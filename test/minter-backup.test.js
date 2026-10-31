@@ -80,7 +80,12 @@ test('a minter that lost its object takes its keys back from Secrets Store and i
   const a = minter({ BACKUP: r2, FLEETWRIGHT_MINTER_EXPORT_TO: exportTo.publicKey }, before);
   const keyA = (await a.op('deposit-key')).secret;
   const signingA = (await a.op('signing-key')).key;
-  const row = { at: 1, login: 'eli', kind: 'login', sealed: { epk: 'e', iv: 'i', ct: 'c' } };
+  // THE NAME IS LONG ON PURPOSE. The copy is checked below for not containing
+  // it, and the copy is base64 of ciphertext: three letters turn up in a few
+  // hundred random base64 characters about once in a thousand runs, which is
+  // how a lane went red for a row it had sealed correctly.
+  const login = 'eli-whose-name-must-stay-sealed-in-the-copy';
+  const row = { at: 1, login, kind: 'login', sealed: { epk: 'e', iv: 'i', ct: 'c' } };
   assert.equal((await a.op('put', { id: '42', row })).ok, true);
   assert.ok(before.alarmAt(), 'a change asks for a copy in a few minutes');
 
@@ -90,7 +95,7 @@ test('a minter that lost its object takes its keys back from Secrets Store and i
   const copy = r2.objects.get(`${prefix}latest.json`);
   assert.ok(copy, 'filed under the deposit key it is sealed to');
   assert.ok(r2.objects.has(`${prefix}${new Date().toISOString().slice(0, 10)}.json`), 'and as the day’s');
-  assert.ok(!copy.includes('eli') && !copy.includes(JSON.parse(keyA).d), 'nothing in it readable, and no key');
+  assert.ok(!copy.includes(login) && !copy.includes(JSON.parse(keyA).d), 'nothing in it readable, and no key');
 
   // THE EXPORT: the keys, sealed to the operator's key, asked for by header
   // at the public address; without the header, the public halves as ever.

@@ -64,6 +64,8 @@ const MAX_RUNNER_STARTS = 200;
  * rows are about 45 KiB of the 128 a value may hold (test/do-key-bounds).
  */
 const MAX_SETUPS = 20;
+/** The most of a job's sentence the coordinator keeps and pushes. */
+export const SETUP_TEXT_MAX = 700;
 /**
  * Pins one policy job may ask for, for the machine of its own it makes on the
  * pool. One is the ordinary case; a few cover a clone that failed to boot.
@@ -76,15 +78,26 @@ export const MAX_HOLDER_PINS = 3;
 export const MAX_IMAGE_REPORTERS = 3;
 /**
  * How long a build VM may report with its token: the download, the disk and
- * the install's own 25 minutes, with room. The job ending takes it back sooner.
+ * the install's own 25 minutes, with room for a Raspberry Pi's slow mirror
+ * and a pull that crawls. It was an hour, which a slow build could outlive
+ * with its last report, the one that decides the build, refused as expired.
+ * The job ending takes it back sooner.
  */
-const IMAGE_REPORT_TTL_MS = 60 * 60_000;
+const IMAGE_REPORT_TTL_MS = 3 * 60 * 60_000;
 /**
- * Reports one token carries: one per step and a retry of each, and the
- * session image's pull reported every 15 seconds through the install's whole
- * 25 minutes. It was 24 when only steps were reported.
+ * Reports one token carries: one per step and a retry of each, the session
+ * image's pull reported every 15 seconds and the heartbeat saying the last
+ * step again every minute, both through an install allowed an hour. It was
+ * 24 when only steps were reported, then 140 for the pull alone, which the
+ * heartbeat was added on top of without counting it, so a long build spent
+ * its allowance just before `done`. `done` and `failed` are not counted
+ * against it at all (imageReport): a build that reported too often is still
+ * a build that finished, and refusing the one report that decides it turns
+ * a good image into a kept VM and a sentence nobody can act on.
  */
-export const MAX_IMAGE_REPORTS = 140;
+export const MAX_IMAGE_REPORTS = 400;
+/** The terminal reports, taken past the count, each this many times at most. */
+const IMAGE_REPORT_ENDS = 30;
 /** The end of the install log a failed build sends back, at most. */
 const IMAGE_REPORT_DETAIL = 2000;
 /** The name a pool's own machine enrols under: `holder-` and six hex. */
@@ -484,7 +497,7 @@ export class CoordinatorCore {
      *
      * BOUND TO THE ENROLMENT THAT ANSWERED `begin` (`enrolment`, its key and
      * when it was let in), not only to the name: see #setupOn.
-     * @type {Map<string, { hostId: string, enrolment?: string|null, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, reporters?: number, reporter?: { hash: string, expiresAt: number, reports: number }, activityNews?: string, activityAt?: number }>}
+     * @type {Map<string, { hostId: string, enrolment?: string|null, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, reporters?: number, reporter?: { hash: string, expiresAt: number, reports: number, ends?: number }, activityNews?: string, activityAt?: number }>}
      */
     this.setups = new Map();
     /**
@@ -1147,6 +1160,77 @@ export class CoordinatorCore {
   }
 
   /**
+   * Whether each person's Xen Orchestra has Fleetwright's reconnect
+   * watchdog, for storage: what the job that last learned it said, when,
+   * and from which box (#learnWatchdog). The most recently learned first,
+   * and at most MAX_XO_WATCHDOGS of them.
+   *
+   * ITS OWN KEY, because it outlives everything else here. A setup job is
+   * forgotten after a day (serialiseSetups) and a pool loss said is forgotten
+   * after an hour (serialisePushLimits); the watchdog's being on a Xen
+   * Orchestra is true until somebody reinstalls it, and the push that needs
+   * the answer comes months after the setup that learned it.
+   *
+   * @returns {Array<[string, { watchdog: XoWatchdogState, at: number, hostId: string }]>}
+   */
+  serialiseXoWatchdogs() {
+    return [...this.#xoWatchdogs].sort((a, b) => b[1].at - a[1].at).slice(0, MAX_XO_WATCHDOGS);
+  }
+
+  /**
+   * Back from storage, each row checked as if a stranger wrote it: an owner
+   * and address for a key, a word from the fixed list, a time that has
+   * happened, a box's name.
+   *
+   * @param {unknown} saved
+   */
+  restoreXoWatchdogs(saved) {
+    if (!Array.isArray(saved)) return;
+    const now = this.now();
+    for (const row of saved.slice(0, MAX_XO_WATCHDOGS)) {
+      if (!Array.isArray(row) || typeof row[0] !== 'string' || row[0].length > 520 || !row[0].includes('\n')) continue;
+      const v = row[1];
+      if (!v || typeof v !== 'object' || !XO_WATCHDOG_STATES.includes(v.watchdog)) continue;
+      if (typeof v.at !== 'number' || !Number.isFinite(v.at) || v.at > now || typeof v.hostId !== 'string' || v.hostId.length > 64) continue;
+      this.#xoWatchdogs.set(row[0], { watchdog: v.watchdog, at: v.at, hostId: v.hostId });
+    }
+  }
+
+  /**
+   * A job on a box learned whether a Xen Orchestra has the reconnect
+   * watchdog, and said so in its progress: kept, by the job's owner and the
+   * address, so the push about a pool that Xen Orchestra loses can say
+   * whether it should come back on its own (#poolLost).
+   *
+   * THE BOX CANNOT TELL AT THE TIME. A pool's loss is seen with the fleet's
+   * limited token, and plugins are an admin's to list; setup, which has the
+   * admin sign-in for a minute, learns it and used to throw the answer away
+   * with the job. So it is learned here, from the one job that knows, and
+   * kept past the job.
+   *
+   * FROM THE BOX RUNNING THE JOB, FOR THE JOB'S OWNER (#onSetupProgress
+   * already held it to that), and about the address the box names: the same
+   * trust the box's health frames get for `xo[].address`. What a false
+   * answer could do is word one push wrongly, towards a Reconnect button
+   * that was there anyway.
+   *
+   * @param {string} hostId @param {string|null} owner @param {any} msg
+   */
+  #learnWatchdog(hostId, owner, msg) {
+    if (!owner) return;
+    const watchdog = XO_WATCHDOG_STATES.includes(msg?.watchdog) ? /** @type {XoWatchdogState} */ (msg.watchdog) : null;
+    const address = typeof msg?.address === 'string' && msg.address.length <= 260 && XO_ADDRESS_RE.test(msg.address) ? msg.address : null;
+    if (!watchdog || !address) return;
+    const key = `${owner}\n${address}`;
+    // The oldest answer goes when the store is full, never the one just given.
+    if (!this.#xoWatchdogs.has(key) && this.#xoWatchdogs.size >= MAX_XO_WATCHDOGS) {
+      this.#xoWatchdogs.delete([...this.#xoWatchdogs].sort((a, b) => a[1].at - b[1].at)[0][0]);
+    }
+    this.#xoWatchdogs.set(key, { watchdog, at: this.now(), hostId });
+    this.onStateChanged?.();
+  }
+
+  /**
    * A host changed state. Say so, once, in words about what it means.
    *
    * @param {string} hostId
@@ -1364,9 +1448,26 @@ export class CoordinatorCore {
       : missing.length <= 2
         ? names.join(' and ')
         : `${names[0]}, ${names[1]} and ${missing.length === 3 ? names[2] : `${missing.length - 2} more`}`;
+    // AND WHETHER IT SHOULD COME BACK BY ITSELF, when a job on a box learned
+    // it (#learnWatchdog): asked for, "has to be a better way, is this a
+    // known issue?", about a push that sent a person to press Reconnect on a
+    // Xen Orchestra whose watchdog was about to do it. With the watchdog on
+    // it, the push says to wait and what it is when waiting does not help;
+    // without, that nothing will try and where both fixes are; and when no
+    // job has looked, what it always said. "Should", for `loaded` as for
+    // `added`: `added` is on its disk and was never seen loaded, and `loaded`
+    // is what setup saw the day it ran (C-5).
+    const them = shown === 0 || missing.length !== 1 ? 'them' : 'it';
+    const usually = `Reconnecting its servers usually brings ${them} back.`;
+    const known = this.#xoWatchdogs.get(key)?.watchdog ?? null;
+    const then = known === 'absent'
+      ? `This Xen Orchestra has no reconnect watchdog, so nothing will try on its own. Reconnect from the pool’s page brings ${them} back, and Add the reconnect watchdog there makes this fix itself next time.`
+      : known
+        ? `${usually} Its reconnect watchdog should bring ${them} back by itself within a few minutes. If this stays, it is something the watchdog leaves to a person: a refused password, a pool already connected through another server, or the pool master itself.`
+        : usually;
     const text = shown === 0
-      ? `Xen Orchestra at ${address} answers ${hostId} but shows none of its pools. Reconnecting its servers usually brings them back.`
-      : `Xen Orchestra at ${address} answers ${hostId} but no longer shows ${gone}. Reconnecting its servers usually brings ${missing.length === 1 ? 'it' : 'them'} back.`;
+      ? `Xen Orchestra at ${address} answers ${hostId} but shows none of its pools. ${then}`
+      : `Xen Orchestra at ${address} answers ${hostId} but no longer shows ${gone}. ${then}`;
     // THE OWNER'S, so other members do not see it (visibleEvents), and the
     // box's share of the ring, because the box chooses when it happens
     // (hostReported).
@@ -1439,6 +1540,8 @@ export class CoordinatorCore {
   #poolLostSaidAt = new Map();
   /** The losses said and not yet followed by a recovery, by person and address (#poolBack). @type {Map<string, number>} */
   #poolsLost = new Map();
+  /** Whether each person's Xen Orchestra has the reconnect watchdog, by person and address, as the last job to learn it said (#learnWatchdog). @type {Map<string, { watchdog: XoWatchdogState, at: number, hostId: string }>} */
+  #xoWatchdogs = new Map();
 
   /**
    * Record something the coordinator itself did, as opposed to something a
@@ -2021,6 +2124,8 @@ export class CoordinatorCore {
     if (!progress) return;
     rec.last = progress;
     this.onStateChanged?.();
+    // What the job learned about the watchdog on the way, kept past the job.
+    this.#learnWatchdog(hostId, rec.owner, msg);
     if (ENDED_SETUP.has(progress.state)) {
       this.relays.closeForJob(job, 'The job using this relay ended, so it was closed.');
       // A build VM's token is the job's, and goes with it.
@@ -2774,6 +2879,14 @@ export class CoordinatorCore {
     // Workers audit). #endSetup saves.
     for (const [job, rec] of [...this.setups]) {
       if (String(rec.owner || '').toLowerCase() === address) this.#endSetup(job, `${address} was removed from the fleet, so the setup they began ended.`);
+    }
+    // And what their setups learned about their Xen Orchestras' watchdogs:
+    // a fact about a pool that is no longer the fleet's to say anything about.
+    for (const key of [...this.#xoWatchdogs.keys()]) {
+      if (key.startsWith(`${address}\n`)) {
+        this.#xoWatchdogs.delete(key);
+        changed = true;
+      }
     }
     // AND AN ADMIN'S BOXES STOP BEING THE FLEET'S, including one that stays
     // connected, whose tier was decided when it connected (#retier), and are
@@ -6403,7 +6516,7 @@ export class CoordinatorCore {
     }
     const secret = randomHex(24);
     const expiresAt = this.now() + IMAGE_REPORT_TTL_MS;
-    rec.reporter = { hash: await hashSecret(secret), expiresAt, reports: 0 };
+    rec.reporter = { hash: await hashSecret(secret), expiresAt, reports: 0, ends: 0 };
     this.onStateChanged?.();
     answer({ ok: true, token: `fwi_${job}_${secret}`, expiresAt });
   }
@@ -6439,7 +6552,17 @@ export class CoordinatorCore {
     if (!IMAGE_REPORT_STEPS.includes(step)) {
       return { status: 400, body: { ok: false, error: { code: 'bad_step' }, text: `step is one of ${IMAGE_REPORT_STEPS.join(', ')}` } };
     }
-    if (++reporter.reports > MAX_IMAGE_REPORTS) return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: 'This build has reported enough.' } };
+    // THE END IS ALWAYS HEARD. A build that said `image` every 15 seconds for
+    // an hour has spent its count, and `done` is the one report the box
+    // makes a template on; a count that refuses it fails a finished build.
+    // The ends have a small count of their own, so a VM that says done
+    // for ever cannot say it for ever.
+    if (step === 'done' || step === 'failed') {
+      reporter.ends = (reporter.ends ?? 0) + 1;
+      if (reporter.ends > IMAGE_REPORT_ENDS) return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: 'This build has reported its end enough.' } };
+    } else if (++reporter.reports > MAX_IMAGE_REPORTS) {
+      return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: 'This build has reported enough.' } };
+    }
     const detail = step === 'failed' && typeof body?.detail === 'string'
       ? body.detail.replace(/[^\P{C}\n\t]/gu, '').slice(-IMAGE_REPORT_DETAIL)
       : null;
@@ -8286,6 +8409,23 @@ const HOST_PUSH_WINDOW_MS = 60 * 60_000;
  * it).
  */
 const MAX_PUSH_LIMIT_ROWS = 64;
+/**
+ * How many Xen Orchestras' watchdog answers are kept (serialiseXoWatchdogs):
+ * one row per person and address, 64 of the widest key restore admits with
+ * a word, a time and a box's name beside it is under 40 KB, and a fleet
+ * with more Xen Orchestras than that loses the oldest answer, which is the
+ * push saying what it said before anything was learned.
+ */
+const MAX_XO_WATCHDOGS = 64;
+/**
+ * What a job can say about Fleetwright's reconnect watchdog on a Xen
+ * Orchestra (xo-setup.js, status): `loaded`, setup listed it loaded or loaded
+ * it; `absent`, the plugins were listed and it was not among them; `added`,
+ * the watchdog job put it on the disk and did not see it load. Nothing else
+ * is believed, and a job that could not tell says nothing (C-5).
+ */
+const XO_WATCHDOG_STATES = Object.freeze(['loaded', 'absent', 'added']);
+/** @typedef {'loaded'|'absent'|'added'} XoWatchdogState */
 
 /** Events worth waking somebody for. The rest are for the log. */
 const NOTIFIABLE = new Set([
@@ -8410,7 +8550,13 @@ export function narrowProgress(msg) {
     phase,
     state: /** @type {SetupProgress['state']} */ (state),
     purpose: /** @type {SetupProgress['purpose']} */ (purpose),
-    text: msg?.text ? String(msg.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, 200) : '',
+    // THE WHOLE SENTENCE, within reason. A job's end says what stopped it,
+    // what it left behind and what to do next, and the box writes that as
+    // one sentence of a few hundred characters; at 200 the phone got "…so"
+    // and the person got nothing to act on. 700 is room for the longest end
+    // a box writes (600, its own cap) and fits a sealed push with room
+    // (push-encryption.test.js).
+    text: msg?.text ? String(msg.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, SETUP_TEXT_MAX) : '',
     // HOW FAR INTO THE STEP, in thousandths, for a step that is bytes
     // moving and can say so: the edge router's build is most of a policy
     // job, and "step 5 of 5" alone held the bar at four fifths for minutes.

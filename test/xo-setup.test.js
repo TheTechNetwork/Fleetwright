@@ -234,6 +234,10 @@ test('automatic updates switched off by a person stay off', { skip }, async (t) 
   assert.ok(!xo.calls.some((c) => c.method === 'plugin.configure'));
   assert.match(end.text, /left that way/);
   assert.match(end.text, /reconnect watchdog is not on it/);
+  // AND SAID TO THE COORDINATOR AS A FACT, with the address it is about, so
+  // the push about a pool this Xen Orchestra loses can say nothing will try.
+  assert.equal(end.watchdog, 'absent');
+  assert.equal(end.address, xo.address);
 });
 
 test('updates that cannot be turned on are a warning in the summary, and the token still reaches the phone', { skip }, async (t) => {
@@ -250,11 +254,14 @@ test('updates that cannot be turned on are a warning in the summary, and the tok
   assert.equal((await collect(end, reply, xo.address)).token, 'tok-limited-123');
   assert.match(end.text, /Updates were not turned on: not enough permissions\. The token was made all the same; whether Xen Orchestra updates itself, and whether the reconnect watchdog is loaded, is for its Settings, Plugins to say\./);
   assert.doesNotMatch(end.text, /updates itself once a day|reconnects a pool it loses by itself/);
+  // A list that could not be read says nothing about the watchdog: unsaid
+  // is "cannot tell", and `absent` would be a claim (C-5).
+  assert.ok(!('watchdog' in end) && !('address' in end), `said ${end.watchdog} about a watchdog it could not look for`);
 });
 
 test('the reconnect watchdog a build carries is loaded and kept loading', { skip }, async (t) => {
   const xo = await standIn(t, { watchdog: { id: 'fleetwright-reconnect', loaded: false, autoload: false } });
-  const { setups } = await machine();
+  const { setups, events } = await machine();
   const actor = 'eli@example.com';
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   await setups.run({ job: begun.xosetup.job, sealed: (await phone(begun, xo.address, xo.pin)).sealed, actor });
@@ -264,6 +271,14 @@ test('the reconnect watchdog a build carries is loaded and kept loading', { skip
     assert.ok(xo.calls.some((c) => c.method === method && c.params.id === 'fleetwright-reconnect'), method);
   }
   assert.match(end.text, /reconnects a pool it loses by itself/);
+  // And said as `loaded`, in the status the phone polls and in the report
+  // the coordinator keeps (core.js #learnWatchdog), with the address.
+  assert.equal(end.watchdog, 'loaded');
+  assert.equal(end.address, xo.address);
+  assert.deepEqual([events.at(-1).watchdog, events.at(-1).address], ['loaded', xo.address]);
+  // Not before the step that learned it: a report from the sign-in step has
+  // nothing to say.
+  assert.ok(!('watchdog' in events.find((e) => e.phase === 'sign-in')));
 });
 
 test('a sealed sign-in opens only for its own job and address, and only for whoever began it', async () => {
@@ -778,6 +793,43 @@ test('an image that is there is rebuilt or removed when the person asks, removed
   assert.deepEqual(done, ['remove ubuntu-24.04 on p1', 'rebuild debian-13']);
   assert.deepEqual(channels, ['rolling'], 'the rebuild is told the suite the phone chose');
   assert.match(end.text, /Removed ubuntu-24\.04\. Rebuilt debian-13\./);
+});
+
+test('an Apply that stops partway says what it had done by then, and one that stops before anything was done says only why', { skip }, async (t) => {
+  // THE INCIDENT: a policy's Apply built its edge router, applied the
+  // resource set, and lost its image build at the very end. The phone said
+  // only that the build VM had stopped before done; nothing about the
+  // router or the policy, both in place, and the person had no idea what
+  // state the pool was in. The parts are built one after another and each
+  // says what it did (ctx.built): the failure now carries those sentences.
+  // Two images stand in for router-then-image here, since the stand-in has
+  // nothing an edge router is built from; it is one list whatever is on it.
+  const edge = { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' };
+  const more = ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate'];
+  const limits = { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 };
+  const actor = 'eli@example.com';
+  const halted = 'the machine image’s build VM stopped before it said the install was done (the last it said, 40 seconds before it stopped, was that clearing what would make two machines cloned from it the same), so it was not made the template. Home still has no Ubuntu 24.04 LTS machine image. Its build VM was kept, stopped, as "fleetwright-image-build (stopped before done)". Applying again removes it and starts over';
+  for (const [images, expect] of /** @type {Array<[string[], string]>} */ ([
+    [['debian-13', 'ubuntu-24.04'], `Applying what you chose stopped: ${halted} Before it stopped: The Debian 13 machine image is ready on Home.`],
+    [['ubuntu-24.04'], `Applying what you chose stopped: ${halted}`],
+  ])) {
+    const xo = await standIn(t, { sets: [chosenBefore()], more, vms: { edge } });
+    const { setups } = await machine({
+      coordinatorUrl: 'https://fleet.test',
+      buildImage: async (/** @type {any} */ o) => {
+        if (o.image === 'debian-13') return 'The Debian 13 machine image is ready on Home.';
+        throw new Error(halted);
+      },
+    });
+    const { begun } = await choosing(xo, setups, actor);
+    const job = begun.xosetup.job;
+    const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', images, limits };
+    assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'failed', end.text);
+    assert.equal(end.text, expect);
+    assert.ok(xo.calls.some((c) => c.method === 'resourceSet.set'), 'the policy itself was applied before the build');
+  }
 });
 
 test('group networks are made by the policy job in the way out’s pool, put in the set, and nothing is built', { skip }, async (t) => {

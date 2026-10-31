@@ -14,7 +14,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ACTIVITY_FILL_EVERY_MS, CoordinatorCore, narrowProgress, narrowCertificate } from '../src/fleet/coordinator/core.js';
+import { ACTIVITY_FILL_EVERY_MS, CoordinatorCore, narrowProgress, narrowCertificate, SETUP_TEXT_MAX } from '../src/fleet/coordinator/core.js';
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XOWATCHDOG_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
 
 const JOB = 'a1b2c3d4e5f6';
@@ -286,6 +286,26 @@ test('a policy job building the edge router reaches the Lock Screen as a change,
   // A policy step from a host that did not say it is one is refused, as any
   // phase onboarding does not have is.
   assert.equal(narrowProgress({ step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'running' }), null);
+});
+
+// THE WHOLE SENTENCE. A failed Apply's end said what stopped it, what it
+// left behind and what to do next, in 400 characters; the coordinator kept
+// 200 and the person read "…the same), so" on a Lock Screen and nothing
+// after it.
+test('a job’s end reaches the phone whole, up to the coordinator’s own cap', async () => {
+  const { core, sent } = fleet(['deb14'], machine);
+  await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
+  await core.dispatch(begin(admin, { preferHost: 'deb14' }));
+  const end = 'Applying what you chose stopped: the machine image’s build VM stopped before it said the install was done (the last it said was that clearing what would make two machines cloned from it the same), so it was not made the template. Its build VM was kept, stopped, as "fleetwright-image-build (stopped before done)". Applying again removes it and starts over. Before it stopped: the edge router pair was rebuilt and answers. The resource set is as you chose.';
+  assert.ok(end.length > 200 && end.length < SETUP_TEXT_MAX, `the sentence is ${end.length} characters`);
+  const apply = XOPOLICY_STEPS.indexOf('apply');
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'failed', purpose: 'policy', text: end });
+  assert.equal(sent.at(-1).message.title, 'The change stopped');
+  assert.equal(sent.at(-1).message.body, end, 'the push carries less than the box said');
+  assert.equal(core.setups.get(JOB)?.last?.text, end, 'the record carries less than the box said');
+  // And the cap is a cap: a sentence past it is cut there, not refused.
+  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: apply, of: XOPOLICY_STEPS.length, phase: 'apply', state: 'failed', purpose: 'policy', text: 'x'.repeat(SETUP_TEXT_MAX + 50) });
+  assert.equal(sent.at(-1).message.body.length, SETUP_TEXT_MAX);
 });
 
 test('only the machine running a job can report on it, and only in its known shape', async () => {

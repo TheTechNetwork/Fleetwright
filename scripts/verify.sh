@@ -143,6 +143,16 @@ else
   printf 'FAILED\n%s\n' "$out"; fail=1
 fi
 
+# The apt Worker too. It is deployed by apt-repo.yml, which cannot run on a
+# pull request (it holds the signing key), so this is the only place before
+# main that its bundle is resolved at all.
+printf 'apt        ... '
+if out=$(cd worker && ./node_modules/.bin/esbuild ../apt/src/index.js --bundle --format=esm --platform=neutral --outfile=/dev/null --external:cloudflare:* 2>&1); then
+  printf 'bundles\n'
+else
+  printf 'FAILED\n%s\n' "$out"; fail=1
+fi
+
 # The contract, and the copy of it the Worker ships. openapi.json is the source
 # and test/openapi.test.js executes it against BOTH coordinators — but the
 # Worker inlines its own copy, and a copy of a contract is a thing that drifts.

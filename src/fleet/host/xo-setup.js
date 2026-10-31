@@ -419,6 +419,10 @@ async function getRoot({ host, port, secure, timeoutMs, through = null }) {
  * @property {number} of
  * @property {string} phase
  * @property {string} text
+ * @property {'loaded'|'absent'|'added'} [watchdog]  what the job learned about
+ *   Fleetwright's reconnect watchdog on this Xen Orchestra, once it has
+ *   (watchdogSaid), with the address it is about
+ * @property {string} [address]
  * @property {string} [handoff]  once done: the limited user's token record,
  *   sealed to the key the phone sent inside the sign-in, as epk.iv.ct
  * @property {string} [watch]  once a policy job is done: the key the fleet reads
@@ -1118,6 +1122,11 @@ export class XoSetups {
         state: rec.state,
         text: rec.text,
         ...(policy ? { purpose: 'policy' } : rec.purpose === 'deploy' ? { purpose: 'deploy' } : rec.purpose === 'watchdog' ? { purpose: 'watchdog' } : reconnect ? { purpose: 'reconnect' } : {}),
+        // WHAT THE JOB LEARNED ABOUT THE RECONNECT WATCHDOG, with the address
+        // it is about, which the coordinator keeps past the job and words the
+        // lost-pool push from (core.js #learnWatchdog). Once learned and not
+        // before, so a job that could not tell sends nothing.
+        ...watchdogSaid(rec),
         ...(rec.part && rec.state === 'running' ? { fill: rec.part.fill } : {}),
         // THE PART OF A BUILD, and only of a build: an install's download is one
         // bar, and "part 1 of 1" on the Lock Screen would be words about nothing.
@@ -1288,7 +1297,25 @@ export class XoSetups {
         if (ctx.rec.reply) await this.#handWatch(ctx).catch((err) => this.log.warn(`xosetup: ${rec.job} could not seal the routers' key: ${/** @type {Error} */ (err).message}`));
       } else {
         rec.state = 'failed';
-        rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets)}`;
+        // ROOM FOR THE APPLY STEP'S OWN WORDS. Its failures are sentences
+        // this code composed (ensureImage, ensureEdge, ensureHolder), not a
+        // server's dump, and scrub's three hundred was cutting them: a build
+        // VM that stopped before done was reported up to "Its build VM was
+        // kept," and the phone never saw where, or that applying again
+        // starts over.
+        rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets, rec.phase === 'apply' ? 600 : 300)}`;
+        // AND WHAT IT HAD DONE BY THEN. The apply step builds one thing after
+        // another and keeps what each said (ctx.built); a failure used to
+        // keep only the error, and a person whose image build died behind a
+        // router built minutes earlier had no word that the router, or the
+        // policy, was in place. Each entry is a sentence, scrubbed as the
+        // error is; the whole is held to the seven hundred characters the
+        // coordinator keeps of any job's text (SETUP_TEXT_MAX in
+        // coordinator/core.js), so what is written here is what arrives:
+        // the longest why above and one finished part fit with room.
+        if (rec.phase === 'apply' && ctx.built?.length) {
+          rec.text = `${rec.text} Before it stopped: ${ctx.built.map((/** @type {string} */ said) => scrub(said, secrets)).join(' ')}`.slice(0, 700);
+        }
       }
       this.#report(rec);
       // AND WHY, in the journal too: the phone's copy goes when the job does,
@@ -1783,6 +1810,10 @@ export class XoSetups {
       async (/** @type {any} */ ctx) => {
         const added = await addToDisk(ctx.pool, ctx.vm.vdi);
         ctx.added = added;
+        // ON THE DISK, which is all this job will ever know of it (the start
+        // step says why): `added` and never `loaded`, to the coordinator
+        // that words the lost-pool push from it.
+        ctx.rec.watchdog = 'added';
         if (added.leftover) this.log.warn(`xosetup: ${ctx.rec.job} left a VBD ${added.leftover} on the pool master's own domain`);
       },
       // start
@@ -2399,6 +2430,19 @@ export class XoSetups {
         try {
           const plugins = (await ctx.admin.call('plugin.get')) || [];
           const watchdog = await this.#loadPlugin(ctx, plugins, RECONNECT_PLUGIN_ID);
+          // KEPT ON THE JOB, for the coordinator (status, #report): the box
+          // that later sees this Xen Orchestra lose a pool holds the fleet's
+          // limited token and cannot ask, so the push about it is worded
+          // from what this step, signed in as admin, saw. `absent` is the
+          // list without it; `loaded` is the list with it loaded, or loaded
+          // by the call above. A list that could not be read, or a load
+          // that failed, leaves it unsaid (the catch below): unsaid is
+          // "cannot tell", and either word is a claim (C-5).
+          ctx.rec.watchdog = !watchdog
+            ? 'absent'
+            : plugins.some((/** @type {any} */ p) => (p?.id === RECONNECT_PLUGIN_ID || p?.name === RECONNECT_PLUGIN_ID) && (p.loaded || Object.hasOwn(ctx.methods, 'plugin.load')))
+              ? 'loaded'
+              : undefined;
           const after = watchdog ? ' It reconnects a pool it loses by itself.' : ' Fleetwright’s reconnect watchdog is not on it, so a pool it loses waits for Reconnect.';
           return `${await this.#updates(ctx, plugins)}${after}`;
         } catch (e) {
@@ -3038,7 +3082,7 @@ function status(rec) {
   // `part.build` says WHAT the part is of, so the phone does not call an
   // image's disk the edge router's: the first version had one sentence for
   // every build, written when the router was the only thing built in parts.
-  const s = { job: rec.job, state: rec.state, step: rec.step, of: rec.of, phase: rec.phase, text: rec.text, ...(rec.part && rec.state === 'running' ? { part: { ...rec.part, ...(buildKey(rec) ? { build: buildKey(rec) } : {}) } } : {}) };
+  const s = { job: rec.job, state: rec.state, step: rec.step, of: rec.of, phase: rec.phase, text: rec.text, ...(rec.part && rec.state === 'running' ? { part: { ...rec.part, ...(buildKey(rec) ? { build: buildKey(rec) } : {}) } } : {}), ...watchdogSaid(rec) };
   // THE TOKEN, SEALED, to the person who began the job (`#mine` already
   // checked) and only once it is done. Asked for as often as the phone likes
   // until the job is forgotten, because a phone that was closed at the end
@@ -3053,6 +3097,27 @@ function status(rec) {
   // ever way: a reconnect that failed is when the person most needs it.
   if (rec.state !== 'running' && rec.result) return { ...s, result: rec.result };
   return s;
+}
+
+/**
+ * What a job learned about Fleetwright's reconnect watchdog on its Xen
+ * Orchestra, with the address that Xen Orchestra answers on, for status()
+ * and #report: `loaded`, setup listed the plugin loaded or loaded it;
+ * `absent`, the plugins were listed and it was not among them; `added`, the
+ * watchdog job put it on the disk and never saw it load. Nothing until it is
+ * learned, so the coordinator keeps nothing on a guess (C-5).
+ *
+ * THE ADDRESS IS XEN ORCHESTRA'S, not the one the job began with: an install
+ * and the watchdog job begin against the pool master, and the pool is kept,
+ * and lost, under the address Xen Orchestra answers on (`xoAddress`).
+ *
+ * @param {any} rec
+ * @returns {{ watchdog?: 'loaded'|'absent'|'added', address?: string }}
+ */
+function watchdogSaid(rec) {
+  if (!rec.watchdog) return {};
+  const address = rec.purpose === 'watchdog' || rec.purpose === 'deploy' ? rec.xoAddress : rec.address;
+  return address ? { watchdog: rec.watchdog, address } : {};
 }
 
 /**
@@ -3074,16 +3139,18 @@ function unknown() {
 
 /**
  * An error's words, with anything from the sign-in taken out. Xen Orchestra
- * does not echo a password back, and this does not rely on it.
+ * does not echo a password back, and this does not rely on it. Held to
+ * `limit` characters: three hundred for a server's words, more where the
+ * caller knows the words are the fleet's own sentences.
  *
- * @param {string} message @param {{ password?: string, token?: string, root?: string, admin?: string }} creds
+ * @param {string} message @param {{ password?: string, token?: string, root?: string, admin?: string }} creds @param {number} [limit]
  */
-function scrub(message, creds) {
+function scrub(message, creds, limit = 300) {
   let out = String(message || 'an error');
   for (const secret of [creds.password, creds.token, creds.root, creds.admin]) {
     if (secret && secret.length >= 4) out = out.split(secret).join('…');
   }
-  return out.slice(0, 300);
+  return out.slice(0, limit);
 }
 
 /**

@@ -386,8 +386,16 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     // stock Python-urllib agent is the kind a CDN's bot check turns away.
     // `sent` says whether anything got through, for the one report that
     // decides the build (done, below); report itself never fails a step.
+    // AND WHAT EACH ONE WAS ANSWERED, as a line on the log and the screen:
+    // `report done: 429`, or `no answer` when nothing spoke HTTP back. A
+    // build that said every step through cleaning and then halted without
+    // a heard `done` left nothing anywhere about why: the box knows only
+    // what was forwarded to it, and the VM's own record was its exit code.
+    // curl is run without -f so a refusal's status is read rather than
+    // thrown away, and `sent` is set on a 2xx alone.
     'report() {',
     '  sent=0',
+    '  code=',
     '  [ -n "$token" ] || return 0',
     '  printf "%s\\n" "$1" >"$stepfile" 2>/dev/null || true',
     "  body=$(python3 -c '",
@@ -405,15 +413,23 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     'print(json.dumps(body))',
     `' "$token" "$1" "$log" "\${2-}" "\${3-}" 2>/dev/null) || return 0`,
     '  if command -v curl >/dev/null 2>&1; then',
-    `    { curl -fsS -m 10 -A fleetwright-image -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1 ||`,
-    `      { [ -n "$pinned" ] && curl -fsS -m 10 -A fleetwright-image --resolve "$pinned" -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1; }; } && sent=1 || true`,
+    // By name first, then to the coordinator's addresses under that name
+    // when the name got no HTTP answer (no resolver, a CDN's bot check with
+    // nothing behind it): curl prints 000 for a connection that never spoke.
+    `    code=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' -A fleetwright-image -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" 2>/dev/null) || code=`,
+    '    case "$code" in 2??) ;; *) [ -z "$pinned" ] ||',
+    `      code=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' -A fleetwright-image --resolve "$pinned" -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" 2>/dev/null) || code= ;; esac`,
+    '    case "$code" in 2??) sent=1 ;; 000) code= ;; esac',
     '  else',
     "    python3 -c '",
     'import sys, urllib.request',
     'req = urllib.request.Request(sys.argv[1] + "/api/xosetup/report", sys.argv[2].encode(), {"content-type": "application/json", "user-agent": "fleetwright-image"})',
     'urllib.request.urlopen(req, timeout=10).read()',
-    `' "$origin" "$body" >/dev/null 2>&1 && sent=1 || true`,
+    `' "$origin" "$body" >/dev/null 2>&1 && { sent=1; code=sent; } || code='not sent'`,
     '  fi',
+    // tee carries on past a screen it cannot open; the line is the record,
+    // not a step, so nothing here fails one.
+    `  printf 'report %s: %s\\n' "$1" "\${code:-no answer}" | tee -a "$log" $screens >/dev/null 2>&1 || true`,
     '}',
     // A HEARTBEAT, so silence means something. Between steps the VM used to
     // say nothing for minutes (apt, a slow mirror, the pull's unpack), and a
@@ -637,9 +653,13 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     'if [ "$status" -eq 0 ]; then',
     // SAID UNTIL IT IS HEARD, within reason: the box makes nothing a
     // template that did not say it was done (ensureImage), so this is the
-    // one report worth a minute of trying. A VM with no token powers off as
-    // it did, and is judged by that alone.
-    '  for _ in 1 2 3 4 5 6; do',
+    // one report worth five minutes of trying, every ten seconds, with
+    // each answer on the screen (report, above). A minute was not enough:
+    // a build on a Raspberry Pi said every step through cleaning, had its
+    // six tries go unanswered, and powered off into "stopped before done"
+    // with nothing anywhere about why. A VM with no token powers off as it
+    // did, and is judged by that alone.
+    '  for _ in {1..30}; do',
     '    report done',
     '    [ -n "$token" ] && [ "$sent" != 1 ] || break',
     '    sleep 10',
@@ -819,9 +839,32 @@ const STALL_MS = 3 * 60_000;
 /**
  * How long after its VM halts a build waits for a late `done`: the report
  * goes out just before the power-off and may arrive after Xen Orchestra has
- * already said Halted.
+ * already said Halted, and it comes by way of the coordinator, which
+ * forwards it when it next speaks to this box. Half a minute was less than
+ * that forwarding has taken: a build that had said every step through
+ * cleaning was failed at thirty seconds, with the VM trying `done` for
+ * minutes more (buildCloudConfig). Two minutes is a long late forward and
+ * still short next to a build.
  */
-const DONE_GRACE_MS = 30_000;
+const DONE_GRACE_MS = 2 * 60_000;
+
+/**
+ * How long before its halt a build VM last reported, for the sentence that
+ * says it stopped without saying done: seconds under two minutes, minutes
+ * past that, and nothing when the report carries no time, rather than a
+ * number made up for it. The halt is when the box's poll first saw it, so
+ * the count is good to that poll; a report forwarded after the halt was
+ * seen reads as after it.
+ *
+ * @param {number} haltedAt @param {{ at?: number }|null} report
+ */
+function lastSaid(haltedAt, report) {
+  if (!report || !Number.isFinite(report.at)) return '';
+  const ms = haltedAt - /** @type {number} */ (report.at);
+  if (ms < 0) return ', after it had stopped,';
+  const s = Math.round(ms / 1000);
+  return s < 120 ? `, ${s} seconds before it stopped,` : `, ${Math.round(s / 60)} minutes before it stopped,`;
+}
 
 /** The last few lines of a log, for a sentence on a phone. @param {string|null|undefined} log */
 // Enough for the DNS probe above, its servers and who answered ARP; and still
@@ -1210,9 +1253,17 @@ export async function ensureImage({
         if (!token || report?.step === 'done') break;
         if (haltedAt === null) haltedAt = now();
         if (now() - haltedAt < DONE_GRACE_MS) continue;
+        // WHAT THE BOX KNOWS, all of it: when the VM last spoke next to when
+        // it stopped, that the pool's image is as it was, and where the VM
+        // is. A person reading this had no way to tell a build that died
+        // mid-step from one whose last report never got through, and no
+        // word on whether the machines being made meanwhile were safe.
         const kept = await giveUp('stopped before done');
-        const last = report ? `the last it said was that ${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}` : 'it never reported in';
-        throw new Error(`the machine image’s build VM stopped before it said the install was done (${last}), so it was not made the template. ${kept}`);
+        const last = report ? `the last it said${lastSaid(haltedAt, report)} was that ${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}` : 'it never reported in';
+        const still = there
+          ? `The ${os} machine image that was there, ${String(there.name_label || spec.name)}, is still the template, and machines keep being made from it.`
+          : `${poolName} still has no ${os} machine image.`;
+        throw new Error(`the machine image’s build VM stopped before it said the install was done (${last}), so it was not made the template. ${still} ${kept}`);
       }
       if (seen.power_state === 'Running') {
         const at = Number(seen.startTime) || null;

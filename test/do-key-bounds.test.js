@@ -83,6 +83,9 @@ const BOUNDED = {
   // The hour's pushes each person has had and the pool losses said to them:
   // a window, and MAX_PUSH_LIMIT_ROWS of each.
   pushLimits: 'src/fleet/coordinator/core.js',
+  // Whether each person's Xen Orchestra has the reconnect watchdog: one row
+  // per person and address, MAX_XO_WATCHDOGS of them.
+  xoWatchdogs: 'src/fleet/coordinator/core.js',
   // GitHub codes handed to boxes: a ten-minute window, and a refusal past
   // MAX_BOX_SIGN_INS.
   boxSignIns: 'src/fleet/coordinator/core.js',
@@ -269,6 +272,18 @@ test('a full store of spent push allowances still fits in one Durable Object val
   assert.ok(kept.pushes.length < FILL_CAP && kept.poolsLost.length < FILL_CAP, 'the store took every row it was given, so it has no ceiling');
   const bytes = new TextEncoder().encode(JSON.stringify(kept)).length;
   assert.ok(bytes < DO_VALUE_LIMIT, `a full store of push allowances is ${bytes} bytes, which does not fit in a DO value`);
+});
+
+test('a full store of watchdog answers still fits in one Durable Object value', async () => {
+  // Every key as wide as restore admits, and more rows than are kept.
+  const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');
+  const core = new CoordinatorCore({});
+  const now = Date.now();
+  core.restoreXoWatchdogs(Array.from({ length: FILL_CAP }, (_, i) => [`${String(i).padStart(254, 'e')}\n${'a'.repeat(265)}`, { watchdog: 'loaded', at: now - i, hostId: 'h'.repeat(64) }]));
+  const kept = core.serialiseXoWatchdogs();
+  assert.ok(kept.length < FILL_CAP, 'the store took every row it was given, so it has no ceiling');
+  const bytes = new TextEncoder().encode(JSON.stringify(kept)).length;
+  assert.ok(bytes < DO_VALUE_LIMIT, `a full store of watchdog answers is ${bytes} bytes, which does not fit in a DO value`);
 });
 
 test('a full list of removals still fits in one Durable Object value', async () => {

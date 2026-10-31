@@ -1351,15 +1351,22 @@ admin sign-in for as long as it runs:
   stops the rest; they used to run where bash ignores `set -e`, and a broken
   install could power off and become the template. **And stopped is not
   done**: a build VM given a report token has to say `done` before it halts,
-  and the box waits half a minute past the halt for a late one. A VM that
-  stops without it, by a host rebooted for maintenance, a stop from Xen
-  Orchestra or an install cut off mid-step, is kept, stopped, as
-  `fleetwright-image-build (stopped before done)` and never made the
-  template, and the failure says what it last reported; any halt used to be
-  taken for success and cloned from. The VM says `done` up to six times, ten
-  seconds apart, until one gets through, since it is the one report that
-  decides the build. Without a token the power state is still all there is,
-  as before reports existed.
+  and the box waits two minutes past the halt for a late one, since the
+  report comes by way of the coordinator and a forward can take longer than
+  the half minute this used to wait. A VM that stops without it, by a host
+  rebooted for maintenance, a stop from Xen Orchestra or an install cut off
+  mid-step, is kept, stopped, as `fleetwright-image-build (stopped before
+  done)` and never made the template, and the failure says what it last
+  reported and how long before the halt, that the image that was there is
+  still the template and machines keep being made from it (or that the pool
+  still has none), and where the VM is; any halt used to be taken for success
+  and cloned from. The VM says `done` for up to five minutes, every ten
+  seconds, until one gets through, since it is the one report that decides
+  the build, and it writes what each report was answered (`report done: 200`,
+  `report done: 429`, `report done: no answer`) to its log and to its
+  console, which Xen Orchestra shows for the kept VM and which is the one
+  place to read why a report did not get through. Without a token the power
+  state is still all there is, as before reports existed.
 
   **It carries the guest agent.** XCP-ng's `xen-guest-agent` 0.4.0,
   upstream's own release build, pinned by size and SHA-256 like the images:
@@ -1425,7 +1432,11 @@ admin sign-in for as long as it runs:
   kept, stopped, as `fleetwright-image-build (install failed)`, one that
   runs past 25 minutes as `fleetwright-image-build (install timed out)`, and
   one that halted without saying done as `(stopped before done)`; applying
-  again removes it. A good one is named Fleetwright Debian 13,
+  again removes it. An Apply that stops partway says what it had done before
+  it stopped, in the words each part ended with, after why: a router built
+  and a resource set changed minutes before the image build failed used to
+  go unmentioned, and the person had no idea what state the pool was in. A
+  good one is named Fleetwright Debian 13,
   tagged `fleetwright-image`, converted to a template and put in the resource
   set.
 - **OPNsense, built and proved for the edge router.** Not from a second disk:
@@ -2344,6 +2355,21 @@ names nothing is left alone as before, since guessing would set two servers
 against each other. The push above still comes when a pool stays gone for five
 minutes; with the watchdog that mostly means one of those, or a master that
 is down.
+
+**The push says which case it is, and where the answer came from.** The
+box that sees a pool go holds the fleet's limited token and cannot list
+plugins, but setup, signed in as admin for a minute, learns whether the
+watchdog is on that Xen Orchestra and the Add-watchdog job knows it put it
+on the disk, so each says so in its status (`watchdog`: `loaded`, `absent`
+or `added`) and the coordinator keeps the answer by owner and address, in
+storage of its own because it outlives both the setup and the hour. Where
+setup loaded it or the job added it, the push adds that the watchdog should
+bring the pool back by itself within a few minutes and what it is when that
+does not happen; where setup found none, that nothing will try on its own
+and that Reconnect and Add the reconnect watchdog are both on the pool's
+page; and where no job has looked, the sentence it always had, with
+"should" for `added` as for `loaded` because the job never saw the plugin
+load and setup saw it the day it ran.
 
 **Built into every Xen Orchestra Fleetwright installs.** The deploy puts the
 plugin beside the installer's own update plugin and names both in
