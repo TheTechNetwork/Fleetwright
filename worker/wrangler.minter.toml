@@ -10,7 +10,9 @@
 # what it checks, against GitHub, before it signs anything.
 #
 # Read this file as the security boundary: no routes, no workers.dev address,
-# no preview URLs, and one binding, to a Durable Object of its own. The one
+# no preview URLs, and one binding, to a Durable Object of its own. The deploy
+# may add an R2 bucket and two Secrets Store secrets, the minter's second copy
+# of its rows and keys (src/fleet/minter/backup.js), in a copy of this file. The one
 # thing on the internet is a public key, and, where a fleet names a signing
 # host, the browser's signing page on that host alone: the deploy adds a single route,
 # <the fleet's hostname>/.well-known/fleetwright-minter, with --route, because
@@ -89,6 +91,20 @@ preview_urls = false
 #                                     it beside what it protects, which is
 #                                     what a fleet should do. Set it only to
 #                                     keep a key made by hand before that
+#   BACKUP                            OPTIONAL. An R2 bucket the minter writes
+#                                     a sealed copy of its rows to, five
+#                                     minutes after a change, and fills an
+#                                     empty object from. The deploy makes and
+#                                     binds it (src/fleet/minter/backup.js)
+#   DEPOSIT_KEY_STORED                OPTIONAL. Secrets Store secrets holding
+#   SIGNING_KEY_STORED                the deposit and signing keys, read when
+#                                     the object has none of its own. The
+#                                     deploy binds the ones the store holds
+#   FLEETWRIGHT_MINTER_EXPORT_TO      SECRET, OPTIONAL, SET FOR A FEW MINUTES.
+#                                     The operator's key the minter seals its
+#                                     own keys to, for the one-time export
+#                                     (scripts/minter-key-export.mjs). Delete
+#                                     it once the keys are in Secrets Store
 
 [observability]
 enabled = true

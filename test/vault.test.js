@@ -33,7 +33,7 @@ import { buildCommand } from '../src/core/claude.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { delegationSigningInput, intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
 import { startStubHub } from './helpers/stub-hub.js';
-import { standInClaude, revokeClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns, claudeUsageAsks } from './helpers/stand-in-claude.js';
+import { standInClaude, revokeClaude, forbidClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns, claudeUsageAsks } from './helpers/stand-in-claude.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -1712,41 +1712,183 @@ test('a refresh token that runs out before its access token is renewed before it
   }
 });
 
-test('the check renews a kept sign-in soon after keeping and hourly after, so a broken one is found in minutes', async (t) => {
+test('the check renews a kept sign-in only when it is due, not ten minutes after keeping and hourly', async (t) => {
+  // It renewed ten minutes after keeping and hourly after that, and each of
+  // those renewals ended the access token every box held, outside the half
+  // hour in which the boxes change over together.
   const m = await minter();
   t.after(m.restore);
   const start = Date.now();
   assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: claudeSignInFor('early') })).ok, true);
-  /** `fn` at `minutes` after the first keeping. @template T @param {number} minutes @param {() => Promise<T>} fn */
-  const during = async (minutes, fn) => {
+  /** The check `minutes` after keeping, past the minter's own ten-minute floor. @param {number} minutes */
+  const checkAt = async (minutes) => {
     t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
     try {
-      return await fn();
+      m.rows.delete('claude-checked');
+      return await m.binding.claude('check', {});
     } finally {
       t.mock.timers.reset();
     }
   };
-  /** The check then, past the minter's own ten-minute floor. @param {number} minutes */
-  const checkAt = (minutes) => during(minutes, () => { m.rows.delete('claude-checked'); return m.binding.claude('check', {}); });
   const before = claudeRenewals.count;
-  assert.deepEqual((await checkAt(5)).ended, []);
-  assert.equal(claudeRenewals.count, before, 'not in the first ten minutes');
-  assert.deepEqual((await checkAt(11)).ended, []);
-  assert.equal(claudeRenewals.count - before, 1, 'renewed eleven minutes after keeping, with eight hours of access left');
-  await checkAt(40);
-  assert.equal(claudeRenewals.count - before, 1, 'not again within the hour');
-  await checkAt(72);
-  assert.equal(claudeRenewals.count - before, 2, 'and again an hour after the last');
+  for (const minutes of [11, 72, 200, 420]) {
+    assert.deepEqual((await checkAt(minutes)).ended, []);
+    assert.equal(claudeRenewals.count, before, `not renewed ${minutes} minutes after keeping, with its access token still good`);
+  }
+  // Inside the half hour before its eight hours run out, it is due.
+  assert.deepEqual((await checkAt(8 * 60 - 20)).ended, []);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed once it was due');
+});
 
-  // ONE THAT ARRIVED BROKEN is told at the first of those, not at the
-  // eight hours' end.
-  const broken = /** @type {any} */ (claudeSignInFor('broken'));
-  broken.oauth.refreshToken = `sk-ant-ort01-revoked-${'z'.repeat(40)}`;
-  assert.equal((await during(80, () => m.phone({ op: 'put', name: 'claude', signIn: broken }))).ok, true);
-  assert.deepEqual((await checkAt(85)).ended, [], 'not in its first ten minutes');
-  const told = await checkAt(91);
-  assert.equal(told.ended.length, 1);
-  assert.equal(told.ended[0].verdict.kind, 'outside');
+test('a renewal that does not say how long the new refresh token lasts is not timed by the old one', async (t) => {
+  // The old expiry was carried over onto the rotated token, so once it was
+  // inside the half hour every box's ask renewed again.
+  const m = await minter();
+  t.after(m.restore);
+  const office = await generateKeyPair();
+  const made = /** @type {any} */ (claudeSignInFor('carried'));
+  made.oauth.refreshTokenExpiresAt = Date.now() + 20 * 60_000;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  const before = claudeRenewals.count;
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed: its refresh token had twenty minutes');
+  await m.box(office);
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'the new refresh token is not due just because the old one was');
+});
+
+test('a refresh token a renewal gave back unchanged keeps its expiry, and is not renewed again for it', async (t) => {
+  // Dropping the expiry of a token that was kept called a refusal after it
+  // "ended outside the fleet"; renewing again for it would cut every box off
+  // on every ask, since renewing cannot move it.
+  const m = await minter();
+  t.after(m.restore);
+  t.after(() => { claudeRenewals.rotate = true; });
+  const office = await generateKeyPair();
+  const made = /** @type {any} */ (claudeSignInFor('kept-refresh'));
+  const refreshUntil = Date.now() + 20 * 60_000;
+  made.oauth.refreshTokenExpiresAt = refreshUntil;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  claudeRenewals.rotate = false;
+  const before = claudeRenewals.count;
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed: its refresh token had twenty minutes');
+  await m.box(office);
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'not again for a refresh token renewing cannot move');
+  const notes = await m.rows.get([...m.rows.keys()].find((k) => k.startsWith('claude-renewed:')));
+  assert.equal(notes.at(-1).refreshUntil, refreshUntil, 'the expiry of the refresh token it kept is still known');
+});
+
+test('a new refresh token that ends as soon as the old one is not renewed again for it', async (t) => {
+  // A rotated answer that gave a refresh token under half an hour renewed on
+  // every ask, as an unchanged one did.
+  const m = await minter();
+  t.after(m.restore);
+  t.after(() => { claudeRenewals.refreshExpiresIn = undefined; });
+  const office = await generateKeyPair();
+  const made = /** @type {any} */ (claudeSignInFor('short-session'));
+  made.oauth.refreshTokenExpiresAt = Date.now() + 20 * 60_000;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  claudeRenewals.refreshExpiresIn = 15 * 60;
+  const before = claudeRenewals.count;
+  await m.box(office);
+  await m.box(office);
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'once: a second renewal would not move it either');
+});
+
+test('a 401 is renewed for once and the new token tried at once; refused again, it is told once and not renewed for again', async (t) => {
+  // A refusal that stayed forced a renewal at every check, and each one ended
+  // the token every box held, for nothing.
+  const m = await minter();
+  t.after(m.restore);
+  const start = Date.now();
+  const made = claudeSignInFor('refused-twice');
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  /** The check `minutes` after keeping, past the minter's own ten-minute floor. @param {number} minutes */
+  const checkAt = async (minutes) => {
+    t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
+    try {
+      m.rows.delete('claude-checked');
+      return await m.binding.claude('check', {});
+    } finally {
+      t.mock.timers.reset();
+    }
+  };
+  revokeClaude(made.oauth.accessToken);
+  // The token the next renewal will give is refused too.
+  revokeClaude(`sk-ant-oat01-renewed${claudeRenewals.count + 1}-${'b'.repeat(40)}`);
+  const before = claudeRenewals.count;
+  const first = await checkAt(11);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed once, because its access token was refused');
+  assert.deepEqual(first.ended, [], 'renewing works, so it is not ended');
+  assert.equal(first.refused.length, 1, 'told at once: the renewed token was tried in the same check');
+  assert.deepEqual([first.refused[0].status, first.refused[0].renewed, first.refused[0].email], [401, true, 'eli@example.com']);
+  for (const minutes of [27, 43, 120]) {
+    const later = await checkAt(minutes);
+    assert.deepEqual([later.ended, later.refused], [[], []], `told once (${minutes} minutes)`);
+  }
+  assert.equal(claudeRenewals.count - before, 1, 'not renewed for it again');
+});
+
+test('a renewal that mends a 401 says nothing, and a later 401 is renewed for once more', async (t) => {
+  // Deciding "renewing will not mend it" from a refusal hours later, not
+  // from the token the renewal gave, told a person something false.
+  const m = await minter();
+  t.after(m.restore);
+  const start = Date.now();
+  const made = claudeSignInFor('mended');
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  /** @param {number} minutes */
+  const checkAt = async (minutes) => {
+    t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
+    try {
+      m.rows.delete('claude-checked');
+      return await m.binding.claude('check', {});
+    } finally {
+      t.mock.timers.reset();
+    }
+  };
+  revokeClaude(made.oauth.accessToken);
+  const before = claudeRenewals.count;
+  const first = await checkAt(11);
+  assert.deepEqual([first.ended, first.refused], [[], []], 'the renewed token works');
+  assert.equal(claudeRenewals.count - before, 1);
+  revokeClaude(`sk-ant-oat01-renewed${claudeRenewals.count}-${'b'.repeat(40)}`);
+  const later = await checkAt(180);
+  assert.deepEqual([later.ended, later.refused], [[], []]);
+  assert.equal(claudeRenewals.count - before, 2, 'a new refusal is renewed for once more');
+});
+
+test('a 403 is never renewed for, and is told to its person once for the sign-in', async (t) => {
+  // A 403 says the sign-in may not do this, not that the token ran out:
+  // renewing does not change it, and each renewal ends every box's token.
+  const m = await minter();
+  t.after(m.restore);
+  const start = Date.now();
+  const made = claudeSignInFor('forbidden');
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  /** @param {number} minutes */
+  const checkAt = async (minutes) => {
+    t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
+    try {
+      m.rows.delete('claude-checked');
+      return await m.binding.claude('check', {});
+    } finally {
+      t.mock.timers.reset();
+    }
+  };
+  forbidClaude(made.oauth.accessToken);
+  const before = claudeRenewals.count;
+  const first = await checkAt(11);
+  assert.equal(first.refused.length, 1);
+  assert.deepEqual([first.refused[0].status, first.refused[0].renewed], [403, false]);
+  for (const minutes of [27, 43, 120]) assert.deepEqual((await checkAt(minutes)).refused, [], `told once (${minutes} minutes)`);
+  assert.equal(claudeRenewals.count - before, 0, 'never renewed for a 403');
 });
 
 test('a refusal after the refresh token ran out by its own lifetime is this fleet being late, not anything outside it', () => {
