@@ -2471,11 +2471,14 @@ export class CoordinatorCore {
       ...(owner ? { clientId: owner } : {}),
       // KEPT ONLY WHEN SUPPLIED THIS TIME, never inherited from `existing`.
       //
-      // A phone that reinstalls loses its private key — it was in the Keychain
-      // or the Keystore and both go with the app — so carrying the old public
-      // key forward would encrypt every future notification to a key nobody
+      // An Android phone that reinstalls loses its private key, because a
+      // Keystore entry goes with the app, so carrying the old public key
+      // forward would encrypt every future notification to a key nobody
       // holds. The failure would be silent and permanent: delivery succeeds,
-      // decryption fails, and the person sees the fallback text forever.
+      // decryption fails, and the person sees the fallback text forever. An
+      // iPhone's Keychain item outlives the app, and the reinstalled app
+      // reads it back and sends it again, so it needs nothing carried for it
+      // either. What a phone sends is the only key it can vouch for.
       ...(pushKey ? { pushKey } : {}),
       registeredAt: existing?.registeredAt ?? this.now(),
     };

@@ -107,7 +107,25 @@ export async function envelopeFor(device, message, { now = () => Date.now() } = 
   // FCM data values must be.
   const data = { ...(message.data || {}), sentAt: String(now()) };
   if (!device.pushKey) return { encrypted: false, title: message.title, body: message.body, data };
-  const sealed = await sealTo(device.pushKey, { title: message.title, body: message.body, data });
+  // THE CATEGORY IS SEALED AS WELL, and it still rides in the clear beside
+  // the envelope. The clear copy has to stay: iOS picks the buttons from
+  // `aps.category` before anything has been opened, and a phone from before
+  // this reads nothing else. But a clear field is one Apple, Google or a
+  // relay could change, and the category decides which two words go on the
+  // buttons while the digits they type are sealed — so a swapped one is a
+  // button labelled for one question typing the answer to another. A phone
+  // that opens the envelope takes the sealed one, and draws no buttons when
+  // the clear one disagrees.
+  //
+  // ALWAYS WRITTEN, empty when there is nothing to answer. An absent key is
+  // how a phone tells a coordinator from before this, whose clear category
+  // is all there is, from this one saying "no buttons" — which a clear
+  // category added on the way must not be able to overrule.
+  const sealed = await sealTo(device.pushKey, {
+    title: message.title,
+    body: message.body,
+    data: { ...data, category: message.category ?? '' },
+  });
   return {
     encrypted: true,
     title: 'Fleetwright',
@@ -217,7 +235,8 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
           // already and putting them here in the clear would undo the point of
           // sealing them. The category is in the clear either way, because iOS
           // reads it before anything could be decrypted — said at length in
-          // promptForPush().
+          // promptForPush() — and inside the envelope as well, where a phone
+          // that opens it checks this copy against it (envelopeFor).
           const appDraws = Boolean(message.category || message.drawnByApp);
           const forTheApp = appDraws && !wire.encrypted
             ? { title: wire.title, body: wire.body }
