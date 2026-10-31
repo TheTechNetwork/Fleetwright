@@ -80,11 +80,11 @@ export const DEBIAN_IMAGE = Object.freeze({
   algorithm: /** @type {'sha512'} */ ('sha512'),
   release: '13',
   // renovate: datasource=custom.debian-cloud depName=trixie
-  build: '20261021-2638',
-  url: 'https://cloud.debian.org/images/cloud/trixie/20261021-2638/debian-13-genericcloud-amd64-20261021-2638.qcow2',
+  build: '20261026-2643',
+  url: 'https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2',
   /** As published in that build's SHA512SUMS, and as downloaded. */
-  sha512: '16e0965312c56feb331049d45d2b1b5778f3f942a33d4300eedbb97527707f2bea87c0006f3e4cc7a25fadbff739c4e235a51fb9bcd1b66fd554f7f8e80ba45c',
-  compressedSize: 342294528,
+  sha512: '3ace18e33bdd036edb49d1f79342bd01d2ab980e35194edb0b410435cd543538d286a0bd13bbb0835f7862306e3d385ce2f6a70d8ecf0bd961111166adbc1b8e',
+  compressedSize: 341114880,
   /** The disk's size inside the qcow2, before it is grown. */
   rawSize: 3221225472,
 });
