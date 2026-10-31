@@ -120,10 +120,10 @@ jobs:
         # gitignored, because a hand-written pbxproj opens on exactly one machine.
         run: xcodegen generate
 
-      # The scheme builds the Live Activity extension too (the app depends on
-      # it in project.yml), so every line of the Lock Screen view is
-      # type-checked here as well, and CODE_SIGNING_ALLOWED=NO covers both
-      # bundles: an unsigned simulator build needs no profile for either.
+      # The scheme builds both extensions (the app depends on them in
+      # project.yml), so the Lock Screen and the notification service are
+      # type-checked here as well, and CODE_SIGNING_ALLOWED=NO covers every
+      # bundle: an unsigned simulator build needs no profile for any of them.
       - name: Build
         working-directory: apps/ios
         run: |
@@ -523,6 +523,69 @@ jobs:
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           rm -f "$RUNNER_TEMP/activity.plist"
 
+      # THE NOTIFICATION SERVICE EXTENSION'S PROFILE, the same way.
+      #
+      # network.thetech.fleetwright.Push opens a sealed notification before
+      # iOS draws it, and it is a third bundle. The app's secret profile does
+      # not cover it, and neither does the Live Activity's. Same tool, its
+      # own bundle id, its own name.
+      #
+      # WHAT IT THEN CHECKS. The extension reads the app's keychain group
+      # (the app's id, where a key written with no group lands) and the app's
+      # entitlements are deliberately unchanged — a new key there would fail
+      # the secret profile. So this profile has to allow that group. App Store
+      # profiles carry keychain-access-groups as the team wildcard, which does.
+      # One that lists only the extension's own id does not, and failing here
+      # is the difference between a release that says so and a phone that
+      # shows the fallback sentence forever.
+      - name: Ensure the notification service extension has a profile
+        if: steps.creds.outputs.have == 'true'
+        id: push_profile
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUNDLE_ID: network.thetech.fleetwright.Push
+          BUNDLE_NAME: Fleetwright Push
+          PROFILE_NAME: Fleetwright Push Profile
+          OUT: ${{ runner.temp }}/push.mobileprovision
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          CERT_SERIAL=$(security find-certificate -c "Apple Distribution" -p "$KEYCHAIN" 2>/dev/null \
+            | openssl x509 -noout -serial 2>/dev/null | sed 's/^serial=//' || true)
+          export CERT_SERIAL
+          node tools/ensure-ios-extension-profile.mjs
+
+          security cms -D -i "$OUT" > "$RUNNER_TEMP/push.plist"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/push.plist")
+          NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$RUNNER_TEMP/push.plist")
+          APPID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/push.plist")
+          EXPIRES=$(/usr/libexec/PlistBuddy -c 'Print :ExpirationDate' "$RUNNER_TEMP/push.plist")
+          echo "extension profile: $NAME ($UUID)"
+          echo "app id:            $APPID"
+          echo "expires:           $EXPIRES"
+          python3 - "$RUNNER_TEMP/push.plist" << 'PY'
+          import plistlib, sys
+          with open(sys.argv[1], "rb") as f:
+              pl = plistlib.load(f)
+          groups = pl.get("Entitlements", {}).get("keychain-access-groups") or []
+          app = "network.thetech.fleetwright"
+          def allows(g):
+              return g == "*" or g.endswith(".*") or g.endswith("." + app) or g == app or g.endswith("." + app)
+          print("keychain-access-groups:", ", ".join(groups) or "(none)")
+          if not any(allows(g) for g in groups):
+              sys.exit(
+                  "this profile does not allow the app's keychain group, so the extension "
+                  "could be signed and still unable to open a notification. "
+                  "keychain-access-groups was: " + repr(groups)
+              )
+          PY
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$OUT" ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          rm -f "$RUNNER_TEMP/push.plist"
+
       - name: Archive
         if: steps.creds.outputs.have == 'true'
         working-directory: apps/ios
@@ -537,6 +600,7 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
           PROFILE_NAME: ${{ steps.profile.outputs.name }}
           ACTIVITY_PROFILE_NAME: ${{ steps.activity_profile.outputs.name }}
+          PUSH_PROFILE_NAME: ${{ steps.push_profile.outputs.name }}
         # If this fails with "provisioning profile does not include the
         # com.apple.developer.applesignin entitlement", it is not a certificate
         # problem however much it reads like one. The app entitles Sign in with
@@ -571,14 +635,14 @@ jobs:
           # fails, rather than a build that fails AND leaves the account one
           # certificate closer to unusable.
           #
-          # TWO PROFILES, ONE PER TARGET, through two variables rather than
+          # ONE PROFILE PER TARGET, through variables rather than
           # PROVISIONING_PROFILE_SPECIFIER itself. A setting on this command
-          # line applies to every target in the build, and the Live Activity
-          # extension is a second target with a second bundle id that the
-          # app's profile does not cover. project.yml gives each target
+          # line applies to every target in the build, and each extension is
+          # a further bundle id that the app's profile does not cover.
+          # project.yml gives each target
           # `PROVISIONING_PROFILE_SPECIFIER: $(FLEETWRIGHT_…_PROFILE)`, so
-          # naming the two variables here names a profile per bundle while
-          # the identity and the team stay shared.
+          # naming the variables here names a profile per bundle while the
+          # identity and the team stay shared.
           xcodebuild archive \
             -project Fleetwright.xcodeproj \
             -scheme Fleetwright \
@@ -589,6 +653,7 @@ jobs:
             CODE_SIGN_IDENTITY="Apple Distribution" \
             FLEETWRIGHT_APP_PROFILE="$PROFILE_NAME" \
             FLEETWRIGHT_ACTIVITY_PROFILE="$ACTIVITY_PROFILE_NAME" \
+            FLEETWRIGHT_PUSH_PROFILE="$PUSH_PROFILE_NAME" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
       - name: Upload to TestFlight
@@ -600,14 +665,16 @@ jobs:
           TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           BUNDLE_ID: network.thetech.fleetwright
           ACTIVITY_BUNDLE_ID: network.thetech.fleetwright.Activity
+          PUSH_BUNDLE_ID: network.thetech.fleetwright.Push
           PROFILE_NAME: ${{ steps.profile.outputs.name }}
           ACTIVITY_PROFILE_NAME: ${{ steps.activity_profile.outputs.name }}
+          PUSH_PROFILE_NAME: ${{ steps.push_profile.outputs.name }}
         run: |
           # signingStyle manual, and the profile named per bundle id. Without
           # these two keys the export re-decides the signing it was just given,
           # and re-deciding is what asked Apple for certificates.
           #
-          # BOTH BUNDLE IDS. The extension inside the app is re-signed on
+          # EVERY BUNDLE ID. Each extension inside the app is re-signed on
           # export like the app is, and a bundle id missing from this list is
           # a bundle the export decides the signing for — which is the thing
           # the list exists to stop.
@@ -630,6 +697,7 @@ jobs:
             <dict>
               <key>${BUNDLE_ID}</key><string>${PROFILE_NAME}</string>
               <key>${ACTIVITY_BUNDLE_ID}</key><string>${ACTIVITY_PROFILE_NAME}</string>
+              <key>${PUSH_BUNDLE_ID}</key><string>${PUSH_PROFILE_NAME}</string>
             </dict>
           </dict>
           </plist>

@@ -67,6 +67,10 @@ targets:
       # PlugIns, and building this scheme builds it, so CI's simulator build
       # type-checks it on every pull request without a second invocation.
       - target: FleetwrightActivity
+      # THE NOTIFICATION SERVICE EXTENSION, embedded for the same reason.
+      # A sealed notification is rewritten before it is shown, and a scheme
+      # that does not build the extension does not type-check it.
+      - target: FleetwrightPush
     # THE TEST TARGET JOINS THIS TARGET'S SCHEME, rather than being declared in
     # a `schemes:` block of its own. CI runs `xcodebuild -scheme Fleetwright`,
     # and a test target that exists but is in no scheme's test action is a
@@ -368,6 +372,63 @@ targets:
         SKIP_INSTALL: YES
         # Its own profile; see the app target's note on this setting.
         PROVISIONING_PROFILE_SPECIFIER: $(FLEETWRIGHT_ACTIVITY_PROFILE)
+
+  # THE NOTIFICATION SERVICE EXTENSION: opens a sealed notification before iOS
+  # draws it (docs/push-encryption.md). An extension because that is the only
+  # process iOS will run for `mutable-content`, and it has to run while the
+  # app is not.
+  #
+  # IT COMPILES PushCrypto.swift BESIDE ITS OWN FILE, the same way the Live
+  # Activity compiles Design.swift: one declaration of the scheme, two bundles.
+  #
+  # THE KEYCHAIN GROUPS ARE THE WHOLE OF HOW IT READS THE KEY. The app writes
+  # the key into its default group, which is its own id, and names no group
+  # itself — so the app's entitlements are unchanged and the distribution
+  # profile that already signs it still does. This target names that group,
+  # plus its own first so its default group stays its own. The release job
+  # checks the profile it is given actually allows the app's group (ios.yml);
+  # a profile that does not fails there, before the archive, rather than as a
+  # notification that shows the fallback forever.
+  #
+  # WHAT ELSE THAT GROUP HOLDS, said rather than left to be found. A keychain
+  # group is the smallest grant there is, so this extension could read every
+  # item the app keeps there, the coordinator credential (`Keychain` in
+  # Fleet.swift, service network.thetech.fleetwright) among them; its code
+  # reads one item, account `push-key`, and nothing else. Narrowing it means
+  # the app writing the key into a group of its own, which means a
+  # keychain-access-groups entitlement on the APP — and the app's profile is
+  # the hand-made secret ios.yml installs, which this repository cannot read
+  # to know it allows one. An archive that failed on that would stop every
+  # release until somebody remade the profile by hand, so the wide grant to
+  # our own extension is the trade, and docs/push-encryption.md records it.
+  FleetwrightPush:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: FleetwrightPush
+      - path: Fleetwright/PushCrypto.swift
+    info:
+      path: FleetwrightPush/Info.plist
+      properties:
+        CFBundleDisplayName: Fleetwright
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    entitlements:
+      path: FleetwrightPush/FleetwrightPush.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)network.thetech.fleetwright.Push
+          - $(AppIdentifierPrefix)network.thetech.fleetwright
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: network.thetech.fleetwright.Push
+        SWIFT_VERSION: "5.9"
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        SKIP_INSTALL: YES
+        PROVISIONING_PROFILE_SPECIFIER: $(FLEETWRIGHT_PUSH_PROFILE)
 
   # UNIT TESTS, plain XCTest — no simulator UI, no XCUITest.
   #

@@ -283,7 +283,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
+        // Whether the extension opened it, for the line on You (PushKey.saw).
+        PushKey.saw(userInfo: notification.request.content.userInfo, at: notification.date)
+        return [.banner, .sound]
     }
 
     /// Somebody tapped one. Until this existed a tap opened the app to
@@ -304,6 +306,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didReceive response: UNNotificationResponse
     ) async {
         let info = response.notification.request.content.userInfo
+        PushKey.saw(userInfo: info, at: response.notification.date)
 
         switch NotificationAnswers.decide(actionIdentifier: response.actionIdentifier, userInfo: info) {
         case let .answer(name, option, promptId):

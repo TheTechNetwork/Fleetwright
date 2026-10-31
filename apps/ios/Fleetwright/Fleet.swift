@@ -2800,7 +2800,22 @@ struct Fleet {
 
     func registerDevice(token: Data) async throws {
         let hex = token.map { String(format: "%02x", $0) }.joined()
-        _ = try await post("/api/devices", body: ["platform": "ios", "token": hex])
+        var body: [String: Any] = ["platform": "ios", "token": hex]
+        // THE KEY THIS INSTALL OPENS WITH, so its notifications are sealed to
+        // it (docs/push-encryption.md). A keychain that is locked or busy
+        // does not stop the registration: it goes with the last key this
+        // phone sent, because the coordinator keeps a key only when one is
+        // sent and this phone must never go back to plaintext, nor stop
+        // sending a new APNs token. Absent only on a phone with no key sent on
+        // record that cannot use one now: one that has never sent a key, or a
+        // reinstalled app, whose record went with its defaults while the
+        // keychain item stayed, meeting a keychain error on its first
+        // registration. That one goes as plaintext until the next registration
+        // reads the key (PushKey.registrationKey).
+        if let pushKey = PushKey.registrationKey() {
+            body["pushKey"] = pushKey
+        }
+        _ = try await post("/api/devices", body: body)
     }
 
     /// - Parameter numeric: keys the protocol types as `int`. They travel as
