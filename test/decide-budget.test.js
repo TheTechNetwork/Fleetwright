@@ -95,6 +95,37 @@ test('one decision per session per ten minutes, twenty per host per hour', async
   assert.equal(f.asked.length, 20);
 });
 
+test('a box already at its own limit does not take a fleet token, and a gate refusal is not stored', async () => {
+  let platform = 0;
+  let stored = 0;
+  const f = fleet({ rateLimit: async () => { platform += 1; return true; } });
+  f.core.onStateChanged = () => { stored += 1; };
+  assert.equal((await f.ask()).ok, true);
+  assert.equal(platform, 1);
+  const written = stored;
+  assert.ok(written > 0, 'an admitted call was not written');
+  assert.equal((await f.ask()).why, 'ratelimited');
+  assert.equal(platform, 1, 'the same session inside ten minutes took another fleet token');
+  assert.equal(stored, written, 'a session-window refusal was written');
+
+  for (let i = 0; i < 19; i++) assert.equal((await f.ask({ name: `s${i}` })).ok, true);
+  const atTheHour = platform;
+  assert.equal((await f.ask({ name: 'one-more' })).why, 'ratelimited');
+  assert.equal(platform, atTheHour, 'a host that had had its hour took another fleet token');
+
+  const beforeGate = stored;
+  const beforeTokens = platform;
+  assert.equal((await f.ask({ name: 'fresh', state: 'token sk-ant-oat01 please' })).why, 'refused:credential-shape');
+  assert.equal(stored, beforeGate, 'a gate refusal was written to storage');
+  assert.equal(platform, beforeTokens, 'a gate refusal took a fleet token');
+  assert.equal(f.core.decideLimits.snapshot().refused, 1);
+
+  let spent = 0;
+  const broke = fleet({ budget: '0.0001', rateLimit: async () => { spent += 1; return true; } });
+  assert.equal((await broke.ask({ name: 'over' })).why, 'budget');
+  assert.equal(spent, 0, 'a day already spent took a fleet token');
+});
+
 test('the day\'s budget refuses before the call, and each call is reconciled to its real tokens', async () => {
   const f = fleet({ budget: '4' });
   assert.equal((await f.ask()).ok, true);

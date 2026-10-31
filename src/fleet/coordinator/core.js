@@ -6154,10 +6154,13 @@ export class CoordinatorCore {
    *
    * THE WALLS, IN ORDER, and each refusal is an answer, never a silence, so a
    * host can tell "off" from "your mask is wrong" from "the day is spent":
-   * the feature and its bindings; the gate (refuses, never cleans); the
-   * platform's rate limit, which no rebuild of this object resets; this
-   * session's and this host's windows; the day's neurons. Then one call, no
-   * retry, and the masked state is dropped: nothing of it is kept or logged.
+   * the feature and its bindings; the gate (refuses, never cleans, and is not
+   * written to storage on its own); this session's window, this host's
+   * window and the day's neurons; and only then the platform's rate limit,
+   * which is one key for the whole fleet and which no rebuild of this object
+   * resets. A box already at its own cap must not spend that key. Then one
+   * call, no retry, and the masked state is dropped: nothing of it is kept
+   * or logged.
    *
    * WHAT THE ANSWER IS FOR. `asked` and `p` go back to the host, which alone
    * decides what a yes may do, and may only mark the pane as waiting
@@ -6183,19 +6186,26 @@ export class CoordinatorCore {
     const refusal = refuseUnlessMasked(msg);
     if (refusal) {
       this.decideLimits.refused();
-      this.onStateChanged?.();
       this.log.warn(`coordinator: decide refused from ${hostId}: ${refusal}`);
       return answer({ ok: false, why: `refused:${refusal}` });
     }
     const session = typeof msg.name === 'string' && msg.name.length <= 128 ? msg.name : null;
     if (!session) return answer({ ok: false, why: 'refused:no-session' });
+    const state = /** @type {string} */ (msg.state);
+    const bytes = new TextEncoder().encode(state).length;
+    // LOCAL WALLS BEFORE THE FLEET'S ONE KEY. The platform limit is 30 a
+    // minute for every box together. Asking it first meant a session already
+    // decided, or a host that had had its hour, spent a token to be told no.
+    const blocked = this.decideLimits.blocked(hostId, session, bytes);
+    if (blocked) {
+      if (blocked === 'budget') this.log.warn(`coordinator: decide refused from ${hostId}: the day's budget of ${this.decideLimits.budget} neurons is spent`);
+      return answer({ ok: false, why: blocked });
+    }
     let allowed = false;
     try {
       allowed = (await this.decide.rateLimit()) === true;
     } catch { /* a rate limit that cannot be asked is a no */ }
     if (!allowed) return answer({ ok: false, why: 'ratelimited' });
-    const state = /** @type {string} */ (msg.state);
-    const bytes = new TextEncoder().encode(state).length;
     const held = this.decideLimits.admit(hostId, session, bytes);
     if (held) {
       if (held === 'budget') this.log.warn(`coordinator: decide refused from ${hostId}: the day's budget of ${this.decideLimits.budget} neurons is spent`);

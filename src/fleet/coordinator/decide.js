@@ -145,9 +145,35 @@ export class DecideLimits {
     return this.spend;
   }
 
-  /** A gate refusal, counted where the health surface reads it. */
+  /**
+   * A gate refusal, counted where the health surface reads it.
+   *
+   * NOT WRITTEN ON ITS OWN. The count rides along the next time the spend or
+   * a window is stored. A frame the gate rejects is the common case of a
+   * wrong mask, and writing the object for each one would be a storage write
+   * per bad frame.
+   */
   refused() {
     this.#today().refused++;
+  }
+
+  /**
+   * The local refusal, without spending a window or the day. The platform
+   * rate limit is one key for the whole fleet, so it is asked only when this
+   * is null: a box already at its own cap, or a day already spent, cannot
+   * take one of the fleet's 30 a minute.
+   *
+   * @param {string} hostId @param {string} session @param {number} bytes
+   * @returns {'ratelimited'|'budget'|null}
+   */
+  blocked(hostId, session, bytes) {
+    const now = this.now();
+    const key = `${hostId}\n${session}`;
+    if (now - (this.sessions.get(key) ?? -Infinity) < DECIDE_SESSION_QUIET_MS) return 'ratelimited';
+    const recent = (this.hosts.get(hostId) || []).filter((t) => now - t < DECIDE_HOST_WINDOW_MS);
+    if (recent.length >= DECIDE_HOST_EACH) return 'ratelimited';
+    if (this.#today().neurons + estimateNeurons(bytes) > this.budget) return 'budget';
+    return null;
   }
 
   /**
@@ -159,17 +185,13 @@ export class DecideLimits {
    * @returns {'ratelimited'|'budget'|null}
    */
   admit(hostId, session, bytes) {
+    const why = this.blocked(hostId, session, bytes);
+    if (why) return why;
     const now = this.now();
     const key = `${hostId}\n${session}`;
-    if (now - (this.sessions.get(key) ?? -Infinity) < DECIDE_SESSION_QUIET_MS) return 'ratelimited';
     const recent = (this.hosts.get(hostId) || []).filter((t) => now - t < DECIDE_HOST_WINDOW_MS);
-    if (recent.length >= DECIDE_HOST_EACH) {
-      this.hosts.set(hostId, recent);
-      return 'ratelimited';
-    }
     const spend = this.#today();
     const estimate = estimateNeurons(bytes);
-    if (spend.neurons + estimate > this.budget) return 'budget';
     for (const [k, at] of this.sessions) if (now - at >= DECIDE_SESSION_QUIET_MS) this.sessions.delete(k);
     for (const [k, times] of this.hosts) if (now - times[times.length - 1] >= DECIDE_HOST_WINDOW_MS) this.hosts.delete(k);
     this.sessions.set(key, now);
