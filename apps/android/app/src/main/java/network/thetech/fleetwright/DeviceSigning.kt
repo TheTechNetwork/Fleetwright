@@ -221,6 +221,9 @@ internal class DeviceSigning(private val settings: Settings) {
 
     private val email: String get() = settings.signedInAs.trim()
 
+    /** Whether this phone's key is listed for the account it is signed in as (Settings.deviceKeyListedDigest says why a digest). */
+    private fun isListed(key: DeviceKey): Boolean = settings.deviceKeyListedDigest == listedDigest(key.kid, email)
+
     /**
      * The signature for an intent to [host], when this phone's key is listed
      * for the account it is signed in as. Null otherwise, and the intent goes
@@ -229,7 +232,7 @@ internal class DeviceSigning(private val settings: Settings) {
     fun signature(verb: String, params: Map<String, Any?>, id: String, host: String): Signed? {
         if (email.isEmpty() || host.isBlank()) return null
         val key = runCatching { DeviceKey.load() }.getOrNull() ?: return null
-        if (settings.deviceKeyListed != "${key.kid} $email") return null
+        if (!isListed(key)) return null
         val issuedAt = System.currentTimeMillis()
         val sig = runCatching { key.sign(IntentSigning.input(email, id, issuedAt, params, verb, host)) }.getOrNull() ?: return null
         return Signed(sig, key.kid, issuedAt)
@@ -245,7 +248,7 @@ internal class DeviceSigning(private val settings: Settings) {
     fun delegation(verbs: List<String>, hosts: List<String>, match: Map<String, Any?>, lifetimeMs: Long): JSONObject? {
         if (email.isEmpty()) return null
         val key = runCatching { DeviceKey.load() }.getOrNull() ?: return null
-        if (settings.deviceKeyListed != "${key.kid} $email") return null
+        if (!isListed(key)) return null
         val now = System.currentTimeMillis()
         // A delegation's id is what it is revoked by, so never reused.
         val grant = mapOf(
@@ -263,13 +266,19 @@ internal class DeviceSigning(private val settings: Settings) {
      * tap. Never throws: until it is listed, nothing is signed.
      */
     suspend fun listIfNeeded(fleet: Fleet) {
+        settings.forgetDeviceKeyListedPair()
         if (email.isEmpty() || !PhoneGitHub(settings).signedIn) return
         val key = runCatching { DeviceKey.load() }.getOrNull() ?: return
-        val listedAs = "${key.kid} $email"
-        if (settings.deviceKeyListed == listedAs) return
+        if (isListed(key)) return
         val now = System.currentTimeMillis()
         if (now - settings.deviceKeyListTriedAt < 600_000) return
         settings.deviceKeyListTriedAt = now
-        if (PhoneVault(settings).listDeviceKey(fleet, key).isSuccess) settings.deviceKeyListed = listedAs
+        if (PhoneVault(settings).listDeviceKey(fleet, key).isSuccess) settings.deviceKeyListedDigest = listedDigest(key.kid, email)
+    }
+
+    companion object {
+        /** The marker for [kid] listed under [email]: the SHA-256 of "<kid> <email>" in hex. */
+        fun listedDigest(kid: String, email: String): String =
+            MessageDigest.getInstance("SHA-256").digest("$kid $email".toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
     }
 }

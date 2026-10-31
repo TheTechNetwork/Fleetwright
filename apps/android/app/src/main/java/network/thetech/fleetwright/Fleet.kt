@@ -3821,13 +3821,22 @@ class Settings(context: Context) {
         set(value) = prefs.edit().putString("signedInAs", value).apply()
 
     /**
-     * Which key the minter lists for which account, as "<kid> <email>": this
-     * phone signs only for the account its key is listed under
-     * (DeviceSigning.kt). Not a secret: a key id and an address.
+     * Which key the minter listed for which account, as the SHA-256 of
+     * "<kid> <email>" in hex (DeviceSigning.listedDigest): this phone signs
+     * only for the account its key is listed under. A digest and not the pair
+     * itself, because the pair put the address in the preference store a
+     * second time (CodeQL, "Cleartext storage of sensitive information in an
+     * application preference store"; it is there once as `signedInAs`, which
+     * the app displays), and the marker only ever answers whether this pair
+     * is the one listed, which a digest answers as well. The same on iOS
+     * (DeviceSigning.swift).
      */
-    var deviceKeyListed: String
-        get() = prefs.getString("deviceKeyListed", "") ?: ""
-        set(value) = prefs.edit().putString("deviceKeyListed", value).apply()
+    var deviceKeyListedDigest: String
+        get() = prefs.getString("deviceKeyListedDigest", "") ?: ""
+        set(value) = prefs.edit().putString("deviceKeyListedDigest", value).apply()
+
+    /** The pair itself, as it was kept before the digest: removed the next time listing is considered, so an upgraded phone does not carry it on. */
+    fun forgetDeviceKeyListedPair() = prefs.edit().remove("deviceKeyListed").apply()
 
     /** When listing this phone's key was last tried, so a minter that is down is not asked on every tap. */
     var deviceKeyListTriedAt: Long
