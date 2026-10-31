@@ -147,7 +147,7 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
 
 /**
  * @typedef {{ key: string, secret: string, pin: string, routers: Array<{ name: string, address: string|null }> }} EdgeKey
- * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string, edge?: EdgeKey, grants?: { upgrades?: boolean, reboot?: boolean } }} PoolRecord
+ * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string, edge?: EdgeKey, grants?: { upgrades?: boolean, reboot?: boolean }, masters?: string[] }} PoolRecord
  * @typedef {{ id: string, name: string, pool: string|null, poolName: string|null }} Image
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, lab?: 'open'|'closed', taken?: boolean|null, perPerson?: number }} Network
  * @typedef {{ interval: number, end: number, rx: Array<number|null>, tx: Array<number|null> }} Traffic
@@ -401,6 +401,12 @@ export function poolRecord(name, value) {
   if (!plain && !pin) return null;
   const edge = edgeKey(r.edge);
   const grants = machineGrantsOf(r.grants);
+  // `masters`, the pool master's addresses as setup saw them (poolMastersOf
+  // in xo-setup.js), is in the record for the phone to show and is not
+  // carried here: a box reaches a pool through the address the record is
+  // filed under, and nothing on it dials a pool master. Any other field a
+  // later setup adds is passed over the same way, never a reason to drop
+  // the pool.
   return { address, pin, plain, token: r.token, resourceSet: typeof r.resourceSet === 'string' ? r.resourceSet : null, user: typeof r.user === 'string' ? r.user : undefined, ...(edge ? { edge } : {}), ...(grants ? { grants } : {}) };
 }
 

@@ -104,12 +104,18 @@ test('a pool’s token is taken out of the vault’s answer before the hub sees 
         { name: 'hypervisor:xo.lan', value: record() },
         { name: 'hypervisor:other.lan', value: record() },
         { name: 'hypervisor:nopin.lan', value: record({ address: 'nopin.lan', pin: null }) },
+        // A record from a setup that kept the pool master's addresses for
+        // the phone to show: adopted as one without them is.
+        { name: 'hypervisor:masters.lan', value: record({ address: 'masters.lan', masters: ['10.10.10.11', '10.10.10.12'] }) },
       ],
     },
   ]);
   assert.deepEqual(given[0].items.map((/** @type {any} */ i) => i.name), ['secret:NPM', 'claude'], 'the hub is given everything but pools');
-  assert.deepEqual([...pools.held.keys()], [`${ELI} xo.lan`], 'filed under another address, or pinned to nothing, is not a pool');
+  assert.deepEqual([...pools.held.keys()], [`${ELI} xo.lan`, `${ELI} masters.lan`], 'filed under another address, or pinned to nothing, is not a pool');
   assert.equal(pools.claude.get(ELI), CLAUDE);
+  // THE FIELD IS THE PHONE'S: the box holds the pool exactly as it would
+  // without it, so a setup adding to the record changes nothing here.
+  assert.deepEqual(poolRecord('hypervisor:masters.lan', record({ address: 'masters.lan', masters: ['10.10.10.11'] })), poolRecord('hypervisor:masters.lan', record({ address: 'masters.lan' })));
   // Plain HTTP only with the person's acceptance recorded at setup.
   assert.ok(poolRecord('hypervisor:plain.lan', record({ address: 'plain.lan', pin: null, plain: true })));
   pools.adopt([]);

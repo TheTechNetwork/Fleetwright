@@ -20,7 +20,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
-import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits, syslogTo } from '../src/fleet/host/xo-setup.js';
+import { probe, XoSetups, limitsFrom, STEP_WORDS, FLEET_USER, checkPolicy, currentLimits, syslogTo, poolMastersOf } from '../src/fleet/host/xo-setup.js';
 import { XOSETUP_STEPS, XOPOLICY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS } from '../src/fleet/protocol/intents.js';
 import { seal, open, newSealKey, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupPolicySigninAad, xosetupReconnectAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../src/fleet/seal.js';
 import { EDGE_KEPT, newWatch } from '../src/fleet/host/edge-credentials.js';
@@ -139,6 +139,10 @@ test('a pool is onboarded end to end, and the limited token goes back to the pho
   assert.equal(kept.address, xo.address);
   assert.equal(kept.pin, xo.pin);
   assert.equal(kept.user, FLEET_USER);
+  // THE POOL MASTER'S ADDRESSES, for the day it stops answering on one:
+  // management first, then the other address its PIFs carry, the one with
+  // no address and another host's left out (xo-stand-in.js, PIF).
+  assert.deepEqual(kept.masters, ['10.10.10.11', '10.10.30.11']);
   // KEPT NOWHERE HERE: not on disk, and not in what the coordinator relays.
   assert.equal(existsSync(old), false, 'the old copy is gone');
   const everything = JSON.stringify({ events, status: end });
@@ -291,6 +295,31 @@ test('the limits are half of what the pool has, and every step has words', () =>
     { cpus: 4, memory: 1024 ** 3, disk: 10 * 1024 ** 3 },
   );
   for (const key of [...XOSETUP_STEPS, ...XORECONNECT_STEPS, ...XOWATCHDOG_STEPS]) assert.ok(STEP_WORDS[key], key);
+});
+
+test('the pool master’s addresses are what Xen Orchestra showed, management first, and nothing when it showed none', () => {
+  const pools = [{ id: 'p1', master: 'h1' }, { id: 'p2', master: 'h2' }];
+  const hosts = [{ id: 'h1', address: 'xcp-a.lan' }, { id: 'h2', address: '10.0.2.1' }];
+  const pifs = [
+    { $host: 'h1', ip: '10.0.1.2' },
+    { $host: 'h1', ip: '10.0.1.1' },
+    { $host: 'h1', ip: '10.0.1.1' },
+    { $host: 'h1', ip: '' },
+    { $host: 'h1', ip: 'fe80::1' },
+    { $host: 'h2', ip: '10.0.2.1' },
+    { $host: 'h3', ip: '10.0.3.1' },
+  ];
+  // Each pool's master in turn, its management address first, nothing twice,
+  // and nothing that is not an address.
+  assert.deepEqual(poolMastersOf(pools, hosts, pifs), ['xcp-a.lan', '10.0.1.2', '10.0.1.1', '10.0.2.1']);
+  // No PIFs read: the management address alone. No master among the hosts,
+  // or no address on it: nothing, which the record then leaves out.
+  assert.deepEqual(poolMastersOf(pools, hosts, []), ['xcp-a.lan', '10.0.2.1']);
+  assert.deepEqual(poolMastersOf([{ id: 'p1', master: 'gone' }], hosts, pifs), []);
+  assert.deepEqual(poolMastersOf([{ id: 'p1', master: 'h1' }], [{ id: 'h1' }], pifs), ['10.0.1.2', '10.0.1.1']);
+  // At most eight, however many a bonded master carries.
+  const many = Array.from({ length: 12 }, (_, i) => ({ $host: 'h1', ip: `10.9.0.${i + 1}` }));
+  assert.equal(poolMastersOf([{ id: 'p1', master: 'h1' }], hosts, many).length, 8);
 });
 
 test('a certificate nothing vouches for stops setup unless the person accepted it, before a byte is sent', { skip }, async (t) => {
