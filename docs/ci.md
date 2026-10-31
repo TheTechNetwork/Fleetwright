@@ -24,6 +24,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `ios-profile.yml` | manual (`workflow_dispatch`) | App Store Connect API key (`ASC_*`) |
 | `codeql.yml` | every push and PR, plus weekly | none |
 | `sandbox.yml` | pushes touching `sandbox/` | none — `GITHUB_TOKEN` with `packages: write`, publishing the session image to GHCR |
+| `edge-image.yml` | PRs and pushes touching `scripts/edge-image/`, `scripts/opnsense-room.mjs` or itself; manual, with a release to build | none — `GITHUB_TOKEN` with `contents: write` publishing the edge router image as a release, `id-token`/`attestations: write` for its provenance; a PR only uploads an artifact. See [`scripts/edge-image/README.md`](../scripts/edge-image/README.md) |
 | `host-release.yml` — `package` | PRs and pushes to main touching what a host runs (`bin/`, `src/`, `install/`, `sandbox/`, the builders) | none — builds the tarball twice and compares, runs every entry point the way the unit does |
 | `host-release.yml` — `attach` | published release | none — `GITHUB_TOKEN` with `contents: write`, attaching the host tarball and manifest |
 | `host-release.yml` — `deb` | every run the host package builds, pull requests included | none — builds amd64 and arm64 debs twice and compares, installs one on `debian:13`, starts the bundled node and the commands, joins nowhere, purges |

@@ -17,8 +17,14 @@
 //     and its cluster map, its count of free blocks, and its counts of free
 //     clusters by length;
 //   - the superblock's totals and the per-group summary array.
-// The file system keeps no check-hashes (`fs_metackhash` 0) and no soft
-// updates or journal (`fs_flags` 0), so nothing else records any of it.
+// The file system keeps no check-hashes (`fs_metackhash` 0) and no journal,
+// so nothing else records any of it. Soft updates may be on (`fs_flags`
+// 0x2): OPNsense turns them on when the nano image first boots, so the image
+// CI builds has them where the upstream image does not, and they change
+// nothing on disk. Soft updates order the running kernel's own writes; a
+// cleanly unmounted file system with them on is laid out exactly as one
+// without, keeps no journal (that is SUJ, 0x8, refused), and is mounted
+// without an fsck as long as it is clean, which `unclean` (0x1) would say.
 //
 // PLANNED HERE, PINNED THERE. `planRoom` reads an image and says each byte
 // it would change and what is there now; `checkRoom` applies a plan to what
@@ -44,15 +50,36 @@ const CST = { nbfree: 8, nffree: 24 };
 
 /** @typedef {(offset: number, length: number) => Buffer} Read */
 /** @typedef {{ offset: number, was: string, becomes: string, what: string }} Edit */
-/** @typedef {{ room: number, data: { offset: number, length: number }, edits: Edit[] }} Plan */
+/** @typedef {{ room: number, from: { offset: number, length: number }, data: { offset: number, length: number }, edits: Edit[] }} Plan */
+
+/** The one `fs_flags` bit planning room is unmoved by (the header says why). */
+const FS_DOSOFTDEP = 0x2;
+/** `fs_flags` bits, from fs.h, so a refusal names what it saw. */
+const FS_FLAG_NAMES = /** @type {const} */ ([[0x1, 'unclean'], [0x2, 'soft updates'], [0x4, 'needs fsck'], [0x8, 'journaled soft updates'], [0x10, 'ACLs'], [0x20, 'multilabel'], [0x40, 'gjournal'], [0x80, 'flags updated'], [0x100, 'NFSv4 ACLs'], [0x200, 'metadata check hashes'], [0x400, 'trim']]);
+/** `fs_metackhash` bits, the same way. */
+const CK_NAMES = /** @type {const} */ ([[0x1, 'superblock'], [0x2, 'cylinder groups'], [0x4, 'inodes'], [0x8, 'indirect blocks'], [0x10, 'directories']]);
+
+/** @param {number} bits @param {ReadonlyArray<readonly [number, string]>} names */
+export function flagWords(bits, names) {
+  const known = names.filter(([bit]) => bits & bit).map(([, name]) => name);
+  const rest = bits & ~names.reduce((all, [bit]) => all | bit, 0);
+  if (rest) known.push(`0x${rest.toString(16)} unknown to this`);
+  return `0x${bits.toString(16)}: ${known.join(', ')}`;
+}
 
 /** @param {Read} read */
 function geometry(read) {
   const sb = read(SBLOCK_UFS2, 1376);
   const i32 = (/** @type {number} */ o) => sb.readInt32LE(o);
   if (sb.readUInt32LE(FS.magic) !== FS_UFS2_MAGIC) throw new Error('there is no UFS2 superblock where the kernel looks for one');
-  if (sb.readUInt32LE(FS.flags) !== 0) throw new Error('the file system has flags set (soft updates, a journal or another feature), which this does not account for');
-  if (sb.readUInt32LE(FS.metackhash) !== 0) throw new Error('the file system keeps check-hashes, which this does not compute');
+  // Named, not just refused: a flag the kernel set during a boot is a fact
+  // about the image, and which one decides whether planning room is still
+  // sound or what else must be kept (a journal, a check-hash).
+  const flags = sb.readUInt32LE(FS.flags);
+  const unaccounted = flags & ~FS_DOSOFTDEP;
+  if (unaccounted !== 0) throw new Error(`the file system has flags set (${flagWords(flags, FS_FLAG_NAMES)}), and this accounts only for soft updates`);
+  const ck = sb.readUInt32LE(FS.metackhash);
+  if (ck !== 0) throw new Error(`the file system keeps check-hashes (${flagWords(ck, CK_NAMES)}), which this does not compute`);
   const fs = { sblkno: i32(FS.sblkno), cblkno: i32(FS.cblkno), iblkno: i32(FS.iblkno), ncg: sb.readUInt32LE(FS.ncg), bsize: i32(FS.bsize), fsize: i32(FS.fsize), frag: i32(FS.frag), ipg: sb.readUInt32LE(FS.ipg), fpg: i32(FS.fpg), csaddr: Number(sb.readBigInt64LE(FS.csaddr)), contigsumsize: i32(FS.contigsumsize) };
   if (fs.bsize !== fs.fsize * fs.frag) throw new Error('the file system’s block is not its fragment times its fragments per block');
   return fs;
@@ -264,7 +291,11 @@ export function planRoom(read, { inode, room }) {
   }
   edits.push(...csEdits, ...cgEdits);
   edits.sort((a, b) => a.offset - b.offset);
-  return { room, data: { offset: toFrag * fs.fsize, length: fs.bsize }, edits };
+  // `from` is where the file is now, by the inode: what a build checks the
+  // default configuration against before it writes (OPNSENSE_IMAGE.config),
+  // and what the image workflow publishes beside each image so nobody finds
+  // it by hand again.
+  return { room, from: { offset: fromFrag * fs.fsize, length: size }, data: { offset: toFrag * fs.fsize, length: fs.bsize }, edits };
 }
 
 /**
