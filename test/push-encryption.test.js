@@ -134,6 +134,16 @@ test('what goes on the wire carries no detail, and still fits', async () => {
   // it. A realistic notification must leave room to spare.
   assert.ok(JSON.stringify(wire).length < 2048, `wire payload is ${JSON.stringify(wire).length} bytes`);
 
+  // And the longest sentence a job's end is allowed (SETUP_TEXT_MAX in
+  // core.js, 700) sealed with its title and data still leaves room.
+  const long = await envelopeFor({ pushKey: alice.pushKey }, {
+    title: 'The change stopped',
+    body: 'Applying what you chose stopped: '.padEnd(700, 'the machine image’s build VM stopped before it said the install was done. '),
+    data: { kind: 'xosetup', job: 'a1b2c3d4e5f6', state: 'failed', host: 'rpi-7550', name: 'xosetup-a1b2c3d4e5f6' },
+  }, { now: () => 1_700_000_000_000 });
+  assert.equal(long.encrypted, true);
+  assert.ok(JSON.stringify(long).length < 3072, `the longest end on the wire is ${JSON.stringify(long).length} bytes`);
+
   // WHEN IT WAS SENT is sealed with the rest, so a captured envelope replayed
   // later carries its own age and the app can refuse it (#351).
   assert.deepEqual(await openWith(alice.privateKey, alice.pushKey, wire.data.e), {

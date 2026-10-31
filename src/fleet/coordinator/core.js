@@ -64,6 +64,8 @@ const MAX_RUNNER_STARTS = 200;
  * rows are about 45 KiB of the 128 a value may hold (test/do-key-bounds).
  */
 const MAX_SETUPS = 20;
+/** The most of a job's sentence the coordinator keeps and pushes. */
+export const SETUP_TEXT_MAX = 700;
 /**
  * Pins one policy job may ask for, for the machine of its own it makes on the
  * pool. One is the ordinary case; a few cover a clone that failed to boot.
@@ -76,15 +78,26 @@ export const MAX_HOLDER_PINS = 3;
 export const MAX_IMAGE_REPORTERS = 3;
 /**
  * How long a build VM may report with its token: the download, the disk and
- * the install's own 25 minutes, with room. The job ending takes it back sooner.
+ * the install's own 25 minutes, with room for a Raspberry Pi's slow mirror
+ * and a pull that crawls. It was an hour, which a slow build could outlive
+ * with its last report, the one that decides the build, refused as expired.
+ * The job ending takes it back sooner.
  */
-const IMAGE_REPORT_TTL_MS = 60 * 60_000;
+const IMAGE_REPORT_TTL_MS = 3 * 60 * 60_000;
 /**
- * Reports one token carries: one per step and a retry of each, and the
- * session image's pull reported every 15 seconds through the install's whole
- * 25 minutes. It was 24 when only steps were reported.
+ * Reports one token carries: one per step and a retry of each, the session
+ * image's pull reported every 15 seconds and the heartbeat saying the last
+ * step again every minute, both through an install allowed an hour. It was
+ * 24 when only steps were reported, then 140 for the pull alone, which the
+ * heartbeat was added on top of without counting it, so a long build spent
+ * its allowance just before `done`. `done` and `failed` are not counted
+ * against it at all (imageReport): a build that reported too often is still
+ * a build that finished, and refusing the one report that decides it turns
+ * a good image into a kept VM and a sentence nobody can act on.
  */
-export const MAX_IMAGE_REPORTS = 140;
+export const MAX_IMAGE_REPORTS = 400;
+/** The terminal reports, taken past the count, each this many times at most. */
+const IMAGE_REPORT_ENDS = 30;
 /** The end of the install log a failed build sends back, at most. */
 const IMAGE_REPORT_DETAIL = 2000;
 /** The name a pool's own machine enrols under: `holder-` and six hex. */
@@ -484,7 +497,7 @@ export class CoordinatorCore {
      *
      * BOUND TO THE ENROLMENT THAT ANSWERED `begin` (`enrolment`, its key and
      * when it was let in), not only to the name: see #setupOn.
-     * @type {Map<string, { hostId: string, enrolment?: string|null, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, reporters?: number, reporter?: { hash: string, expiresAt: number, reports: number }, activityNews?: string, activityAt?: number }>}
+     * @type {Map<string, { hostId: string, enrolment?: string|null, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, reporters?: number, reporter?: { hash: string, expiresAt: number, reports: number, ends?: number }, activityNews?: string, activityAt?: number }>}
      */
     this.setups = new Map();
     /**
@@ -6403,7 +6416,7 @@ export class CoordinatorCore {
     }
     const secret = randomHex(24);
     const expiresAt = this.now() + IMAGE_REPORT_TTL_MS;
-    rec.reporter = { hash: await hashSecret(secret), expiresAt, reports: 0 };
+    rec.reporter = { hash: await hashSecret(secret), expiresAt, reports: 0, ends: 0 };
     this.onStateChanged?.();
     answer({ ok: true, token: `fwi_${job}_${secret}`, expiresAt });
   }
@@ -6439,7 +6452,17 @@ export class CoordinatorCore {
     if (!IMAGE_REPORT_STEPS.includes(step)) {
       return { status: 400, body: { ok: false, error: { code: 'bad_step' }, text: `step is one of ${IMAGE_REPORT_STEPS.join(', ')}` } };
     }
-    if (++reporter.reports > MAX_IMAGE_REPORTS) return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: 'This build has reported enough.' } };
+    // THE END IS ALWAYS HEARD. A build that said `image` every 15 seconds for
+    // an hour has spent its count, and `done` is the one report the box
+    // makes a template on; a count that refuses it fails a finished build.
+    // The ends have a small count of their own, so a VM that says done
+    // for ever cannot say it for ever.
+    if (step === 'done' || step === 'failed') {
+      reporter.ends = (reporter.ends ?? 0) + 1;
+      if (reporter.ends > IMAGE_REPORT_ENDS) return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: 'This build has reported its end enough.' } };
+    } else if (++reporter.reports > MAX_IMAGE_REPORTS) {
+      return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: 'This build has reported enough.' } };
+    }
     const detail = step === 'failed' && typeof body?.detail === 'string'
       ? body.detail.replace(/[^\P{C}\n\t]/gu, '').slice(-IMAGE_REPORT_DETAIL)
       : null;
@@ -8410,7 +8433,13 @@ export function narrowProgress(msg) {
     phase,
     state: /** @type {SetupProgress['state']} */ (state),
     purpose: /** @type {SetupProgress['purpose']} */ (purpose),
-    text: msg?.text ? String(msg.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, 200) : '',
+    // THE WHOLE SENTENCE, within reason. A job's end says what stopped it,
+    // what it left behind and what to do next, and the box writes that as
+    // one sentence of a few hundred characters; at 200 the phone got "…so"
+    // and the person got nothing to act on. 700 is room for the longest end
+    // a box writes (600, its own cap) and fits a sealed push with room
+    // (push-encryption.test.js).
+    text: msg?.text ? String(msg.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, SETUP_TEXT_MAX) : '',
     // HOW FAR INTO THE STEP, in thousandths, for a step that is bytes
     // moving and can say so: the edge router's build is most of a policy
     // job, and "step 5 of 5" alone held the bar at four fifths for minutes.
