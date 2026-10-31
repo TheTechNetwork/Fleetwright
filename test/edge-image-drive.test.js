@@ -20,7 +20,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { main, INSIDE } from '../scripts/edge-image/drive.mjs';
+import { main, INSIDE, FORGET_HOOK } from '../scripts/edge-image/drive.mjs';
 
 // The guest: a node script, because `--qemu` is spawned as an executable.
 // Each typed line ends in \r as a terminal's would. Commands carry the
@@ -30,6 +30,7 @@ const { appendFileSync } = require('node:fs');
 const typed = process.env.TYPED;
 let rebooted = false;
 let booting = true;
+let echoOff = false;
 const out = (s) => process.stdout.write(s);
 const boot = () => { booting = true; out('Booting...\\r\\nPress any key to start the manual interface assignment: \\r\\nFreeBSD/amd64 (OPNsense.internal) (ttyu0)\\r\\n\\r\\nlogin: '); booting = false; };
 boot();
@@ -45,6 +46,7 @@ process.stdin.on('data', (d) => {
     if (line === 'opnsense') { out('\\r\\n*** OPNsense.internal: OPNsense 26.7 ***\\r\\n 0) Logout   8) Shell\\r\\n\\r\\nEnter an option: '); continue; }
     if (line === '8') { out('8\\r\\nroot@OPNsense:~ # '); continue; }
     if (line === 'exec /bin/sh') { out('exec /bin/sh\\r\\n# '); continue; }
+    if (line.startsWith('set +o emacs')) { echoOff = true; out(line + '\\r\\n# '); continue; }
     if (line === 'shutdown -r now') { out('shutdown -r now\\r\\nRebooting...\\r\\n'); rebooted = true; setTimeout(boot, 5); continue; }
     if (line === 'shutdown -p now') { out('shutdown -p now\\r\\nThe operating system has halted.\\r\\n'); setTimeout(() => process.exit(0), 5); continue; }
     const m = /^(.*); echo "__FW_""DONE_(\\d+)_\\$\\?__"$/.exec(line);
@@ -67,7 +69,7 @@ process.stdin.on('data', (d) => {
     else if (cmd.startsWith('pkg which')) text = 'none';
     else if (cmd.startsWith('ls -la /conf')) text = 'total 1;';
     else if (cmd.startsWith('pkg info -ql')) text = '/usr/local/sbin/xe-daemon';
-    out(line + '\\r\\n' + (text ? text + '\\r\\n' : '') + '__FW_DONE_' + id + '_' + status + '__\\r\\n# ');
+    out((echoOff ? '' : line + '\\r\\n') + (text ? text + '\\r\\n' : '') + '__FW_DONE_' + id + '_' + status + '__\\r\\n# ');
   }
 });
 `;
@@ -118,6 +120,14 @@ test('the driver logs in, updates, reboots and logs in again, installs the agent
   assert.ok(at('stat -f %i /usr/local/etc/config.xml') > lastCleanup, 'facts are read before cleanup is done');
   assert.equal(typed.at(-1), 'shutdown -p now');
   assert.equal(typed.at(-2), INSIDE.forget, 'the last command before power-off is not forgetting this boot');
+  // Forgotten by a stop hook that runs AFTER OPNsense's 99-config, which puts
+  // the factory configuration back when it finds none (see FORGET_HOOK).
+  assert.ok(path.basename(FORGET_HOOK) > '99-config', `${FORGET_HOOK} does not sort after 99-config`);
+  assert.match(INSIDE.forget, /rm -f \/conf\/config\.xml/);
+  assert.match(INSIDE.forget, /rm -f "\$0"/, 'the hook does not remove itself');
+  assert.ok(INSIDE.forget.includes(`> ${FORGET_HOOK} && chmod 755 ${FORGET_HOOK}`), 'the hook is not written where rc.syshook stop looks');
+  // The shell is made quiet before the first sentinel, and never before.
+  assert.ok(at('exec /bin/sh') < typed.findIndex((l) => l.startsWith('set +o emacs')) && typed.findIndex((l) => l.startsWith('set +o emacs')) < at('true'));
 
   // What the guest said, written for measure.mjs.
   const got = JSON.parse(readFileSync(path.join(facts, 'facts.json'), 'utf8'));
@@ -135,6 +145,9 @@ test('the driver logs in, updates, reboots and logs in again, installs the agent
   const text = readFileSync(log, 'utf8');
   assert.match(text, /qemu-fake -accel tcg/);
   assert.match(text, />>> root\n/);
+  // The password is typed and never written: the log is uploaded from every run.
+  assert.match(text, />>> \[the root password\]\n/);
+  assert.doesNotMatch(text, />>> opnsense\n/);
   assert.match(text, /Upgrading opnsense from 26\.7 to 26\.7\.5/);
   assert.match(text, /The operating system has halted/);
 });

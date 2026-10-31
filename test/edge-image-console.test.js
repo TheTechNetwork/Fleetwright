@@ -86,5 +86,20 @@ test('one conversation: a second wait while one is pending is refused rather tha
 
 test('output without an echo (echo off) is the whole window, carriage returns dropped', () => {
   assert.equal(sliceOutput('line one\r\nline two\r\n', 'DONE_3_$?__"'), 'line one\nline two');
+  // The prompt printed after the previous marker opens the window, and goes.
+  assert.equal(sliceOutput('\r\n# 26.7.5\r\n', 'DONE_3_$?__"'), '26.7.5');
+  assert.equal(sliceOutput('\r\n# \r\n', 'DONE_3_$?__"'), '');
+  // An echo a line editor redrew with a carriage return inside it is still found.
+  assert.equal(sliceOutput('# x; echo "__FW_""DONE_3_\r$?__"\r\nout\r\n', 'DONE_3_$?__"'), 'out');
   assert.equal(sliceOutput('x; echo "__FW_""DONE_3_$?__"\r\n', 'DONE_3_$?__"'), '');
+});
+
+test('a secret is sent as typed, and the log says only what it was', () => {
+  const sent = [];
+  const logged = [];
+  const con = new Console({ send: (s) => sent.push(s), log: (s) => logged.push(s) });
+  con.typeSecret('opnsense', 'the root password');
+  assert.deepEqual(sent, ['opnsense\r']);
+  assert.equal(logged.join(''), '\n>>> [the root password]\n');
+  assert.ok(!logged.join('').includes('opnsense'));
 });

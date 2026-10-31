@@ -81,6 +81,25 @@ export const WAITS = Object.freeze({
 });
 
 /** What runs inside, in order, with why; the values are shell. */
+/**
+ * WHERE THE BOOT IS FORGOTTEN, AND WHY NOT BEFORE SHUTDOWN. The first build
+ * removed /conf/config.xml as its last command and powered off, and the
+ * image came out with the file back: 5234 bytes, the factory configuration,
+ * with a fresh backup beside it. `shutdown -p now` runs /etc/rc.shutdown,
+ * which is `exec /usr/local/etc/rc.syshook stop`, which runs every file in
+ * /usr/local/etc/rc.syshook.d/stop in name order (src/etc/rc.syshook,
+ * stable/26.7: `find -s`). The last of them, 99-config, is PHP that loads
+ * the configuration and then opens /conf/config.xml to wait for its lock;
+ * loading it with the file gone restores the factory one and writes it, as
+ * OPNsense does on any boot that has none. So the file has to go after
+ * 99-config, from a hook that sorts after it: "99-zz-" follows "99-config".
+ * The hook removes the configuration, its backups and the change event,
+ * then itself, and syncs; what runs after it is init unmounting the disks.
+ * The workflow mounts the image afterwards and refuses one that still has
+ * the file, so this is proved on every build rather than believed.
+ */
+export const FORGET_HOOK = '/usr/local/etc/rc.syshook.d/stop/99-zz-fleetwright-forget';
+
 export const INSIDE = Object.freeze({
   /**
    * Packages first, then base and kernel, which is the order OPNsense's own
@@ -144,10 +163,24 @@ export const INSIDE = Object.freeze({
    * config.xml ]; then cp /usr/local/etc/config.xml /conf/config.xml`).
    * This VM has booted, so it has one, and if it shipped the host's
    * configuration would be ignored in favour of the build VM's. The upstream
-   * image has no /conf/config.xml; neither does this one.
+   * image has no /conf/config.xml; neither does this one, and FORGET_HOOK
+   * above says why it cannot simply be removed from here.
    */
-  forget: 'rm -f /conf/config.xml /.probe.for.readonly; rm -rf /conf/backup/*; sync; sync',
+  forget: [
+    `printf '%s\\n' '#!/bin/sh' '# Fleetwright image build: the last stop hook, after 99-config has put the factory configuration back. Gone with this shutdown.' 'rm -f /conf/config.xml /conf/event_config_changed.json /.probe.for.readonly' 'rm -rf /conf/backup/*' 'rm -f "$0"' 'sync; sync' > ${FORGET_HOOK}`,
+    `chmod 755 ${FORGET_HOOK}`,
+    `sh -n ${FORGET_HOOK}`,
+  ].join(' && '),
   poweroff: 'shutdown -p now',
+  /**
+   * The shell made quiet before the first sentinel: no line editor and no
+   * echo. The first real run returned every fact with the typed command line
+   * in front of it, because what the tty echoed was not what was typed and
+   * the echo could not be found to cut it off. Nothing here needs the echo:
+   * the log records what was typed on its own line, and a command's output
+   * is everything between typing it and its marker.
+   */
+  quiet: 'set +o emacs 2>/dev/null; set +o vi 2>/dev/null; stty -echo',
 });
 
 /**
@@ -223,11 +256,13 @@ async function login(c) {
   await c.waitFor(PROMPTS.login, { timeout: WAITS.boot, label: 'the login prompt' });
   c.type(LOGIN.user);
   await c.waitFor(PROMPTS.password, { timeout: WAITS.prompt, label: 'the password prompt' });
-  c.type(LOGIN.password);
+  c.typeSecret(LOGIN.password, 'the root password');
   await c.waitFor(PROMPTS.menu, { timeout: WAITS.prompt, label: 'the console menu' });
   c.type(LOGIN.shellOption);
   await c.waitFor(PROMPTS.csh, { timeout: WAITS.prompt, label: 'csh’s prompt' });
   c.type('exec /bin/sh');
+  await c.waitFor(PROMPTS.csh, { timeout: WAITS.prompt, label: 'sh’s prompt' });
+  c.type(INSIDE.quiet);
   // The first sentinel proves a POSIX shell is the one answering.
   await c.must('true', { timeout: WAITS.prompt, label: 'a POSIX shell answering' });
 }
