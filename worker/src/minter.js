@@ -43,6 +43,10 @@
 //   GET /.well-known/fleetwright-minter   the deposit key's public half, and
 //                                         the signing key's
 //
+// And, only while the operator has set FLEETWRIGHT_MINTER_EXPORT_TO and asks
+// with the `x-fleetwright-export: keys` header, the keys themselves sealed to
+// that key, once, to keep them in Secrets Store (src/fleet/minter/backup.js).
+//
 // The deploy routes that one path of the fleet's own hostname here
 // (.github/workflows/worker.yml), and a route runs before the coordinator's
 // Custom Domain on the same hostname, so the coordinator never sees the
@@ -64,6 +68,7 @@ import { answerVaultDevice, answerVaultBox, answerVaultKeys, answerClaudeFresh, 
 import { generateKeyPair } from '../../src/fleet/crypto.js';
 import { importAppKey, checkRunnerRepoForApp, checkLinkedRepoForApp } from '../../src/core/repo-tokens.js';
 import { importDepositKey, newDepositKey } from '../../src/fleet/seal.js';
+import { storedSecret, snapshot, latestCopy, exportKeys, BACKUP_AFTER_MS, BACKUP_WARN_BYTES } from '../../src/fleet/minter/backup.js';
 import { signerRoutes, SIGNER_VERBS } from '../../src/fleet/minter/sign-page.js';
 import { VERBS } from '../../src/fleet/protocol/intents.js';
 
@@ -80,6 +85,19 @@ export const KEY_PATH = '/.well-known/fleetwright-minter';
 const DEPOSIT_ROW = 'deposit:key';
 /** Where the object keeps the key it signs a box's key list with: a P-256 private JWK. */
 const SIGNING_ROW = 'signing:key';
+/**
+ * Set while rows are being put back from a copy, and removed once the last is
+ * in: an object found holding it was cut off part way, and is filled again.
+ */
+const RESTORING_ROW = 'restore:pending';
+
+/**
+ * The header that asks the public address for the keys sealed to the
+ * operator's key instead of the public halves (exported, below). A header and
+ * not a path or a query, because the deploy routes that one exact path here
+ * and a route pattern with no wildcard matches no other path and no query.
+ */
+export const EXPORT_HEADER = 'x-fleetwright-export';
 
 /**
  * The imported key, per isolate. Importing is cheap and done once; the PEM it
@@ -189,16 +207,125 @@ function signInsFrom(ns) {
  */
 export class ClaudeLogins {
   /**
-   * @param {{ storage: { get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void> } }} state
+   * @param {{ storage: { get: (k: string) => Promise<any>, put: (k: string, v: any) => Promise<void>, list?: (o?: { prefix?: string, limit?: number }) => Promise<Map<string, any>>, getAlarm?: () => Promise<number|null>, setAlarm?: (t: number) => Promise<void> } }} state
    * @param {Record<string, any>} [env]
    */
   constructor(state, env = {}) {
-    this.storage = state.storage;
+    // EVERY WRITE NOTED, so a copy is asked for after a change and not after
+    // every read (backupSoon). Everything else passes through as it is.
+    const storage = state.storage;
+    this.dirty = false;
+    this.storage = new Proxy(storage, {
+      get: (target, prop) => {
+        const v = /** @type {any} */ (target)[prop];
+        if (typeof v !== 'function') return v;
+        if (prop === 'put' || prop === 'delete') {
+          return (/** @type {any[]} */ ...a) => {
+            this.dirty = true;
+            return v.apply(target, a);
+          };
+        }
+        return v.bind(target);
+      },
+    });
     this.env = env;
     /** @type {Promise<string>|null} */
     this.made = null;
     /** @type {Promise<{ privateJwk: any, publicJwk: any }>|null} */
     this.signing = null;
+    /** @type {Promise<void>|null} */
+    this.ready = null;
+  }
+
+  /**
+   * An empty object filled from the latest copy in R2, once, before it answers
+   * anything (src/fleet/minter/backup.js). Only with the deposit key kept
+   * outside the object, which is the only key that copy opens with, and only
+   * when the object holds nothing at all: a copy is never laid over rows.
+   *
+   * A COPY THAT IS THERE AND WILL NOT BE READ stops the object answering,
+   * rather than letting it start empty: the first thing written into it would
+   * make it not empty, and the copy would never be read again. Unbinding
+   * `BACKUP` is how an operator says to start empty anyway.
+   *
+   * CUT OFF PART WAY, it is filled again. The rows go back one at a time, so
+   * an object stopped half way would hold some and look not empty; it holds
+   * RESTORING_ROW too until the last is in, and that is what says to go on.
+   *
+   * @returns {Promise<void>}
+   */
+  restoreIfEmpty() {
+    if (!this.ready) {
+      this.ready = (async () => {
+        if (!this.env.BACKUP || typeof this.storage.list !== 'function') return;
+        const resuming = await this.storage.get(RESTORING_ROW);
+        if (!resuming && (await this.storage.list({ limit: 1 })).size) return;
+        const secret = String(this.env.FLEETWRIGHT_MINTER_DEPOSIT_KEY || '') || (await storedSecret(this.env.DEPOSIT_KEY_STORED));
+        if (!secret) {
+          console.warn('The minter is empty, and its deposit key is kept nowhere outside it, so no copy can be opened. Starting empty.');
+          return;
+        }
+        const copy = await latestCopy(this.env.BACKUP, await depositKeyFor(secret));
+        if (!copy) {
+          if (resuming) throw new Error('a restore was cut off part way and its copy is no longer there');
+          return;
+        }
+        await this.storage.put(RESTORING_ROW, { from: copy.at });
+        for (const [k, v] of Object.entries(copy.rows)) await this.storage.put(k, v);
+        await this.storage.delete(RESTORING_ROW);
+        const n = Object.keys(copy.rows).length;
+        console.log(`The minter was empty, and was filled from the copy made at ${new Date(copy.at).toISOString()}: ${n} ${n === 1 ? 'row' : 'rows'}.`);
+      })();
+      this.ready.catch(() => {
+        this.ready = null;
+      });
+    }
+    return this.ready;
+  }
+
+  /**
+   * Whether the key kept outside agrees with the one this object holds, said
+   * in the log when it does not. The object's own wins: it is the one every
+   * vault here is sealed to, and a Secrets Store secret set to another key by
+   * mistake must not take them all away. Never waited for.
+   *
+   * @param {string} name @param {any} binding @param {(outside: string) => boolean} same
+   */
+  agrees(name, binding, same) {
+    storedSecret(binding).then(
+      (outside) => {
+        if (outside && !same(outside)) console.error(`The ${name} key in Secrets Store is not the one this minter holds; the one it holds is used. Put the exported one there (docs/vault.md).`);
+      },
+      () => {},
+    );
+  }
+
+  /**
+   * The copy written BACKUP_AFTER_MS after a change, when a bucket is bound
+   * and no copy is due already. Only after a write: a read asking for one
+   * every five minutes was two R2 writes and a listing for nothing new.
+   */
+  async backupSoon() {
+    if (!this.dirty || !this.env.BACKUP || typeof this.storage.getAlarm !== 'function' || typeof this.storage.setAlarm !== 'function') return;
+    try {
+      if ((await this.storage.getAlarm()) === null) await this.storage.setAlarm(Date.now() + BACKUP_AFTER_MS);
+    } catch {
+      // The next answer asks again.
+    }
+  }
+
+  /** Every row but the keys, copied to R2 and sealed to the deposit key (src/fleet/minter/backup.js). */
+  async alarm() {
+    if (!this.env.BACKUP || typeof this.storage.list !== 'function') return;
+    await this.restoreIfEmpty();
+    const secret = String(this.env.FLEETWRIGHT_MINTER_DEPOSIT_KEY || '') || (await this.depositSecret());
+    // CLEARED BEFORE, so a write while the copy is made asks for the next.
+    this.dirty = false;
+    const made = await snapshot(this.env.BACKUP, await this.storage.list(), [DEPOSIT_ROW, SIGNING_ROW, RESTORING_ROW], await depositKeyFor(secret), Date.now());
+    // ITS SIZE SAID, because the copy is every row in one object held in memory.
+    const said = `The minter copied ${made.rows} rows to R2 (${Math.ceil(made.bytes / 1024)} KiB).`;
+    if (made.bytes > BACKUP_WARN_BYTES) console.warn(`${said} That is large enough to split the copy before it grows much more.`);
+    else console.log(said);
   }
 
   /**
@@ -213,10 +340,23 @@ export class ClaudeLogins {
   signingKey() {
     if (!this.signing) {
       this.signing = (async () => {
+        const halves = (/** @type {any} */ jwk) => {
+          const { d: _d, key_ops: _ops, ...rest } = jwk;
+          return { privateJwk: jwk, publicJwk: { ...rest, key_ops: ['verify'] } };
+        };
         const kept = await this.storage.get(SIGNING_ROW);
         if (kept && typeof kept === 'object' && typeof kept.d === 'string') {
-          const { d: _d, key_ops: _ops, ...rest } = kept;
-          return { privateJwk: kept, publicJwk: { ...rest, key_ops: ['verify'] } };
+          this.agrees('signing', this.env.SIGNING_KEY_STORED, (outside) => JSON.parse(outside)?.d === kept.d);
+          return halves(kept);
+        }
+        // KEPT OUTSIDE, from Secrets Store (src/fleet/minter/backup.js): the
+        // object lost, and the key every box pinned brought back with it.
+        const outside = await storedSecret(this.env.SIGNING_KEY_STORED);
+        if (outside) {
+          const jwk = JSON.parse(outside);
+          if (jwk?.kty !== 'EC' || jwk?.crv !== 'P-256' || typeof jwk?.d !== 'string') throw new Error('the signing key in Secrets Store is not a P-256 private key');
+          await this.storage.put(SIGNING_ROW, jwk);
+          return halves(jwk);
         }
         const { privateJwk, publicJwk } = await generateKeyPair();
         await this.storage.put(SIGNING_ROW, privateJwk);
@@ -243,7 +383,18 @@ export class ClaudeLogins {
     if (!this.made) {
       this.made = (async () => {
         const kept = await this.storage.get(DEPOSIT_ROW);
-        if (typeof kept === 'string' && kept) return kept;
+        if (typeof kept === 'string' && kept) {
+          this.agrees('deposit', this.env.DEPOSIT_KEY_STORED, (outside) => JSON.parse(outside)?.d === JSON.parse(kept)?.d);
+          return kept;
+        }
+        // KEPT OUTSIDE, from Secrets Store: the object lost, and the key every
+        // vault and every copy in R2 is sealed to brought back with it.
+        const outside = await storedSecret(this.env.DEPOSIT_KEY_STORED);
+        if (outside) {
+          await importDepositKey(outside);
+          await this.storage.put(DEPOSIT_ROW, outside);
+          return outside;
+        }
         const { secret } = await newDepositKey();
         await this.storage.put(DEPOSIT_ROW, secret);
         return secret;
@@ -257,6 +408,18 @@ export class ClaudeLogins {
 
   /** @param {Request} request */
   async fetch(request) {
+    try {
+      await this.restoreIfEmpty();
+    } catch (e) {
+      return json(503, { ok: false, error: { code: 'restore_failed' }, text: `The minter is empty and its copy in R2 could not be read back (${/** @type {Error} */ (e).message}), so it answers nothing until it can. See docs/vault.md.` });
+    }
+    const answer = await this.answer(request);
+    await this.backupSoon();
+    return answer;
+  }
+
+  /** @param {Request} request */
+  async answer(request) {
     const op = new URL(request.url).pathname.slice(1);
     /** @type {any} */
     const body = await request.json().catch(() => ({}));
@@ -269,6 +432,15 @@ export class ClaudeLogins {
     if (op === 'deposit-key') return json(200, { ok: true, secret: await this.depositSecret() });
     // THE PUBLIC HALF ONLY, for the well-known answer: the private half never
     // leaves this object.
+    // THE KEYS THEMSELVES, sealed to the operator's key, only while the
+    // Worker secret naming that key is set (src/fleet/minter/backup.js).
+    if (op === 'export') {
+      const to = String(this.env.FLEETWRIGHT_MINTER_EXPORT_TO || '');
+      if (!to) return json(404, { ok: false, error: { code: 'not_exporting' }, text: 'No key to export to is set.' });
+      const depositKey = String(this.env.FLEETWRIGHT_MINTER_DEPOSIT_KEY || '') || (await this.depositSecret());
+      const { privateJwk } = await this.signingKey();
+      return json(200, { ok: true, v: 1, sealed: await exportKeys(to, { depositKey, signingKey: privateJwk }, Date.now()) });
+    }
     if (op === 'signing-key') {
       const { publicJwk } = await this.signingKey();
       return json(200, { ok: true, key: { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y } });
@@ -330,6 +502,27 @@ function vaultConfig(env, storage, own, signingKey = null) {
 /** @param {number} status @param {unknown} body */
 function json(status, body) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+}
+
+/**
+ * What the one public path answers: the public halves, or, asked with
+ * EXPORT_HEADER while the operator has named a key to export to, the keys
+ * themselves sealed to it (src/fleet/minter/backup.js).
+ *
+ * @param {Request} request @param {Record<string, any>} env
+ */
+async function keyAnswer(request, env) {
+  if (request.headers.get(EXPORT_HEADER) !== 'keys') return publicKey(env);
+  const headers = { 'content-type': 'application/json', 'cache-control': 'no-store' };
+  // ONLY WHILE ASKED FOR: the operator sets FLEETWRIGHT_MINTER_EXPORT_TO to
+  // a key of their own, fetches this once, and deletes it again. Unset, this
+  // is the same 404 as any path the Worker does not serve.
+  if (!env.FLEETWRIGHT_MINTER_EXPORT_TO || !env.LOGINS || request.method !== 'GET') {
+    return new Response(JSON.stringify({ ok: false, error: { code: 'not_exporting' }, text: 'This minting Worker is not exporting its keys.' }), { status: 404, headers });
+  }
+  const stub = env.LOGINS.get(env.LOGINS.idFromName('logins'));
+  const res = await stub.fetch('https://logins.internal/export', { method: 'POST', body: '{}' });
+  return new Response(await res.text(), { status: res.status, headers });
 }
 
 /**
@@ -405,7 +598,7 @@ async function signingHost(request, url, env) {
       : null,
   });
   if (page) return new Response(request.method === 'HEAD' ? null : page.body, { status: page.status, headers: page.headers });
-  if (url.pathname === KEY_PATH && (request.method === 'GET' || request.method === 'HEAD')) return publicKey(env);
+  if (url.pathname === KEY_PATH && (request.method === 'GET' || request.method === 'HEAD')) return keyAnswer(request, env);
   return new Response('Not here. This address serves the signing page and nothing else.', {
     status: 404,
     headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' },
@@ -422,7 +615,7 @@ export default {
     const signHost = String(env.FLEETWRIGHT_SIGNING_HOST || '').trim().toLowerCase();
     if (signHost && url.hostname.toLowerCase() === signHost) return signingHost(request, url, env);
     if (url.pathname === KEY_PATH && (request.method === 'GET' || request.method === 'HEAD')) {
-      return publicKey(env);
+      return keyAnswer(request, env);
     }
     if (request.method !== 'POST' || !ROUTES.includes(url.pathname)) {
       return json(404, { ok: false, error: { code: 'not_found' }, text: 'This Worker mints repository tokens and keeps each person’s vault for the coordinator, and does nothing else.' });

@@ -406,7 +406,29 @@ class Fleet(
      * does the arithmetic — "two days left" stays right while the screen is
      * open, and a server-rendered string would freeze the moment it was sent.
      */
-    data class Binned(val name: String, val title: String?, val expiresAt: Long) {
+    data class Binned(
+        val name: String,
+        val title: String?,
+        val expiresAt: Long,
+        /**
+         * Who forgot it, as the fleet believes the box: `fleet:<address>`.
+         * Read for one thing, whether a machine that pins its admins takes its
+         * restore from this person ([FleetHost.mayRestore]). Null from an older
+         * coordinator, and then it is nobody's as far as that goes.
+         */
+        val createdBy: String? = null,
+    ) {
+        /**
+         * Whether this person forgot it. The box reads `fleet:<address>` or a
+         * bare address as its owner (pinned-admins.js ownerOf), and so does
+         * this.
+         */
+        fun isOwn(me: String): Boolean {
+            val who = me.trim().lowercase()
+            val by = createdBy?.lowercase() ?: return false
+            return who.isNotEmpty() && (by == "fleet:$who" || by == who)
+        }
+
         val remaining: String?
             get() {
                 if (expiresAt <= 0L) return null
@@ -417,6 +439,46 @@ class Fleet(
                 val days = left / 86_400_000L
                 return "$days day${if (days == 1L) "" else "s"} left"
             }
+    }
+
+    /** A machine's pinned admins as this person may see them. Same fields as iOS's `HostHealth.Admins`. */
+    data class PinnedAdmins(
+        /** How many it pins. Zero is nobody: the fleet's word, as before. Null is a record the box cannot read, and then it takes those verbs from nobody. */
+        val count: Int?,
+        /** Whether this person is one of them. Null with [count]. */
+        val you: Boolean?,
+        /** Their addresses, sent only to somebody on the list and to the fleet's admin. */
+        val pinned: List<String>?,
+        /**
+         * Said when the box pins somebody and takes those verbs from nobody:
+         * every admin it pins left the fleet, none of them can sign, or it
+         * cannot check a signature. The coordinator's sentence, never the
+         * box's own (intents.js PIN_SENTENCES).
+         */
+        val left: String?,
+        /** Said when the box cannot read its record. The coordinator's sentence too. */
+        val problem: String?,
+        /**
+         * Why, beside [left]: `left`, `unlisted` or `unchecked`, always one of
+         * the coordinator's three. Null from a coordinator too old to send it,
+         * and then Restore is drawn as before.
+         */
+        val stranded: String? = null,
+    ) {
+        /**
+         * Whether the box takes those verbs from this person. Not while it is
+         * stranded, from anybody: a pinned person whose key the fleet does not
+         * list cannot sign either (C-2).
+         */
+        val takesFromYou: Boolean get() = count == 0 || (you == true && left == null)
+
+        /**
+         * Whether the box can check anybody's signature, which a person's
+         * restore of their own work needs. Not while it cannot read its
+         * record, and not on `unchecked`: it holds no key list to check with,
+         * so it refuses their own restore too.
+         */
+        val checksSignatures: Boolean get() = count != null && stranded != "unchecked"
     }
 
     data class FleetHost(
@@ -554,6 +616,21 @@ class Fleet(
          */
         val sandboxed: Boolean? = null,
         /**
+         * Why not, beside a false: `off`, `unsafe_args`, `userns_root`,
+         * `userns_docker` or `userns_host` (http.js uncontained). A box can
+         * have its sandbox on and still not contain a session, run as root,
+         * so [resumeKept] names the reason and its way on from this rather
+         * than saying the sandbox is off. Null from a box too old to send it,
+         * read as off, which is what such a box meant by false.
+         */
+        val sandboxedWhy: String? = null,
+        /**
+         * And every reason after it, in the box's order, because a box can
+         * have two (root with its sandbox off) and fixing the first alone does
+         * not open it. Empty from a box that gives only the first.
+         */
+        val sandboxedAlso: List<String> = emptyList(),
+        /**
          * What `tag` matches on for this box: os, architecture, distribution,
          * whether its image has a browser, plus anything set from an app or in
          * FLEETWRIGHT_LABELS.
@@ -592,6 +669,19 @@ class Fleet(
          */
         val houseRules: Int? = null,
         /**
+         * What a session started here with no mode does: "asks" before each
+         * tool, or runs with permissions "bypassed" (FLEETWRIGHT_SKIP_PERMISSIONS
+         * on the box, http.js #hostFacts). New session labels its "Box default"
+         * choice from this, and offers "Permissions bypassed" only where every
+         * machine it could land on says "bypassed", because a box that asks
+         * refuses a start from the fleet that asks to bypass (commands.js
+         * permissionCeiling), and null may be a box that asks.
+         *
+         * NULL IS CANNOT TELL: a box too old to say, and then the sheet says
+         * nothing about which way the default goes.
+         */
+        val permissions: String? = null,
+        /**
          * The host's own answer to "is there something to apply", and the only
          * one that is right for every kind of box. Null from a host too old to
          * send it, and null from a host that could not find out.
@@ -615,7 +705,32 @@ class Fleet(
         val administers: Boolean? = null,
         /** A pool's own machine: it holds the pool and runs no sessions. */
         val holder: Boolean = false,
+        /**
+         * WHO THIS MACHINE TAKES UPDATE, UPGRADE, REBOOT AND RESTORING
+         * SOMEBODY ELSE'S WORK FROM, when it pins its own admins
+         * (src/fleet/host/pinned-admins.js, shaped per person by core.js
+         * adminsSeenBy). Null is a box that cannot pin, which is every box from
+         * before this: nothing about pins is drawn there, and the buttons are
+         * drawn as before.
+         */
+        val admins: PinnedAdmins? = null,
     ) {
+        /**
+         * Whether the box takes update, upgrade, reboot, a new channel and a
+         * new image from this person as far as its pins go. True where it pins
+         * nobody or cannot pin, so only the coordinator's rule decides there,
+         * as before.
+         */
+        val boxWideAllowed: Boolean get() = admins?.takesFromYou ?: true
+
+        /**
+         * Whether the box takes this restore from this person: their own work
+         * on their signature, anybody's from a pinned admin, nothing while it
+         * cannot read its record or check a signature.
+         */
+        fun mayRestore(item: Binned, me: String): Boolean =
+            boxWideAllowed || (admins?.checksSignatures == true && item.isOwn(me))
+
         /**
          * Two separate answers, because they are two actions on two things.
          *
@@ -658,15 +773,75 @@ class Fleet(
          * (C-5). A coordinator too old to send [administers] is older than
          * the rule too, so null offers Resume as before, and a refusal still
          * says why.
+         *
+         * WHY NOT IS THE BOX'S WORD TOO ([sandboxedWhy]). A box run as root
+         * has its sandbox on and still does not contain a session, and
+         * "without the sandbox" would send its operator to a switch that is
+         * already on. So each reason is named with what opens it, in the
+         * coordinator's words for the same refusal (scheduler.js
+         * NOT_CONTAINED), and the same words as iOS; a reason this app does
+         * not know is not guessed at.
+         *
+         * AND EVERY ONE OF THEM when there are more ([sandboxedAlso]). A box
+         * run as root with its sandbox off would have read "until its sandbox
+         * is on", and with it on, still not taken the session. So two or more
+         * are named together with everything that has to change, from
+         * [NOT_CONTAINED]; one this app does not know makes the rest a partial
+         * list, and then the line says only "not contained".
          */
         val resumeKept: String?
             get() = when {
                 administers != false || sandboxed == true -> null
-                sandboxed == false ->
-                    "$hostId runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
+                sandboxed == false && saidWhy.size > 1 -> {
+                    val known = saidWhy.mapNotNull { NOT_CONTAINED[it] }
+                    if (known.size != saidWhy.size) {
+                        "$hostId says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
+                    } else {
+                        "$hostId ${together(known.map { it.first })}, so only this fleet’s admin, or the one person it works for, can resume one there until ${together(known.map { it.second })}."
+                    }
+                }
+                sandboxed == false -> when (saidWhy[0]) {
+                    "off" ->
+                        "$hostId runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
+                    "unsafe_args" ->
+                        "$hostId lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out."
+                    "userns_root" ->
+                        "$hostId runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user."
+                    "userns_docker" ->
+                        "$hostId runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman."
+                    "userns_host" ->
+                        "$hostId has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap."
+                    else ->
+                        "$hostId says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
+                }
                 else ->
                     "$hostId has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
             }
+
+        /** Every reason this box gave, in its order; a box too old to say why is off. */
+        private val saidWhy: List<String>
+            get() = sandboxedWhy?.let { listOf(it) + sandboxedAlso } ?: listOf("off")
+
+        private companion object {
+            /**
+             * Each reason a machine can give, as [resumeKept] joins two or
+             * more: what the machine does, in the coordinator's `short` words,
+             * and what has to be true before it takes the session, its `step`
+             * said as a condition (scheduler.js NOT_CONTAINED). Fleet.swift
+             * has the same table.
+             */
+            val NOT_CONTAINED = mapOf(
+                "off" to ("runs sessions without the sandbox" to "its sandbox is on"),
+                "unsafe_args" to ("lets FLEETWRIGHT_SANDBOX_ARGS end its sandbox" to "the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox is taken out"),
+                "userns_root" to ("runs fleetwright as root" to "fleetwright runs as its own user"),
+                "userns_docker" to ("runs its sandbox with docker" to "its sessions run under podman"),
+                "userns_host" to ("has FLEETWRIGHT_SANDBOX_USERNS=host" to "FLEETWRIGHT_SANDBOX_USERNS is set back to nomap"),
+            )
+
+            /** Clauses as one, joined as the coordinator joins them: `a and b`, or `a, b, and c`. */
+            fun together(parts: List<String>): String =
+                if (parts.size < 3) parts.joinToString(" and ") else parts.dropLast(1).joinToString(", ") + ", and " + parts.last()
+        }
 
         val appPending: Boolean
             get() = appPendingReported ?: ((behind ?: 0) > 0 || release?.available != null)
@@ -875,8 +1050,8 @@ class Fleet(
         /**
          * The title over a start the fleet refused. Two refusals are a
          * setting on the machine and not a fault in the asking, and asking
-         * again changes neither: `unsandboxed`, a machine that runs sessions
-         * without the sandbox and so only for its admins (G8), and
+         * again changes neither: `unsandboxed`, a machine that does not
+         * contain a session and so runs them only for its admins (G8), and
          * `host_outdated`, one too old to carry what was asked. Those are
          * titled as the reason, and the coordinator's sentence beneath says
          * which setting; anything else is a start that could not happen.
@@ -1596,6 +1771,16 @@ class Fleet(
             },
             host = host,
         )
+
+    /**
+     * Add or remove an admin this machine pins (`pinadmin`).
+     *
+     * Only an admin the machine already pins may, signed for this one request;
+     * the first is pinned on the machine itself, so a phone never offers it.
+     * Named for the host so the phone signs it for that box.
+     */
+    suspend fun pinAdmin(host: String, email: String, add: Boolean): Reply =
+        intent("pinadmin", mapOf("email" to email, "op" to if (add) "add" else "remove"), host = host)
 
     /**
      * The last lines of a session's pane — what it is actually doing.
@@ -3032,6 +3217,12 @@ class Fleet(
                     // `has` first: optBoolean turns a missing answer into false,
                     // and a box too old to say has not said it is off.
                     sandboxed = health?.takeIf { it.has("sandboxed") && !it.isNull("sandboxed") }?.optBoolean("sandboxed"),
+                    sandboxedWhy = health?.optString("sandboxedWhy")?.takeIf { it.isNotBlank() && it != "null" },
+                    // Every entry kept: one dropped would leave a shorter list
+                    // read as complete, and the coordinator sends only codes.
+                    sandboxedAlso = health?.optJSONArray("sandboxedAlso")?.let { arr ->
+                        (0 until arr.length()).map { i -> arr.optString(i) }
+                    } ?: emptyList(),
                     labels = health?.optJSONArray("labels")?.let { arr ->
                         (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
                     } ?: emptyList(),
@@ -3047,6 +3238,7 @@ class Fleet(
                                     name = n,
                                     title = b.optString("title").takeIf { it.isNotBlank() && it != "null" },
                                     expiresAt = b.optLong("expiresAt", 0L),
+                                    createdBy = b.optString("createdBy").takeIf { it.isNotBlank() && it != "null" },
                                 )
                             }
                         }
@@ -3070,11 +3262,30 @@ class Fleet(
                     // collapse this field exists to prevent — "no file" drawn
                     // as "a file that is not in use".
                     houseRules = health?.takeIf { it.has("houseRules") && !it.isNull("houseRules") }?.optInt("houseRules"),
+                    // Only the two words the host uses; a missing field, and
+                    // the "null" optString makes of a JSON null, stay null.
+                    permissions = health?.optString("permissions")?.takeIf { it == "asks" || it == "bypassed" },
                     // `has` first, for the same reason as appPending: a
                     // coordinator too old to say is not one that said no.
                     takesSessions = o.takeIf { it.has("takesSessions") && !it.isNull("takesSessions") }?.optBoolean("takesSessions"),
                     administers = o.takeIf { it.has("administers") && !it.isNull("administers") }?.optBoolean("administers"),
                     holder = o.optBoolean("holder", false),
+                    // ABSENT STAYS NULL: a box that cannot pin. `has` first
+                    // inside it, for the reason everywhere else here: optInt
+                    // reads a JSON null as 0, which would turn a record the box
+                    // cannot read into nobody pinned.
+                    admins = health?.optJSONObject("admins")?.let { a ->
+                        PinnedAdmins(
+                            count = a.takeIf { it.has("count") && !it.isNull("count") }?.optInt("count"),
+                            you = a.takeIf { it.has("you") && !it.isNull("you") }?.optBoolean("you"),
+                            pinned = a.optJSONArray("pinned")?.let { arr ->
+                                (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
+                            },
+                            left = a.optString("left").takeIf { it.isNotBlank() && it != "null" },
+                            problem = a.optString("problem").takeIf { it.isNotBlank() && it != "null" },
+                            stranded = a.optString("stranded").takeIf { it.isNotBlank() && it != "null" },
+                        )
+                    },
                 )
             }
         }.getOrDefault(emptyList())

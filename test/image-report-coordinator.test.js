@@ -93,11 +93,12 @@ test('a step is a word from the list, and only a failure carries the log, stripp
   const token = (await ask('laptop')).token;
   assert.equal((await core.imageReport({ token, step: 'Installing everything' })).status, 400);
   assert.equal((await core.imageReport({ token, step: 'packages', detail: 'ignored' })).status, 202);
+  assert.equal((await core.imageReport({ token, step: 'dns' })).status, 202, 'the wait for a name is a step, so it is not silence');
   assert.equal('detail' in reports('laptop')[0], false, 'words ride on a failure only');
 
   const log = `${'x'.repeat(3000)}\nE: Unable to locate package‮ nope\u001b[0m\n`;
   assert.equal((await core.imageReport({ token, step: 'failed', detail: log })).status, 202);
-  const failed = reports('laptop')[1];
+  const failed = reports('laptop')[2];
   assert.equal(failed.step, 'failed');
   assert.equal(failed.detail.length, 2000, 'the end of the log, not all of it');
   assert.ok(failed.detail.endsWith('E: Unable to locate package nope[0m\n'), 'control and direction characters are dropped');

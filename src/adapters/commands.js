@@ -26,6 +26,9 @@
  *   send none (older records also hold "cli" and "telegram:<id>"; see
  *   core/accounts.js for how each is read)
  * @property {string} [actorLabel] human name for logs/records
+ * @property {'fleet'} [via]       set when the line arrived from the fleet — the
+ *   sidecar's token, or the sidecar saying so — rather than from somebody on
+ *   this box. Only ever narrows what a line may do: see fromFleet below
  * @property {string} [title]      prose a person wrote, carried as a FIELD rather
  *   than parsed out of the command line — see adapters/http.js
  * @property {string} [brief]      a sentence of context for the same reason
@@ -206,6 +209,57 @@ function permissionOverride(flags) {
   if (safe) return false;
   if (dangerous) return true;
   return null;
+}
+
+/**
+ * Did this line come from the fleet rather than from somebody at this box?
+ *
+ * Three ways to know, and any one is enough, because the answer is only ever
+ * used to say no. The hub marks a request carrying the sidecar's token, and
+ * the sidecar marks every line it builds from an intent — which covers a box
+ * whose sidecar still holds the operator's token, and an intent the
+ * coordinator sent with no actor (its admin token names nobody). A `fleet:`
+ * actor is the third, for a sidecar from before it said so. Nothing on the box
+ * sends any of the three, so the operator's own console and command line are
+ * never mistaken for the fleet.
+ *
+ * @param {Ctx} ctx
+ */
+function fromFleet(ctx) {
+  return ctx.via === 'fleet' || /^fleet(:|$)/.test(String(ctx.actor ?? ''));
+}
+
+/**
+ * THE OPERATOR'S "ASK FIRST" IS A CEILING FOR THE FLEET.
+ *
+ * FLEETWRIGHT_SKIP_PERMISSIONS turned off is somebody with a shell on this box
+ * deciding that its sessions stop and ask before each tool. Off is any
+ * non-empty value other than 1, true, yes or on, in any case (config.js
+ * `bool`; an empty one is unset, and unset bypasses), so the refusal says
+ * "turned off" rather than quote a value the operator may never have written.
+ *
+ * `start` has carried `mode` since protocol v1, and nothing held a fleet start to that decision: a phone,
+ * Siri, an agent over MCP or a held runner start that asked for `dangerous`
+ * got `--dangerously-skip-permissions` on a box whose operator had turned it
+ * off. Refused rather than quietly downgraded, because a session that asks
+ * where the person expected one that does not is a session that hangs at its
+ * first tool with nobody watching, and the reply is the only place to say why.
+ *
+ * The operator's own `/new --dangerous` at the box still works: it is the same
+ * person overriding their own default, for one session.
+ *
+ * Asking for the box's default, or for `safe`, is never refused here.
+ *
+ * @param {Ctx} ctx
+ * @param {boolean|null} skipPermissions  what the line asked for
+ * @returns {string|null} the refusal, or null when the start may go ahead
+ */
+function permissionCeiling(ctx, skipPermissions) {
+  if (skipPermissions !== true || ctx.cfg.skipPermissions || !fromFleet(ctx)) return null;
+  return (
+    'This box asks before each tool — its operator turned FLEETWRIGHT_SKIP_PERMISSIONS off — and a start from the fleet ' +
+    'cannot bypass that. Start it with the box default, or with permission prompts on.'
+  );
 }
 
 /**
@@ -875,6 +929,10 @@ export const COMMANDS = {
     run: async (ctx, args, flags, values) => {
       const [name, cwd] = args;
       const skipPermissions = permissionOverride(flags);
+      // Before anything else is looked at, so a refused start has touched
+      // nothing on the box.
+      const ceiling = permissionCeiling(ctx, skipPermissions);
+      if (ceiling) return { ok: false, text: ceiling };
       // ONE TOKEN, HELD TO GITHUB'S NAMING RULES, like the protocol holds it:
       // the fleet sends the starter's archive as `--archive=owner/repo`, and a
       // value that is not a repository is refused rather than stored.

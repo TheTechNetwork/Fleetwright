@@ -175,14 +175,19 @@ fi
  *
  * @param {import('node:test').TestContext} t
  * @param {ReturnType<typeof poolMaster>} pool
- * @param {{ adminPassword?: string, fetch?: typeof globalThis.fetch }} [opts]
+ * `reaching` is called each time the job reaches for the new Xen Orchestra,
+ * before it is there to reach; what it throws, the connection throws.
+ * `xoOpts` go to the stand-in Xen Orchestra the job then finds.
+ *
+ * @param {{ adminPassword?: string, fetch?: typeof globalThis.fetch, reaching?: (attempt: number) => void, xoOpts?: Record<string, any> }} [opts]
  */
-async function machine(t, pool, { adminPassword = 'admin', fetch = pool.fetch } = {}) {
+async function machine(t, pool, { adminPassword = 'admin', fetch = pool.fetch, reaching = () => {}, xoOpts = {} } = {}) {
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const events = [];
   /** @type {any} */
   let xo = null;
+  let reached = 0;
   const setups = new XoSetups({
     signer: { publicJwk: keys.publicJwk, sign: (m) => sign(keys.privateJwk, m) },
     emit: (e) => events.push(e),
@@ -193,10 +198,11 @@ async function machine(t, pool, { adminPassword = 'admin', fetch = pool.fetch } 
     xoRetryMs: 20,
     connect: async ({ address, pin }) => {
       if (address !== '127.0.0.1') return connectXo({ address, pin });
+      reaching(++reached);
       if (!xo) {
         const cert = readFileSync(path.join(pool.seen, 'cert.pem'), 'utf8');
         const madePin = createHash('sha256').update(new X509Certificate(cert).raw).digest('hex');
-        xo = await standIn(t, { tls: { cert, key: readFileSync(path.join(pool.seen, 'key.pem'), 'utf8'), pin: madePin }, adminPassword });
+        xo = await standIn(t, { tls: { cert, key: readFileSync(path.join(pool.seen, 'key.pem'), 'utf8'), pin: madePin }, adminPassword, ...xoOpts });
       }
       return connectXo({ address: xo.address, pin });
     },
@@ -353,6 +359,59 @@ test('a Xen Orchestra whose default password somebody else changed first is left
   assert.equal(end.phase, 'admin');
   assert.match(end.text, /no longer takes its default admin password/);
   assert.equal(m.xo().calls.filter((/** @type {any} */ c) => c.method === 'user.set' || c.method === 'user.create').length, 0);
+});
+
+test('a Xen Orchestra this machine could not sign in to is said as that, not as somebody else’s doing', async (t) => {
+  // Any error from the default sign-in was reported as "somebody signed in
+  // to it and changed it"; only a refusal of the password means that.
+  const pool = poolMaster();
+  const m = await machine(t, pool, { xoOpts: { refuse: { 'session.signIn': 'the event loop was busy' } } });
+  const { end } = await install(m, pool);
+  assert.equal(end.state, 'failed');
+  assert.equal(end.phase, 'admin');
+  assert.equal(end.text, 'Replacing the default admin password stopped: this machine could not sign in to Xen Orchestra at 127.0.0.1 to replace the default admin password (the event loop was busy). Unless somebody changed it, it is still admin@admin.net / admin: change it, then add it from the app.');
+  assert.doesNotMatch(end.text, /somebody signed in/);
+});
+
+test('an install cancelled after Xen Orchestra is up says what is on the pool, and what its admin password is', async (t) => {
+  // Between two steps the generic "Cancelled before <step>" hid that a VM
+  // named fleetwright-xo now exists, with the person's password or the
+  // installer's default (C-5).
+  const actor = 'eli@example.com';
+  await t.test('after its admin password was replaced', async () => {
+    const pool = poolMaster();
+    const box = /** @type {{ cancel?: () => void }} */ ({});
+    const m = await machine(t, pool, { xoOpts: { on: { 'session.signIn': () => box.cancel?.() } } });
+    const begun = await m.setups.beginDeploy({ address: POOL_MASTER, pin: pool.pin, actor });
+    box.cancel = () => m.setups.cancel({ job: begun.xosetup.job, actor });
+    const { sealed } = await phone(begun, pool.pin);
+    assert.equal((await m.setups.run({ job: begun.xosetup.job, sealed, actor })).ok, true);
+    const end = await finished(m.setups, begun.xosetup.job);
+    assert.equal(end.state, 'cancelled', end.text);
+    assert.equal(end.text, 'Cancelled after Xen Orchestra was installed at 127.0.0.1, as fleetwright-xo on the pool, and its admin password was replaced with the one you chose, before it was added to the fleet. Add it from the app with that address.');
+    assert.equal(m.xo().passwords.get('admin@admin.net'), NEW_ADMIN, 'the password is the one it says');
+    assert.equal(m.xo().calls.filter((/** @type {any} */ c) => c.method === 'session.signIn').length, 1, 'onboarding never began');
+  });
+  await t.test('before its admin password was replaced', async () => {
+    const pool = poolMaster();
+    const box = /** @type {{ cancel?: () => void }} */ ({});
+    // The first reach for the new Xen Orchestra fails and the cancel lands;
+    // the second is never made.
+    const m = await machine(t, pool, {
+      reaching: () => {
+        box.cancel?.();
+        throw new Error('ECONNREFUSED');
+      },
+    });
+    const begun = await m.setups.beginDeploy({ address: POOL_MASTER, pin: pool.pin, actor });
+    box.cancel = () => m.setups.cancel({ job: begun.xosetup.job, actor });
+    const { sealed } = await phone(begun, pool.pin);
+    assert.equal((await m.setups.run({ job: begun.xosetup.job, sealed, actor })).ok, true);
+    const end = await finished(m.setups, begun.xosetup.job);
+    assert.equal(end.state, 'cancelled', end.text);
+    assert.equal(end.text, 'Cancelled after Xen Orchestra was installed at 127.0.0.1, as fleetwright-xo on the pool, before its default admin password was replaced: it is admin@admin.net with the password admin, and anybody on its network can sign in with it until that is changed. Change it now, then add it from the app with that address.');
+    assert.equal(m.xo(), null, 'Xen Orchestra was never reached');
+  });
 });
 
 test('an install that failed inside its VM says so and where the VM is', async (t) => {

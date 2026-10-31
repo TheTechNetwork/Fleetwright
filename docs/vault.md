@@ -101,25 +101,41 @@ sign-in itself (`checkClaude` in `src/fleet/minter/claude-login.js`):
 
 - a renewal already refused, by a box, a runner or a test, is the answer;
 - otherwise its access token is tried at the usage address, which costs
-  nothing, and a token refused there is renewed at once instead of when due;
+  nothing. A 401 there is renewed for at once instead of when due, and the
+  token the renewal gave is tried in the same check: refused too, renewing
+  will not mend it, so it is not renewed for again until it is due, and its
+  person is told once. A 403 is never renewed for: it says the sign-in may
+  not do this, not that the token ran out, and each renewal ends the token
+  every box holds. Its person is told once for the sign-in. Both are listed
+  in the check's answer as `refused`, with the status, apart from `ended`,
+  because renewing still works;
 - a sign-in that is due is renewed, as a box asking would renew it;
-- a sign-in kept ten minutes ago and never renewed, or not renewed for an
-  hour, is renewed anyway.
+- nothing else is renewed.
 
-**Why renew before it is due.** Two sign-ins in a row were refused at their
-first renewal, about 7.7 hours after keeping. Nothing in the fleet had used
-them, and nobody had signed in anywhere else. Waiting for the access token to
-run out tested the refresh token only at the end of eight hours. Renewing ten
-minutes after keeping says whether a sign-in arrived broken. Renewing hourly
-after that says within the hour when one stopped working.
+**Why nothing is renewed before it is due.** For a while the check renewed a
+sign-in ten minutes after keeping and hourly after that, to find a broken
+refresh token in minutes rather than at the end of eight hours: two sign-ins
+in a row had been refused at their first renewal, about 7.7 hours after
+keeping. But a renewal ends the access token every box already holds
+("Renewing revokes the token every holder has", below), and the boxes change
+over together only because they all ask inside the same half hour before
+expiry. A renewal at any other time cut every box off at once, hourly. So a
+refresh token is tested when it is needed, and the access token is tried every
+check, which costs nothing and ends nothing.
 
 **A refresh token's own lifetime is kept.** Claude Code writes it beside the
 sign-in as `refreshTokenExpiresAt`, and a renewal's answer may give it as
 `refresh_token_expires_in`. The minter used to drop it. Now a sign-in is due
 when either its access token or its refresh token is within thirty minutes of
-running out. The Test's sentence says how long the refresh token is good for.
-A refusal that comes after the refresh token ran out by its own lifetime is
-called this fleet being late (`expired`), not something outside it.
+running out. A renewal whose answer does not give it keeps it for a refresh
+token that came back unchanged, and leaves it unknown for a new one. Claude
+Code carries the old expiry over either way, but never renews because of it.
+The minter does, and timing a new refresh token by the one it replaced renewed
+again on every check and every box's ask. A refresh token a renewal gave back
+unchanged, or new but ending as soon, is not renewed again for its own
+expiry, since another renewal will not move it either. The Test's sentence says how long the refresh token is good for. A refusal
+that comes after the refresh token ran out by its own lifetime is called this
+fleet being late (`expired`), not something outside it.
 
 Only Anthropic refusing the refresh token counts as ended. An access token can
 be refused for reasons the refresh token survives, and the refresh token is
@@ -127,7 +143,11 @@ the one thing only signing in again mends. Anything else is cannot tell and
 says nothing. Each ended sign-in is named once (`claude-ended:<id>`, keyed by
 when it was kept), so the next sign-in kept is told about afresh. The
 coordinator records `claude.ended` and pushes to the person's phones, and to
-an admin's with whose sign-in it was.
+an admin's with whose sign-in it was. A sign-in whose access token Claude
+refuses at the usage address, and which the minter is not renewing for, is
+recorded as `claude.refused` and pushed the same way, once, saying what was
+seen: the status, and whether renewing was tried. Renewing works, so it is
+not called ended, and nothing is promised to mend it.
 
 **The push says what the record says, and no more** (`renewalVerdict`). "Was
 ended outside the fleet" is said only when nothing in the fleet renewed the
@@ -468,6 +488,64 @@ coordinator is which key that is. Nobody hunts for it:
 What this trusts is the Cloudflare account that serves both Workers, which is
 already the minter's bound (below): code deployed there could read every vault
 whatever key a phone held.
+
+### Kept a second time, outside the minter
+
+The deposit key, the signing key and every vault sit in one Durable Object.
+Lose that object and every vault is gone, along with the one key that could
+open a copy of it. So two things can be kept elsewhere. Each is optional, and
+each is off until the deploy binds it (`src/fleet/minter/backup.js`):
+
+- **The rows, in R2.** The deploy makes a private bucket,
+  `fleetwright-minter-backup` unless the repository variable
+  `FLEETWRIGHT_MINTER_BACKUP_BUCKET` names another, and binds it as `BACKUP`.
+  Five minutes after anything is written, the minter writes every row but its
+  keys to `latest.json`, and to that day's file, sealed to the deposit key.
+  Dated copies are kept thirty days. Copies are filed under the deposit key's
+  fingerprint, so a minter that lost its key and made a new one writes beside
+  the old copies and never over them.
+- **The keys, in Secrets Store.** When the object holds no key, it reads
+  `fleetwright-minter-deposit-key` and `fleetwright-minter-signing-key` from
+  the account's Secrets Store and keeps them again. When the object holds a
+  key and Secrets Store holds a different one, the object's key is used and
+  the log says so: every vault here is sealed to the object's key. A
+  secret that is bound but cannot be read stops the object answering. It does
+  not make a new key, because a new key would lose every vault sealed to the
+  unread one.
+
+**An empty object is filled from its copy** before it answers anything, and
+only when the deposit key comes from outside it (Secrets Store, or
+`FLEETWRIGHT_MINTER_DEPOSIT_KEY`), because a copy opens with that key alone. A
+copy that is there and does not open stops the object with `restore_failed`.
+It does not start empty, because the first row written would mean the copy
+was never read again. Unbind `BACKUP` to start empty anyway.
+A restore cut off part way is finished at the next ask. The rows go back one
+at a time with a `restore:pending` marker, which is removed only once the last
+row is in, so an object holding some of the rows still knows to go on.
+
+A copy is asked for only after something was written. Reads ask for none. Each
+copy's row count and size go to the log, and the log warns past 16 MiB. The
+deploy warns while `FLEETWRIGHT_MINTER_EXPORT_TO` is still set.
+
+**Getting the keys into Secrets Store** is done once, by hand, because a
+Worker cannot write there and nobody can read a value back out:
+
+```sh
+node scripts/minter-key-export.mjs new ./minter-keys        # your key; prints the next command
+echo '<printed key>' | npx wrangler secret put FLEETWRIGHT_MINTER_EXPORT_TO --config wrangler.minter.toml
+node scripts/minter-key-export.mjs open https://<the fleet> ./minter-keys
+npx wrangler secrets-store secret create <store-id> --name fleetwright-minter-deposit-key --scopes workers --remote
+npx wrangler secrets-store secret create <store-id> --name fleetwright-minter-signing-key --scopes workers --remote
+npx wrangler secret delete FLEETWRIGHT_MINTER_EXPORT_TO --config wrangler.minter.toml
+```
+
+Then set the repository variable `FLEETWRIGHT_MINTER_SECRETS_STORE` to the
+store's id. The deploy binds each of the two names it finds there, and warns
+about each one it does not find. The `open` step asks the public address with
+the header `x-fleetwright-export: keys`. The minter answers that only while
+`FLEETWRIGHT_MINTER_EXPORT_TO` is set, and only with the keys sealed to it, so
+anyone else who asks gets something they cannot open. Delete the files in
+`./minter-keys` once the secrets are in the store.
 
 ## For whoever runs the fleet
 

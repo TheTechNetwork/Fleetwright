@@ -785,17 +785,31 @@ internal fun HypervisorSheet(
                         .firstOrNull { it.hostId == hostId }?.publicJwk?.let { PhoneVault.fingerprint(it) }
                     // APPROVED only by a whole-vault grant for this machine,
                     // by this whole key: a pool machine's grant, scoped by
-                    // `only`, is not the person's word (PhoneVault.approves).
-                    val approved = PhoneGitHub(settings).signedIn &&
+                    // `only`, is not the person's word (PhoneVault.approval).
+                    // NONE when the vault cannot be asked: no GitHub sign-in
+                    // on this phone, or a vault that did not answer. It asks
+                    // the person; it never passes.
+                    val approval = if (PhoneGitHub(settings).signedIn) {
                         runCatching { PhoneVault(settings).list(fleet) }.getOrNull()?.grants
-                            ?.let { PhoneVault.approves(it, hostId, setup.hostKey!!) } == true
+                            ?.let { PhoneVault.approval(it, hostId, setup.hostKey!!) } ?: PhoneVault.Approval.NONE
+                    } else {
+                        PhoneVault.Approval.NONE
+                    }
                     val pending = Pending(setup, hostId, where, who)
                     when {
                         listed != null && listed != fingerprint -> {
                             password = ""
                             refusal = "That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent."
                         }
-                        approved -> run(pending)
+                        // Approved under another key: a machine that was
+                        // re-keyed would have been re-approved. Hard stop, in
+                        // iOS's words, and the job is dropped on the machine.
+                        approval == PhoneVault.Approval.ANOTHER_KEY -> {
+                            password = ""
+                            refusal = "The key $hostId answered with did not come from that machine: it is not the key this phone approved for it. The sign-in was not sent."
+                            runCatching { fleet.xosetup("cancel", job = setup.job) }
+                        }
+                        approval == PhoneVault.Approval.APPROVED -> run(pending)
                         else -> unvouched = pending
                     }
                 }

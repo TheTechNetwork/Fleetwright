@@ -48,6 +48,7 @@ const BASELINE = Object.freeze({
   update: { restart: 1 },
   upgrade: { apply: 1 },
   reboot: { pin: 1, confirm: 1 },
+  pinadmin: { email: 16, op: 16 },
   answer: { name: 1, option: 1, promptId: 1 },
   forget: { name: 1 },
   restore: { name: 1 },

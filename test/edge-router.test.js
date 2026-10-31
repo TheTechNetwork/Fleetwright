@@ -255,6 +255,8 @@ function edgeArgs(/** @type {any} */ admin, /** @type {any} */ extra = {}) {
       },
       getImage: async () => '/nowhere/image.bz2',
       unpackImpl: () => new PassThrough(),
+      // The clock a rebuilt router is watched by (settled): one that does not wait.
+      sleep: async () => {},
       upload: async (/** @type {any} */ u) => {
         assert.equal(u.size, OPNSENSE_IMAGE.rawSize);
         assert.equal(u.sendTo, '/import/abc');
@@ -507,7 +509,7 @@ test('an edge is built with an interface on each lab, in order, and tagged with 
   const params = Object.fromEntries(rebuilt.calls);
   assert.deepEqual(params['vm.create'].tags, [EDGE.tag, EDGE.updatesTag, EDGE.blocksTag, `${LAB.edgeTag}o`]);
   assert.deepEqual(params['vm.delete'], { id: 'vm-old', deleteDisks: true });
-  assert.ok(said.includes('Rebuilding the edge router with one open lab. Machines behind it have no way out until it is up.'), said.join('\n'));
+  assert.ok(said.includes('Rebuilding the edge router with one open lab. Machines behind it keep their way out while the new one is built, and have none while it starts.'), said.join('\n'));
   // The same kinds on a lab network made again: the old edge is not on it.
   const moved = xo({ VM: [old], 'VM-template': [TEMPLATE], VIF: onLabs }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' });
   await ensureEdge(edgeArgs(moved, { labs: [labs[0], { id: 'net-lab-2b', open: false }], fleet }).args);
@@ -681,7 +683,7 @@ test('an edge from before it updated itself is rebuilt once to get that and the 
   /** @type {string[]} */
   const said = [];
   const done = await ensureEdge(edgeArgs(admin, { say: (/** @type {string} */ t) => said.push(t) }).args);
-  assert.ok(said.includes('Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. Machines behind it have no way out until it is up.'));
+  assert.ok(said.includes('Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. Machines behind it keep their way out while the new one is built, and have none while it starts.'));
   assert.deepEqual(Object.fromEntries(admin.calls)['vm.create'].tags, [EDGE.tag, EDGE.updatesTag], 'logging, as it was');
   assert.match(done, /updates itself every day after 10:00 UTC, restarting when OPNsense needs it to, and gets the Xen guest agent with its first update\./);
   // Current, and Xen Orchestra knows no address: cannot tell, not "none".
@@ -689,18 +691,23 @@ test('an edge from before it updated itself is rebuilt once to get that and the 
   assert.match(await ensureEdge(edgeArgs(quiet).args), /already there, on eth0\.10, logging[\s\S]*Xen Orchestra does not know its WAN address: it has none, or its guest agent has not arrived yet/);
 });
 
-test('an edge built the other way is rebuilt: the old one stopped, the new one built and tagged, and only then the old one removed', async () => {
+// THE WAY OUT IS GONE FOR ONE BOOT, not for the build: the download and the
+// disk, up to 490 MB and 3 GiB, go through while the old router still runs,
+// and it is stopped only when the new one is made and about to start. The
+// first version stopped it first, and the machines waited out the download.
+test('an edge built the other way is rebuilt: the new one built while the old one runs, then the old one stopped, the new one started, and only then the old one removed', async () => {
   const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag], power_state: 'Running' };
   const admin = xo(
     { VM: [old], 'VM-template': [TEMPLATE], VIF: [] },
     { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' },
   );
   let told = 0;
-  const { args } = edgeArgs(admin, { block: true, rebuilding: () => told++ });
+  const { args, said } = edgeArgs(admin, { block: true, rebuilding: () => told++ });
   const done = await ensureEdge(args);
   assert.equal(told, 1, 'the job is not told it is rebuilding');
   const methods = admin.calls.map(([m]) => m).filter((m) => !READS.includes(m) && m !== 'vif.set');
-  assert.deepEqual(methods, ['vm.stop', 'disk.create', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.start', 'vm.delete']);
+  assert.deepEqual(methods, ['disk.create', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.stop', 'vm.start', 'vm.delete'], 'the old router was stopped before the slow part of the build');
+  assert.ok(said.includes('Rebuilding the edge router to drop what its threat rules match. Machines behind it keep their way out while the new one is built, and have none while it starts.'), said.join('\n'));
   const params = Object.fromEntries(admin.calls);
   assert.deepEqual(params['vm.stop'], { id: 'vm-old', force: true });
   assert.deepEqual(params['vm.create'].tags, [EDGE.tag, EDGE.updatesTag, EDGE.blocksTag]);
@@ -714,9 +721,9 @@ test('a rebuild that fails leaves the old edge running as it was, and an edge as
     { VM: [old], 'VM-template': [TEMPLATE], VIF: [] },
     { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => { throw new Error('no memory left on the host'); } },
   );
-  await assert.rejects(ensureEdge(edgeArgs(admin, { block: false }).args), /no memory left on the host\. The edge router it was replacing was started again/);
-  assert.deepEqual(admin.calls.filter(([m]) => m === 'vm.start').map(([, p]) => p), [{ id: 'vm-old' }]);
-  assert.ok(!admin.calls.some(([m, p]) => m === 'vm.delete' && p.id === 'vm-old'), 'the old edge was removed though nothing replaced it');
+  // The build fails before the old one was stopped for it: nothing to start again, and the sentence does not claim it.
+  await assert.rejects(ensureEdge(edgeArgs(admin, { block: false }).args), /no memory left on the host\. The edge router it was replacing was left running, as it was/);
+  assert.ok(!admin.calls.some(([m, p]) => (m === 'vm.stop' || m === 'vm.start' || m === 'vm.delete') && p.id === 'vm-old'), 'the old edge was touched though nothing replaced it');
   // A phone that predates the choice sends none: the edge is not touched,
   // whichever way it was built; nor is one already built the way asked.
   for (const block of [null, true]) {
@@ -788,14 +795,36 @@ test('a pair is rebuilt one at a time with the password it has, and the second g
   const b = routerOf(1, password);
   const admin = pairXo([a, b], keeperWith({ carp: password }));
   const { args, said } = edgeArgs(admin, { block: true });
+  // THE NEW ONE IS WATCHED BEFORE THE OLD ONE GOES: Xen Orchestra, asked
+  // about the router just started, shows it running with no address twice,
+  // then with an address from its guest agent. Each poll is recorded among
+  // the calls, so the order below can hold the old router's removal to it.
+  let polls = 0;
+  const under = admin.call.bind(admin);
+  admin.call = async (/** @type {string} */ m, /** @type {any} */ p) => {
+    if (m === 'xo.getAllObjects' && p.filter?.id) {
+      admin.calls.push(['poll', { id: p.filter.id }]);
+      return { [p.filter.id]: { id: p.filter.id, power_state: 'Running', ...(++polls % 3 === 0 ? { addresses: { '0/ipv4/0': '10.10.10.5' } } : {}) } };
+    }
+    return under(m, p);
+  };
   const done = await ensureEdge(args);
   const stops = admin.calls.filter((/** @type {any} */ c) => c[0] === 'vm.stop' || c[0] === 'vm.delete').map((/** @type {any} */ c) => `${c[0]} ${c[1].id}`);
   assert.deepEqual(stops, ['vm.stop vm-b', 'vm.delete vm-b', 'vm.stop vm-a', 'vm.delete vm-a'], 'never both down at once');
+  const steps = admin.calls.filter((/** @type {any} */ c) => ['vm.create', 'vm.stop', 'vm.start', 'poll', 'vm.delete'].includes(c[0])).map((/** @type {any} */ c) => `${c[0]} ${c[1].id ?? c[1].name_label}`);
+  assert.deepEqual(
+    steps,
+    [
+      `vm.create ${EDGE_HA.second}`, 'vm.stop vm-b', 'vm.start vm-new-1', 'poll vm-new-1', 'poll vm-new-1', 'poll vm-new-1', 'vm.delete vm-b',
+      `vm.create ${EDGE.vm}`, 'vm.stop vm-a', 'vm.start vm-new-2', 'poll vm-new-2', 'poll vm-new-2', 'poll vm-new-2', 'vm.delete vm-a',
+    ],
+    'an old router went before the new one was built, or before Xen Orchestra had shown the new one up',
+  );
   assert.deepEqual(created(admin).map((c) => c.name_label), [EDGE_HA.second, EDGE.vm]);
   assert.ok(created(admin).every((c) => c.tags.includes(EDGE.blocksTag)));
   assert.deepEqual(passwords(admin), [password, password], 'a new password would leave the new one and the old one deaf to each other');
   assert.ok(said.some((s) => /keep their way out/.test(s)));
-  assert.match(done, /rebuilt, one at a time, dropping/);
+  assert.match(done, /rebuilt, one at a time, dropping[\s\S]*fleetwright-edge-b’s guest agent answers: Xen Orchestra has its WAN address, 10\.10\.10\.5\. fleetwright-edge’s guest agent answers/);
   // A pair asked nothing new is left alone, and says where each is.
   const still = pairXo([{ ...a, addresses: { '0/ipv4/0': '10.10.10.237' } }, b], keeperWith({ carp: password }));
   const left = await ensureEdge(edgeArgs(still).args);
@@ -808,8 +837,49 @@ test('a rebuild of one of the pair that fails starts the old one again, and the 
   const a = routerOf(0, password);
   const b = routerOf(1, password);
   const admin = xo({ VM: [a, b], 'VM-template': [TEMPLATE], VIF: [], users: keeperWith({ carp: password }) }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => { throw new Error('no memory left on the host'); } });
-  await assert.rejects(ensureEdge(edgeArgs(admin, { block: true }).args), /no memory left on the host\. fleetwright-edge-b, which it was replacing, was started again/);
-  assert.ok(!admin.calls.some((/** @type {any} */ c) => (c[0] === 'vm.stop' || c[0] === 'vm.delete') && c[1].id === 'vm-a'), 'the first carried the machines throughout');
+  await assert.rejects(ensureEdge(edgeArgs(admin, { block: true }).args), /no memory left on the host\. fleetwright-edge-b, which it was replacing, was left running, as it was/);
+  assert.ok(!admin.calls.some((/** @type {any} */ c) => c[0] === 'vm.stop' || c[0] === 'vm.delete'), 'a router was stopped for a build that never got as far as needing it');
+});
+
+// WHAT XEN ORCHESTRA CAN TELL OF A ROUTER JUST STARTED, which is little: a
+// new router has no guest agent until its first update, so it shows running
+// and nothing more. The watch (settled) catches the one thing it can, a
+// router that stops again, and says the rest as not known.
+test('a new router that stops again while it is watched is removed and the old one started again; one that only runs is not claimed to answer', async () => {
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag], power_state: 'Running' };
+  /** A stand-in whose VMs keep their power state: `vm.start` works, or leaves the VM halted. */
+  const standIn = (/** @type {boolean} */ starts) => {
+    const VM = [{ ...old }];
+    return xo({ VM, 'VM-template': [TEMPLATE], VIF: [] }, {
+      'disk.import': () => ({ $sendTo: '/import/abc' }),
+      'vm.create': () => {
+        VM.push({ id: 'vm-new', $pool: 'p1', tags: [], power_state: 'Halted' });
+        return 'vm-new';
+      },
+      'vm.start': (p) => {
+        const v = VM.find((x) => x.id === p.id);
+        if (v && (starts || p.id !== 'vm-new')) v.power_state = 'Running';
+        return true;
+      },
+    });
+  };
+  const settle = { ms: 20_000, every: 10_000 };
+  const dies = standIn(false);
+  await assert.rejects(
+    ensureEdge(edgeArgs(dies, { block: true, settle }).args),
+    /fleetwright-edge stopped again as soon as it was started, which a router that boots does not do\. The new fleetwright-edge was removed, and the edge router it was replacing was started again, as it was/,
+  );
+  assert.deepEqual(dies.calls.filter(([m]) => m === 'vm.delete').map(([, p]) => p), [{ id: 'vm-new', deleteDisks: true }], 'the old router went, or the new one stayed');
+  assert.deepEqual(dies.calls.filter(([m]) => m === 'vm.start').map(([, p]) => p.id), ['vm-new', 'vm-old']);
+
+  const runs = standIn(true);
+  const { args, said } = edgeArgs(runs, { block: true, settle });
+  const done = await ensureEdge(args);
+  assert.equal(runs.calls.filter(([m, p]) => m === 'xo.getAllObjects' && p.filter?.id === 'vm-new').length, 3, 'asked at 0, 10 and 20 seconds');
+  assert.deepEqual(runs.calls.filter(([m]) => m === 'vm.delete').map(([, p]) => p), [{ id: 'vm-old', deleteDisks: true }]);
+  assert.ok(said.includes('fleetwright-edge is started. Xen Orchestra is watched for 20 seconds for it stopping again; whether it answers cannot be told from here until its guest agent arrives with its first update.'), said.join('\n'));
+  assert.match(done, /It replaced the one that was there, which was removed\. Xen Orchestra reported fleetwright-edge running for the 20 seconds it was watched; whether it answers cannot be told from here until its guest agent arrives with its first update, after 10:00 UTC\.$/);
+  assert.ok(!/answers:/.test(done), 'a router with no agent was said to answer');
 });
 
 test('going back to one removes the second and rebuilds the first on its own', async () => {
@@ -817,10 +887,94 @@ test('going back to one removes the second and rebuilds the first on its own', a
   const admin = pairXo([routerOf(0, password), routerOf(1, password)], keeperWith({ carp: password }));
   const done = await ensureEdge(edgeArgs(admin, { ha: false }).args);
   const order = admin.calls.filter((/** @type {any} */ c) => ['vm.stop', 'vm.delete', 'vm.create'].includes(c[0])).map((/** @type {any} */ c) => `${c[0]} ${c[1].id ?? c[1].name_label}`);
-  assert.deepEqual(order, ['vm.stop vm-b', 'vm.delete vm-b', 'vm.stop vm-a', `vm.create ${EDGE.vm}`, 'vm.delete vm-a']);
+  assert.deepEqual(order, ['vm.stop vm-b', 'vm.delete vm-b', `vm.create ${EDGE.vm}`, 'vm.stop vm-a', 'vm.delete vm-a'], 'the first stopped carrying the machines before the new one was built');
   assert.ok(!created(admin)[0].tags.some((/** @type {string} */ x) => x.startsWith(EDGE_HA.nodeTag)), 'one edge, not one of a pair');
   assert.deepEqual(passwords(admin), []);
   assert.match(done, /The edge router is up/);
+});
+
+// HALF A PAIR. "Applying again finishes the pair", said when the first failed
+// to build beside the new second, started the old single router instead: it
+// has no node tag, so the next run took it for the pair's first, found
+// nothing to change, and started it. That router has 10.254.0.1 as its own
+// address and hands out the whole DHCP range; the second holds the address
+// by CARP and hands out half of it. The only write that run made was that
+// start. Played through here as the two runs they are, on a stand-in that
+// keeps what the first run left.
+test('“applying again finishes the pair” finishes it: the first is built beside the second with the pair’s password, and the old single router is removed, never started', async () => {
+  const old = { id: 'vm-old', name_label: EDGE.vm, $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag], power_state: 'Running' };
+  const live = liveXo([old]);
+  // The stand-in keeps power states and deletions, as the next run reads them, and the first's build fails once.
+  const under = live.admin.call.bind(live.admin);
+  let creates = 0;
+  live.admin.call = async (/** @type {string} */ m, /** @type {any} */ p) => {
+    if (m === 'vm.create' && ++creates === 2) throw new Error('no memory left on the host');
+    if (m === 'vm.stop') for (const v of live.objects.VM) if (v.id === p.id) v.power_state = 'Halted';
+    if (m === 'vm.delete') live.objects.VM = live.objects.VM.filter((v) => v.id !== p.id);
+    return under(m, p);
+  };
+  await assert.rejects(
+    ensureEdge(edgeArgs(live.admin, { ha: true, upload: live.upload }).args),
+    /no memory left on the host\. fleetwright-edge-b carries the machines on its own; the old edge router is left stopped, since it would clash with it, and applying again finishes the pair/,
+  );
+  const b = live.objects.VM.find((v) => v.name_label === EDGE_HA.second);
+  assert.equal(b?.power_state, 'Running');
+  assert.equal(live.objects.VM.find((v) => v.id === 'vm-old')?.power_state, 'Halted');
+
+  // Applying again, as the sentence says to: the phone sends the same policy.
+  const before = live.admin.calls.length;
+  const done = await ensureEdge(edgeArgs(live.admin, { ha: true, upload: live.upload }).args);
+  const since = live.admin.calls.slice(before);
+  assert.ok(!since.some(([m, p]) => m === 'vm.start' && p.id === 'vm-old'), 'the old single router, with 10.254.0.1 as its own address, was started beside the second');
+  assert.deepEqual(since.filter(([m]) => m === 'vm.create').map(([, p]) => [p.name_label, p.tags.filter((/** @type {string} */ x) => x.startsWith(EDGE_HA.nodeTag))]), [[EDGE.vm, [`${EDGE_HA.nodeTag}0`]]], 'the first, and only the first, is built');
+  assert.deepEqual(since.filter(([m]) => m === 'vm.delete').map(([, p]) => p), [{ id: 'vm-old', deleteDisks: true }]);
+  assert.ok(!since.some(([m, p]) => (m === 'vm.stop' || m === 'vm.delete') && p.id === b.id), 'the second, which carries the machines, was touched');
+  assert.equal(carpIn(live.configs.at(-1)), carpIn(live.configs[0]), 'the first was given a password the second does not have');
+  assert.match(done, /The pair is complete: fleetwright-edge was built beside fleetwright-edge-b, sharing 10\.254\.0\.1, and the edge router from before the pair was removed\./);
+});
+
+test('a second on its own gets the first built beside it with the password it has, not a second second with a new one', async () => {
+  const password = '56'.repeat(16);
+  const admin = pairXo([routerOf(1, password)], keeperWith({ carp: password }));
+  const done = await ensureEdge(edgeArgs(admin).args);
+  assert.deepEqual(created(admin).map((c) => [c.name_label, c.tags.filter((/** @type {string} */ x) => x.startsWith(EDGE_HA.nodeTag))]), [[EDGE.vm, [`${EDGE_HA.nodeTag}0`]]]);
+  assert.deepEqual(passwords(admin), [password], 'the first would not hear the second');
+  assert.ok(!admin.calls.some((/** @type {any} */ c) => c[0] === 'vm.stop' || c[0] === 'vm.delete'), 'the second, which carries the machines, was touched');
+  assert.match(done, /The pair is complete: fleetwright-edge was built beside fleetwright-edge-b, sharing 10\.254\.0\.1\./);
+  // With the password kept nowhere, a new first could not run beside it:
+  // the first replaces the second, and a new second is built beside it.
+  const lost = pairXo([routerOf(1, password)]);
+  await ensureEdge(edgeArgs(lost).args);
+  const order = lost.calls.filter((/** @type {any} */ c) => ['vm.stop', 'vm.start', 'vm.delete', 'vm.create'].includes(c[0])).map((/** @type {any} */ c) => `${c[0]} ${c[1].id ?? c[1].name_label}`);
+  assert.deepEqual(order, [`vm.create ${EDGE.vm}`, 'vm.stop vm-b', 'vm.start vm-new-1', 'vm.delete vm-b', `vm.create ${EDGE_HA.second}`, 'vm.start vm-new-2']);
+  assert.equal(new Set(passwords(lost)).size, 1);
+});
+
+// LABS ARE NOT A REASON TO LOSE THEM. `labs` null means nobody asked about
+// labs (a phone from before them, a box that offers none, the one-time
+// rebuilds), and the comment above ensureEdge promised the edge keeps the
+// ones it has. The rebuild passed `labs ?? []`, so a block toggle took both
+// lab interfaces off.
+test('a rebuild for another reason keeps the labs the edge has when nobody asked for others', async () => {
+  const fleet = fleetHosts('https://fleet.example.network');
+  const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag, `${LAB.edgeTag}oc`], power_state: 'Running' };
+  const onLabs = [{ id: 'v2', $VM: 'vm-old', device: '2', $network: 'net-lab-1' }, { id: 'v3', $VM: 'vm-old', device: '3', $network: 'net-lab-2' }];
+  const admin = xo({ VM: [old], 'VM-template': [TEMPLATE], VIF: onLabs }, { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' });
+  const done = await ensureEdge(edgeArgs(admin, { block: true, labs: null, fleet }).args);
+  const made = Object.fromEntries(admin.calls)['vm.create'];
+  assert.deepEqual(made.VIFs.map((/** @type {any} */ v) => v.network), ['net-wan', 'net-up', 'net-lab-1', 'net-lab-2'], 'the labs came off with the toggle');
+  assert.deepEqual(made.tags, [EDGE.tag, EDGE.updatesTag, EDGE.blocksTag, `${LAB.edgeTag}oc`]);
+  assert.match(done, /dropped\. It has one open lab and one closed lab of their own/);
+  // A pair the same, through the one-at-a-time rebuild.
+  const password = '78'.repeat(16);
+  const a = { ...routerOf(0, password), tags: [...routerOf(0, password).tags, `${LAB.edgeTag}oc`] };
+  const pair = pairXo([a, routerOf(1, password)], keeperWith({ carp: password }));
+  pair.calls.length = 0;
+  const vifs = onLabs.map((v) => ({ ...v, $VM: 'vm-a' }));
+  const under = pair.call.bind(pair);
+  pair.call = async (/** @type {string} */ m, /** @type {any} */ p) => (m === 'xo.getAllObjects' && p.filter?.type === 'VIF' && p.filter.$VM === 'vm-a' ? Object.fromEntries(vifs.map((v) => [v.id, v])) : under(m, p));
+  await ensureEdge(edgeArgs(pair, { block: true, labs: null, fleet }).args);
+  assert.deepEqual(created(pair).map((c) => c.VIFs.map((/** @type {any} */ v) => v.network)), [['net-wan', 'net-up', 'net-lab-1', 'net-lab-2'], ['net-wan', 'net-up', 'net-lab-1', 'net-lab-2']]);
 });
 
 // WHAT EVERYBODY SIGNED IN READS. Measured on Xen Orchestra 5.211.0:
@@ -847,6 +1001,10 @@ function liveXo(/** @type {any[]} */ vms = [], /** @type {any[]} */ users = []) 
       const id = `vm-new-${++n}`;
       objects.VM.push({ id, type: 'VM', $pool: 'p1', power_state: 'Halted', ...p, xenStoreData: {} });
       return id;
+    },
+    'vm.start': (p) => {
+      for (const v of objects.VM) if (v.id === p.id) v.power_state = 'Running';
+      return true;
     },
     'vm.set': (p) => {
       const vm = objects.VM.find((v) => v.id === p.id);
@@ -1060,7 +1218,7 @@ test('a router without the key the job brings is rebuilt once, keeping its WAN M
   const { args, said } = edgeArgs(admin, { watch: w, syslog: ['192.168.1.20'] });
   await ensureEdge(args);
   const params = Object.fromEntries(admin.calls);
-  assert.ok(said.includes('Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. Machines behind it have no way out until it is up.'), said.join('\n'));
+  assert.ok(said.includes('Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. Machines behind it keep their way out while the new one is built, and have none while it starts.'), said.join('\n'));
   assert.deepEqual(params['vm.create'].VIFs[0], { network: 'net-wan', mac: '02:aa:bb:cc:dd:ee' }, 'the new router is not where the old one was on the way out');
   assert.ok(params['vm.create'].tags.includes(EDGE_WATCH.tag));
   assert.deepEqual(JSON.parse(admin.users[0].preferences[EDGE_KEPT.entry('p1')]).watch, w, 'the key is not kept where the next rebuild finds it');
@@ -1341,7 +1499,8 @@ test('the first build keeps the image as published, never booted and out of the 
   const again = edgeArgs(k.admin, { ...k.extra, block: true });
   const done = await ensureEdge(again.args);
   const later = k.admin.calls.slice(before).map((c) => c[0]).filter((m) => !['xo.getAllObjects', 'resourceSet.getAll', 'vif.set'].includes(m));
-  assert.deepEqual(later, ['vm.stop', 'vm.create', 'disk.importContent', 'vdi.set', 'vm.start', 'vm.delete']);
+  // The copy made and written while the old router runs; it is stopped only for the new one to start.
+  assert.deepEqual(later, ['vm.create', 'disk.importContent', 'vdi.set', 'vm.stop', 'vm.start', 'vm.delete']);
   assert.equal(called(k.admin, 'vm.create').at(-1).template, 'vm-3');
   assert.deepEqual(k.uploads.length, 1, 'the second build sent the disk again');
   assert.match(done, /dropped[\s\S]*replaced the one that was there/);

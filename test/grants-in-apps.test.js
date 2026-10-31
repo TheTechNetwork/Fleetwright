@@ -60,7 +60,8 @@ test('Android draws Reboot only where the box allows it, and the line where it d
   // On the machine's page, as on iOS: the line instead of the button when the
   // box refuses, and the button otherwise.
   assert.match(ANDROID, /if \(h\.grantReboot == false\) \{\s*GrantOff\("Reboot from the app is off on this box\.", grantLine\("reboot"\)\)\s*\} else if \(!rebooting\) \{/);
-  assert.match(ANDROID, /if \(h\.systemPending && h\.grantUpgrades != false\)/);
+  // (and where the machine takes it from this person: test/pinned-admins-in-apps.test.js)
+  assert.match(ANDROID, /if \(h\.systemPending && h\.grantUpgrades != false && actsOnBox\)/);
   // Only the case that is news is said: "allowed" is the ordinary state.
   assert.match(ANDROID, /h\.grantUpgrades\?\.let \{ allowed ->\s*if \(!allowed\) \{[\s\S]*?GrantOff\("Turning it on is one line on the box:", grantLine\("upgrades"\)\)/);
   assert.match(ANDROID, /fun grantLine\(name: String\): String = "sudo fleetwright grant \$name on"/);

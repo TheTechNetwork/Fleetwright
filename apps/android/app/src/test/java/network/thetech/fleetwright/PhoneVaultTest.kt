@@ -2,19 +2,18 @@ package network.thetech.fleetwright
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * PhoneVault.approves: which of the vault's grants is the person's word that a
+ * PhoneVault.approval: which of the vault's grants is the person's word that a
  * key is a machine's, so an admin's secret is sealed to it without the
  * comparison. PhoneVaultTests.swift is the same table on iOS.
  *
  * WHAT IS PINNED is that a grant scoped by `only`, the one this phone writes
  * when it lets a pool's own machine in to hold its pool's record, is not that
- * word, and that the key is held to the whole hash the minter names the grant
- * by, not to its sixteen-character prefix.
+ * word, that the key is held to the whole hash the minter names the grant
+ * by, not to its sixteen-character prefix, and that a whole-vault grant for
+ * that machine by another key is a hard stop rather than a question.
  */
 class PhoneVaultTest {
 
@@ -36,21 +35,30 @@ class PhoneVaultTest {
 
     @Test
     fun aWholeVaultGrantForThatMachineByThatKeyIsApproval() {
-        assertTrue(PhoneVault.approves(listOf(grant(hash)), "deb132", key))
+        assertEquals(PhoneVault.Approval.APPROVED, PhoneVault.approval(listOf(grant(hash)), "deb132", key))
     }
 
     @Test
     fun aPoolMachinesScopedGrantIsNotApproval() {
-        assertFalse(PhoneVault.approves(listOf(grant(hash, only = listOf("hypervisor:xo.lan"))), "deb132", key))
+        val holder = grant(hash, only = listOf("hypervisor:xo.lan"))
+        assertEquals(PhoneVault.Approval.NONE, PhoneVault.approval(listOf(holder), "deb132", key))
     }
 
     @Test
     fun theSixteenCharacterPrefixAloneIsNotApproval() {
-        assertFalse(PhoneVault.approves(listOf(grant(hash.take(16) + "0".repeat(48))), "deb132", key))
+        val samePrefix = grant(hash.take(16) + "0".repeat(48))
+        assertEquals(PhoneVault.Approval.ANOTHER_KEY, PhoneVault.approval(listOf(samePrefix), "deb132", key))
     }
 
     @Test
     fun aGrantUnderAnotherNameIsNotApproval() {
-        assertFalse(PhoneVault.approves(listOf(grant(hash, label = "deb133")), "deb132", key))
+        assertEquals(PhoneVault.Approval.NONE, PhoneVault.approval(listOf(grant(hash, label = "deb133")), "deb132", key))
+    }
+
+    @Test
+    fun anotherKeyApprovedForThatMachineIsAHardStopAndAReapprovalIsNot() {
+        val old = grant("1".repeat(64))
+        assertEquals(PhoneVault.Approval.ANOTHER_KEY, PhoneVault.approval(listOf(old), "deb132", key))
+        assertEquals(PhoneVault.Approval.APPROVED, PhoneVault.approval(listOf(old, grant(hash)), "deb132", key))
     }
 }

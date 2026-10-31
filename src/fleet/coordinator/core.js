@@ -23,7 +23,7 @@ import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
 import { actorEmail, intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
 import { Delegations } from './delegations.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage, PIN_SENTENCES } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
@@ -140,7 +140,7 @@ const MINT_WINDOW_MS = 10 * 60_000;
  * sign-in ended at 18:19 is told by 18:35, against the hours it took a failed
  * session to say so; the minter refuses to ask more often than ten minutes.
  */
-const CLAUDE_CHECK_MS = 15 * 60_000;
+export const CLAUDE_CHECK_MS = 15 * 60_000;
 
 /**
  * How many times one runner may ask for its owner's Claude login in
@@ -2720,9 +2720,7 @@ export class CoordinatorCore {
     // and its ownership check runs before its first await, so before the
     // hosts are revoked below.
     const person = { email: address, admin: false };
-    for (const name of extra) {
-      void this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: address, requester: person }).catch(() => {});
-    }
+    const stops = extra.map((name) => this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: address, requester: person }).catch(() => {}));
     /** @type {string[]} */
     const hosts = [];
     for (const h of this.hostIds.list()) {
@@ -2745,8 +2743,18 @@ export class CoordinatorCore {
       }
     }
     // What they signed for the fleet to do in their name: it is not theirs to
-    // ask any more, so it is not carried.
-    if (this.delegations.forget(address)) changed = true;
+    // ask any more, so it is not carried. ONCE THE STOPS ABOVE HAVE SETTLED,
+    // when there are any: `send` covers an intent with a delegation as it
+    // goes out, and a stop that moves on from a box answering "not on these
+    // pools" is sent to the next box then. Forgotten in the same breath the
+    // stops were sent, only the first box was sent what the person signed to
+    // let the fleet end their machines, and a box that takes only signed
+    // requests refused the rest, leaving their machines running.
+    if (stops.length) {
+      void Promise.allSettled(stops).then(() => {
+        if (this.delegations.forget(address)) this.onStateChanged?.();
+      });
+    } else if (this.delegations.forget(address)) changed = true;
     for (const [code, p] of this.enrollment.pending) {
       if (emailOf(p.actor) === address) {
         this.enrollment.pending.delete(code);
@@ -4388,7 +4396,11 @@ export class CoordinatorCore {
     if (!this.minter?.claude || now - this.#claudeCheckedAt < CLAUDE_CHECK_MS) return 0;
     this.#claudeCheckedAt = now;
     /** @type {any} */
-    const r = await this.minter.claude('check', {}).catch(() => null);
+    const r = await this.minter.claude('check', {}).catch((/** @type {any} */ e) => {
+      this.log.warn(`coordinator: could not ask the minter after the Claude sign-ins: ${e?.message || e}`);
+      return null;
+    });
+    if (r && !r.ok) this.log.warn(`coordinator: the minter would not say how the Claude sign-ins are: ${String(r.text || r.code || 'no reason given').slice(0, 200)}`);
     if (!r?.ok || !Array.isArray(r.ended)) return 0;
     let told = 0;
     for (const e of r.ended.slice(0, 100)) {
@@ -4426,6 +4438,33 @@ export class CoordinatorCore {
         if (own.length) await this.push.send(own, { title: `Your Claude sign-in ${said}`, body, data });
         if (admins.length) await this.push.send(admins, { title: `${email}’s Claude sign-in ${said}`, body: body.replace('from your phone', 'from their phone'), data });
       } catch { /* recorded above; a phone not told is no reason to stop telling the next */ }
+    }
+    // REFUSED AT THE USAGE ADDRESS (claude-login.js, checkClaude): renewing
+    // works, so it is not ended, and the minter is not renewing for it, since
+    // each renewal ends the token every box holds. Told once, saying only
+    // what was seen: where it was refused, with what, and whether renewing
+    // was tried. What would mend it is not known, so it is not promised.
+    for (const e of (Array.isArray(r.refused) ? r.refused : []).slice(0, 100)) {
+      const email = String(e?.email || '').trim().toLowerCase();
+      if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
+      const at = Number(e.at);
+      const when = Number.isFinite(at) ? ` at ${new Date(at).toISOString().slice(11, 16)} UTC` : '';
+      const status = e.status === 403 ? 403 : e.status === 401 ? 401 : null;
+      const cause = status === 403
+        ? `Claude refused this sign-in’s access token${when} when the fleet asked for its usage (403: not allowed, rather than run out). Renewing does not change that, so the fleet is not renewing for it. Sessions may still work.`
+        : `Claude refused this sign-in’s access token${when} when the fleet asked for its usage${status ? ` (${status})` : ''}, and again straight after the fleet renewed it, so the fleet has stopped renewing for it until it is due. Sessions may be refused too.`;
+      this.record({ event: 'claude.refused', actor: email, text: `${email}: ${cause}` });
+      told += 1;
+      if (!this.push) continue;
+      const devices = this.#devicesOf(email);
+      const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
+      const admins = devices.filter((d) => !own.includes(d));
+      const body = `${cause} Signing in to Claude again from your phone or the signing page may mend it.`;
+      const data = { event: 'claude.refused', kind: 'claude-ended', name: '', hostId: '', url: '' };
+      try {
+        if (own.length) await this.push.send(own, { title: 'Claude refused your sign-in’s access token', body, data });
+        if (admins.length) await this.push.send(admins, { title: `Claude refused ${email}’s access token`, body: body.replace('from your phone', 'from their phone'), data });
+      } catch { /* recorded above */ }
     }
     return told;
   }
@@ -6668,11 +6707,13 @@ export class CoordinatorCore {
     this.record({ event: 'vm.control', actor: spec.actor ?? null, text: `${owner} asked to ${params.action} ${name}` });
     /** @type {string[]} */
     const skipped = [];
+    let askedAny = false;
     for (const { host } of holders) {
       if (this.#cannotCarry(host, spec)) {
         skipped.push(`${host.hostId} (needs updating)`);
         continue;
       }
+      askedAny = true;
       let answer;
       try {
         answer = explainUnknownVerb(await this.send(host, { ...spec, params }), host);
@@ -6687,6 +6728,16 @@ export class CoordinatorCore {
         continue;
       }
       return { ...answer, hostId: host.hostId };
+    }
+    // NOT ASKED IS NOT "COULD NOT FIND". When every holder was too old to be
+    // sent this, no box looked, and saying none could find the machine told
+    // the person to look for it (C-5). What is known is what each needs.
+    if (!askedAny) {
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text: `None of the boxes holding your pools is new enough to work ${name}, so none was asked: ${skipped.join(', ')}. Update one and ask again.`,
+      };
     }
     return { ok: false, error: { code: 'not_found' }, text: `No box holding your pools could find ${name}: ${skipped.join(', ')}.` };
   }
@@ -6729,11 +6780,13 @@ export class CoordinatorCore {
     if (spec.verb === 'xoact') this.record({ event: 'xo.act', actor: spec.actor ?? null, text: `${owner} asked for ${params.method} on ${address}` });
     /** @type {string[]} */
     const skipped = [];
+    let askedAny = false;
     for (const { host } of holders) {
       if (this.#cannotCarry(host, spec)) {
         skipped.push(`${host.hostId} (needs updating)`);
         continue;
       }
+      askedAny = true;
       let answer;
       try {
         // AS THE OWNER CHECKED ABOVE: the box picks the token by the actor,
@@ -6751,6 +6804,16 @@ export class CoordinatorCore {
         continue;
       }
       return { ...answer, hostId: host.hostId };
+    }
+    // NOT ASKED IS NOT "COULD NOT REACH": with every holder too old for the
+    // verb, none tried, and "could not reach" sent the person to check the
+    // pool's network (C-5). What is known is that the boxes need updating.
+    if (!askedAny) {
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text: `None of the machines holding your token for ${address} is new enough to show its page from away, so none was asked: ${skipped.join('; ')}. Update one and ask again.`,
+      };
     }
     return { ok: false, error: { code: 'unreachable' }, text: `None of the machines holding your token could reach ${address}: ${skipped.join('; ')}.` };
   }
@@ -6964,16 +7027,21 @@ export class CoordinatorCore {
    * each said its pools have — narrowed to one image when `template` is
    * given. In hostId order, so the same request goes to the same box.
    *
-   * @param {string} email @param {string|null} template
+   * A box whose last look at the pool failed (`reachable: false`) is left
+   * out, since nothing can be asked of it; with `unreached` it is the only
+   * kind listed, for the refusal that says a box holds the pool and could
+   * not reach it rather than that nobody holds it.
+   *
+   * @param {string} email @param {string|null} template @param {{ unreached?: boolean }} [opts]
    * @returns {Array<{ host: any, entries: Array<{ address: string, networks: Array<{ id: string, name: string, pool: string|null, group: boolean, lab: 'open'|'closed'|null, taken: boolean|null, perPerson: number|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
    */
-  #vmHolders(email, template) {
+  #vmHolders(email, template, { unreached = false } = {}) {
     /** @type {Array<{ host: any, entries: any[] }>} */
     const out = [];
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
       const entries = xoFor(host, email)
-        .filter((/** @type {any} */ e) => e?.reachable !== false)
+        .filter((/** @type {any} */ e) => (unreached ? e?.reachable === false : e?.reachable !== false))
         .map((/** @type {any} */ e) => ({
           address: String(e.address || ''),
           networks: (Array.isArray(e.networks) ? e.networks : [])
@@ -7040,6 +7108,9 @@ export class CoordinatorCore {
     const lab = params.platform === 'lab';
     /** The Xen Orchestra the lab is on, which its hold is counted against. */
     let labAt = '';
+    /** The hold on the lab, from before the first await (below) until the box has seen the machine there. */
+    /** @type {{ owner: string, vm: string, at: number, address: string }|null} */
+    let hold = null;
     if (lab) {
       const network = typeof params.network === 'string' ? params.network : '';
       if (!network) return { ok: false, error: { code: 'bad_params' }, text: 'Say which lab: `network`, one of the labs status lists under that image.' };
@@ -7057,7 +7128,21 @@ export class CoordinatorCore {
           text: `This pool’s policy lets one person hold ${limit === 1 ? 'one lab' : `${limit} labs`} at once, and you hold ${held}. End one and ask again.`,
         };
       }
+      // THE LAB IS HELD FROM HERE, before the first await, and counted against
+      // the limit just read. It was held only once the box had answered, and
+      // requests to this object interleave at the awaits between (the ticket,
+      // the box), so two asks at once for two free labs each counted the
+      // other's as not held and both were sent: a limit of one became two.
+      // The same move noteMade made for a machine kept ready. The machine's
+      // name is filled in once there is a ticket, and the hold is let go on
+      // every refusal after this line.
+      hold = { owner, vm: '', at: this.now(), address: labAt };
+      this.labAsks.set(network, hold);
     }
+    /** Let the lab go if it is still ours to let go: a refusal after the hold was taken. */
+    const unhold = () => {
+      if (hold && this.labAsks.get(String(params.network)) === hold) this.labAsks.delete(String(params.network));
+    };
     // A MACHINE KEPT READY, when this person keeps one from that image on
     // that network: the session starts on it now, and another is made behind
     // it. A machine is taken only with the time asked for still left on it.
@@ -7073,6 +7158,24 @@ export class CoordinatorCore {
     // box's pool's, and the box checks it again against its own look.
     const holders = this.#vmHolders(owner, template).filter((h) => !lab || h.entries.some((e) => e.networks.some((n) => n.id === params.network && n.lab)));
     if (!holders.length) {
+      unhold();
+      // A BOX THAT HOLDS IT AND COULD NOT REACH IT is a different fact from
+      // nobody holding it, and was told as the second: "approve a box that
+      // can reach it" to somebody whose box is approved and whose Xen
+      // Orchestra is down or unreachable from it (C-5). #vmHolders leaves
+      // out a box whose last look at the pool failed; here they are asked
+      // for by name.
+      const blind = this.#vmHolders(owner, template, { unreached: true }).map((h) => h.host.hostId);
+      if (blind.length) {
+        return {
+          ok: false,
+          error: { code: 'unreachable' },
+          text:
+            `${blind.length === 1 ? 'The box' : 'The boxes'} holding your token for the pool with that machine image (${blind.join(', ')}) could not reach ` +
+            `Xen Orchestra the last time ${blind.length === 1 ? 'it' : 'they'} looked, so no machine can be asked for from ${blind.length === 1 ? 'it' : 'them'} now. ` +
+            'Check that Xen Orchestra is up and reachable from that network, then ask again; or approve a box that can reach it.',
+        };
+      }
       return {
         ok: false,
         error: { code: 'no_hosts' },
@@ -7090,13 +7193,22 @@ export class CoordinatorCore {
         if (spec.startAfter[k] !== undefined && spec.startAfter[k] !== null) wanted[k] = spec.startAfter[k];
       }
       const checked = checkParams('start', wanted);
-      if (checked.ok === false) return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+      if (checked.ok === false) {
+        unhold();
+        return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+      }
       start = /** @type {any} */ (checked.params);
     }
     const image = holders[0].entries[0].images[0];
     const ticket = await this.runnerTickets.mint({ owner, platform: `vm:${template}`, repository: null, start, ttlMs: VM_TICKET_TTL_MS });
-    if (!ticket) return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
+    if (!ticket) {
+      unhold();
+      return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
+    }
     const vmHost = `vm-${ticket.id}`;
+    // The hold now names the machine, so the box reporting it in the lab is
+    // what lets the hold go (#labsAskedFor).
+    if (hold) hold.vm = vmHost;
     // A MACHINE KEPT READY IS BEING MADE FROM HERE, not from the box's answer.
     // Counted only once the box said yes, a top-up set off by a health frame
     // in between saw none being made and asked for a second: two machines
@@ -7143,8 +7255,9 @@ export class CoordinatorCore {
         this.vmStandby.forget(vmHost);
         this.onStateChanged?.();
       }
-      // THE LAB IS HELD for this machine until the box reports it there.
-      if (lab && answer?.ok !== false) this.labAsks.set(String(params.network), { owner, vm: vmHost, at: this.now(), address: labAt });
+      // THE LAB STAYS HELD for this machine until the box reports it there,
+      // unless the box would not make it.
+      if (answer?.ok === false) unhold();
       // AND ONE MADE FOR A SESSION is replaced in the ready set, if this
       // person keeps some, the next time the pool is looked at.
       return { ...answer, hostId: host.hostId, vm: answer?.ok === false ? null : vmHost };
@@ -7153,6 +7266,7 @@ export class CoordinatorCore {
       this.vmStandby.forget(vmHost);
       this.onStateChanged?.();
     }
+    unhold();
     return {
       ok: false,
       error: { code: 'unreachable' },
@@ -7165,6 +7279,11 @@ export class CoordinatorCore {
    * under its owner and not revoked, connected and healthy, and with that
    * long still to run by its pool's last look (a machine whose end was not
    * reported is taken; the box sweeps it at its end either way).
+   *
+   * THIS DECIDES WHO IS CLAIMED, NOT WHO IS COUNTED. It was also what
+   * `tally` forgot a machine by, and a kept machine is not healthy for a
+   * while after it enrols (vm-standby.js says what that cost); what forgets
+   * one is #standbyGone.
    *
    * @param {string} owner @param {number} [minutes]
    * @returns {(hostId: string) => boolean}
@@ -7179,6 +7298,33 @@ export class CoordinatorCore {
       const until = ends.get(hostId);
       return typeof until !== 'number' || until - this.now() >= minutes * 60_000;
     };
+  }
+
+  /**
+   * Whether an enrolled kept machine is no longer in the fleet, which is the
+   * only thing that forgets one: its enrolment revoked or gone (a box's
+   * goodbye and retireStranded both revoke a temporary host, the latter ten
+   * minutes after it was last connected, so a machine that dropped and may
+   * dial back is still counted), no longer this person's, or past its end
+   * by its pool's last look. Not connected, not healthy: still counted, as
+   * starting.
+   *
+   * @param {string} owner
+   * @returns {(hostId: string) => boolean}
+   */
+  #standbyGone(owner) {
+    const ends = new Map(this.vmMachinesFor({ email: owner }).map((m) => [m.name, m.until]));
+    return (hostId) => {
+      const enrolled = this.hostIds.get(hostId);
+      if (!enrolled || enrolled.revokedAt || String(enrolled.owner || '').toLowerCase() !== owner) return true;
+      const until = ends.get(hostId);
+      return typeof until === 'number' && until <= this.now();
+    };
+  }
+
+  /** Both questions `tally` asks about a kept machine, for one owner. @param {string} owner */
+  #standbyBy(owner) {
+    return { gone: this.#standbyGone(owner), ready: this.#standbyReady(owner) };
   }
 
   /**
@@ -7230,10 +7376,11 @@ export class CoordinatorCore {
     const owner = String(requester?.email || '').toLowerCase();
     const wish = owner ? this.vmStandby.wishFor(owner) : null;
     if (!wish) return null;
-    const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
+    const by = this.#standbyBy(owner);
+    const { ready, starting } = this.vmStandby.tally(owner, by);
     // WHEN THE ONE BEING MADE WAS ASKED FOR, and why the last did not come:
     // "0 being made" said nothing about a machine that had just failed.
-    const since = this.vmStandby.makingSince(owner);
+    const since = this.vmStandby.makingSince(owner, by.ready);
     const failed = this.vmStandby.failureFor(owner);
     return { template: wish.template, count: wish.count, network: wish.network, ready, starting, ...(since === null ? {} : { since }), ...(failed ? { failed } : {}) };
   }
@@ -7348,7 +7495,7 @@ export class CoordinatorCore {
       // Keep button and a health frame, on a real pool) both found none
       // being made and asked for one each.
       if (this.#toppingUp.has(owner)) continue;
-      const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
+      const { ready, starting } = this.vmStandby.tally(owner, this.#standbyBy(owner));
       if (ready + starting >= wish.count) continue;
       this.#toppingUp.add(owner);
       try {
@@ -7848,6 +7995,76 @@ function takesSessions(host, requester, entry) {
   return mayActFor(entry, whose) && runsSessionsFor(entry, requester);
 }
 
+/** How many pinned admins a box's health may list. A box pins a few people; more is not a box's word. */
+const MAX_PINNED = 64;
+
+/**
+ * Who a box pins as its admins (`health.admins`, src/fleet/host/pinned-admins.js),
+ * as this person may see it, or undefined for a field that is not the shape a
+ * box sends.
+ *
+ * THE ADDRESSES ARE PEOPLE'S, so the list goes only to whoever already sees
+ * everybody (the admin, and the break-glass token) and to somebody on it, who
+ * administers the box with the others. Anybody else is told how many, and
+ * that they are not one: enough for a phone to draw Update and Reboot only
+ * where the box will take them from this person (C-2), and no list of whom
+ * to ask.
+ *
+ * `count` and `you` are null when the box said it cannot read its record,
+ * which is cannot tell (C-5): it refuses those verbs from everybody until it
+ * can, and `problem` says so. `left` is said when the box pins somebody and
+ * takes those verbs from nobody: every admin it pins left the fleet, none of
+ * them can sign, or it cannot check a signature at all (`stranded`).
+ *
+ * BOTH SENTENCES ARE THIS FILE'S, never the box's (intents.js
+ * PIN_SENTENCES). They go to everybody who sees the box, people not shown the
+ * addresses included, so a box's own text there would be a way to put an
+ * address, or anything else, in front of all of them. The box sends a code;
+ * one it does not name, or no code beside its own sentence, reads as `left`.
+ *
+ * `stranded` goes with `left`, and only ever as one of the three codes this
+ * file names, never as the box sent it. A phone reads it for one thing: on
+ * `unchecked` the box can check nobody's signature, so it refuses even a
+ * person's restore of their own work, and the phone does not draw Restore.
+ *
+ * @param {unknown} admins
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ * @returns {{ count: number|null, you: boolean|null, pinned?: string[], left?: string, stranded?: 'left'|'unlisted'|'unchecked', problem?: string }|undefined}
+ */
+export function adminsSeenBy(admins, requester) {
+  if (!admins || typeof admins !== 'object' || Array.isArray(admins)) return undefined;
+  const a = /** @type {Record<string, unknown>} */ (admins);
+  const raw = a.pinned;
+  /** @type {string[]|null} */
+  let pinned = null;
+  if (Array.isArray(raw)) {
+    if (raw.length > MAX_PINNED || !raw.every((e) => typeof e === 'string' && e.length <= 254 && emailOf(e))) return undefined;
+    pinned = [...new Set(raw.map((e) => /** @type {string} */ (emailOf(e))))];
+  } else if (raw !== null) {
+    return undefined;
+  }
+  const said = (/** @type {unknown} */ v) => typeof v === 'string' && v.length > 0;
+  // ANY CODE AT ALL IS STRANDED. One this file does not name, from a newer box
+  // or a broken one, still means the box takes those verbs from nobody, and
+  // read as nothing it drew controls the box refuses; it reads as `left`.
+  /** @type {'left'|'unlisted'|'unchecked'|null} */
+  const code = said(a.stranded) || said(a.left)
+    ? (['unlisted', 'unchecked'].includes(/** @type {string} */ (a.stranded)) ? /** @type {'unlisted'|'unchecked'} */ (a.stranded) : 'left')
+    : null;
+  const left = pinned && pinned.length > 0 && code ? PIN_SENTENCES[code] : null;
+  const problem = pinned === null ? PIN_SENTENCES.unreadable : null;
+  const email = emailOf(requester?.email ?? '');
+  const you = pinned ? Boolean(email) && pinned.includes(/** @type {string} */ (email)) : null;
+  const sees = !requester || Boolean(requester.admin) || you === true;
+  return {
+    count: pinned ? pinned.length : null,
+    you,
+    ...(sees && pinned ? { pinned } : {}),
+    ...(left && code ? { left, stranded: code } : {}),
+    ...(problem ? { problem } : {}),
+  };
+}
+
 /**
  * One host, with everything private to somebody else removed.
  *
@@ -7856,6 +8073,10 @@ function takesSessions(host, requester, entry) {
  * with it — a list of names somebody cannot act on is an existence oracle
  * wearing a convenience.
  *
+ * Its pinned admins are shaped for everybody, the admin included, because
+ * whether the asker is one of them (`you`) is the part a phone draws from
+ * (adminsSeenBy).
+ *
  * @param {any} host
  * @param {{ email?: string|null, admin?: boolean }|null} requester
  * @param {{ actsFor?: string|null }|null|undefined} entry  the host's registry
@@ -7863,6 +8084,11 @@ function takesSessions(host, requester, entry) {
  *   Without one no pool entry is believed.
  */
 function visibleHost(host, requester, entry) {
+  if (host?.health && 'admins' in host.health) {
+    const { admins, ...rest } = host.health;
+    const seen = adminsSeenBy(admins, requester);
+    host = { ...host, health: seen ? { ...rest, admins: seen } : rest };
+  }
   if (!requester || requester.admin || !host) return host;
   // WHOSE TEMPORARY MACHINE IT IS is an email, and a member is shown it only
   // when it is theirs, as /api/hosts/enrolled already did (enrolledHostsFor).

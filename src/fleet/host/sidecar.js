@@ -63,6 +63,7 @@ import { RelayStreams } from './xo-relay.js';
 import { XoPools } from './xo-pools.js';
 import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
+import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
 import { actorEmail, needsSignature } from '../protocol/intent-signature.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 import { CLAUDE_REFRESH_AHEAD_MS } from '../minter/claude-login.js';
@@ -86,8 +87,37 @@ const SILENT = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {
  * @property {boolean|null} channelPinned
  * @property {{ variant: string, image: string, pinned: boolean }|null} sandbox
  * @property {boolean|null} sandboxed
+ * @property {string|null} sandboxedWhy
+ * @property {string[]} sandboxedAlso
  * @property {number|null} houseRules
+ * @property {'asks'|'bypassed'|null} permissions
  */
+
+/** What a reason the hub gives looks like: a short code (http.js uncontained). */
+const REASON_RE = /^[a-z_]{1,32}$/;
+
+/** More reasons than a hub has: it gives five at most. */
+const REASONS_MAX = 8;
+
+/**
+ * The reasons after the first, as the frame carries them.
+ *
+ * NOT FILTERED. A list with an entry dropped reads as complete, and the
+ * coordinator would name too few fixes and say they open the box, which is
+ * the false sentence this list exists to stop (scheduler.js NOT_CONTAINED).
+ * So an entry that is not a code, or a list longer than a hub sends, is
+ * carried as `unreadable`, a code nothing knows, and the fleet says only
+ * that the box is not contained. Absent, from a hub that gives one reason,
+ * is an empty list.
+ *
+ * @param {unknown} list
+ * @returns {string[]}
+ */
+function reasonsAfter(list) {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list) || list.length > REASONS_MAX) return ['unreadable'];
+  return list.map((c) => (typeof c === 'string' && REASON_RE.test(c) ? c : 'unreadable'));
+}
 
 /**
  * The facts out of a /api/state reply, shape-checked.
@@ -105,6 +135,17 @@ export function factsFrom(state) {
   const labels = state?.labels;
   const strings = (/** @type {unknown} */ v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
   const sandbox = state?.sandbox;
+  // A first reason that is there and is not a code is `unreadable`, as in
+  // reasonsAfter, not null: null beside a `false` is a hub from before the
+  // field, which the coordinator reads as `off` and answers with "turn its
+  // sandbox on", and that is not known to be the way on for this box.
+  const said = state?.sandboxedWhy;
+  const why =
+    state?.sandboxed !== false || said === undefined || said === null
+      ? null
+      : typeof said === 'string' && REASON_RE.test(said)
+        ? said
+        : 'unreadable';
   return {
     labels: labels && strings(labels.auto) && strings(labels.set) ? { auto: labels.auto, set: labels.set } : null,
     channel: state?.channel === 'stable' || state?.channel === 'rolling' ? state.channel : null,
@@ -114,7 +155,15 @@ export function factsFrom(state) {
         ? { variant: sandbox.variant, image: sandbox.image, pinned: sandbox.pinned }
         : null,
     sandboxed: typeof state?.sandboxed === 'boolean' ? state.sandboxed : null,
+    // Why not, and only beside a `false`: a reason next to `true` or next to
+    // cannot tell would be a reason for nothing. A short code and nothing
+    // else, because it is carried to the coordinator and read there as one
+    // (scheduler.js NOT_CONTAINED), never as prose.
+    sandboxedWhy: why,
+    // And the rest, only beside a first (reasonsAfter).
+    sandboxedAlso: why === null ? [] : reasonsAfter(state?.sandboxedAlso),
     houseRules: typeof state?.houseRules === 'number' ? state.houseRules : null,
+    permissions: state?.permissions === 'asks' || state?.permissions === 'bypassed' ? state.permissions : null,
   };
 }
 
@@ -155,6 +204,7 @@ const CAPABILITY_VERBS = new Set([
   'unlink',
   'renew',
   'forgetperson',
+  'pinadmin',
   'update',
   'upgrade',
   'start',
@@ -276,10 +326,11 @@ export class Sidecar {
     // process that loaded it (bin/fleetwright-sidecar). Null: no vault here.
     vaultKey = null,
     vaultIntervalMs = 10 * 60_000,
-    // THIS PROCESS'S OWN STATE DIRECTORY, the one beside its key, where the
-    // first version of hypervisor onboarding kept a pool's token. Nothing is
-    // kept there now (src/fleet/host/xo-setup.js, hand-off); it is only where
-    // a setup run again looks for that old file to remove it.
+    // THIS PROCESS'S OWN STATE DIRECTORY, the one beside its key. The admins
+    // this box pins are recorded there (pinned-admins.js), beside the
+    // minter's key and the signers (intent-keys.js). It is also where the
+    // first version of hypervisor onboarding kept a pool's token, which a
+    // setup run again looks for to remove (xo-setup.js, hand-off).
     xoStateDir = null,
     // THE HYPERVISORS THIS BOX CAN MAKE MACHINES ON, from its people's
     // vaults, in memory only (src/fleet/host/xo-pools.js). Made here for any
@@ -798,9 +849,11 @@ export class Sidecar {
     // enforcement a coordinator can lapse by holding the list back.
     /** @type {string|null} */
     let verdict = null;
+    /** @type {'taken'|'failed'|'held'|undefined} */
+    let askedAgain;
     if (this.intentKeys) {
       try {
-        verdict = (await this.intentKeys.check(intent, this.hostId)).verdict;
+        ({ verdict, askedAgain } = await this.intentKeys.check(intent, this.hostId));
         if (verdict === 'bad-signature' || verdict === 'unknown-key' || verdict === 'revoked') {
           const what = intent.sig ? 'a signature' : 'a delegation';
           this.log.warn(`sidecar: ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'} carries ${what} that does not hold (${verdict})${this.requireSigned !== 'off' ? '' : '; not refused, as this box does not enforce'}`);
@@ -810,7 +863,7 @@ export class Sidecar {
       }
     }
     if (this.#enforces(intent) && verdict !== 'signed' && verdict !== 'delegated' && needsSignature(intent.verb)) {
-      const why = unsignedReason(verdict, intent, this.intentKeys?.problem ?? null);
+      const why = unsignedReason(verdict, intent, this.intentKeys?.problem ?? null, askedAgain);
       this.log.warn(`sidecar: refused ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'}: ${why}`);
       return {
         v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'signature_required' },
@@ -818,7 +871,7 @@ export class Sidecar {
       };
     }
 
-    if (!isMutating(intent.verb)) return this.#run(intent);
+    if (!isMutating(intent.verb)) return this.#run(intent, verdict);
 
     // Idempotency. The PROMISE is cached, not just the result, so a retry that
     // arrives while the first attempt is still in flight — which is exactly
@@ -829,7 +882,7 @@ export class Sidecar {
       this.log.info(`sidecar: ${intent.verb} ${intent.id} already handled — replaying the original reply`);
       return { ...(await cached), replayed: true };
     }
-    const pending = this.#run(intent);
+    const pending = this.#run(intent, verdict);
     this.#remember(intent.id, pending);
     // A VERB THAT CHANGES WHAT THIS HOST IS CAPABLE OF PUSHES HEALTH AT ONCE.
     //
@@ -849,15 +902,94 @@ export class Sidecar {
   }
 
   /**
+   * A `pinadmin` from the wire, decided against the record as it is now and
+   * written in the same step (pinned-admins.js, updatePins).
+   *
    * @param {import('../protocol/intents.js').Intent} intent
+   * @param {string|null} verdict
+   */
+  async #pinAdmin(intent, verdict) {
+    const dir = this.xoStateDir;
+    const decided = dir
+      ? await updatePins(dir, (pins) => {
+          const d = decidePin(intent, pins, verdict, this.intentKeys?.directory ?? null);
+          return { ...(d.ok && d.write ? { write: d.write } : {}), result: d };
+        })
+      : decidePin(intent, readPins(null), verdict);
+    if (!decided.ok) {
+      this.log.warn(`sidecar: refused pinadmin ${intent.id} from ${intent.actor ?? 'nobody'}: ${decided.text}`);
+      return { ok: false, text: decided.text, error: { code: decided.code } };
+    }
+    if (decided.write) this.log.info(`sidecar: ${intent.actor} changed who is pinned here: ${decided.write.admins.join(', ')}`);
+    return { ok: true, text: decided.text };
+  }
+
+  /**
+   * The refusal for a box-wide verb this box's pins do not allow, or null.
+   *
+   * A restore of the asker's own binned session goes through on their
+   * signature, pinned or not. Whose it is comes from the hub's bin; missing,
+   * unreadable, or with no owner is cannot tell, which refuses, because a
+   * guess would restore somebody else's work.
+   *
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @param {string|null} verdict
+   * @returns {Promise<Record<string, unknown>|null>}
+   */
+  async #boxWide(intent, verdict) {
+    const pins = readPins(this.xoStateDir);
+    /** @type {boolean|null} */
+    let owns = null;
+    if (intent.verb === 'restore' && pins.admins.length > 0 && !pins.unreadable) owns = await this.#ownsBinned(intent);
+    const decided = decideBoxWide(intent, pins, verdict, owns);
+    if (decided.ok) return null;
+    this.log.warn(`sidecar: refused ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'}: ${decided.text}`);
+    return { ok: false, text: decided.text, error: { code: decided.code } };
+  }
+
+  /**
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @returns {Promise<boolean|null>}
+   */
+  async #ownsBinned(intent) {
+    /** @type {any} */
+    let state;
+    try {
+      state = await this.hub.state();
+    } catch {
+      return null;
+    }
+    const bin = state?.bin;
+    if (!Array.isArray(bin)) return null;
+    const name = String(intent.params?.name ?? '');
+    const row = bin.find((/** @type {any} */ r) => r && r.name === name);
+    if (!row) return null;
+    const owner = ownerOf(row.createdBy);
+    const who = actorEmail(intent.actor);
+    if (!owner || !who) return null;
+    return owner === who;
+  }
+
+  /**
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @param {string|null} [verdict]  what the signature check said, null when this box could not check
    * @returns {Promise<Record<string, any>>}
    */
-  async #run(intent) {
+  async #run(intent, verdict = null) {
     /** @param {Record<string, unknown>} extra */
     const reply = (extra) => ({ v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ...extra });
     const actor = intent.actor ? `fleet:${intent.actor}` : 'fleet';
 
     try {
+      // WHO THIS BOX TAKES ITS REBOOTS FROM (pinned-admins.js). Before the
+      // command line: a reboot the pins refuse must not reach the hub, and
+      // `pinadmin` never becomes a command line at all.
+      if (intent.verb === 'pinadmin') return reply(await this.#pinAdmin(intent, verdict));
+      if (isBoxWide(intent)) {
+        const refused = await this.#boxWide(intent, verdict);
+        if (refused) return reply(refused);
+      }
+
       // Two verbs never reach the command registry, because they read host
       // state rather than acting on a session.
       if (intent.verb === 'health') return reply({ ok: true, text: 'ok', health: await this.health() });
@@ -898,10 +1030,32 @@ export class Sidecar {
       // as `unlink` is. The hub does the forgetting, because every store
       // involved is its own (src/core/forget-person.js); the reply says what
       // it did, which is the only thing that settles it at the coordinator.
+      //
+      // AND THEIR PIN AS AN ADMIN HERE, unless they are the last one who can
+      // sign, who stays pinned so the box does not fall back to the
+      // coordinator's word (pinned-admins.js, forgetPinned). A pin that could
+      // not be changed fails the reply, so the coordinator asks again.
+      //
+      // SOMEBODY NOT PINNED HERE IS THE REPLY FROM BEFORE PINS, read without
+      // the lock: on a box that pins nobody, which is every box until
+      // somebody pins one, a lock that cannot be taken (a directory this
+      // account cannot write, one left by a change that died) must not turn
+      // a forgetperson into a failure the coordinator retries forever.
+      // updatePins reads again under the lock before it writes.
       if (intent.verb === 'forgetperson') {
         const who = emailFromActor(intent.actor ? `fleet:${intent.actor}` : null);
         if (!who) return reply({ ok: false, text: 'forgetperson names its person as the actor, and this one names nobody.' });
-        return reply(await this.hub.forgetPerson(who));
+        const forgot = await this.hub.forgetPerson(who);
+        if (!this.xoStateDir) return reply(forgot);
+        const now = readPins(this.xoStateDir);
+        if (now.unreadable || !now.admins.includes(who)) return reply(forgot);
+        const listed = this.intentKeys?.directory ?? null;
+        try {
+          const note = await updatePins(this.xoStateDir, (pins) => forgetPinned(pins, who, listed));
+          return reply(note ? { ...forgot, text: [forgot.text, note].filter(Boolean).join(' ') } : forgot);
+        } catch (e) {
+          return reply({ ...forgot, ok: false, text: `${forgot.text ? `${forgot.text} ` : ''}Their pin as an admin here could not be changed: ${/** @type {Error} */ (e).message}` });
+        }
       }
 
       // ADDING A HYPERVISOR IS THIS PROCESS'S TOO. The setup key is signed
@@ -980,6 +1134,12 @@ export class Sidecar {
       // app is displaying. FLEETWRIGHT_LABELS is in this process's environment
       // and in no other, which is why it has to travel.
       if (intent.verb === 'labels') meta.hostLabels = this.givenLabels.join(',');
+      // FROM THE FLEET, said on every line built from an intent, so the hub
+      // holds a start to the operator's FLEETWRIGHT_SKIP_PERMISSIONS off even
+      // where this process still holds the operator's token, which the hub
+      // cannot tell from the operator's own console (commands.js
+      // permissionCeiling). It only ever takes something away.
+      meta.via = 'fleet';
       if (intent.verb === 'provision') {
         // THE PERSON'S OWN REPOSITORY WHEN THE COORDINATOR NAMED ONE, and the
         // fleet's off the config frame otherwise. Both came from the
@@ -1913,6 +2073,19 @@ export class Sidecar {
     return [...new Set([...this.givenLabels, ...auto, ...set])].sort();
   }
 
+  /** The `admins` field of health, or nothing. Never throws: a frame is not lost to it. */
+  #adminsReport() {
+    try {
+      // The list check() would use, not whatever list is held: one past its
+      // age refuses every signature, and health must say so (C-5).
+      const report = pinReport(readPins(this.xoStateDir), this.intentKeys?.current ?? null, { checks: Boolean(this.intentKeys) });
+      return report ? { admins: report } : {};
+    } catch (e) {
+      this.log.warn(`sidecar: could not read who is pinned here: ${/** @type {Error} */ (e).message}`);
+      return {};
+    }
+  }
+
   async health() {
     const [load1, load5, load15] = this.machine.loadavg();
     const cpus = this.machine.cpus();
@@ -1987,6 +2160,17 @@ export class Sidecar {
             },
           }
         : {}),
+      // WHO THIS BOX TAKES REBOOT, UPGRADE, UPDATE, A NEW CHANNEL OR SANDBOX
+      // IMAGE AND RESTORING SOMEBODY ELSE'S WORK FROM (pinned-admins.js),
+      // read from the record on every frame so a pin made at the box's own
+      // prompt shows without a restart. `stranded` when nobody pinned can
+      // sign, so a phone draws none of those for anybody.
+      // Empty is nobody pinned: the coordinator's word, as before. Present at
+      // all is how a phone knows `pinadmin` exists here; absent, from an older
+      // box or one with nowhere to keep a record, it offers nothing. The
+      // coordinator shapes it per person before anybody sees the addresses
+      // (core.js adminsSeenBy).
+      ...this.#adminsReport(),
       // WHICH SERVICE LOGS THIS BOX CAN READ, so a screen offers a button for
       // exactly those. The chat surface already checks — logButtons in
       // commands.js filters on unitInstalled, because "no log entries for
@@ -2210,6 +2394,26 @@ export class Sidecar {
         // (hosts.js runsSessionsFor, docs/security.md G8). Null from a hub
         // too old to say, which is cannot tell and is treated as not.
         sandboxed: this.facts?.sandboxed ?? null,
+        // AND WHY NOT, beside a `false` (http.js uncontained): the sandbox
+        // off, opened by FLEETWRIGHT_SANDBOX_ARGS, or in the host user
+        // namespace because the hub runs as root, runs docker, or was told
+        // to. The coordinator names the way on from it; null from a hub too
+        // old to say, which it reads as off.
+        sandboxedWhy: this.facts?.sandboxedWhy ?? null,
+        // AND EVERY REASON AFTER IT, because a box with two is not opened by
+        // fixing the first, and the coordinator names them all. Empty when
+        // there is one, or none.
+        sandboxedAlso: this.facts?.sandboxedAlso ?? [],
+        // WHAT A START WITH NO MODE DOES HERE: `asks` before each tool, or
+        // runs with permissions `bypassed` (http.js #hostFacts). A phone
+        // labels its "Box default" choice from this and offers "Permissions
+        // bypassed" only on a box that says `bypassed`, since on one that says
+        // `asks` the hub refuses a fleet start that asks for it. Null from a
+        // hub too old to say, which is cannot tell: a phone then says nothing
+        // about the mode rather than guessing at the usual one. Additive, so
+        // an older coordinator stores it with the rest and an older phone
+        // never reads it.
+        permissions: this.facts?.permissions ?? null,
       };
     }
     const err = /** @type {Error & {code?: string}} */ (unreachable);
@@ -2844,14 +3048,21 @@ export function commandMeta(verb, params = {}, actor = '') {
  *   could not check at all
  * @param {{ verb: string, actor?: string }} intent
  * @param {string|null} problem  what the box's key list is missing, if anything
+ * @param {'taken'|'failed'|'held'} [askedAgain]  for an unknown key, what asking
+ *   the minter again came to (IntentKeys#check): a phone added a moment ago is
+ *   the usual reason, and what the person can do about it depends on this
  */
-export function unsignedReason(verdict, intent, problem) {
+export function unsignedReason(verdict, intent, problem, askedAgain) {
   const who = intent.actor || 'nobody named';
   switch (verdict) {
     case 'unsigned':
       return `this ${intent.verb} from ${who} was not signed`;
     case 'unknown-key':
-      return `this ${intent.verb} is signed by a key the minter does not list for ${who}`;
+      return `this ${intent.verb} is signed by a key the minter does not list for ${who}${
+        askedAgain === 'taken' ? ', even on the list this box asked the minter for just now'
+          : askedAgain === 'failed' ? `, and this box could not ask the minter again just now${problem ? ` (${problem})` : ''}. A phone added in the last few minutes can try again shortly`
+            : askedAgain === 'held' ? ', and this box asked the minter for a new list moments ago. A phone added since then can try again in two minutes'
+              : ''}`;
     case 'bad-signature':
       return `the signature on this ${intent.verb} does not hold for what arrived, so it was changed after it was signed`;
     case 'no-directory':

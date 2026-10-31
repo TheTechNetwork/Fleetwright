@@ -27,7 +27,10 @@ const SHARED = [
   'Drop what the threat rules match',
   'On: Suricata drops it, and while it cannot inspect, nothing leaves.',
   'Off: Suricata logs it by machine and lets it through.',
-  ' Apply rebuilds the edge router to change this: machines behind it have no way out until the new one is up.',
+  // The rebuild's cost, as the box says it: the new router is built beside
+  // the old one (ONE_BOOT in src/fleet/host/edge-router.js), so the way out
+  // is gone for one boot and not for the whole build.
+  ' Apply rebuilds the edge router to change this: machines behind it keep their way out while the new one is built, and have none while it starts.',
 ];
 
 test('offered only by a machine whose `can` says so, and only with the router asked for', () => {
@@ -53,5 +56,8 @@ test('both phones say it in the same words', () => {
   for (const words of SHARED) {
     assert.ok(I_FORM.includes(words), `iOS: ${words}`);
     assert.ok(A_FORM.includes(words), `Android: ${words}`);
+  }
+  for (const [name, form] of [['iOS', I_FORM], ['Android', A_FORM]]) {
+    assert.ok(!form.includes('no way out until the new one is up'), `${name}: the rebuild still says the way out is gone for the whole build`);
   }
 });

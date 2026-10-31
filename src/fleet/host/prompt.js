@@ -59,6 +59,16 @@ const KINDS = [
     // The old wording is kept rather than replaced. An older CLI is still a
     // CLI, and a matcher that only knows today's text is the thing that just
     // failed.
+    //
+    // `project`, AND NOT `directory`. "Is this a directory you created or one
+    // you trust?" is /cd's dialog, which asks whether to MOVE the session
+    // somewhere, under the title "Moving to a new directory:". Read as this
+    // kind, the phone asked "Do you trust the files in this folder?" about a
+    // folder the session was not in. watcher.js notices /cd by its titles and
+    // this file deliberately does not describe it: its options carry no
+    // numbers, so there is nothing to answer, and a kind the published
+    // vocabulary (openapi.json) does not list would be a new promise to every
+    // client for a question the fleet cannot act on.
     test: /Do you trust the files|Is this a project you created or one you trust/i,
     question: 'Do you trust the files in this folder?',
     // The dialog names the directory. The QUESTION above does not, and the
@@ -67,6 +77,14 @@ const KINDS = [
     // Two trust asks for two directories are the same shape and different
     // questions. The body is a path, which does not redraw.
     discriminate: true,
+    // ANSWERABLE ON THE CLI THESE WERE WRITTEN AGAINST, AND NOT ON TODAY'S.
+    // 2.1.234 numbered "1. Yes, I trust this folder"; the release the fleet
+    // pins now draws the same two choices with no numbers, "No, exit" first
+    // and under the cursor. readPrompt finds no options there, answerActions
+    // returns nothing, and the notification is one to open rather than to
+    // answer. The phone is still told; it cannot reply. Kept for a CLI that
+    // numbers them, and src/fleet/host/claude-dialogs.js says which dialogs
+    // are which on the pinned release.
     answers: [
       { slot: 'a', title: 'Trust this folder', test: /^yes\b|proceed|trust/i },
       { slot: 'b', title: 'Do not trust it', test: /^no\b|exit/i },

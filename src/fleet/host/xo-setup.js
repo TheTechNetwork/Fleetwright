@@ -19,7 +19,8 @@
 //           same seal, a key the phone made for the token to come back to.
 //
 // THE STEPS (XOSETUP_STEPS) make the limited `fleetwright` user, the resource
-// set that bounds it, and a token for it; turn on the installer's own update
+// set that bounds it, and a token for it, removing the tokens earlier runs
+// made (a lost phone's among them); turn on the installer's own update
 // plugin when the pool has it (github.com/00o-sh/XenOrchestraInstallerUpdater);
 // and hand the token back. The admin sign-in is never written anywhere.
 //
@@ -136,7 +137,12 @@ export const UPDATES_PLUGIN = 'installer-updates';
 /** Fleetwright's reconnect watchdog, by the same rule: xo-server-fleetwright-reconnect. */
 export const RECONNECT_PLUGIN_ID = 'fleetwright-reconnect';
 
-/** What `inventory` checks the server offers before anything is changed. */
+/**
+ * What `inventory` checks the server offers before anything is changed.
+ * `token.deleteAll`, which the token step asks for as the limited user, is
+ * not here on purpose: a server without it still gets its token, and the
+ * summary says the earlier tokens stayed (#revokeOlderTokens).
+ */
 export const REQUIRED_METHODS = Object.freeze([
   'session.signIn',
   'system.getMethodsInfo',
@@ -772,13 +778,41 @@ export class XoSetups {
     // to know the job cannot open (seal.js).
     /** @type {'setup'|'reconnect'|'policy'} */
     let under = 'setup';
+    // ONE RUN AT A TIME, settled before the first await. Two runs of one
+    // job arriving together both passed the check above, because the first
+    // was still opening its seal when the second looked, and both ran the
+    // steps: two admin sign-ins, two tokens. So the key is taken and the job
+    // is running from here, and the second run is refused above as one that
+    // has its sign-in. A seal that does not open gives both back, so the
+    // phone can send the right one; a cancel that landed meanwhile stands.
+    // ONE USE: the key goes as soon as it has opened the one thing it exists
+    // for, which for a policy job is two things (below).
+    const jobKey = rec.key;
+    const waitingText = rec.text;
+    rec.key = null;
+    rec.state = 'running';
+    rec.text = 'Opening the sign-in.';
+    /** @param {string} text */
+    const notOpened = (text) => {
+      if (rec.cancelled) {
+        rec.state = 'cancelled';
+        rec.text = 'Cancelled before it started.';
+        this.#report(rec);
+        this.#ended(rec);
+      } else {
+        rec.key = jobKey;
+        rec.state = 'waiting';
+        rec.text = waitingText;
+      }
+      return { ok: false, text };
+    };
     /** @param {string} aad */
-    const tryOpen = (aad) => openSealed({ privateKey: rec.key.privateKey, publicKey: rec.key.publicKey, aad, sealed: box });
+    const tryOpen = (aad) => openSealed({ privateKey: jobKey.privateKey, publicKey: jobKey.publicKey, aad, sealed: box });
     try {
       inside = await tryOpen(deploy ? xodeployAad(job, rec.address) : watchdog ? xowatchdogAad(job, rec.address) : xosetupAad(job, rec.address));
     } catch {
-      if (deploy) return { ok: false, text: 'The passwords did not open with this job’s key. Start again from the app.' };
-      if (watchdog) return { ok: false, text: 'The root password did not open with this job’s key. Start again from the app.' };
+      if (deploy) return notOpened('The passwords did not open with this job’s key. Start again from the app.');
+      if (watchdog) return notOpened('The root password did not open with this job’s key. Start again from the app.');
       for (const [name, aad] of /** @type {const} */ ([['reconnect', xosetupReconnectSigninAad(job, rec.address)], ['policy', xosetupPolicySigninAad(job, rec.address)]])) {
         try {
           inside = await tryOpen(aad);
@@ -786,12 +820,8 @@ export class XoSetups {
           break;
         } catch { /* the next name, or none */ }
       }
-      if (under === 'setup') return { ok: false, text: 'The sign-in did not open with this setup’s key. Start again from the app.' };
+      if (under === 'setup') return notOpened('The sign-in did not open with this setup’s key. Start again from the app.');
     }
-    // ONE USE: the key goes as soon as it has opened the one thing it exists
-    // for, which for a policy job is two things (below).
-    const jobKey = rec.key;
-    rec.key = null;
     // EACH JOB ONLY UNDER ITS OWN BINDING, and no purpose this machine does
     // not know taken for a whole setup. Under the reconnect's or the policy
     // change's name the phone asked for that and nothing else, so anything
@@ -984,19 +1014,21 @@ export class XoSetups {
       this.#ended(rec);
     } else if (rec.state === 'running') {
       // Between steps: a call already sent to Xen Orchestra is not unsent.
-      // The edge router's build is the exception, because it is minutes of
-      // bytes: its download and upload stop where they are (ensureEdge).
+      // A build is the exception, because it is minutes of bytes: its
+      // download and upload stop where they are (ensureEdge, ensureImage,
+      // the installer). THE JOB'S ONE SIGNAL is what they stop on (#execute):
+      // each build used to make its own, so a cancel during the uplink, the
+      // labs or between two images aborted nothing, the next build began on
+      // a fresh signal and ran in full, and the job ended `done`.
       rec.cancelled = true;
-      if (rec.abort) {
-        rec.abort.abort();
-        rec.text = rec.building === 'deploy'
-          ? 'Stopping the installer where it is.'
-          : rec.building === 'image'
-            ? 'Stopping the machine image’s build and removing what it made.'
-            : 'Stopping the edge router’s build and removing what it made.';
-      } else {
-        rec.text = 'Cancelling after this step.';
-      }
+      rec.abort?.abort();
+      rec.text = rec.building === 'deploy'
+        ? 'Stopping the installer where it is.'
+        : rec.building === 'image'
+          ? 'Stopping the machine image’s build and removing what it made.'
+          : rec.building === 'edge' || rec.building === 'edge-rebuild'
+            ? 'Stopping the edge router’s build and removing what it made.'
+            : 'Cancelling after this step.';
     } else if (rec.state === 'choosing') {
       // Nothing has been changed yet, so this is the whole of it.
       rec.cancelled = true;
@@ -1109,6 +1141,10 @@ export class XoSetups {
   async #execute(rec, creds) {
     /** @type {any} */
     const ctx = { rec, creds, admin: null, limited: null, notes: /** @type {string[]} */ ([]) };
+    // ONE SIGNAL FOR THE WHOLE JOB, made here and aborted by `cancel`, which
+    // every build and every wait is handed. It is not made again: a cancel
+    // is a cancel of the job, not of whichever build happened to be running.
+    rec.abort = new AbortController();
     // What an error message is scrubbed of, taken before the sign-in step
     // wipes the originals, and wiped with them at the end.
     const secrets = { password: creds.password, token: creds.token, root: creds.root, admin: creds.admin };
@@ -1147,7 +1183,13 @@ export class XoSetups {
         if (rec.cancelled) {
           if (reconnect) await this.#sealReconnect(ctx);
           rec.state = 'cancelled';
-          rec.text = `Cancelled before ${STEP_WORDS[keys[i]] ?? `step ${i + 1}`}.${policy || (reconnect && !ctx.outcomes) ? ' Nothing was changed.' : ''}`;
+          // AN INSTALL SAYS WHAT IS ON THE POOL, not which step was next:
+          // "Cancelled before Reaching Xen Orchestra" after the installer had
+          // finished hid that fleetwright-xo now exists, with the password
+          // the person chose or the default (deployCancelled, C-5).
+          rec.text = deploy
+            ? deployCancelled(rec.phase, ctx)
+            : `Cancelled before ${STEP_WORDS[keys[i]] ?? `step ${i + 1}`}.${policy || (reconnect && !ctx.outcomes) ? ' Nothing was changed.' : ''}`;
           if (watchdog) {
             await this.#restoreXoVm(ctx);
             rec.text = `${rec.text} ${ctx.vmState ?? 'Xen Orchestra’s VM was not touched.'}`;
@@ -1174,10 +1216,21 @@ export class XoSetups {
       if (policy && ctx.rec.reply) await this.#handWatch(ctx).catch((e) => this.log.warn(`xosetup: ${rec.job} could not seal the routers' key: ${/** @type {Error} */ (e).message}`));
       rec.step = rec.of;
       rec.phase = 'done';
-      rec.state = 'done';
       rec.part = null;
       rec.text = [ctx.summary || (policy ? `${rec.address}: what the fleet may use is changed.` : `${rec.address} is in the fleet.`), ...ctx.notes].join(' ');
       if (watchdog) rec.text = ctx.summary;
+      // A CANCEL THAT LANDED DURING THE LAST THING A POLICY JOB DID, which
+      // took no signal (the pool's own machine) and finished: the job was
+      // cancelled and says so, with what it had done. Not for a setup or an
+      // install, whose last step seals the token to the phone: that token
+      // reaches the phone only from a job that is `done`, and a token made
+      // and handed to nobody would be the worse outcome.
+      if (policy && rec.cancelled) {
+        rec.state = 'cancelled';
+        rec.text = `Cancelled as it finished: everything you chose was applied before the cancel arrived. ${rec.text}`;
+      } else {
+        rec.state = 'done';
+      }
       this.#report(rec);
       this.log.info(`xosetup: ${rec.job} finished for ${rec.address}`);
     } catch (e) {
@@ -1187,7 +1240,7 @@ export class XoSetups {
       if (reconnect) await this.#sealReconnect(ctx);
       if (deploy && rec.cancelled) {
         rec.state = 'cancelled';
-        rec.text = deployCancelled(rec.phase);
+        rec.text = deployCancelled(rec.phase, ctx);
       } else if (watchdog) {
         // WHAT IS TRUE OF THE VM NOW, which the restore below settles: it is
         // started again before these words are final (#restoreXoVm).
@@ -1208,18 +1261,31 @@ export class XoSetups {
       } else if (policy && rec.cancelled) {
         rec.state = 'cancelled';
         // Cancelled during the build, the policy was already in force: say
-        // so, rather than that nothing changed.
+        // so, rather than that nothing changed. BETWEEN TWO THINGS IT WAS
+        // ASKED FOR (`building` is cleared as each ends) nothing is half
+        // made: what was built stands and the next was not begun. And what
+        // was built before the cancel, in each case, so the person knows
+        // what they have rather than only what they do not.
+        const before = ctx.built?.length ? ` Before it was cancelled: ${ctx.built.join(' ')}` : '';
         rec.text = rec.phase !== 'apply'
           ? 'Cancelled before anything was changed.'
           : rec.building === 'holder'
-            ? 'Cancelled while making the pool’s own machine. What the fleet may use was changed, and whatever else you asked for was built.'
+            ? `Cancelled while making the pool’s own machine. What the fleet may use was changed, and whatever else you asked for was built.${before}`
             : rec.building === 'image' && rec.replacing
-            ? 'Cancelled while rebuilding the machine image. What the fleet may use was changed; the new image was not made, what was made of it was removed, and the one that was there is as it was.'
+            ? `Cancelled while rebuilding the machine image. What the fleet may use was changed; the new image was not made, what was made of it was removed, and the one that was there is as it was.${before}`
             : rec.building === 'image'
-            ? 'Cancelled while building the machine image. What the fleet may use was changed; the image was not made, and what was made of it was removed.'
+            ? `Cancelled while building the machine image. What the fleet may use was changed; the image was not made, and what was made of it was removed.${before}`
             : rec.building === 'edge-rebuild'
-            ? 'Cancelled while rebuilding the edge router. What the fleet may use was changed; the new router was removed and the one that was there was started again, as it was.'
-            : 'Cancelled while building the edge router. What the fleet may use was changed; the router was not built, and what was made of it was removed.';
+            ? `Cancelled while rebuilding the edge router. What the fleet may use was changed; the new router was removed and the one that was there was started again, as it was.${before}`
+            : rec.building === 'edge'
+            ? `Cancelled while building the edge router. What the fleet may use was changed; the router was not built, and what was made of it was removed.${before}`
+            : ctx.built?.length
+              ? `Cancelled between the things you asked for. What the fleet may use was changed, and nothing more was started.${before}`
+              : 'Cancelled before it built anything. What the fleet may use was changed; the fleet’s own networks it had made by then are kept, and nothing was built.';
+        // THE ROUTERS' KEY STILL GOES TO THE PHONE: a router built before
+        // the cancel was built with it, and a job that ended cancelled used
+        // to end `done` and hand it over (status reads it from either).
+        if (ctx.rec.reply) await this.#handWatch(ctx).catch((err) => this.log.warn(`xosetup: ${rec.job} could not seal the routers' key: ${/** @type {Error} */ (err).message}`));
       } else {
         rec.state = 'failed';
         rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets)}`;
@@ -1405,8 +1471,18 @@ export class XoSetups {
         // The words every time, for the screen that asks; an event only when
         // the stage changes or the bar has moved a twentieth, so a Lock
         // Screen is not pushed to for every 16 MB.
+        // AFTER A CANCEL the words still flow: a build winding down says
+        // what it is removing, and the screen used to freeze on "Stopping"
+        // until the job ended. Its bar does not: the bytes it counts are
+        // being thrown away, and a count of them after "Stopping" would
+        // read as the build going on.
         const say = (/** @type {string} */ text, /** @type {any} */ part) => {
-          if (rec.cancelled) return;
+          if (rec.cancelled) {
+            if (part) return;
+            rec.text = text;
+            this.#report(rec);
+            return;
+          }
           rec.text = text;
           if (!part) return;
           const before = rec.part;
@@ -1417,6 +1493,7 @@ export class XoSetups {
         if (!way?.$pool) throw new Error('the way out is not in a pool this Xen Orchestra listed. The policy was applied; nothing was built.');
         /** @type {string[]} */
         const built = [];
+        ctx.built = built;
         if (p.edge || rotate) {
           const missing = EDGE_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
           if (missing.length) throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}, so the edge router cannot be built. The policy was applied.`);
@@ -1442,7 +1519,12 @@ export class XoSetups {
           if (made.length) built.push(`Made ${made.length === 1 ? 'a group network' : `${made.length} group networks`} for machines that work together.`);
           if (!p.edge && !rotate && !p.image && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) return built.join(' ') || undefined;
         }
+        // BETWEEN EACH THING IT WAS ASKED FOR, the cancel is looked for: the
+        // networks take no signal and are quick, and a cancel during one
+        // used to be found only by the next step, of which there is none.
+        stopIfCancelled(rec);
         const uplink = await ensureUplink({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks });
+        stopIfCancelled(rec);
         // LABS' NETWORKS, made before the edge is (re)built with an interface
         // on each: quick, and kept if the build fails, like group networks.
         /** @type {Array<{ id: string, open: boolean }>|null} */
@@ -1452,6 +1534,7 @@ export class XoSetups {
           labs = made.labs.map((l) => ({ id: l.id, open: l.open }));
           if (made.made.length) built.push(`Made ${made.made.length === 1 ? 'a lab network' : `${made.made.length} lab networks`}.`);
           if (p.labsEach !== undefined && labs.length) built.push(p.labsEach === null ? 'One person may hold any number of labs.' : `One person may hold ${p.labsEach === 1 ? 'one lab' : `${p.labsEach} labs`} at once.`);
+          stopIfCancelled(rec);
         }
         const edgeAsked = p.edge || labs !== null || rotate;
         if (rotate) built.push('The edge router’s key, and a pair’s shared password, were readable by everybody signed in to Xen Orchestra: they were taken off it, and it was built again with new ones.');
@@ -1461,11 +1544,11 @@ export class XoSetups {
         if (p.image || p.rebuild.length || p.remove.length) {
           const poolName = String((ctx.pools || []).find((/** @type {any} */ x) => x?.id === way.$pool)?.name_label || 'this pool').slice(0, 80);
           const image = async (/** @type {string} */ key, replace = false) => {
+            stopIfCancelled(rec);
             rec.building = 'image';
             rec.replacing = replace;
             rec.part = null;
-            rec.abort = new AbortController();
-            return this.buildImage({
+            const said = await this.buildImage({
               image: key,
               replace,
               channel: p.imageChannel,
@@ -1496,12 +1579,19 @@ export class XoSetups {
                 : null,
               vmReport: () => rec.vmReport ?? null,
             });
+            // Over, whichever way: a cancel between this and the next is
+            // between two things, not during this one (the catch reads it).
+            rec.building = null;
+            return said;
           };
           // ONE AFTER ANOTHER, router first: each image is built behind it.
           if (edgeAsked) built.push(await this.#edge(ctx, p, way, uplink, say, labs));
           // REMOVED FIRST, which frees their disks for what is built next;
           // then the new images, then the ones rebuilt.
-          for (const key of p.remove) built.push(await this.dropImage({ admin: ctx.admin, pool: way.$pool, poolName, image: key }));
+          for (const key of p.remove) {
+            stopIfCancelled(rec);
+            built.push(await this.dropImage({ admin: ctx.admin, pool: way.$pool, poolName, image: key }));
+          }
           for (const key of p.images) built.push(await image(key));
           for (const key of p.rebuild) built.push(await image(key, true));
         } else if (edgeAsked) {
@@ -1510,9 +1600,9 @@ export class XoSetups {
         // THE POOL'S OWN MACHINE, last: it is cloned from the image, which may
         // have been built a moment ago.
         if (p.holder) {
+          stopIfCancelled(rec);
           rec.building = 'holder';
           rec.part = null;
-          rec.abort = null;
           built.push(await ensureHolder({
             admin: ctx.admin,
             pool: way.$pool,
@@ -1556,7 +1646,6 @@ export class XoSetups {
       async (/** @type {any} */ ctx) => {
         const rec = ctx.rec;
         rec.building = 'deploy';
-        rec.abort = new AbortController();
         ctx.dir = jobDir();
         // The password moves into an object openPool wipes on every way out.
         ctx.root = { password: ctx.creds.root };
@@ -1604,7 +1693,6 @@ export class XoSetups {
         rec.xoAddress = found.address;
         rec.vm = found.vm;
         rec.building = null;
-        rec.abort = null;
         rec.part = null;
         // The pool master is not needed again: its connection goes now
         // rather than at the end of onboarding.
@@ -1624,11 +1712,27 @@ export class XoSetups {
           let user;
           try {
             user = await admin.call('session.signIn', { email: DEFAULT_ADMIN.email, password: DEFAULT_ADMIN.password });
-          } catch {
-            throw new Error(`Xen Orchestra at ${rec.xoAddress} no longer takes its default admin password, so somebody signed in to it and changed it before this machine could. Nothing more was done; look at it in Xen Orchestra before adding it.`);
+          } catch (e) {
+            // ONLY A REFUSAL MEANS SOMEBODY CHANGED IT. Xen Orchestra turns a
+            // wrong password down as `invalid credentials` (xo-common's
+            // api-errors, code 3). A call that timed out or a connection that
+            // dropped says nothing about the password, and used to be put
+            // down to somebody else's doing (C-5): it is said as what it was,
+            // with the default still to be changed by hand.
+            const err = /** @type {Error & { code?: unknown }} */ (e);
+            if (err.code === 3 || /invalid credentials/i.test(err.message)) {
+              throw new Error(`Xen Orchestra at ${rec.xoAddress} no longer takes its default admin password, so somebody signed in to it and changed it before this machine could. Nothing more was done; look at it in Xen Orchestra before adding it.`);
+            }
+            // Short, with the reason bounded: a failure's words are cut at
+            // 300 (scrub) and what to do has to be inside them.
+            throw new Error(`this machine could not sign in to Xen Orchestra at ${rec.xoAddress} to replace the default admin password (${scrub(err.message, ctx.secrets ?? {}).slice(0, 60)}). Unless somebody changed it, it is still ${DEFAULT_ADMIN.email} / ${DEFAULT_ADMIN.password}: change it, then add it from the app.`);
           }
           if (!user?.id) throw new Error('Xen Orchestra signed its default admin in and did not say which user that is, so its password was not changed.');
+          // WHAT A CANCEL FROM HERE ON CAN SAY (deployCancelled): the change
+          // was asked for, and then that it took.
+          ctx.adminTried = true;
           await admin.call('user.set', { id: user.id, password: ctx.creds.admin });
+          ctx.adminChanged = true;
         } finally {
           admin.close();
         }
@@ -1652,7 +1756,6 @@ export class XoSetups {
       // reach
       async (/** @type {any} */ ctx) => {
         const rec = ctx.rec;
-        rec.abort = new AbortController();
         ctx.dir = jobDir();
         ctx.root = { password: ctx.creds.root };
         ctx.creds.root = undefined;
@@ -1693,10 +1796,15 @@ export class XoSetups {
         await startXoVm(ctx.pool, ctx.vm.vm);
         ctx.stopped = false;
         ctx.vmState = 'Xen Orchestra’s VM was started again.';
+        // WHAT THE WAIT KNOWS is that the port took a connection
+        // (xo-watchdog.js, waitForXo): not that Xen Orchestra is up behind
+        // it, and not that it loaded the plugin, which this job, holding the
+        // pool master's root password and no Xen Orchestra sign-in, cannot
+        // ask. It used to say the plugin had loaded (C-5).
         const back = await this.waitXo(rec.xoAddress, { signal: rec.abort?.signal });
         ctx.summary = back
-          ? `The reconnect watchdog is in Xen Orchestra at ${rec.xoAddress}, and it is answering again. It loaded as Xen Orchestra started, and reconnects a pool it loses by itself from now on.`
-          : `The reconnect watchdog is in Xen Orchestra at ${rec.xoAddress}, and ${name} was started again, but Xen Orchestra had not answered after five minutes. Look at it in the pool; it may still be starting.`;
+          ? `The reconnect watchdog is on ${name}’s disk, and Xen Orchestra at ${rec.xoAddress} answers on its port again. Whether it loaded the plugin as it started was not checked from here: Settings, Plugins in Xen Orchestra lists it, and once loaded it reconnects a pool it loses by itself.`
+          : `The reconnect watchdog is on ${name}’s disk, and ${name} was started again, but nothing answered on Xen Orchestra’s port at ${rec.xoAddress} after five minutes. Look at it in the pool; it may still be starting.`;
       },
     ];
   }
@@ -1750,9 +1858,9 @@ export class XoSetups {
    */
   async #edge(ctx, p, way, uplink, say, labs = null) {
     const rec = ctx.rec;
+    stopIfCancelled(rec);
     rec.building = 'edge';
     rec.part = null;
-    rec.abort = new AbortController();
     // THE KEY THE FLEET READS THE ROUTERS WITH (edge-credentials.js): the
     // one they were built with, so a rebuild keeps it and the person's vault
     // stays right, or a new one for routers that have none. Its logs go to
@@ -1785,7 +1893,12 @@ export class XoSetups {
       plain: rec.plain === true,
       imageDir: path.join(this.stateDir || '.', 'edge'),
       signal: rec.abort.signal,
+      // The clock a rebuilt router is watched by (edge-router.js, settled): this one's, so a test can hurry it.
+      sleep: this.sleep,
       say,
+    }).then((said) => {
+      rec.building = null;
+      return said;
     });
   }
 
@@ -2132,6 +2245,27 @@ export class XoSetups {
     return 'Xen Orchestra already updates itself.';
   }
 
+  /**
+   * Remove the limited user's tokens from earlier runs, signed in as it,
+   * keeping the one this run made. Never throws; what it says is what is
+   * true of the old tokens now: gone, or still valid and why (C-5).
+   *
+   * @param {any} ctx with `limited` signed in as FLEET_USER and `token` just made
+   * @returns {Promise<{ removed: boolean, text: string }>}
+   */
+  async #revokeOlderTokens(ctx) {
+    const stayed = 'so any token the fleetwright user had from before still opens the pool until it expires.';
+    if (!Object.hasOwn(ctx.methods, 'token.deleteAll')) {
+      return { removed: false, text: `This Xen Orchestra does not offer token.deleteAll, ${stayed}` };
+    }
+    try {
+      await ctx.limited.call('token.deleteAll', { except: ctx.token });
+      return { removed: true, text: 'Any token the fleetwright user had from before was removed, so only this one opens the pool.' };
+    } catch (e) {
+      return { removed: false, text: `This Xen Orchestra refused to remove the fleetwright user’s earlier tokens (${scrub(/** @type {Error} */ (e).message, ctx.secrets ?? {})}), ${stayed}` };
+    }
+  }
+
   /** The steps, in XOSETUP_STEPS order. Each may return the sentence it leaves on the job. */
   #steps() {
     return [
@@ -2240,17 +2374,36 @@ export class XoSetups {
           ctx.tokenExpires = null;
         }
         if (typeof ctx.token !== 'string' || !ctx.token) throw new Error('Xen Orchestra did not hand back a token.');
+        // THE TOKENS BEFORE THIS ONE GO. Every run minted a token and left
+        // the earlier ones valid for their 180 days, so a setup run again
+        // for a lost phone left that phone's token opening the pool. Xen
+        // Orchestra's `token.deleteAll` removes the signed-in user's tokens
+        // but the one named, so it is asked as the limited user, for all but
+        // the one just made. Not in REQUIRED_METHODS: a server without it
+        // still gets its token, and the summary says the old ones stayed
+        // rather than that they went (C-5).
+        ctx.tokensRevoked = await this.#revokeOlderTokens(ctx);
         ctx.limited.close();
         ctx.limited = null;
         ctx.password = undefined;
+        return ctx.tokensRevoked.text;
       },
       // updates, and the reconnect watchdog
       async (/** @type {any} */ ctx) => {
         if (!Object.hasOwn(ctx.methods, 'plugin.get')) return 'This Xen Orchestra does not list its plugins; updates stay as they are.';
-        const plugins = (await ctx.admin.call('plugin.get')) || [];
-        const watchdog = await this.#loadPlugin(ctx, plugins, RECONNECT_PLUGIN_ID);
-        const after = watchdog ? ' It reconnects a pool it loses by itself.' : ' Fleetwright’s reconnect watchdog is not on it, so a pool it loses waits for Reconnect.';
-        return `${await this.#updates(ctx, plugins)}${after}`;
+        // A WARNING, NOT THE END OF THE JOB. The token was made a step ago;
+        // a failure here used to fail the whole setup and throw that token
+        // away unhanded, over the one step the pool can do without. What is
+        // said is what is known: the plugins' state after a call that failed
+        // part way is Xen Orchestra's to show, not this job's to guess.
+        try {
+          const plugins = (await ctx.admin.call('plugin.get')) || [];
+          const watchdog = await this.#loadPlugin(ctx, plugins, RECONNECT_PLUGIN_ID);
+          const after = watchdog ? ' It reconnects a pool it loses by itself.' : ' Fleetwright’s reconnect watchdog is not on it, so a pool it loses waits for Reconnect.';
+          return `${await this.#updates(ctx, plugins)}${after}`;
+        } catch (e) {
+          return `Updates were not turned on: ${scrub(/** @type {Error} */ (e).message, ctx.secrets ?? {})}. The token was made all the same; whether Xen Orchestra updates itself, and whether the reconnect watchdog is loaded, is for its Settings, Plugins to say.`;
+        }
       },
       // hand-off
       async (/** @type {any} */ ctx) => {
@@ -2307,6 +2460,18 @@ export class XoSetups {
   }
 }
 
+/**
+ * Stop a step here if the job was cancelled: between two things a step does
+ * that take no signal, so a cancel that landed during one ends the job at
+ * its end rather than being found by a next step that never comes. The
+ * catch in #execute reads `rec.cancelled`, not these words.
+ *
+ * @param {any} rec
+ */
+function stopIfCancelled(rec) {
+  if (rec.cancelled) throw new Error('cancelled');
+}
+
 /** The words a job leaves on itself while it runs: the same keys the apps word. */
 export const STEP_WORDS = Object.freeze(/** @type {Record<string, string>} */ ({
   connect: 'Reaching Xen Orchestra',
@@ -2345,16 +2510,26 @@ export const STEP_WORDS = Object.freeze(/** @type {Record<string, string>} */ ({
  * the installer ran, nothing was made. While it ran, it removes what it made
  * if it is stopped before its VM starts and keeps the VM after, and which of
  * those happened is the installer's to know, so the sentence names what to
- * look for rather than claiming either (C-5).
+ * look for rather than claiming either (C-5). Once it has finished
+ * (`rec.xoAddress` is where it said Xen Orchestra is) the VM exists, and
+ * what its admin password is comes from the admin step: replaced with the
+ * person's (`adminChanged`), asked to be and not answered (`adminTried`,
+ * which is the one case this cannot settle), or still the default.
  *
  * @param {string} phase
+ * @param {{ rec: { xoAddress?: string|null }, adminTried?: boolean, adminChanged?: boolean }} ctx
  */
-function deployCancelled(phase) {
+function deployCancelled(phase, ctx) {
   if (phase === 'reach' || phase === 'installer') return 'Cancelled before anything was made on the pool.';
-  if (STAGES.includes(phase)) {
+  if (!ctx.rec.xoAddress) {
     return 'Cancelled while the installer ran. Anything it had made may still be on the pool: a VM named fleetwright-xo, and disks named for it.';
   }
-  return 'Cancelled after Xen Orchestra was installed, as fleetwright-xo on the pool, before it was added. If this got past replacing its admin password, the password is the one you chose; add it from the app with its address.';
+  const installed = `Cancelled after Xen Orchestra was installed at ${ctx.rec.xoAddress}, as fleetwright-xo on the pool`;
+  if (ctx.adminChanged) return `${installed}, and its admin password was replaced with the one you chose, before it was added to the fleet. Add it from the app with that address.`;
+  if (ctx.adminTried) {
+    return `${installed}, while its default admin password was being replaced. Whether that went through is not known from here: sign in to it as ${DEFAULT_ADMIN.email} with the password you chose, or with ${DEFAULT_ADMIN.password} if yours is refused, change it if it is still ${DEFAULT_ADMIN.password}, then add it from the app with that address.`;
+  }
+  return `${installed}, before its default admin password was replaced: it is ${DEFAULT_ADMIN.email} with the password ${DEFAULT_ADMIN.password}, and anybody on its network can sign in with it until that is changed. Change it now, then add it from the app with that address.`;
 }
 
 /**
@@ -2817,8 +2992,9 @@ function status(rec) {
   // until the job is forgotten, because a phone that was closed at the end
   // collects it whenever it next looks.
   if (rec.state === 'done' && rec.handoff) return { ...s, handoff: rec.handoff };
-  // THE ROUTERS' KEY, SEALED the same way, once a policy job is done.
-  if (rec.state === 'done' && rec.watch) return { ...s, watch: rec.watch };
+  // THE ROUTERS' KEY, SEALED the same way, once a policy job is over: done,
+  // or cancelled after it built a router with that key.
+  if ((rec.state === 'done' || rec.state === 'cancelled') && rec.watch) return { ...s, watch: rec.watch };
   // THE POOL, SEALED, while the job waits on the person's choice.
   if (rec.state === 'choosing' && rec.inventory) return { ...s, inventory: rec.inventory };
   // WHAT A RECONNECT DID TO EACH SERVER, SEALED, once it has ended, which
