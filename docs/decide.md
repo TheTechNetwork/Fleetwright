@@ -25,13 +25,18 @@ reports them. The model covers the case where all of them say nothing.
 
 All of these, per running session, on the watcher's 20-second tick:
 
-1. No hook newer than the pane's last change says `awaiting` or `ready`. Hooks
-   win; the model never second-guesses one.
+1. The latest hook does not say `awaiting` or `ready` about this pane. Hooks
+   win. The watcher stamps the pane when it reads it, which is after the Stop
+   hook that produced the bytes, so a hook within one 20-second tick before
+   that stamp still counts. An older one is about a pane that has since
+   changed, and a dialog painted in the gap is still asked about. A later
+   `working` hook replaces the phase, and that pane may be asked about.
 2. `AWAITING_RE` does not match and `readPrompt` reads nothing.
 3. The pane has not changed for 90 seconds (`DECIDE_AFTER_MS`): longer than the
    two polls that make a transition, shorter than any idle-restart window.
-4. This host has not asked about this pane hash before. The last 256 hashes are
-   kept; a still pane is asked about once, whatever the answer.
+4. This host has not asked about this session's pane before. The last 256
+   are kept, keyed by session and the pane's fingerprint; a still pane is
+   asked about once, whatever the answer. The fingerprint stays on the box.
 5. The session is running and not already waiting.
 6. `FLEETWRIGHT_DECIDE=1` on the host.
 
@@ -63,7 +68,7 @@ Never the raw pane, never a screenshot, never `images`.
 ## The frames
 
 ```
-host → coordinator  { v, kind: 'decide', hostId, id, name, hash, state }
+host → coordinator  { v, kind: 'decide', hostId, id, name, state }
 coordinator → host  { v, kind: 'decided', id, ok, asked?, p?, dialog?, confidence?, why? }
 ```
 
@@ -79,15 +84,17 @@ Every refusal is an answer with a `why`, so a host can tell them apart.
 |---|---|---|
 | the switch and both bindings | `FLEETWRIGHT_DECIDE` exactly `"1"`, plus `AI` and `DECIDE_RATE_LIMIT`, which only `wrangler.production.toml` declares | `off` |
 | the gate (`refuseUnlessMasked`) | `images` present; state empty; over 4,096 bytes or 40 lines; a run of 20+ `[A-Za-z0-9_-]`; `sk-ant-`, `fwk_`, `http(s)://`, an email, `-----BEGIN` | `refused:<rule>` |
-| the platform rate limit | 30 a minute, namespace 1003, kept by Cloudflare | `ratelimited` |
 | per session | one decision per session per 10 minutes | `ratelimited` |
 | per host | 20 an hour | `ratelimited` |
 | the day's budget | `DECIDE_NEURONS_PER_DAY`, default 8,000, clamped to 100,000 | `budget` |
+| the platform rate limit | 30 a minute, namespace 1003, kept by Cloudflare, and only asked once the three walls above allow the call | `ratelimited` |
 | the call | one, 8-second timeout, no retry | `error` |
 
 The gate refuses and never cleans. A refusal is logged as
 `coordinator: decide refused from <host>: <rule>`, never with the text, and
-counted. A host whose mask let something through logs the refusal too.
+counted in memory. It is not a storage write of its own: the count rides
+along the next time the spend or a window is stored. A host whose mask let
+something through logs the refusal too.
 
 **Every cap is persisted.** The day's spend and both windows are stored under
 the Durable Object key `decide` the moment they move, so a deploy or an
