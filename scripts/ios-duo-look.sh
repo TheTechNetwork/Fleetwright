@@ -87,14 +87,32 @@ else
   echo "::warning::no hinge tool, so only the closed pose; the open display needs it"
 fi
 
+# THE SIMULATOR DOES NOT ALWAYS FOLLOW THE HINGE. `hinge set` waits two
+# seconds for the angle and fails when it is not reached ("the hinge angle
+# did not reach 180.0 within 2.0 s"), and on the hosted Macs that has
+# happened on one run and not the next with the same code; under `set -e` it
+# failed the whole build job for want of a picture. A pose is asked for three
+# times, and a pose the simulator will not take is skipped with a warning,
+# the way a picture of the wrong display is dropped below: the pictures are
+# evidence, and a build is not judged by whether the Duo opened today.
+pose_set() {
+  local try
+  for try in 1 2 3; do
+    if "$HINGE" -d "$UDID" orient portrait && "$HINGE" -d "$UDID" set "$angle" && "$HINGE" -d "$UDID" orient "$orient"; then
+      return 0
+    fi
+    sleep 3
+  done
+  return 1
+}
+
 mkdir -p "$OUT"
 first=1
 for pose in "${POSES[@]}"; do
   IFS=: read -r name angle orient display <<<"$pose"
-  if [ -n "$HINGE" ]; then
-    "$HINGE" -d "$UDID" orient portrait
-    "$HINGE" -d "$UDID" set "$angle"
-    "$HINGE" -d "$UDID" orient "$orient"
+  if [ -n "$HINGE" ] && ! pose_set; then
+    echo "::warning::no pictures of the $name pose: the simulator did not reach hinge angle $angle in three tries"
+    continue
   fi
   for tab in "${TABS[@]}"; do
     xcrun simctl terminate "$UDID" "$BUNDLE_ID" 2>/dev/null || true
