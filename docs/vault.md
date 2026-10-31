@@ -127,7 +127,11 @@ the one thing only signing in again mends. Anything else is cannot tell and
 says nothing. Each ended sign-in is named once (`claude-ended:<id>`, keyed by
 when it was kept), so the next sign-in kept is told about afresh. The
 coordinator records `claude.ended` and pushes to the person's phones, and to
-an admin's with whose sign-in it was.
+an admin's with whose sign-in it was. A sign-in whose access token Claude
+refuses at the usage address, and which the minter is not renewing for, is
+recorded as `claude.refused` and pushed the same way, once, saying what was
+seen: the status, and whether renewing was tried. Renewing works, so it is
+not called ended, and nothing is promised to mend it.
 
 **The push says what the record says, and no more** (`renewalVerdict`). "Was
 ended outside the fleet" is said only when nothing in the fleet renewed the
