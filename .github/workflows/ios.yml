@@ -90,16 +90,19 @@ jobs:
   # should not be able to hide a syntax error.
   build:
     # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
-    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
+    # Duo needs the 27 SDK. scripts/select-xcode.sh picks 27.2 on it.
     runs-on: xcode-27
-    # ON WHAT SHIPS AND ON THE FLOOR. 27.2 is what TestFlight builds and the
-    # store submits (the Duo's Pencil arrived with it); 27.1 is the oldest SDK
-    # that draws the Duo edge to edge, built beside it so nothing comes to need
-    # 27.2 by accident. Neither cancels the other. scripts/select-xcode.sh.
+    # ON WHAT SHIPS, AND ON THE NEXT ONE WHILE IT IS IN BETA. 27.2 is what
+    # TestFlight builds and the store submits. The next Xcode joins this list
+    # the day GitHub's image carries its beta, built beside what ships so a
+    # change in it is seen before it is what ships; select-xcode.sh prints a
+    # notice on every run while the image has one this list does not. 27.1
+    # was built beside 27.2 as the oldest SDK that draws the Duo edge to edge,
+    # until 27.2 shipped. Neither cancels the other. scripts/select-xcode.sh.
     strategy:
       fail-fast: false
       matrix:
-        xcode: ['27.1', '27.2']
+        xcode: ['27.2']
     name: build (Xcode ${{ matrix.xcode }})
     steps:
       - uses: actions/checkout@v7.0.1
@@ -232,7 +235,7 @@ jobs:
       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: build
     # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
-    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
+    # Duo needs the 27 SDK. scripts/select-xcode.sh picks 27.2 on it.
     runs-on: xcode-27
     environment: production
     outputs:
@@ -849,7 +852,7 @@ jobs:
     name: store screenshots
     if: github.event_name == 'release' && !github.event.release.prerelease
     # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
-    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
+    # Duo needs the 27 SDK. scripts/select-xcode.sh picks 27.2 on it.
     runs-on: xcode-27
     # A WALL. A simulator that never finishes booting is a job that never
     # ends, and the submission waits behind this job: 0.4.14 sat for over

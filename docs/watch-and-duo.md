@@ -62,10 +62,14 @@ is meant literally.
 1. **The SDK, pinned, on the image that has it.** `macos-latest` carried Xcode 26
    alone, so every build before this round was the letterboxed one. The macOS
    jobs run on GitHub's `xcode-27` image, and `scripts/select-xcode.sh` picks an
-   exact build or fails: **TestFlight ships on Xcode 27.2** (RC, 27B48, the
-   release that brought Pencil to the Duo) and the store submits that upload;
-   the build job also compiles and tests on **27.1** (27A9275), the oldest SDK
-   that draws the Duo edge to edge. Unit tests run on the image's iPhone Duo
+   exact build or fails: **TestFlight ships on Xcode 27.2** (27B48, the
+   release that brought Pencil to the Duo) and the store submits that upload.
+   **The next Xcode is built beside it from its first beta** on GitHub's
+   image, so a change in it is seen before it is what ships; the script prints
+   a notice on every run while the image carries one the build matrix does
+   not, and adding it is a line in `ios.yml` and a build in the script. 27.1
+   (27A9275), the oldest SDK that draws the Duo edge to edge, was built beside
+   27.2 until 27.2 shipped. Unit tests run on the image's iPhone Duo
    simulator, and `scripts/ios-duo-look.sh` attaches a picture of each tab on it
    in each pose to every full release (the `duo-pictures` job): the store's own
    four sizes, ready for the upload the API does not take yet. They were on
@@ -112,10 +116,11 @@ is meant literally.
 
 ### Still to do
 
-1. **Look at it in every pose.** CI builds on 27.1 and 27.2 and runs the unit
-   tests on the iPhone Duo simulator, and each full release attaches the three
-   tabs on both displays in each pose (`hinge` folds and rotates the
-   simulator); a device is still a person's job. Fold, unfold, rotate, and open a session
+1. **Look at it in every pose.** CI builds on 27.2, and on the next beta once
+   the image has it, and runs the unit tests on the iPhone Duo simulator, and
+   each full release attaches the three tabs on both displays in each pose
+   (`hinge` folds and rotates the simulator); a device is still a person's
+   job. Fold, unfold, rotate, and open a session
    from a notification in each pose. **Look first at unfolded portrait**: the tab
    sidebar, the 300-point list and the page are three columns on 669 points, and
    the tab sidebar is meant to be the one that collapses. If it does not, the
