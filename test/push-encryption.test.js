@@ -134,13 +134,48 @@ test('what goes on the wire carries no detail, and still fits', async () => {
   // it. A realistic notification must leave room to spare.
   assert.ok(JSON.stringify(wire).length < 2048, `wire payload is ${JSON.stringify(wire).length} bytes`);
 
+  // And the longest sentence a job's end is allowed (SETUP_TEXT_MAX in
+  // core.js, 700) sealed with its title and data still leaves room.
+  const long = await envelopeFor({ pushKey: alice.pushKey }, {
+    title: 'The change stopped',
+    body: 'Applying what you chose stopped: '.padEnd(700, 'the machine image’s build VM stopped before it said the install was done. '),
+    data: { kind: 'xosetup', job: 'a1b2c3d4e5f6', state: 'failed', host: 'rpi-7550', name: 'xosetup-a1b2c3d4e5f6' },
+  }, { now: () => 1_700_000_000_000 });
+  assert.equal(long.encrypted, true);
+  assert.ok(JSON.stringify(long).length < 3072, `the longest end on the wire is ${JSON.stringify(long).length} bytes`);
+
   // WHEN IT WAS SENT is sealed with the rest, so a captured envelope replayed
   // later carries its own age and the app can refuse it (#351).
   assert.deepEqual(await openWith(alice.privateKey, alice.pushKey, wire.data.e), {
     title: message.title,
     body: message.body,
-    data: { ...message.data, sentAt: '1700000000000' },
+    data: { ...message.data, sentAt: '1700000000000', category: '' },
   });
+});
+
+test('the category is sealed beside the words, and stays in the clear for an older phone', async () => {
+  // The category picks the two words on the buttons; the digits they type are
+  // sealed. Left only in the clear, a provider or a relay that swapped it
+  // could put "Allow this once" on the button that types "Do not allow" — so
+  // the phone needs a copy nobody on the way could have changed. An empty one
+  // for a notification with nothing to answer, so a category added on the way
+  // has a sealed "none" to disagree with.
+  const alice = await phone();
+  const asking = {
+    title: 'cc-brave-otter on deb132',
+    body: 'Waiting: run npm install?',
+    category: 'fleet.prompt.permission',
+    data: { event: 'session.awaiting-input', name: 'cc-brave-otter', hostId: 'deb132', promptId: 'p-01J8', answers: 'a:1,b:3' },
+  };
+  const sealed = await envelopeFor({ pushKey: alice.pushKey }, asking, { now: () => 5 });
+  assert.equal((await openWith(alice.privateKey, alice.pushKey, sealed.data.e)).data.category, 'fleet.prompt.permission');
+
+  const told = await envelopeFor({ pushKey: alice.pushKey }, { title: 'deb132', body: 'offline', data: { event: 'host.offline', hostId: 'deb132' } });
+  assert.equal((await openWith(alice.privateKey, alice.pushKey, told.data.e)).data.category, '');
+
+  // A phone with no key opens nothing, and gets the category where it always
+  // did: beside the notification, from the sender (push.test.js).
+  assert.equal('category' in (await envelopeFor({}, asking)).data, false);
 });
 
 test('a phone that predates encryption still gets its notification', async () => {
@@ -155,8 +190,9 @@ test('a phone that predates encryption still gets its notification', async () =>
 });
 
 test('a reinstall does not inherit the old key', async () => {
-  // A phone that reinstalls loses its private key — Keychain and Keystore both
-  // go with the app. Carrying the public key forward would encrypt every future
+  // An Android phone that reinstalls loses its private key, because a Keystore
+  // entry goes with the app (an iPhone's Keychain item does not, and the app
+  // sends it again). Carrying the public key forward would encrypt every future
   // notification to a key nobody holds, and the failure would be silent and
   // permanent: delivery succeeds, decryption fails, the fallback shows forever.
   const { CoordinatorCore } = await import('../src/fleet/coordinator/core.js');

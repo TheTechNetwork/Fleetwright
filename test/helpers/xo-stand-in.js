@@ -123,10 +123,10 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
   const objects = {
     // With servers, the pools of the connected ones; without, the one pool.
     get pool() {
-      if (!servers) return { p1: { id: 'p1', type: 'pool', name_label: 'Home', default_SR: 'sr1' } };
+      if (!servers) return { p1: { id: 'p1', type: 'pool', name_label: 'Home', default_SR: 'sr1', master: 'h1' } };
       return Object.fromEntries(servers.filter((s) => s.status === 'connected' && s.poolId).map((s) => [s.poolId, { id: s.poolId, type: 'pool', name_label: s.poolName ?? s.poolId }]));
     },
-    host: { h1: { id: 'h1', type: 'host', cpus: { cores: 16 }, memory: { size: 64 * 1024 ** 3 } } },
+    host: { h1: { id: 'h1', type: 'host', address: '10.10.10.11', cpus: { cores: 16 }, memory: { size: 64 * 1024 ** 3 } } },
     SR: {
       sr1: { id: 'sr1', type: 'SR', name_label: 'Local storage', $pool: 'p1', size: 1000 * 1024 ** 3, physical_usage: 200 * 1024 ** 3, content_type: 'user', shared: false },
       sr2: { id: 'sr2', type: 'SR', name_label: 'NFS', $pool: 'p1', size: 4000 * 1024 ** 3, physical_usage: 1000 * 1024 ** 3, content_type: 'user', shared: true },
@@ -136,9 +136,14 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
       const named = { 'net-mgmt': 'Pool-wide network associated with eth0', 'net-lab': 'lab', 'net-dmz': 'dmz', ...nets };
       return Object.fromEntries(Object.entries(named).map(([id, name]) => [id, { id, type: 'network', name_label: name, $pool: 'p1', tags: [...(tags.get(id) ?? [])] }]));
     },
+    // The master's PIFs: the management one, whose address the host object
+    // carries too, a second with an address of its own, and one with none.
+    // The last is another host's, which the record never lists.
     PIF: {
-      pif1: { id: 'pif1', type: 'PIF', $network: 'net-mgmt', vlan: -1 },
-      pif2: { id: 'pif2', type: 'PIF', $network: 'net-dmz', vlan: 30 },
+      pif1: { id: 'pif1', type: 'PIF', $host: 'h1', $network: 'net-mgmt', vlan: -1, ip: '10.10.10.11', management: true },
+      pif2: { id: 'pif2', type: 'PIF', $host: 'h1', $network: 'net-dmz', vlan: 30, ip: '10.10.30.11', management: false },
+      pif3: { id: 'pif3', type: 'PIF', $host: 'h1', $network: 'net-lab', vlan: -1, ip: '', management: false },
+      pif4: { id: 'pif4', type: 'PIF', $host: 'h2', $network: 'net-mgmt', vlan: -1, ip: '10.10.10.12', management: true },
     },
     VM: vms,
     'VM-template': templates,

@@ -139,6 +139,21 @@ enum XOSetupHandoff {
         return master
     }
 
+    /// The addresses the pool master answers on, as setup saw them and the
+    /// record keeps them (`masters`, poolMastersOf in xo-setup.js): the
+    /// management address first, then the others its PIFs carry. Empty for
+    /// a record from before the field, or one whose setup could not tell,
+    /// and the page then says nothing of it rather than guessing (C-5).
+    /// Only what is shaped like an address is kept, since these are shown
+    /// and may one day be dialled.
+    static func masters(of address: String) -> [String] {
+        guard let record = Keychain.get(tokenAccount(address)),
+              let object = try? JSONSerialization.jsonObject(with: Data(record.utf8)) as? [String: Any],
+              let masters = object["masters"] as? [String]
+        else { return [] }
+        return masters.filter { XOSetupKey.isAddress($0) }
+    }
+
     /// The record a machine sealed, as the JSON kept in the Keychain, or nil
     /// for anything that does not open under this job and address with this
     /// key, or opens to something with no token for that address in it.

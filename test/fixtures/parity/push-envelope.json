@@ -1,0 +1,23 @@
+{
+  "recipient": {
+    "d": "L2CDrdaGYPjACnAL3lTTSaC4We3pp2Bh613VvhiPgpM",
+    "x": "IZxJvF4ztgSbZtz723lj83771C_5TsVODFTAKm9szBg",
+    "y": "j1Jf0kDo-6zXgjYuSgpp4O1oUtj8rRGAHafuS4mdJtQ",
+    "pushKey": "BCGcSbxeM7YEm2bc-9t5Y_N--9Qv-U7FTgxUwCpvbMwYj1Jf0kDo-6zXgjYuSgpp4O1oUtj8rRGAHafuS4mdJtQ"
+  },
+  "envelope": "AZnahaFrQ8HB7dnuEthSX1oEd5BqARZ0d4oy8x-kMhn95yf2MrQWB4tKtBvBFhJTNUtUFKRtKjQmEBFybWSMBdOLxAZDYGCoetwG4gF0MFeNSMzlECcfVOWX8YkHA2o5uZGm5-uJOe5ChqA3xnisuflUA-BKfDBPFdtvuFfZHTeCpWpELhNHscs4mLM8jzES2yrvSfC1cRIahpKKfvWSUhePQU2LIYv0h9GJmA9TYhJsa4nHmj6t2TB8xoQqAYru6yn2QKRbnt2lmB7GayZsdKploXQEWxwnMa_YyAIuhxgQFsua9ZlM8f1lDH56ucjyT0KUMPX553jaRGlYXKt_DOEjwLjEbYxRlIl1vymaOev05U4nJNJmuvw_iZ7PFItYfwmO3qAFB-U4WQXNzrlIKFbrtuQ8xlm1TZcNbBK9ZbIeE-6zmZokuTjZUKKcAtKiDiAktUPqC8hys-jkm_Fnigh6Poe0LtZRFlHJ9hBXuvMdxA",
+  "plaintext": {
+    "title": "cc-brave-otter on deb132",
+    "body": "Do you want to run npm install?",
+    "data": {
+      "event": "session.awaiting-input",
+      "name": "cc-brave-otter",
+      "hostId": "deb132",
+      "url": "",
+      "promptId": "p-01J8",
+      "answers": "a:1,b:3",
+      "sentAt": "1700000000000",
+      "category": "fleet.prompt.permission"
+    }
+  }
+}
