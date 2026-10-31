@@ -340,34 +340,31 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
-      # THE PACKAGES, ALSO BEFORE INIT, and this one is not a saving but the
-      # difference between a database and a red run. To read a package's
-      # Package.swift, SwiftPM compiles it inside `/usr/bin/sandbox-exec`, and
-      # under CodeQL's tracer that spawn fails: the tracer inserts its library
-      # into every process the build starts, cannot into a protected system
-      # binary, copies one it can, and the copy of sandbox-exec has no slice for
-      # this Mac. `xcodebuild` then reports
+      # ROSETTA, FOR ONE PROCESS THE TRACER COPIES. To read a package's
+      # Package.swift, SwiftPM runs it inside `/usr/bin/sandbox-exec`. CodeQL
+      # traces a build by inserting its library into every process the build
+      # starts; a protected system binary will not take it, so the tracer
+      # copies the binary somewhere it will. A copy of an Apple binary on this
+      # Mac has two slices and can run neither as itself: the arm64e slice
+      # loads only for binaries Apple signed, which the copy no longer is, and
+      # the x86_64 slice needs Rosetta, which GitHub's xcode-27 image does not
+      # carry. The spawn fails as
       #
       #   Could not resolve package dependencies:
       #   posix_spawn error: Bad CPU type in executable (86), `["/usr/bin/sandbox-exec", ...
       #
-      # before compiling a line, and the Swift analysis of main was red on every
-      # merge from the day the app took its first package (sentry-cocoa, #1370)
-      # without anyone seeing it, because this job does not run on pull requests.
+      # before a line is compiled, and this job was red on every merge from the
+      # day the app took its first package (sentry-cocoa, #1370) with nobody
+      # seeing it, because it does not run on pull requests.
       #
-      # SwiftPM caches what it read from a manifest, keyed on the manifest and
-      # the toolchain, so resolving the graph once here, untraced, means the
-      # traced build below finds every manifest in the cache and never spawns
-      # the sandbox. Resolution is not compilation: nothing the analysis should
-      # see happens in this step. The sandbox stays on; the alternative,
-      # `-IDEPackageSupportDisableManifestSandbox=YES`, would turn off the one
-      # thing standing between a dependency's manifest and this runner.
-      - name: Resolve the packages
-        working-directory: apps/ios
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project Fleetwright.xcodeproj \
-            -scheme Fleetwright
+      # With Rosetta installed the copy runs as x86_64, the manifest is read
+      # inside its sandbox as always, and the tracer sees the compile it came
+      # for. Nothing about what the build may do changes; this is the one
+      # machine-level fact the job was missing. Resolving the packages
+      # untraced beforehand was tried and does not help: SwiftPM keys its
+      # manifest cache on the process environment, which the tracer changes.
+      - name: Install Rosetta
+        run: sudo softwareupdate --install-rosetta --agree-to-license
 
       - uses: github/codeql-action/init@v4.39.1
         with:
