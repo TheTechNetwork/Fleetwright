@@ -18,6 +18,8 @@
 // that cries wolf gets its notifications turned off, which costs you the one
 // that mattered.
 
+import { maskPane } from '../../core/mask-pane.js';
+import { DECIDE_P_AWAITING } from '../../core/decide-questions.js';
 import { isRemoteControlOnline, extractRcUrl } from './pane.js';
 import { readPrompt, promptId, describePrompt, answerActions } from './prompt.js';
 
@@ -146,6 +148,23 @@ const RESTART_QUIET_MS = 3 * 60_000;
  */
 const DEFAULT_IDLE_RESTART_LIMIT = 2;
 
+/**
+ * How long a pane nothing can read must be still before the decision model is
+ * asked about it (docs/decide.md). Longer than the two polls that make a
+ * transition, shorter than any idle-restart window, so a dialog the matchers
+ * cannot see is marked waiting before it can be restarted onto.
+ */
+export const DECIDE_AFTER_MS = 90_000;
+
+/** How many pane hashes this host remembers having asked about. A restart forgets them; the coordinator's caps bound the re-ask. */
+const DECIDE_HASHES_KEPT = 256;
+
+/**
+ * What a session the model read as waiting says. Fleet-authored and only
+ * this: there is no prompt behind it, so no question, no options, no answer.
+ */
+export const MODEL_AWAITING_TEXT = 'is waiting for you; the fleet could not read what it is asking, open it to see';
+
 export class SessionWatcher {
   /**
    * @param {{
@@ -155,6 +174,8 @@ export class SessionWatcher {
    *   allowSessionText?: boolean,
    *   idleRestartMs?: number,
    *   idleRestartLimit?: number,
+   *   decide?: ((ask: { name: string, hash: string, state: string }) => Promise<any>)|null,
+   *   decideAfterMs?: number,
    *   logger?: typeof import('../../log.js').log,
    * }} opts
    */
@@ -165,8 +186,27 @@ export class SessionWatcher {
     allowSessionText = false,
     idleRestartMs = 0,
     idleRestartLimit = DEFAULT_IDLE_RESTART_LIMIT,
+    // THE LAST-RESORT READER (docs/decide.md): asks the coordinator whether a
+    // still pane nothing else can read is a person being asked something.
+    // Null unless FLEETWRIGHT_DECIDE=1, and null is the old behaviour exactly.
+    decide = null,
+    decideAfterMs = DECIDE_AFTER_MS,
     logger,
   }) {
+    this.decide = typeof decide === 'function' ? decide : null;
+    this.decideAfterMs = decideAfterMs;
+    /**
+     * Pane hashes already asked about, oldest first. A still pane is asked
+     * about once, whatever the answer, and the set is bounded so a long-lived
+     * host does not grow it for ever. @type {Set<string>}
+     */
+    this.askedHashes = new Set();
+    /**
+     * Sessions the model read as waiting, and on which pane. The claim holds
+     * only while the pane is that pane: the tick its hash changes, it goes,
+     * because its evidence did. @type {Map<string, { hash: string, since: number }>}
+     */
+    this.modelAwaiting = new Map();
     /** The last prompt read per session, so health need not peek again. */
     this.prompts = new Map();
     /**
@@ -295,6 +335,9 @@ export class SessionWatcher {
       //   ready    — it is waiting for input specifically, rather than working
       let atRest = false;
       let ready = false;
+      // Whether `awaiting` came from the decision model rather than a regex or
+      // a hook, which changes only what the event says (#awaiting).
+      let readByModel = false;
       /** @type {any} */
       let prompt = null;
       let rcUrl = session.rcUrl ?? null;
@@ -327,6 +370,8 @@ export class SessionWatcher {
           // between a notification that says "resumed (summary)" and one that
           // says what is being asked.
           prompt = readPrompt(pane);
+          if (!awaiting && prompt === null) readByModel = this.#modelSaysWaiting(name, pane, activity);
+          awaiting = awaiting || readByModel;
           rcUrl = extractRcUrl(pane) ?? rcUrl;
           // Kept so health can report what a session is ASKING without a
           // second peek per session per tick. The watcher is already the one
@@ -348,7 +393,7 @@ export class SessionWatcher {
         // New to us. On a restart everything is new, which is why the first
         // pass is quiet.
         if (session.status === 'error') this.#fire(quiet, { event: 'session.error', name, text: session.detail });
-        else if (awaiting) this.#fire(quiet, this.#awaiting(name, session, prompt));
+        else if (awaiting) this.#fire(quiet, this.#awaiting(name, session, prompt, readByModel));
       } else {
         if (before.status === 'running' && !running) {
           // NOT WHEN WE STOPPED IT. A restart's own `/stop` is a status change
@@ -368,7 +413,7 @@ export class SessionWatcher {
         // The transition, not the state — a session parked at a prompt is one
         // notification, not one every twenty seconds until somebody answers.
         if (!before.awaiting && awaiting) {
-          this.#fire(quiet, this.#awaiting(name, session, prompt));
+          this.#fire(quiet, this.#awaiting(name, session, prompt, readByModel));
         }
         // BACK AT ITS PROMPT, after having been away from it. This is the
         // "done" both beta testers ranked daily: a session handed a job
@@ -431,6 +476,59 @@ export class SessionWatcher {
     for (const name of [...this.idle.keys()]) if (!live.has(name)) this.idle.delete(name);
     for (const name of [...this.restarts.keys()]) if (!live.has(name)) this.restarts.delete(name);
     for (const name of [...this.restarting.keys()]) if (!live.has(name)) this.restarting.delete(name);
+    for (const name of [...this.modelAwaiting.keys()]) if (!live.has(name)) this.modelAwaiting.delete(name);
+  }
+
+  /**
+   * Whether the decision model has said this pane is a person being asked
+   * something, and if it has not been asked yet and every condition holds,
+   * ask it now (docs/decide-design.md, section A). Called only when no regex
+   * and no hook says waiting and readPrompt read nothing.
+   *
+   * WHAT IT MAY DO IS ONE THING: make `awaiting` true for this exact pane, as
+   * if AWAITING_RE had matched with no question read. It never sets ready,
+   * never clears a waiting a regex or hook set, never writes a prompt, and a
+   * hook newer than the pane's last change always wins over it.
+   *
+   * THE ASK IS NOT AWAITED. It takes up to ten seconds, the tick does not wait
+   * for it, and its answer is read on a later tick, which is when the
+   * transition fires, once. Anything but a confident yes leaves the pane what
+   * it was: unrecognised, which is cannot tell.
+   *
+   * @param {string} name @param {string} pane @param {any} activity
+   * @returns {boolean}
+   */
+  #modelSaysWaiting(name, pane, activity) {
+    const entry = this.idle.get(name);
+    if (!entry) return false;
+    const claim = this.modelAwaiting.get(name);
+    if (claim && claim.hash !== entry.hash) this.modelAwaiting.delete(name);
+    // HOOKS WIN. A ready or awaiting from a hook that came after the pane last
+    // moved is the CLI's own word about this pane.
+    const hookSaid = Boolean(activity && (activity.phase === 'awaiting' || activity.phase === 'ready') && Number(activity.at) >= entry.since);
+    if (hookSaid) return false;
+    if (this.modelAwaiting.get(name)?.hash === entry.hash) return true;
+    if (!this.decide || Date.now() - entry.since < this.decideAfterMs || this.askedHashes.has(entry.hash)) return false;
+
+    const hash = entry.hash;
+    this.askedHashes.add(hash);
+    while (this.askedHashes.size > DECIDE_HASHES_KEPT) this.askedHashes.delete(/** @type {string} */ (this.askedHashes.values().next().value));
+    // MASKED HERE AND ONLY HERE: this is the one line where pane text leaves
+    // the box, and it leaves as src/core/mask-pane.js allows.
+    const state = maskPane(pane);
+    void Promise.resolve()
+      .then(() => /** @type {Function} */ (this.decide)({ name, hash, state }))
+      .then((a) => {
+        if (a?.ok === true && a.asked === true && typeof a.p === 'number' && a.p >= DECIDE_P_AWAITING && this.idle.get(name)?.hash === hash) {
+          this.modelAwaiting.set(name, { hash, since: Date.now() });
+          // The kind is evidence for DIALOGS, and the journal is where it goes.
+          this.log.info(`watcher: ${name} read as waiting by the decision model (p ${a.p}${a.dialog ? `; looks like ${a.dialog}, confidence ${a.confidence}` : ''})`);
+        } else if (a?.ok === false && String(a.why ?? '').startsWith('refused:')) {
+          this.log.warn(`watcher: the coordinator refused this host's masked pane (${a.why}); the mask let something through`);
+        }
+      })
+      .catch(() => { /* a failed ask is nothing, which is what the pane already was */ });
+    return false;
   }
 
   /**
@@ -651,11 +749,14 @@ export class SessionWatcher {
    * @param {string} name
    * @param {any} session
    * @param {any} prompt
+   * @param {boolean} [readByModel]  the decision model said so, not a regex or a hook
    */
-  #awaiting(name, session, prompt) {
+  #awaiting(name, session, prompt, readByModel = false) {
     if (!prompt) {
-      // Recognised as waiting, not recognised as a question. Honest about it.
-      return { event: 'session.awaiting-input', name, text: firstPrompt(session) };
+      // Recognised as waiting, not recognised as a question. Honest about it,
+      // and more so when it was a model that recognised it: no question, no
+      // options, nothing to answer from a phone.
+      return { event: 'session.awaiting-input', name, text: readByModel ? MODEL_AWAITING_TEXT : firstPrompt(session) };
     }
     const shown = describePrompt(prompt, this.allowSessionText);
     return {

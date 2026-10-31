@@ -168,14 +168,18 @@ test('the setting that decides what leaves this box is explained, not just liste
   // somebody else's servers, on a fleet that may not belong to the person
   // holding the phone. A bare `#FLEETWRIGHT_PROMPT_TEXT=0` in a list of
   // defaults is not something anybody makes that decision from.
-  const at = SIDECAR_EXAMPLE.indexOf('#FLEETWRIGHT_PROMPT_TEXT=');
-  assert.ok(at > 0, 'FLEETWRIGHT_PROMPT_TEXT is not offered as a settable line');
-  const before = SIDECAR_EXAMPLE.slice(0, at).split('\n').slice(0, -1).reverse();
-  const prose = [];
-  for (const line of before) {
-    if (!line.startsWith('#')) break;
-    if (/^# ---/.test(line)) break;
-    prose.push(line.replace(/^#\s?/, ''));
+  // FLEETWRIGHT_DECIDE is the second: it decides whether masked pane text
+  // goes to a model on Cloudflare (docs/decide.md).
+  for (const name of ['FLEETWRIGHT_PROMPT_TEXT', 'FLEETWRIGHT_DECIDE']) {
+    const at = SIDECAR_EXAMPLE.indexOf(`#${name}=`);
+    assert.ok(at > 0, `${name} is not offered as a settable line`);
+    const before = SIDECAR_EXAMPLE.slice(0, at).split('\n').slice(0, -1).reverse();
+    const prose = [];
+    for (const line of before) {
+      if (!line.startsWith('#')) break;
+      if (/^# ---/.test(line)) break;
+      prose.push(line.replace(/^#\s?/, ''));
+    }
+    assert.ok(prose.join(' ').trim().length > 40, `${name} is listed with no explanation of what setting it does`);
   }
-  assert.ok(prose.join(' ').trim().length > 40, 'it is listed with no explanation of what setting it does');
 });

@@ -260,6 +260,9 @@ export function askAgainIn(soonest, intervalMs, now = Date.now()) {
  */
 const OVERLOAD_LOAD_PER_CORE = 4;
 
+
+/** How long a decide frame waits for its `decided` answer before it is nothing (docs/decide-design.md, section A). */
+const DECIDE_ANSWER_MS = 10_000;
 export class Sidecar {
   /**
    * @param {{
@@ -272,6 +275,7 @@ export class Sidecar {
    *   logger?: Logger,
    *   healthIntervalMs?: number,
    *   promptText?: boolean,
+   *   decide?: boolean,
    *   idleRestartMs?: number,
    *   renewIntervalMs?: number,
    *   poolIntervalMs?: number,
@@ -300,6 +304,7 @@ export class Sidecar {
     adoptUpdates = null,
     version = null,
     promptText = false,
+    decide = false,
     idleRestartMs = 0,
     renewIntervalMs = 3_600_000,
     // How often the pools this box holds are looked at between vault passes:
@@ -467,6 +472,7 @@ export class Sidecar {
           emit: (event) => this.emitEvent(event),
           allowSessionText: promptText,
           idleRestartMs,
+          decide: decide === true ? (ask) => this.#askDecide(ask) : null,
           logger,
         })
       : null;
@@ -815,7 +821,9 @@ export class Sidecar {
     // THE ANSWER TO A MINT THIS RUNNER ASKED FOR. Not an intent either, and it
     // gets no reply: it closes a request this process opened. An answer
     // nobody is waiting for is dropped — it is sealed to a key that has gone.
-    if (/** @type {any} */ (msg)?.kind === 'minted') {
+    // AND TO A DECISION IT ASKED FOR (`decided`, the same shape): an answer
+    // with an id nobody is waiting on is dropped, like any other.
+    if (/** @type {any} */ (msg)?.kind === 'minted' || /** @type {any} */ (msg)?.kind === 'decided') {
       const m = /** @type {any} */ (msg);
       const waiter = typeof m.id === 'string' ? this.mintWaiters.get(m.id) : undefined;
       if (waiter) {
@@ -1849,6 +1857,39 @@ export class Sidecar {
         this.mintWaiters.delete(id);
         clearTimeout(timer);
         resolve({ ok: false, text: 'this box was not connected to the fleet when it asked' });
+      }
+    });
+  }
+
+  /**
+   * Ask the coordinator whether a still, unreadable pane is a person being
+   * asked something (docs/decide.md). `state` is already masked; the
+   * watcher is the only caller. Ten seconds and then nothing: an unanswered
+   * ask is `null`, which the watcher reads as cannot tell, so a coordinator
+   * that predates this frame, or has it off, changes nothing here.
+   *
+   * @param {{ name: string, hash: string, state: string }} ask
+   * @returns {Promise<any>}
+   */
+  async #askDecide({ name, hash, state }) {
+    const id = `decide-${crypto.randomUUID()}`;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.mintWaiters.delete(id);
+        resolve(null);
+      }, DECIDE_ANSWER_MS);
+      timer.unref?.();
+      this.mintWaiters.set(id, { resolve, timer });
+      let sent;
+      try {
+        sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'decide', hostId: this.hostId, id, name, hash, state });
+      } catch {
+        sent = false;
+      }
+      if (sent === false) {
+        this.mintWaiters.delete(id);
+        clearTimeout(timer);
+        resolve(null);
       }
     });
   }

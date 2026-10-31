@@ -84,7 +84,7 @@ export function claudeCodeVersion(root = ROOT) {
  *
  * @param {string} version
  */
-function fetchBinary(version) {
+export function fetchBinary(version) {
   const dir = mkdtempSync(path.join(tmpdir(), 'claude-dialogs-'));
   process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
   const spec = `${PACKAGE}-linux-x64@${version}`;
