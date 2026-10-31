@@ -100,7 +100,7 @@ test('Android: a policy sign-in goes only to a machine that says it can, asked b
   const begin = fn(sheet, 'fun begin(');
   const refuse = begin.indexOf('policy && XoPolicy.PURPOSE !in setup.can ->');
   assert.ok(refuse > 0, 'begin checks `can` for a policy job');
-  for (const later of ['XoSetup.verifyKeySig(', 'approved -> run(pending)', 'else -> unvouched = pending']) {
+  for (const later of ['XoSetup.verifyKeySig(', 'approval == PhoneVault.Approval.APPROVED -> run(pending)', 'else -> unvouched = pending']) {
     assert.ok(begin.indexOf(later) > refuse, `the can check comes before ${later}`);
   }
   assert.ok(sheet.includes('"$hostId is older than changing a policy, so nothing was sent.'));
@@ -111,7 +111,7 @@ test('Android: a policy sign-in goes only to a machine that says it can, asked b
   assert.ok(file('XoPolicy.kt').includes('const val SIGNIN = "policy-signin"'));
   const tooOld = begin.indexOf('policy && XoPolicy.SIGNIN !in setup.can ->');
   assert.ok(tooOld > refuse, 'begin checks `can` for the policy sign-in after `policy`');
-  for (const later of ['XoSetup.verifyKeySig(', 'approved -> run(pending)', 'else -> unvouched = pending']) {
+  for (const later of ['XoSetup.verifyKeySig(', 'approval == PhoneVault.Approval.APPROVED -> run(pending)', 'else -> unvouched = pending']) {
     assert.ok(begin.indexOf(later) > tooOld, `the policy-signin check comes before ${later}`);
   }
   assert.match(begin.slice(tooOld), /refusal = olderThanPolicySignin\(hostId\)\s*runCatching \{ fleet\.xosetup\("cancel", job = setup\.job\) \}/);

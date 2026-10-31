@@ -154,10 +154,15 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                     val listed = runCatching { fleet.enrolledHosts() }.getOrDefault(emptyList())
                         .firstOrNull { it.hostId == hostId }?.publicJwk?.let { PhoneVault.fingerprint(it) }
                     // APPROVED only by a whole-vault grant for this machine,
-                    // by this whole key, as an install's (PhoneVault.approves).
-                    val approved = PhoneGitHub(settings).signedIn &&
+                    // by this whole key, as an install's (PhoneVault.approval).
+                    // NONE when the vault cannot be asked, which asks the
+                    // person and never passes.
+                    val approval = if (PhoneGitHub(settings).signedIn) {
                         runCatching { PhoneVault(settings).list(fleet) }.getOrNull()?.grants
-                            ?.let { PhoneVault.approves(it, hostId, setup.hostKey!!) } == true
+                            ?.let { PhoneVault.approval(it, hostId, setup.hostKey!!) } ?: PhoneVault.Approval.NONE
+                    } else {
+                        PhoneVault.Approval.NONE
+                    }
                     val begun = Begun(setup, hostId, where)
                     when {
                         listed != null && listed != fingerprint -> {
@@ -165,7 +170,15 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                             refusal = "That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent."
                             runCatching { fleet.xosetup("cancel", job = setup.job) }
                         }
-                        approved -> run(begun)
+                        // Approved under another key: a machine that was
+                        // re-keyed would have been re-approved. Hard stop, in
+                        // iOS's words.
+                        approval == PhoneVault.Approval.ANOTHER_KEY -> {
+                            rootPassword = ""
+                            refusal = "The key $hostId answered with did not come from that machine: it is not the key this phone approved for it. The root password was not sent."
+                            runCatching { fleet.xosetup("cancel", job = setup.job) }
+                        }
+                        approval == PhoneVault.Approval.APPROVED -> run(begun)
                         else -> unvouched = begun
                     }
                 }
