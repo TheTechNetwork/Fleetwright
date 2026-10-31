@@ -1288,7 +1288,25 @@ export class XoSetups {
         if (ctx.rec.reply) await this.#handWatch(ctx).catch((err) => this.log.warn(`xosetup: ${rec.job} could not seal the routers' key: ${/** @type {Error} */ (err).message}`));
       } else {
         rec.state = 'failed';
-        rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets)}`;
+        // ROOM FOR THE APPLY STEP'S OWN WORDS. Its failures are sentences
+        // this code composed (ensureImage, ensureEdge, ensureHolder), not a
+        // server's dump, and scrub's three hundred was cutting them: a build
+        // VM that stopped before done was reported up to "Its build VM was
+        // kept," and the phone never saw where, or that applying again
+        // starts over.
+        rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets, rec.phase === 'apply' ? 600 : 300)}`;
+        // AND WHAT IT HAD DONE BY THEN. The apply step builds one thing after
+        // another and keeps what each said (ctx.built); a failure used to
+        // keep only the error, and a person whose image build died behind a
+        // router built minutes earlier had no word that the router, or the
+        // policy, was in place. Each entry is a sentence, scrubbed as the
+        // error is; the whole is held to the seven hundred characters the
+        // coordinator keeps of any job's text (SETUP_TEXT_MAX in
+        // coordinator/core.js), so what is written here is what arrives:
+        // the longest why above and one finished part fit with room.
+        if (rec.phase === 'apply' && ctx.built?.length) {
+          rec.text = `${rec.text} Before it stopped: ${ctx.built.map((/** @type {string} */ said) => scrub(said, secrets)).join(' ')}`.slice(0, 700);
+        }
       }
       this.#report(rec);
       // AND WHY, in the journal too: the phone's copy goes when the job does,
@@ -3022,16 +3040,18 @@ function unknown() {
 
 /**
  * An error's words, with anything from the sign-in taken out. Xen Orchestra
- * does not echo a password back, and this does not rely on it.
+ * does not echo a password back, and this does not rely on it. Held to
+ * `limit` characters: three hundred for a server's words, more where the
+ * caller knows the words are the fleet's own sentences.
  *
- * @param {string} message @param {{ password?: string, token?: string, root?: string, admin?: string }} creds
+ * @param {string} message @param {{ password?: string, token?: string, root?: string, admin?: string }} creds @param {number} [limit]
  */
-function scrub(message, creds) {
+function scrub(message, creds, limit = 300) {
   let out = String(message || 'an error');
   for (const secret of [creds.password, creds.token, creds.root, creds.admin]) {
     if (secret && secret.length >= 4) out = out.split(secret).join('…');
   }
-  return out.slice(0, 300);
+  return out.slice(0, limit);
 }
 
 /**

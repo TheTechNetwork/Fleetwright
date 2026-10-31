@@ -751,6 +751,43 @@ test('an image that is there is rebuilt or removed when the person asks, removed
   assert.match(end.text, /Removed ubuntu-24\.04\. Rebuilt debian-13\./);
 });
 
+test('an Apply that stops partway says what it had done by then, and one that stops before anything was done says only why', { skip }, async (t) => {
+  // THE INCIDENT: a policy's Apply built its edge router, applied the
+  // resource set, and lost its image build at the very end. The phone said
+  // only that the build VM had stopped before done; nothing about the
+  // router or the policy, both in place, and the person had no idea what
+  // state the pool was in. The parts are built one after another and each
+  // says what it did (ctx.built): the failure now carries those sentences.
+  // Two images stand in for router-then-image here, since the stand-in has
+  // nothing an edge router is built from; it is one list whatever is on it.
+  const edge = { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' };
+  const more = ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate'];
+  const limits = { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 };
+  const actor = 'eli@example.com';
+  const halted = 'the machine image’s build VM stopped before it said the install was done (the last it said, 40 seconds before it stopped, was that clearing what would make two machines cloned from it the same), so it was not made the template. Home still has no Ubuntu 24.04 LTS machine image. Its build VM was kept, stopped, as "fleetwright-image-build (stopped before done)". Applying again removes it and starts over';
+  for (const [images, expect] of /** @type {Array<[string[], string]>} */ ([
+    [['debian-13', 'ubuntu-24.04'], `Applying what you chose stopped: ${halted} Before it stopped: The Debian 13 machine image is ready on Home.`],
+    [['ubuntu-24.04'], `Applying what you chose stopped: ${halted}`],
+  ])) {
+    const xo = await standIn(t, { sets: [chosenBefore()], more, vms: { edge } });
+    const { setups } = await machine({
+      coordinatorUrl: 'https://fleet.test',
+      buildImage: async (/** @type {any} */ o) => {
+        if (o.image === 'debian-13') return 'The Debian 13 machine image is ready on Home.';
+        throw new Error(halted);
+      },
+    });
+    const { begun } = await choosing(xo, setups, actor);
+    const job = begun.xosetup.job;
+    const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', images, limits };
+    assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'failed', end.text);
+    assert.equal(end.text, expect);
+    assert.ok(xo.calls.some((c) => c.method === 'resourceSet.set'), 'the policy itself was applied before the build');
+  }
+});
+
 test('group networks are made by the policy job in the way out’s pool, put in the set, and nothing is built', { skip }, async (t) => {
   // ASKED FOR: "the 3 VMs need to reach each other". A network with no way
   // off the pool, made with the admin sign-in the fleet's user does not have.
