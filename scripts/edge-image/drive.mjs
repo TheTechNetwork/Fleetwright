@@ -263,6 +263,10 @@ async function login(c) {
   c.type('exec /bin/sh');
   await c.waitFor(PROMPTS.csh, { timeout: WAITS.prompt, label: 'sh’s prompt' });
   c.type(INSIDE.quiet);
+  // And its prompt, before anything else is typed: the line is three
+  // commands, and the second CI run typed the first sentinel while the shell
+  // was still on them, so what came back was not an answer to it.
+  await c.waitFor(PROMPTS.csh, { timeout: WAITS.prompt, label: 'the quiet shell’s prompt' });
   // The first sentinel proves a POSIX shell is the one answering.
   await c.must('true', { timeout: WAITS.prompt, label: 'a POSIX shell answering' });
 }

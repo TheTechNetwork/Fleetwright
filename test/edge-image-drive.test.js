@@ -31,6 +31,7 @@ const typed = process.env.TYPED;
 let rebooted = false;
 let booting = true;
 let echoOff = false;
+let quieting = false;
 const out = (s) => process.stdout.write(s);
 const boot = () => { booting = true; out('Booting...\\r\\nPress any key to start the manual interface assignment: \\r\\nFreeBSD/amd64 (OPNsense.internal) (ttyu0)\\r\\n\\r\\nlogin: '); booting = false; };
 boot();
@@ -42,11 +43,15 @@ process.stdin.on('data', (d) => {
     const line = buf.slice(0, i); buf = buf.slice(i + 1);
     appendFileSync(typed, line + '\\n');
     if (booting) { out('TYPED DURING BOOT: ' + line); process.exit(3); }
+    if (quieting) { out('TYPED BEFORE THE QUIET PROMPT: ' + line); process.exit(5); }
     if (line === 'root') { out('root\\r\\nPassword: '); continue; }
     if (line === 'opnsense') { out('\\r\\n*** OPNsense.internal: OPNsense 26.7 ***\\r\\n 0) Logout   8) Shell\\r\\n\\r\\nEnter an option: '); continue; }
     if (line === '8') { out('8\\r\\nroot@OPNsense:~ # '); continue; }
     if (line === 'exec /bin/sh') { out('exec /bin/sh\\r\\n# '); continue; }
-    if (line.startsWith('set +o emacs')) { echoOff = true; out(line + '\\r\\n# '); continue; }
+    // The quiet line's prompt comes late, as a shell's does while it runs
+    // three commands; a line typed before it is the race the second CI run
+    // lost, and ends the guest.
+    if (line.startsWith('set +o emacs')) { echoOff = true; quieting = true; out(line + '\\r\\n'); setTimeout(() => { quieting = false; out('# '); }, 30); continue; }
     if (line === 'shutdown -r now') { out('shutdown -r now\\r\\nRebooting...\\r\\n'); rebooted = true; setTimeout(boot, 5); continue; }
     if (line === 'shutdown -p now') { out('shutdown -p now\\r\\nThe operating system has halted.\\r\\n'); setTimeout(() => process.exit(0), 5); continue; }
     const m = /^(.*); echo "__FW_""DONE_(\\d+)_\\$\\?__"$/.exec(line);
