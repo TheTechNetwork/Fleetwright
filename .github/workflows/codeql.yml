@@ -340,6 +340,35 @@ jobs:
         working-directory: apps/ios
         run: xcodegen generate
 
+      # THE PACKAGES, ALSO BEFORE INIT, and this one is not a saving but the
+      # difference between a database and a red run. To read a package's
+      # Package.swift, SwiftPM compiles it inside `/usr/bin/sandbox-exec`, and
+      # under CodeQL's tracer that spawn fails: the tracer inserts its library
+      # into every process the build starts, cannot into a protected system
+      # binary, copies one it can, and the copy of sandbox-exec has no slice for
+      # this Mac. `xcodebuild` then reports
+      #
+      #   Could not resolve package dependencies:
+      #   posix_spawn error: Bad CPU type in executable (86), `["/usr/bin/sandbox-exec", ...
+      #
+      # before compiling a line, and the Swift analysis of main was red on every
+      # merge from the day the app took its first package (sentry-cocoa, #1370)
+      # without anyone seeing it, because this job does not run on pull requests.
+      #
+      # SwiftPM caches what it read from a manifest, keyed on the manifest and
+      # the toolchain, so resolving the graph once here, untraced, means the
+      # traced build below finds every manifest in the cache and never spawns
+      # the sandbox. Resolution is not compilation: nothing the analysis should
+      # see happens in this step. The sandbox stays on; the alternative,
+      # `-IDEPackageSupportDisableManifestSandbox=YES`, would turn off the one
+      # thing standing between a dependency's manifest and this runner.
+      - name: Resolve the packages
+        working-directory: apps/ios
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Fleetwright.xcodeproj \
+            -scheme Fleetwright
+
       - uses: github/codeql-action/init@v4.39.1
         with:
           languages: swift
