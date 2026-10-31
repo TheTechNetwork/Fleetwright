@@ -11,11 +11,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { newDepositKey, newSealKey, seal, open, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
+import { newDepositKey, newSealKey, seal, open, atRestAad, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, signingInput, fingerprint, verify } from '../src/fleet/crypto.js';
 import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
-import { describeRenewals, renewalVerdict, CLAUDE_USAGE_URL } from '../src/fleet/minter/claude-login.js';
+import { describeRenewals, renewalVerdict, freshClaude, claudeRenewals as renewalsKept, CLAUDE_USAGE_URL } from '../src/fleet/minter/claude-login.js';
 import { USAGE_URL } from '../src/core/usage.js';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,7 +33,7 @@ import { buildCommand } from '../src/core/claude.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { delegationSigningInput, intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
 import { startStubHub } from './helpers/stub-hub.js';
-import { standInClaude, revokeClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns, claudeUsageAsks } from './helpers/stand-in-claude.js';
+import { standInClaude, revokeClaude, forbidClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns, claudeUsageAsks } from './helpers/stand-in-claude.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -60,8 +60,11 @@ async function minter(extra = {}) {
     FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET: 'cf-secret',
     ...extra,
   };
+  // A COPY ON EVERY READ, as a Durable Object's storage gives: the same row
+  // read twice is two objects, so nothing here can compare rows by reference.
+  // The renewal did, and every renewal looked like one a deposit overtook.
   const storage = {
-    get: async (/** @type {string} */ k) => rows.get(k),
+    get: async (/** @type {string} */ k) => structuredClone(rows.get(k)),
     put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); },
     // As a Durable Object's storage lists, in key order.
     list: async (/** @type {{ prefix: string }} */ o) => new Map([...rows.entries()].filter(([k]) => k.startsWith(o.prefix)).sort(([a], [b]) => (a < b ? -1 : 1))),
@@ -1140,7 +1143,8 @@ test('a box run with FLEETWRIGHT_REQUIRE_SIGNED refuses what a person did not si
   assert.equal(await box.sidecar.intentKeys?.refresh(), false);
   const forged = await start({ key: mallet, keyId: malletId });
   assert.equal(forged.error?.code, 'signature_required');
-  assert.match(forged.text, /signed by a key the minter does not list for eli@example\.com/);
+  // Asked about again, and the list that came back is the coordinator's too.
+  assert.match(forged.text, /signed by a key the minter does not list for eli@example\.com, and this box could not ask the minter again just now \(the key list is not signed by the minter’s key[^)]*\)\. A phone added in the last few minutes can try again shortly\./);
   heal();
 
   // WHAT NEEDS NO SIGNATURE STILL WORKS: a read every box answers, and one of
@@ -1153,6 +1157,50 @@ test('a box run with FLEETWRIGHT_REQUIRE_SIGNED refuses what a person did not si
 
   const seen = /** @type {any} */ (await box.sidecar.health()).signatures;
   assert.equal(seen.enforcing, true, 'the box does not say it enforces');
+});
+
+// A NEW PHONE'S FIRST REQUEST. The phone signs only once the minter lists its
+// key, but the box took its list up to ten minutes before that, and refused
+// the phone until its next one: "signed by a key the minter does not list", on
+// a phone that had just been listed. Reported from a new iPhone.
+test('a box asks the minter again when a signature is by a key its list does not have, at most every two minutes', async (t) => {
+  const { m, core, box, start } = await signingFleet(t, { requireSigned: true });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  let asks = 0;
+  core.minter = /** @type {any} */ ({
+    vault: (/** @type {string} */ route, /** @type {any} */ ask) => {
+      if (route === 'keys') asks += 1;
+      return m.binding.vault(route, ask);
+    },
+  });
+
+  // LISTED AFTER THE BOX'S LIST: taken, on the list the box asks for then.
+  const iPad = await generateKeyPair();
+  assert.equal((await m.phone({ op: 'devicekey', key: iPad.publicJwk, label: 'Eli’s iPad' })).ok, true);
+  const iPadId = await boxKeyHash({ kty: 'EC', crv: 'P-256', x: iPad.publicJwk.x, y: iPad.publicJwk.y });
+  const first = await start({ key: iPad, keyId: iPadId });
+  assert.equal(first.ok, true, first.text);
+  assert.equal(asks, 1);
+
+  // A KEY THE MINTER DOES NOT HAVE, moments later: not asked about again, and
+  // the refusal says when asking again is worth it.
+  const stranger = await generateKeyPair();
+  const strangerId = await boxKeyHash({ kty: 'EC', crv: 'P-256', x: stranger.publicJwk.x, y: stranger.publicJwk.y });
+  const held = await start({ key: stranger, keyId: strangerId });
+  assert.equal(held.error?.code, 'signature_required');
+  assert.match(held.text, /does not list for eli@example\.com, and this box asked the minter for a new list moments ago\. A phone added since then can try again in two minutes\. Nothing was done\./);
+  assert.equal(asks, 1, 'a second unknown key within two minutes asked the minter again');
+  assert.equal(/** @type {any} */ (await box.sidecar.health()).signatures.checked['unknown-key'], 1, 'an intent asked about again was counted twice');
+});
+
+test('a key still missing from the list the box asked for again is refused as one the minter does not have', async (t) => {
+  const { box, start } = await signingFleet(t, { requireSigned: true });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  const stranger = await generateKeyPair();
+  const strangerId = await boxKeyHash({ kty: 'EC', crv: 'P-256', x: stranger.publicJwk.x, y: stranger.publicJwk.y });
+  const refused = await start({ key: stranger, keyId: strangerId });
+  assert.equal(refused.error?.code, 'signature_required');
+  assert.match(refused.text, /does not list for eli@example\.com, even on the list this box asked the minter for just now\. Nothing was done\./);
 });
 
 // WHAT THE FLEET SENDS IN SOMEBODY'S NAME WHILE THEY ARE AWAY, on a box that
@@ -1573,6 +1621,48 @@ test('the phone is told what the record says ended a sign-in, and a renewal this
   assert.ok(core.events.some((e) => e.event === 'claude.ended' && /cut off before its answer was kept/.test(e.text)), 'the event says the same');
 });
 
+// THE WRITE-BACK GUARD, on storage that gives a copy on every read, as a
+// Durable Object's does. Compared by reference, the row read again was never
+// the row read first, so every renewal was thrown away as overtaken and the
+// sign-in died at the next one: "Refresh token not found or invalid", ten to
+// twenty minutes after it was kept. Reported from a phone, twice in a day.
+test('a renewal is written back unless a new sign-in was kept while it was asked for', async () => {
+  const key = await newSealKey();
+  const rows = new Map();
+  const store = {
+    get: async (/** @type {string} */ k) => structuredClone(rows.get(k)),
+    put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); },
+  };
+  const now = Date.now();
+  /** @param {string} refresh @param {number} at */
+  const keep = async (refresh, at) => rows.set('gh:7', {
+    at, login: 'eli', kind: 'login',
+    sealed: await seal({ to: key.publicKey, aad: atRestAad('7'), payload: { oauth: { accessToken: 'sk-ant-oat01-old', refreshToken: refresh, expiresAt: now + 60_000, scopes: ['user:inference'] }, account: {} } }),
+  });
+  const kept = async () => (await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: atRestAad('7'), sealed: rows.get('gh:7').sealed })).oauth;
+  /** @type {(() => Promise<void>)|null} */
+  let during = null;
+  const fetchImpl = /** @type {any} */ (async () => {
+    if (during) await during();
+    return new Response(JSON.stringify({ access_token: 'sk-ant-oat01-new', refresh_token: 'sk-ant-ort01-rotated', expires_in: 28_800 }), { status: 200 });
+  });
+
+  // NOTHING KEPT MEANWHILE: the rotated refresh token is what the row holds.
+  await keep('sk-ant-ort01-first', now - 1000);
+  const first = await freshClaude(store, key, '7', { fetchImpl, now: () => now, force: true });
+  assert.equal(first.held?.bearer, 'sk-ant-oat01-new');
+  assert.equal((await kept()).refreshToken, 'sk-ant-ort01-rotated', 'the renewal was not written back, so its refresh token was lost');
+  assert.equal((await renewalsKept(store, '7', now - 1000)).at(-1)?.dropped, undefined);
+
+  // A NEW SIGN-IN KEPT WHILE CLAUDE WAS ASKED: it stands, and the renewal is
+  // noted as the one that was not kept.
+  await keep('sk-ant-ort01-second', now - 500);
+  during = async () => { during = null; await keep('sk-ant-ort01-deposited', now); };
+  await freshClaude(store, key, '7', { fetchImpl, now: () => now, force: true });
+  assert.equal((await kept()).refreshToken, 'sk-ant-ort01-deposited', 'a renewal overwrote a sign-in kept while it was asked for');
+  assert.equal((await renewalsKept(store, '7', now - 500)).at(-1)?.dropped, true);
+});
+
 test('a refresh token that runs out before its access token is renewed before it does, and its lifetime is kept', async (t) => {
   // TWO SIGN-INS IN A ROW were refused at their first renewal, 7.7 hours
   // after keeping, with nothing in the fleet using them. A refresh token that
@@ -1622,41 +1712,183 @@ test('a refresh token that runs out before its access token is renewed before it
   }
 });
 
-test('the check renews a kept sign-in soon after keeping and hourly after, so a broken one is found in minutes', async (t) => {
+test('the check renews a kept sign-in only when it is due, not ten minutes after keeping and hourly', async (t) => {
+  // It renewed ten minutes after keeping and hourly after that, and each of
+  // those renewals ended the access token every box held, outside the half
+  // hour in which the boxes change over together.
   const m = await minter();
   t.after(m.restore);
   const start = Date.now();
   assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: claudeSignInFor('early') })).ok, true);
-  /** `fn` at `minutes` after the first keeping. @template T @param {number} minutes @param {() => Promise<T>} fn */
-  const during = async (minutes, fn) => {
+  /** The check `minutes` after keeping, past the minter's own ten-minute floor. @param {number} minutes */
+  const checkAt = async (minutes) => {
     t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
     try {
-      return await fn();
+      m.rows.delete('claude-checked');
+      return await m.binding.claude('check', {});
     } finally {
       t.mock.timers.reset();
     }
   };
-  /** The check then, past the minter's own ten-minute floor. @param {number} minutes */
-  const checkAt = (minutes) => during(minutes, () => { m.rows.delete('claude-checked'); return m.binding.claude('check', {}); });
   const before = claudeRenewals.count;
-  assert.deepEqual((await checkAt(5)).ended, []);
-  assert.equal(claudeRenewals.count, before, 'not in the first ten minutes');
-  assert.deepEqual((await checkAt(11)).ended, []);
-  assert.equal(claudeRenewals.count - before, 1, 'renewed eleven minutes after keeping, with eight hours of access left');
-  await checkAt(40);
-  assert.equal(claudeRenewals.count - before, 1, 'not again within the hour');
-  await checkAt(72);
-  assert.equal(claudeRenewals.count - before, 2, 'and again an hour after the last');
+  for (const minutes of [11, 72, 200, 420]) {
+    assert.deepEqual((await checkAt(minutes)).ended, []);
+    assert.equal(claudeRenewals.count, before, `not renewed ${minutes} minutes after keeping, with its access token still good`);
+  }
+  // Inside the half hour before its eight hours run out, it is due.
+  assert.deepEqual((await checkAt(8 * 60 - 20)).ended, []);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed once it was due');
+});
 
-  // ONE THAT ARRIVED BROKEN is told at the first of those, not at the
-  // eight hours' end.
-  const broken = /** @type {any} */ (claudeSignInFor('broken'));
-  broken.oauth.refreshToken = `sk-ant-ort01-revoked-${'z'.repeat(40)}`;
-  assert.equal((await during(80, () => m.phone({ op: 'put', name: 'claude', signIn: broken }))).ok, true);
-  assert.deepEqual((await checkAt(85)).ended, [], 'not in its first ten minutes');
-  const told = await checkAt(91);
-  assert.equal(told.ended.length, 1);
-  assert.equal(told.ended[0].verdict.kind, 'outside');
+test('a renewal that does not say how long the new refresh token lasts is not timed by the old one', async (t) => {
+  // The old expiry was carried over onto the rotated token, so once it was
+  // inside the half hour every box's ask renewed again.
+  const m = await minter();
+  t.after(m.restore);
+  const office = await generateKeyPair();
+  const made = /** @type {any} */ (claudeSignInFor('carried'));
+  made.oauth.refreshTokenExpiresAt = Date.now() + 20 * 60_000;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  const before = claudeRenewals.count;
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed: its refresh token had twenty minutes');
+  await m.box(office);
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'the new refresh token is not due just because the old one was');
+});
+
+test('a refresh token a renewal gave back unchanged keeps its expiry, and is not renewed again for it', async (t) => {
+  // Dropping the expiry of a token that was kept called a refusal after it
+  // "ended outside the fleet"; renewing again for it would cut every box off
+  // on every ask, since renewing cannot move it.
+  const m = await minter();
+  t.after(m.restore);
+  t.after(() => { claudeRenewals.rotate = true; });
+  const office = await generateKeyPair();
+  const made = /** @type {any} */ (claudeSignInFor('kept-refresh'));
+  const refreshUntil = Date.now() + 20 * 60_000;
+  made.oauth.refreshTokenExpiresAt = refreshUntil;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  claudeRenewals.rotate = false;
+  const before = claudeRenewals.count;
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed: its refresh token had twenty minutes');
+  await m.box(office);
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'not again for a refresh token renewing cannot move');
+  const notes = await m.rows.get([...m.rows.keys()].find((k) => k.startsWith('claude-renewed:')));
+  assert.equal(notes.at(-1).refreshUntil, refreshUntil, 'the expiry of the refresh token it kept is still known');
+});
+
+test('a new refresh token that ends as soon as the old one is not renewed again for it', async (t) => {
+  // A rotated answer that gave a refresh token under half an hour renewed on
+  // every ask, as an unchanged one did.
+  const m = await minter();
+  t.after(m.restore);
+  t.after(() => { claudeRenewals.refreshExpiresIn = undefined; });
+  const office = await generateKeyPair();
+  const made = /** @type {any} */ (claudeSignInFor('short-session'));
+  made.oauth.refreshTokenExpiresAt = Date.now() + 20 * 60_000;
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office' });
+  claudeRenewals.refreshExpiresIn = 15 * 60;
+  const before = claudeRenewals.count;
+  await m.box(office);
+  await m.box(office);
+  await m.box(office);
+  assert.equal(claudeRenewals.count - before, 1, 'once: a second renewal would not move it either');
+});
+
+test('a 401 is renewed for once and the new token tried at once; refused again, it is told once and not renewed for again', async (t) => {
+  // A refusal that stayed forced a renewal at every check, and each one ended
+  // the token every box held, for nothing.
+  const m = await minter();
+  t.after(m.restore);
+  const start = Date.now();
+  const made = claudeSignInFor('refused-twice');
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  /** The check `minutes` after keeping, past the minter's own ten-minute floor. @param {number} minutes */
+  const checkAt = async (minutes) => {
+    t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
+    try {
+      m.rows.delete('claude-checked');
+      return await m.binding.claude('check', {});
+    } finally {
+      t.mock.timers.reset();
+    }
+  };
+  revokeClaude(made.oauth.accessToken);
+  // The token the next renewal will give is refused too.
+  revokeClaude(`sk-ant-oat01-renewed${claudeRenewals.count + 1}-${'b'.repeat(40)}`);
+  const before = claudeRenewals.count;
+  const first = await checkAt(11);
+  assert.equal(claudeRenewals.count - before, 1, 'renewed once, because its access token was refused');
+  assert.deepEqual(first.ended, [], 'renewing works, so it is not ended');
+  assert.equal(first.refused.length, 1, 'told at once: the renewed token was tried in the same check');
+  assert.deepEqual([first.refused[0].status, first.refused[0].renewed, first.refused[0].email], [401, true, 'eli@example.com']);
+  for (const minutes of [27, 43, 120]) {
+    const later = await checkAt(minutes);
+    assert.deepEqual([later.ended, later.refused], [[], []], `told once (${minutes} minutes)`);
+  }
+  assert.equal(claudeRenewals.count - before, 1, 'not renewed for it again');
+});
+
+test('a renewal that mends a 401 says nothing, and a later 401 is renewed for once more', async (t) => {
+  // Deciding "renewing will not mend it" from a refusal hours later, not
+  // from the token the renewal gave, told a person something false.
+  const m = await minter();
+  t.after(m.restore);
+  const start = Date.now();
+  const made = claudeSignInFor('mended');
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  /** @param {number} minutes */
+  const checkAt = async (minutes) => {
+    t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
+    try {
+      m.rows.delete('claude-checked');
+      return await m.binding.claude('check', {});
+    } finally {
+      t.mock.timers.reset();
+    }
+  };
+  revokeClaude(made.oauth.accessToken);
+  const before = claudeRenewals.count;
+  const first = await checkAt(11);
+  assert.deepEqual([first.ended, first.refused], [[], []], 'the renewed token works');
+  assert.equal(claudeRenewals.count - before, 1);
+  revokeClaude(`sk-ant-oat01-renewed${claudeRenewals.count}-${'b'.repeat(40)}`);
+  const later = await checkAt(180);
+  assert.deepEqual([later.ended, later.refused], [[], []]);
+  assert.equal(claudeRenewals.count - before, 2, 'a new refusal is renewed for once more');
+});
+
+test('a 403 is never renewed for, and is told to its person once for the sign-in', async (t) => {
+  // A 403 says the sign-in may not do this, not that the token ran out:
+  // renewing does not change it, and each renewal ends every box's token.
+  const m = await minter();
+  t.after(m.restore);
+  const start = Date.now();
+  const made = claudeSignInFor('forbidden');
+  assert.equal((await m.phone({ op: 'put', name: 'claude', signIn: made })).ok, true);
+  /** @param {number} minutes */
+  const checkAt = async (minutes) => {
+    t.mock.timers.enable({ apis: ['Date'], now: start + minutes * 60_000 });
+    try {
+      m.rows.delete('claude-checked');
+      return await m.binding.claude('check', {});
+    } finally {
+      t.mock.timers.reset();
+    }
+  };
+  forbidClaude(made.oauth.accessToken);
+  const before = claudeRenewals.count;
+  const first = await checkAt(11);
+  assert.equal(first.refused.length, 1);
+  assert.deepEqual([first.refused[0].status, first.refused[0].renewed], [403, false]);
+  for (const minutes of [27, 43, 120]) assert.deepEqual((await checkAt(minutes)).refused, [], `told once (${minutes} minutes)`);
+  assert.equal(claudeRenewals.count - before, 0, 'never renewed for a 403');
 });
 
 test('a refusal after the refresh token ran out by its own lifetime is this fleet being late, not anything outside it', () => {

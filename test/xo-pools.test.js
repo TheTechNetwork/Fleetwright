@@ -45,7 +45,7 @@ const record = (extra = {}) => JSON.stringify({ v: 1, address: 'xo.lan', pin: PI
  * `outside` names the objects in no set of the fleet's: what somebody else
  * made or was given, which Xen Orchestra shows the limited user all the same.
  *
- * @param {{ objects?: any[], fail?: Record<string, string>, stats?: Record<string, any>, methods?: string[], outside?: string[] }} [opts]
+ * @param {{ objects?: any[], fail?: Record<string, string|string[]>, stats?: Record<string, any>, methods?: string[], outside?: string[] }} [opts]
  */
 function xo({ objects = [], fail = {}, stats = {}, methods, outside = [] } = {}) {
   /** @type {Array<{ method: string, params: any }>} */
@@ -56,7 +56,11 @@ function xo({ objects = [], fail = {}, stats = {}, methods, outside = [] } = {})
     closed: false,
     async call(/** @type {string} */ method, /** @type {any} */ params = {}) {
       calls.push({ method, params });
-      if (fail[method]) throw new Error(fail[method]);
+      // `fail[method]` is why every call of it fails; a list is why each of
+      // the next calls fails in turn, and the calls after the list succeed,
+      // as a start that fails once does.
+      const why = Array.isArray(fail[method]) ? fail[method].shift() : fail[method];
+      if (why) throw new Error(why);
       // `vm.restart:clean` refuses only the clean one, as a machine without
       // its guest agent does.
       if (params?.force === false && fail[`${method}:clean`]) throw new Error(fail[`${method}:clean`]);
@@ -100,12 +104,18 @@ test('a pool’s token is taken out of the vault’s answer before the hub sees 
         { name: 'hypervisor:xo.lan', value: record() },
         { name: 'hypervisor:other.lan', value: record() },
         { name: 'hypervisor:nopin.lan', value: record({ address: 'nopin.lan', pin: null }) },
+        // A record from a setup that kept the pool master's addresses for
+        // the phone to show: adopted as one without them is.
+        { name: 'hypervisor:masters.lan', value: record({ address: 'masters.lan', masters: ['10.10.10.11', '10.10.10.12'] }) },
       ],
     },
   ]);
   assert.deepEqual(given[0].items.map((/** @type {any} */ i) => i.name), ['secret:NPM', 'claude'], 'the hub is given everything but pools');
-  assert.deepEqual([...pools.held.keys()], [`${ELI} xo.lan`], 'filed under another address, or pinned to nothing, is not a pool');
+  assert.deepEqual([...pools.held.keys()], [`${ELI} xo.lan`, `${ELI} masters.lan`], 'filed under another address, or pinned to nothing, is not a pool');
   assert.equal(pools.claude.get(ELI), CLAUDE);
+  // THE FIELD IS THE PHONE'S: the box holds the pool exactly as it would
+  // without it, so a setup adding to the record changes nothing here.
+  assert.deepEqual(poolRecord('hypervisor:masters.lan', record({ address: 'masters.lan', masters: ['10.10.10.11'] })), poolRecord('hypervisor:masters.lan', record({ address: 'masters.lan' })));
   // Plain HTTP only with the person's acceptance recorded at setup.
   assert.ok(poolRecord('hypervisor:plain.lan', record({ address: 'plain.lan', pin: null, plain: true })));
   pools.adopt([]);
@@ -520,13 +530,13 @@ test('a pool that will not say what one machine did is cannot tell for that one,
 /**
  * A pool with one machine of Eli's on it, made `age` minutes ago and running
  * for `left` more, with its guest agent unless `agent` is false.
- * @param {{ age?: number, left?: number, state?: string, fail?: Record<string, string>, owner?: string, tags?: string[], agent?: boolean }} [o]
+ * @param {{ age?: number, left?: number, state?: string, fail?: Record<string, string|string[]>, owner?: string, tags?: string[], agent?: boolean }} [o]
  */
 function withMachine({ age = 10, left = 20, state = 'Running', fail = {}, owner = ELI, tags = [], agent = true } = {}) {
   const now = Date.parse('2026-10-06T12:00:00Z');
   const s = Math.floor(now / 1000);
   const vm = {
-    type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: state, managementAgentDetected: agent,
+    type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: state, managementAgentDetected: agent, CPUs: { number: 2 }, memory: { size: 4 * 1024 ** 3 },
     tags: [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${s + left * 60}`, `fleetwright-made:${s - age * 60}`, `fleetwright-for:${owner}`, ...tags],
   };
   const stand = xo({ objects: [pool, image, vm], fail });
@@ -598,14 +608,15 @@ test('a machine is given longer up to its longest life from when it was made, an
 
 test('a resize stops the machine marked busy so the sweep leaves it, and starts it again whatever the pool said', async () => {
   let m = withMachine();
+  const busyTag = `fleetwright-busy:${m.s}`;
   const r = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'resize', cpus: 4, memory: 8 });
   assert.equal(r.ok, true, r.text);
   assert.deepEqual(m.asked().slice(0, 5), [
-    ['tag.add', { id: 'vm-uuid', tag: 'fleetwright-busy' }],
+    ['tag.add', { id: 'vm-uuid', tag: busyTag }],
     ['vm.stop', { id: 'vm-uuid', force: false }],
     ['vm.set', { id: 'vm-uuid', CPUs: 4, memory: 8 * 1024 ** 3 }],
     ['vm.start', { id: 'vm-uuid' }],
-    ['tag.remove', { id: 'vm-uuid', tag: 'fleetwright-busy' }],
+    ['tag.remove', { id: 'vm-uuid', tag: busyTag }],
   ]);
   assert.match(r.text, /4 vCPUs and 8 GiB/);
 
@@ -614,12 +625,146 @@ test('a resize stops the machine marked busy so the sweep leaves it, and starts 
   assert.equal(refused.ok, false);
   assert.match(refused.text, /old size.*limit exceeded/);
   assert.ok(m.asked().some(([method]) => method === 'vm.start'), 'not left stopped');
-  assert.ok(m.asked().some(([method, p]) => method === 'tag.remove' && p.tag === 'fleetwright-busy'), 'not left marked busy');
+  assert.ok(m.asked().some(([method, p]) => method === 'tag.remove' && p.tag === busyTag), 'not left marked busy');
+});
 
-  // Busy is left alone by the sweep, though stopped.
-  const busy = withMachine({ state: 'Halted', tags: ['fleetwright-busy'] });
-  await busy.pools.refresh();
-  assert.ok(!busy.asked().some(([method]) => method === 'vm.delete'));
+test('a resize whose restart fails puts the old size back and starts again; failing that too, the machine is left stopped, marked, and said so', async () => {
+  // THE CHANGE TOOK AND THE MACHINE WOULD NOT START WITH IT (no host has
+  // that much memory free): the old size goes back and it is started again.
+  // This used to fall through to the sweep, which took the stop for done and
+  // removed the machine with its disk.
+  let m = withMachine({ fail: { 'vm.start': ['HOST_NOT_ENOUGH_FREE_MEMORY'] } });
+  const busyTag = `fleetwright-busy:${m.s}`;
+  const back = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'resize', memory: 64 });
+  assert.equal(back.ok, false);
+  assert.match(back.text, /restarted at its old size.*HOST_NOT_ENOUGH_FREE_MEMORY/);
+  assert.deepEqual(m.asked().slice(2), [
+    ['vm.set', { id: 'vm-uuid', memory: 64 * 1024 ** 3 }],
+    ['vm.start', { id: 'vm-uuid' }],
+    ['vm.set', { id: 'vm-uuid', memory: 4 * 1024 ** 3 }],
+    ['vm.start', { id: 'vm-uuid' }],
+    ['tag.remove', { id: 'vm-uuid', tag: busyTag }],
+  ]);
+
+  // NOR AT ITS OLD SIZE: left stopped and still marked busy, so the sweep
+  // leaves it, and the person is told the state it is in.
+  m = withMachine({ fail: { 'vm.start': 'HOST_NOT_ENOUGH_FREE_MEMORY' } });
+  const stuck = await m.pools.control({ owner: ELI, name: 'vm-111111111111', action: 'resize', memory: 64 });
+  assert.equal(stuck.ok, false);
+  assert.match(stuck.text, /^vm-111111111111 is stopped: it would not start with 64 GiB \(HOST_NOT_ENOUGH_FREE_MEMORY\), nor at its old size .*It was not removed/);
+  assert.ok(!m.asked().some(([method, p]) => method === 'tag.remove' && String(p.tag).startsWith('fleetwright-busy')), 'kept marked busy');
+});
+
+test('busy holds the sweep off for half an hour from the time in the mark, and no longer: a mark left behind is not a machine kept for ever', async () => {
+  // A sidecar that died between marking and unmarking left the bare tag on,
+  // and the machine with it: stopped, never swept, never started.
+  const S = Math.floor(Date.parse('2026-10-06T12:00:00Z') / 1000);
+  const fresh = withMachine({ state: 'Halted', left: -5, tags: [`fleetwright-busy:${S - 60}`] });
+  await fresh.pools.refresh();
+  assert.deepEqual(fresh.asked(), [], 'marked a minute ago: left as it is');
+
+  // A BARE MARK, from a box older than the time in it: dated from now, so
+  // it runs out like the rest, and honoured this pass.
+  const bare = withMachine({ state: 'Halted', left: -5, tags: ['fleetwright-busy'] });
+  await bare.pools.refresh();
+  assert.deepEqual(bare.asked(), [
+    ['tag.add', { id: 'vm-uuid', tag: `fleetwright-busy:${S}` }],
+    ['tag.remove', { id: 'vm-uuid', tag: 'fleetwright-busy' }],
+  ]);
+
+  // OLDER THAN A RESIZE TAKES: the mark comes off and the machine is swept
+  // by the rules, here stopped past its end.
+  const stale = withMachine({ state: 'Halted', left: -5, tags: [`fleetwright-busy:${S - 31 * 60}`] });
+  await stale.pools.refresh();
+  assert.deepEqual(stale.asked(), [
+    ['tag.remove', { id: 'vm-uuid', tag: `fleetwright-busy:${S - 31 * 60}` }],
+    ['vm.delete', { id: 'vm-uuid', deleteDisks: true }],
+  ]);
+});
+
+test('a stopped machine is removed only once it is old enough to have booted and past its end; stopped before its end, it is started again, once', async () => {
+  // vm.create clones and tags a machine before it boots, so a box looking
+  // in that window took it for a stopped one and removed it, disk and all,
+  // before it ran once; and a host reboot or an evacuation stops a machine
+  // mid-session, which went the same way, the session's work with it.
+  const now = Date.parse('2026-10-06T12:00:00Z');
+  const s = Math.floor(now / 1000);
+  /** @param {string} id @param {string} state @param {{ age: number, left: number, tags?: string[] }} o */
+  const vm = (id, state, { age, left, tags = [] }) => ({
+    type: 'VM', id, name_label: `vm-${id}`, power_state: state,
+    tags: [VM_IMAGE.sessionTag, `${VM_IMAGE.untilPrefix}${s + left * 60}`, `fleetwright-made:${s - age * 60}`, `fleetwright-for:${ELI}`, ...tags],
+  });
+  const stand = xo({
+    objects: [
+      pool, image,
+      vm('young', 'Halted', { age: 1, left: 59 }),
+      vm('stopped', 'Halted', { age: 30, left: 30 }),
+      vm('twice', 'Halted', { age: 30, left: 30, tags: [`fleetwright-restarted:${s - 120}`] }),
+      vm('done', 'Halted', { age: 70, left: -10 }),
+      vm('overdue', 'Running', { age: 80, left: -20 }),
+    ],
+  });
+  const pools = holder(stand, () => now);
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }] }]);
+  await pools.refresh();
+  const did = (/** @type {string} */ method) => stand.calls.filter((c) => c.method === method).map((c) => c.params.id);
+  assert.deepEqual(did('vm.delete'), ['done', 'overdue'], 'stopped past its end, or running past it: never one still booting, or stopped before its end');
+  assert.deepEqual(did('vm.stop'), ['overdue'], 'the running case as it was');
+  assert.deepEqual(did('vm.start'), ['stopped'], 'stopped before its end: started again, and not a second time');
+  assert.deepEqual(stand.calls.filter((c) => c.method === 'tag.add').map((c) => [c.params.id, c.params.tag]), [['stopped', `fleetwright-restarted:${s}`]]);
+});
+
+test('two asks for one machine’s login at once: one is handed it and the other is handed nothing', async () => {
+  // Both used to read the machine from `made` before either had taken it
+  // out, and both were handed the login.
+  const m = withMachine();
+  m.pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }, { name: 'claude', value: CLAUDE }] }]);
+  m.pools.made.set('vm-111111111111', { vm: 'vm-uuid', owner: ELI, at: Date.now() });
+  const key = await newSealKey();
+  const ask = () => m.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  const [a, b] = await Promise.all([ask(), ask()]);
+  assert.equal([a, b].filter((r) => r.ok).length, 1, `${a.text} / ${b.text}`);
+  const other = /** @type {any} */ ([a, b].find((r) => !r.ok));
+  assert.match(other.text, /is being handed its login already/);
+  assert.equal(other.notHere, undefined, 'this box made it: the coordinator is not sent to the next');
+  assert.equal(m.pools.made.has('vm-111111111111'), false);
+  assert.equal(m.pools.handing.size, 0);
+
+  // A NO THAT MAY PASS keeps the machine for its next ask: not running yet.
+  const paused = withMachine({ state: 'Paused' });
+  paused.pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }, { name: 'claude', value: CLAUDE }] }]);
+  paused.pools.made.set('vm-111111111111', { vm: 'vm-uuid', owner: ELI, at: Date.now() });
+  const later = await paused.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(later.ok, false);
+  assert.match(later.text, /is paused/);
+  assert.equal(paused.pools.made.has('vm-111111111111'), true, 'asked again once running, it is handed');
+  assert.equal(paused.pools.handing.size, 0);
+});
+
+test('a machine not found on the pools that answered, with another unreached, is said to be so and kept for the next ask', async () => {
+  // One of two pools down and the machine not on the other used to answer
+  // "not on any of your pools any more", with neither `unreachable` nor
+  // `notHere`: the coordinator stopped there, the entry was gone, and the
+  // machine never got its login.
+  const stand = xo({ objects: [pool, image] });
+  const connect = /** @type {any} */ (async ({ address }) => {
+    if (address === 'other.lan') throw new Error('connect ETIMEDOUT');
+    return stand.rpc;
+  });
+  const pools = new XoPools({ connect, connectPlain: connect });
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }, { name: 'hypervisor:other.lan', value: record({ address: 'other.lan' }) }, { name: 'claude', value: CLAUDE }] }]);
+  pools.made.set('vm-111111111111', { vm: 'vm-uuid', owner: ELI, at: Date.now() });
+  const key = await newSealKey();
+  const r = await pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(r.ok, false);
+  assert.equal(r.unreachable, true, r.text);
+  assert.match(r.text, /pools of yours that answered.*other\.lan: connect ETIMEDOUT/);
+  assert.ok(pools.made.has('vm-111111111111'), 'kept for the next ask');
+  // The same of working it.
+  const c = await pools.control({ owner: ELI, name: 'vm-111111111111', action: 'reboot' });
+  assert.equal(c.unreachable, true, c.text);
+  assert.equal(c.notHere, undefined);
+  assert.match(c.text, /pools of yours that answered.*other\.lan: connect ETIMEDOUT/);
 });
 
 test('a machine is given its owner’s SSH keys and sudo when they keep some, and nothing when they do not', () => {
@@ -737,7 +882,13 @@ test('the guest agent goes in the cloud-init drive and starts before anything th
  *   a command that fails; and, offline, a VM that cannot look up a name, so
  *   curl gets nowhere by name and only by an address it is given
  */
-function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offline = false, pull = false } = {}) {
+/**
+ * The install script, run against stubs. `deaf` is the fleet not answering a
+ * report: `true` is no HTTP answer at all, a number is that status with
+ * nothing behind it. `log` collects the lines the script writes to its log
+ * and screen, which is where it records what each report was answered.
+ */
+function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offline = false, pull = false, beat = 60, slow = false, deaf = false, log = /** @type {string[]} */ ([]) } = {}) {
   const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token, addresses });
   const lines = config.split('\n');
   const script = lines.slice(lines.indexOf('    content: |') + 1, lines.indexOf('runcmd:')).map((l) => l.slice(6)).join('\n');
@@ -762,7 +913,7 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
     const counter = (/** @type {string} */ nic, /** @type {number} */ n) =>
       `echo ${n} >'${dir}/net/${nic}/statistics/rx_bytes.next' && mv -f '${dir}/net/${nic}/statistics/rx_bytes.next' '${dir}/net/${nic}/statistics/rx_bytes'`;
     const holdPull = [
-      'if [ "$*" = "install -y fleetwright" ]; then',
+      'if [ "$*" = "install -y --no-install-recommends fleetwright" ]; then',
       `  mkdir -p '${dir}/proc/4242'; printf 'podman\\0pull\\0ghcr.io/x/y:latest\\0' >'${dir}/proc/4242/cmdline'`,
       `  ${until('image:0/262144000')}`,
       `  ${counter('eth0', 5000)}; ${counter('lo', 9000000)}`,
@@ -772,9 +923,17 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
       'fi',
     ].join('\n');
     const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test', 'ip', 'getent', 'sleep', 'resolvectl', 'dpkg', 'debconf-set-selections'].map((c) => {
-      const fails = c === fail ? 'return 1' : offline && c === 'getent' ? 'return 2' : offline && c === 'curl' ? '[[ "$*" == *--resolve* ]] || return 6' : '';
-      const held = pull && c === 'apt-get' ? `${holdPull}\n` : '';
-      return `${c}() { echo "${c} $*" >>"$CALLS"; ${held}${fails}${fails ? '; ' : ''}return 0; }`;
+      // `deaf`: the fleet cannot be reached for reports, and nothing else fails.
+      // A report's curl prints the status it got, as the real one is asked to
+      // (-w '%{http_code}'); the stand-in's fleet answers 200, a deaf one by
+      // status answers that and nothing, one with no answer exits as curl
+      // does when nothing spoke.
+      const report = '[[ "$*" != */api/xosetup/report ]]';
+      const fails = c === fail ? 'return 1' : offline && c === 'getent' ? 'return 2' : offline && c === 'curl' ? '[[ "$*" == *--resolve* ]] || return 6' : deaf === true && c === 'curl' ? `${report} || return 6` : deaf && c === 'curl' ? `${report} || { printf ${deaf}; return 0; }` : '';
+      const answers = c === 'curl' ? `${report} || printf 200; ` : '';
+      // `slow` holds apt-get update long enough for the heartbeat to beat.
+      const held = `${pull && c === 'apt-get' ? `${holdPull}\n` : ''}${slow && c === 'apt-get' ? 'if [ "$*" = update ]; then command sleep 0.4; fi\n' : ''}`;
+      return `${c}() { echo "${c} $*" >>"$CALLS"; ${held}${fails}${fails ? '; ' : ''}${answers}return 0; }`;
     });
     // python3 builds a report's body, whose fourth argument is the step and
     // all the body need be here (curl is what sends it), with the pull's
@@ -784,6 +943,8 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
     stubs.push('python3() { if [ "${1-}" = - ]; then cat >/dev/null; echo 262144000; else echo "${4-}${6:+:$6}${7:+/$7}"; fi; }');
     const body = script
       .replace('log=/var/log/fleetwright-image.log', `log='${dir}/image.log'`)
+      .replace('stepfile=/run/fleetwright-image.step', `stepfile='${dir}/step'`)
+      .replace('beat=60', `beat=${beat}`)
       .replace('procs=/proc', `procs='${dir}/proc'`)
       .replace('nets=/sys/class/net', `nets='${dir}/net'`)
       .replace('every=15', 'every=0')
@@ -792,12 +953,14 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
       .replace('#!/bin/bash', '');
     const run = spawnSync('bash', ['-c', `${stubs.join('\n')}\n${body}`], { env: { CALLS: join(dir, 'calls'), PATH: process.env.PATH }, encoding: 'utf8' });
     assert.equal(run.status, 0, run.stderr);
+    if (existsSync(join(dir, 'image.log'))) log.push(...readFileSync(join(dir, 'image.log'), 'utf8').trim().split('\n'));
     // A report is a curl to the report route under an agent of its own, not
     // a stock one a CDN's bot check turns away, and reads back as
     // `report <step>`, or `report <step> to <host:port:address>` when it went
-    // to an address rather than by name.
+    // to an address rather than by name. Whether it asked for the status it
+    // got is the log's to show (`report done: 200`), not this parse's.
     return readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n').map((c) => {
-      const sent = /^curl -fsS -m 10 -A fleetwright-image (?:--resolve (\S+) )?.*--data-binary (\S+) https:\/\/fleet\.test\/api\/xosetup\/report$/.exec(c);
+      const sent = /^curl -f?sS -m 10 (?:-o \/dev\/null -w %\{http_code\} )?-A fleetwright-image (?:--resolve (\S+) )?.*--data-binary (\S+) https:\/\/fleet\.test\/api\/xosetup\/report$/.exec(c);
       return sent ? `report ${sent[2]}${sent[1] ? ` to ${sent[1]}` : ''}` : c;
     });
   } finally {
@@ -809,7 +972,7 @@ const REPORT_TOKEN = `fwi_a1b2c3d4e5f6_${'ab'.repeat(24)}`;
 
 test('the install script reports each step to the fleet and powers off when every step worked', () => {
   const calls = runImageScript();
-  assert.deepEqual(calls.filter((c) => c.startsWith('report ')), ['report started', 'report packages', 'report installer', 'report cleaning', 'report done']);
+  assert.deepEqual(calls.filter((c) => c.startsWith('report ')), ['report started', 'report dns', 'report packages', 'report installer', 'report cleaning', 'report done']);
   assert.equal(calls.at(-1), 'systemctl poweroff');
   assert.ok(calls.includes('rm -f /root/fleetwright-image.sh'), 'the script, with its token in it, is not left in the image');
   // A VM that never reports in is most often one with no network, so the
@@ -820,8 +983,15 @@ test('the install script reports each step to the fleet and powers off when ever
   // needs: the distributions' own is older, and the installer refuses it.
   const key = calls.indexOf('curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg');
   const user = calls.indexOf('debconf-set-selections ');
-  const install = calls.indexOf('apt-get install -y fleetwright');
+  const install = calls.indexOf('apt-get install -y --no-install-recommends fleetwright');
   assert.ok(key > 0 && key < install && user > 0 && user < install, 'installed before its key or its run user');
+  // NO CONTAINER ON THE IMAGE: the VM is the sandbox, FLEETWRIGHT_SANDBOX is
+  // never turned on in a clone, and podman with the 293 MB session image were
+  // most of a build for nothing. Recommends off, and the installer told.
+  const script = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token: REPORT_TOKEN });
+  assert.match(script, /export DEBIAN_FRONTEND=noninteractive FLEETWRIGHT_NO_SANDBOX=1 FLEETWRIGHT_BUILD_IMAGE=0/);
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  assert.match(sh, /FLEETWRIGHT_NO_SANDBOX:-0}" = "1" \]; then\n\s+ok "sandboxing off/, 'the installer honours the knob by not installing podman');
   assert.equal(calls.filter((c) => c === 'apt-get update').length, 2, 'apt is not told about the repository it was just given');
   assert.ok(!calls.some((c) => c.includes('fleet.test/install') || c.includes('/prereq')), 'the installer is still fetched by hand');
 });
@@ -867,6 +1037,15 @@ test('a VM that cannot look up a name stops within half a minute, says which ser
   const calls = runImageScript({ offline: true, addresses: ['203.0.113.7', '203.0.113.7', '198.51.100.2'] });
   assert.equal(calls.filter((c) => c === 'getent hosts deb.debian.org').length, 15, 'fifteen looks, two seconds apart');
   assert.ok(calls.includes('sleep 2'));
+  // SAID, AND BOUNDED. A build sat at "started" for twelve minutes on a phone
+  // while fifteen looks at a server that dropped queries each waited the
+  // resolver's default (five seconds, twice, per server): the wait is a step
+  // of its own now, each look waits two seconds for one answer, and the whole
+  // wait is held to a minute.
+  assert.ok(calls.indexOf('report dns') > calls.indexOf('report started') && calls.indexOf('report dns') < calls.indexOf('getent hosts deb.debian.org'));
+  const script = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token: REPORT_TOKEN });
+  assert.match(script, /RES_OPTIONS='timeout:2 attempts:1' getent hosts deb\.debian\.org/);
+  assert.match(script, /\[ \$\(\(SECONDS - t0\)\) -lt 60 \] \|\| break/);
   assert.ok(calls.includes('resolvectl dns'), 'and the servers DHCP gave it, on its screen and in the log it sends');
   // And who answers when asked straight, and whose MAC the gateway is: a
   // build behind two edge routers was told 10.254.0.1 and heard nothing,
@@ -1170,14 +1349,15 @@ test('a build VM’s reports are what the phone is told, and a failure it report
   // after a real build sat at "18 min so far, usually about 8".
   const p = buildPool({ then: 'Running' });
   const MB = 1024 ** 2;
+  const at = Date.now();
   const reports = [
     null,
-    { step: 'packages', detail: null, at: 0 },
-    { step: 'installer', detail: null, at: 0 },
-    { step: 'image', detail: null, got: 0, of: 262 * MB, at: 0 },
-    { step: 'image', detail: null, got: 131 * MB, of: 262 * MB, at: 0 },
-    { step: 'image', detail: null, got: 268 * MB, of: 262 * MB, at: 0 },
-    { step: 'failed', detail: 'Get:1 deb.debian.org\nE: Unable to fetch some archives', at: 0 },
+    { step: 'packages', detail: null, at },
+    { step: 'installer', detail: null, at },
+    { step: 'image', detail: null, got: 0, of: 262 * MB, at },
+    { step: 'image', detail: null, got: 131 * MB, of: 262 * MB, at },
+    { step: 'image', detail: null, got: 268 * MB, of: 262 * MB, at },
+    { step: 'failed', detail: 'Get:1 deb.debian.org\nE: Unable to fetch some archives', at },
   ];
   let looks = 0;
   /** @type {Array<{ text: string, fill: number }>} */
@@ -1222,10 +1402,135 @@ test('a build VM that never reports in is named as the likely problem, and one t
     say: (text) => shown.push(text),
   }).catch((e) => e);
   assert.ok(shown.some((s) => /min so far, usually about 8\./.test(s)), 'quiet at first: it may still be booting');
-  assert.ok(shown.some((s) => /6 min so far, and its VM has not reported in\. It may have no network, or its start-up script did not run\./.test(s)));
+  assert.ok(shown.some((s) => /4 min so far, and its VM has not reported in\. It may have no network, or its start-up script did not run\./.test(s)));
   assert.match(String(err), /did not finish within 25 minutes, and its VM never reported in.*kept, stopped, as "fleetwright-image-build \(install timed out\)"/);
   assert.ok(p.calls.some((c) => c.method === 'vm.stop' && c.params.id === 'build-vm'));
   assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), 'kept, where a timeout used to delete it');
+});
+
+test('a build VM that halts without saying it finished is kept, named for it, and never made the template', async () => {
+  // THE BUG: the install powers the VM off when every step worked, and the
+  // build took any halt for that. A host rebooted for maintenance, a VM
+  // stopped from Xen Orchestra, an install cut off mid-step: each became the
+  // image every session was cloned from. Found by a review that ran it.
+  const p = buildPool({ then: 'Halted' });
+  let at = 0;
+  const err = await ensureImage({
+    ...buildArgs(p),
+    reporter: async () => REPORT_TOKEN,
+    now: () => at,
+    sleep: async () => { at += 10_000; },
+  }).catch((e) => e);
+  assert.match(String(err), /build VM stopped before it said the install was done \(it never reported in\), so it was not made the template\. rack still has no Debian 13 machine image\. Its build VM was kept, stopped, as "fleetwright-image-build \(stopped before done\)"/);
+  assert.ok(!p.calls.some((c) => c.method === 'vm.convertToTemplate' && c.params.id === 'build-vm'), 'a half-built VM became the template');
+  assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), 'kept, to be looked at');
+  // TWO MINUTES for a late done, which comes by way of the coordinator: a
+  // build on a Raspberry Pi that had said every step through cleaning was
+  // failed at the thirty seconds this used to wait.
+  assert.ok(at >= 20_000 + 120_000, `given two minutes for a late done first, not ${(at - 20_000) / 1000} s`);
+
+  // Cut off after a step it had reported: that step is named, and how long
+  // before the halt it was said, so a VM that died mid-step (seconds) reads
+  // differently from one whose last report never got through (minutes).
+  const q = buildPool({ then: 'Halted' });
+  at = 0;
+  const cut = await ensureImage({
+    ...buildArgs(q), reporter: async () => REPORT_TOKEN, now: () => at, sleep: async () => { at += 10_000; },
+    vmReport: () => ({ step: 'installer', detail: null, at: 10_000 }),
+  }).catch((e) => e);
+  assert.match(String(cut), /stopped before it said the install was done \(the last it said, 10 seconds before it stopped, was that installing Fleetwright\)/);
+  assert.ok(!q.calls.some((c) => c.method === 'vm.convertToTemplate' && c.params.id === 'build-vm'));
+
+  // A REBUILD THAT STOPS SO says the image that was there still is, and that
+  // machines keep being made from it: the person whose Apply failed this
+  // way had no word on whether the pool still had an image at all. A report
+  // without a time, from before times were kept, says nothing about one.
+  const r = buildPool({ then: 'Halted', existing: [{ type: 'VM-template', id: 'img', name_label: 'Fleetwright Debian 13', $pool: 'pool-1', tags: [VM_IMAGE.tag] }] });
+  at = 0;
+  const kept = await ensureImage({
+    ...buildArgs(r), replace: true, reporter: async () => REPORT_TOKEN, now: () => at, sleep: async () => { at += 10_000; },
+    vmReport: () => ({ step: 'cleaning', detail: null }),
+  }).catch((e) => e);
+  assert.match(String(kept), /\(the last it said was that clearing what would make two machines cloned from it the same\), so it was not made the template\. The Debian 13 machine image that was there, Fleetwright Debian 13, is still the template, and machines keep being made from it\. Its build VM was kept/);
+  assert.ok(!r.calls.some((c) => c.method === 'vm.delete' && c.params.id === 'img'), 'the image that was there was removed');
+});
+
+test('a build VM whose done report lands after Xen Orchestra already said Halted is still the template', async () => {
+  // The VM reports done just before it powers off; the report can arrive
+  // after the halt, and it comes by way of the coordinator, which forwards
+  // it when it next speaks to the box. Here it lands 90 seconds after the
+  // halt was seen (at 20 s): within the two minutes waited now, and past
+  // the thirty seconds that failed a real build.
+  const p = buildPool({ then: 'Halted' });
+  let at = 0;
+  const text = await ensureImage({
+    ...buildArgs(p),
+    reporter: async () => REPORT_TOKEN,
+    now: () => at,
+    sleep: async () => { at += 10_000; },
+    vmReport: () => (at >= 110_000 ? { step: 'done', detail: null, at } : { step: 'cleaning', detail: null, at: 10_000 }),
+  });
+  assert.match(text, /machine image is ready on rack/);
+  assert.ok(p.calls.some((c) => c.method === 'vm.convertToTemplate' && c.params.id === 'build-vm'));
+  assert.ok(!p.calls.some((c) => c.method === 'vm.set' && /stopped before/.test(c.params.name_label)));
+});
+
+test('a build VM that said a step and then nothing for three minutes is said to have gone quiet, with what it last said and when', async () => {
+  // THE FROZEN BAR: "started, 12 min so far" on a phone, with no warning,
+  // because the box only warned of a VM that had never reported. The VM now
+  // says its step again every minute (heartbeat), so silence is news.
+  const p = buildPool({ then: 'Running' });
+  let at = 0;
+  /** @type {string[]} */
+  const shown = [];
+  await ensureImage({
+    ...buildArgs(p),
+    reporter: async () => REPORT_TOKEN,
+    now: () => at,
+    sleep: async () => { at += 60_000; },
+    vmReport: () => (at >= 60_000 ? { step: 'packages', detail: null, at: 60_000 } : null),
+    say: (text) => shown.push(text),
+  }).catch(() => {});
+  assert.ok(shown.some((s) => /: installing Debian’s packages, 1 min so far\./.test(s)), 'the step, while it is fresh');
+  assert.ok(shown.some((s) => /: installing Debian’s packages, 3 min so far\./.test(s)), 'three minutes is still within what a slow step takes');
+  assert.ok(shown.some((s) => /: its VM last said that installing Debian’s packages, 4 min ago, and nothing since\. 5 min so far\./.test(s)), `nothing said that it had gone quiet: ${shown.join('\n')}`);
+});
+
+test('the install script says its step again every minute, so a box can tell silence from a slow step, and says nothing more once it is done', () => {
+  const calls = runImageScript({ beat: 0.05, slow: true });
+  const sent = calls.filter((c) => c.startsWith('report '));
+  assert.ok(sent.filter((c) => c === 'report packages').length >= 2, `packages said again while apt-get ran: ${sent.join(', ')}`);
+  assert.ok(sent.slice(sent.lastIndexOf('report done') + 1).length === 0 && sent.at(-1) === 'report done', 'the heartbeat outlived the build');
+  assert.equal(calls.at(-1), 'systemctl poweroff');
+});
+
+test('the done report is tried for five minutes until it is heard, each answer on the VM’s screen, and a VM with no token powers off at once', () => {
+  // A VM that halts without a heard `done` is not made the template, so the
+  // one report that decides the build is worth five minutes of trying: a
+  // build on a Raspberry Pi had its six tries go unanswered and powered off
+  // into "stopped before done" with nothing anywhere about why. What each
+  // report was answered now goes on the log and the console Xen Orchestra
+  // shows, which is the one place a person can read it from a kept VM.
+  /** @type {string[]} */
+  const log = [];
+  const deaf = runImageScript({ deaf: true, log });
+  assert.equal(deaf.filter((c) => c === 'report done').length, 30, 'thirty tries, ten seconds apart');
+  assert.equal(deaf.filter((c) => c === 'sleep 10').length, 30);
+  assert.equal(deaf.at(-1), 'systemctl poweroff', 'and it still powers off, kept for the box to look at');
+  assert.equal(log.filter((l) => l === 'report done: no answer').length, 30, `nothing spoke HTTP back, and the screen says so: ${log.join(' | ')}`);
+  // A fleet that answers and refuses, as a front door does with 429, is told
+  // apart from one that cannot be reached, and a refusal is not "sent".
+  /** @type {string[]} */
+  const refused = [];
+  const turnedAway = runImageScript({ deaf: 429, log: refused });
+  assert.equal(turnedAway.filter((c) => c === 'report done').length, 30, 'a refusal is not heard');
+  assert.ok(refused.includes('report cleaning: 429') && refused.filter((l) => l === 'report done: 429').length === 30, refused.join(' | '));
+  /** @type {string[]} */
+  const fine = [];
+  const heard = runImageScript({ log: fine });
+  assert.equal(heard.filter((c) => c === 'report done').length, 1);
+  assert.deepEqual(fine.filter((l) => /^report (started|done)/.test(l)), ['report started: 200', 'report done: 200']);
+  assert.equal(runImageScript({ token: null }).filter((c) => c === 'sleep 10').length, 0);
 });
 
 // --- rebuilt and removed ----------------------------------------------------

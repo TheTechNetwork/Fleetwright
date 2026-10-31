@@ -39,12 +39,16 @@ struct PoolManageView: View {
     @State private var edgesFailed = false
     /// False for a coordinator from before it, which can tell nothing: no card.
     @State private var edgesKnown = true
+    /// The pool master's addresses from the record this phone keeps, read
+    /// once: empty when the record does not say, and then not a line.
+    private let masters: [String]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
     init(settings: Settings, pool: XOSetupHandoff.Held) {
         self.settings = settings
         self.pool = pool
+        masters = XOSetupHandoff.masters(of: pool.address)
         _watch = State(initialValue: PoolWatch(address: pool.address, fleet: Fleet(settings: settings)))
     }
 
@@ -252,6 +256,16 @@ struct PoolManageView: View {
                 Text(Manage.Words.limitedUser(user))
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
+            }
+            // WHERE THE POOL MASTER ANSWERS, as setup saw it, so a master
+            // that stops answering on one address has its others to hand.
+            // Only when the record says (C-5); offering one of them to Xen
+            // Orchestra as a second server is designed and not built.
+            if !masters.isEmpty {
+                Text(Manage.Words.poolMaster(masters))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .textSelection(.enabled)
             }
             if canLookAgain {
                 Button(Manage.Words.lookAgain) { Task { await watch.start() } }

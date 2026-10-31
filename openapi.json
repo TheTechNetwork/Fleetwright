@@ -1678,6 +1678,7 @@
                       "logs",
                       "mint",
                       "peek",
+                      "pinadmin",
                       "profiles",
                       "provision",
                       "purge",

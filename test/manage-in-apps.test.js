@@ -377,5 +377,5 @@ test('both phones keep the routers’ key a policy job seals back, beside the po
   assert.match(bare(read('apps/android/app/src/main/java/network/thetech/fleetwright/XoHandoff.kt')), /record\.put\("edge", JSONObject\(\)\.put\("key", edgeKey\)\.put\("secret", secret\)\.put\("pin", pin\)\.put\("routers", routers\)\)/);
   // The card, under the status, on both; only once the fleet was asked, and not from a coordinator too old to say.
   assert.match(bare(IOS_SCREEN), /statusCard\s*\.fleetRow\(\)\s*if edgesAsked && edgesKnown \{\s*edgeCard/);
-  assert.match(bare(KT_SCREEN), /StatusCard\(watch\)\s*if \(edgesAsked && edgesKnown\) EdgeCard\(edges, edgesFailed\)/);
+  assert.match(bare(KT_SCREEN), /StatusCard\(watch, masters\)\s*if \(edgesAsked && edgesKnown\) EdgeCard\(edges, edgesFailed\)/);
 });

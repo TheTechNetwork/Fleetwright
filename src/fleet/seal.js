@@ -282,6 +282,12 @@ export const VAULT_REPLY_AAD = 'fleetwright-vault-reply/v1';
 /** What a box was approved to hold, sealed to the key the box made for that one request. */
 export const VAULT_BOX_AAD = 'fleetwright-vault-box/v1';
 
+/** The minter's own keys, sealed once to the operator's key so they can be kept outside it (src/fleet/minter/backup.js). */
+export const MINTER_EXPORT_AAD = 'fleetwright-minter-export/v1';
+
+/** A copy of the minter's rows in R2, sealed to its own deposit key (src/fleet/minter/backup.js). */
+export const MINTER_BACKUP_AAD = 'fleetwright-minter-backup/v1';
+
 /**
  * The additional data a vault item is kept under AT REST: whose it is and
  * which it is, so a row moved under another account, or one item copied over

@@ -91,8 +91,9 @@ test('Android: the key is verified against the documented signing input before a
   // A key the fleet lists for that machine that differs is the same stop.
   assert.ok(sheet.includes('That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent.'));
   // Approved in the vault and matching: proceed. Otherwise the person compares.
-  assert.match(sheet, /grants\s*\?\.let \{ PhoneVault\.approves\(it, hostId, setup\.hostKey!!\) \} == true/);
-  assert.match(sheet, /approved -> run\(pending\)/);
+  assert.match(sheet, /grants\s*\?\.let \{ PhoneVault\.approval\(it, hostId, setup\.hostKey!!\) \} \?: PhoneVault\.Approval\.NONE/);
+  assert.match(sheet, /approval == PhoneVault\.Approval\.APPROVED -> run\(pending\)/);
+  assert.match(sheet, /else -> unvouched = pending/);
   assert.ok(sheet.includes('Compare this with what fleetwright-sidecar identity prints on ${waitingOn.hostId}.'));
   assert.ok(sheet.includes('Text("They match")'));
   assert.ok(sheet.includes('If they differ, cancel: the sign-in has not left this phone, and will not.'));
@@ -108,15 +109,48 @@ test('Android: only a whole-vault grant for that machine, by that whole key, ski
   // minter names the grant by (boxKeyHash), not any grant whose
   // sixteen-character prefix matches. Which grant counts is run by
   // PhoneVaultTest.kt.
-  const rule = vault.slice(vault.indexOf('fun approves('), vault.indexOf('/** How a vault item is named'));
-  assert.match(rule, /grants\.any \{ it\.only\.isEmpty\(\) && it\.label == hostId && it\.key == hash \}/);
-  assert.match(rule, /val hash = keyHash\(jwk\)/);
+  const rule = vault.slice(vault.indexOf('fun approval('), vault.indexOf('/**\n         * The kept credentials'));
+  assert.match(rule, /grants\.filter \{ it\.only\.isEmpty\(\) && it\.label == hostId \}/);
+  assert.match(rule, /it\.key == keyHash\(jwk\)/);
+  assert.ok(!rule.includes('fingerprint'), 'approval compares the sixteen-character fingerprint');
   assert.match(vault, /fun keyHash\(jwk: JSONObject\): String \{[\s\S]*?return digest\.joinToString\(""\)/);
-  // Both sheets that seal an admin's secret to a machine ask it the same way.
+  // Every sheet that seals an admin's secret to a machine asks it the same way.
   for (const name of ['HypervisorSheet.kt', 'XoDeploySheet.kt', 'XoWatchdogSheet.kt']) {
     const sheet = file(name);
-    assert.ok(sheet.includes('PhoneVault.approves(it, hostId, setup.hostKey!!)'), name);
+    assert.ok(sheet.includes('PhoneVault.approval(it, hostId, setup.hostKey!!)'), name);
     assert.ok(!/grants\?\.any \{ it\.fingerprint == fingerprint \}/.test(sheet), `${name} approves any grant with the same prefix`);
+  }
+});
+
+test('Android: a key approved for that machine that is not the one it answered with is a hard stop, in iOS’s words', () => {
+  // A whole-vault grant under that name by another key is not a question for
+  // the comparison card: a machine that was re-keyed would have been
+  // re-approved, so whatever answered is not the machine this phone
+  // approved. The secret is cleared, the job is dropped on the machine, and
+  // the sentence is the one iOS says on the same screen, read from its
+  // source rather than copied here, so the two cannot drift apart.
+  const iosDir = new URL('../apps/ios/Fleetwright/', import.meta.url);
+  const pairs = [
+    ['HypervisorSheet.kt', 'AddHypervisorView.swift', 'password = ""', 'The sign-in was not sent.'],
+    ['XoDeploySheet.kt', 'DeployXOView.swift', 'adminPassword = ""', 'The passwords were not sent.'],
+    ['XoWatchdogSheet.kt', 'AddWatchdogView.swift', 'rootPassword = ""', 'The root password was not sent.'],
+  ];
+  for (const [kt, swift, cleared, ending] of pairs) {
+    const sheet = file(kt);
+    const screen = readFileSync(new URL(swift, iosDir), 'utf8');
+    const ios = screen.match(/case \.anotherKey:[\s\S]{0,400}?refuse\("([^"]+)"\)/)?.[1];
+    assert.ok(ios, `${swift} has no anotherKey refusal`);
+    assert.ok(ios.endsWith(ending), `${swift}: ${ios}`);
+    // The same sentence, with Kotlin's interpolation where Swift has its own.
+    const expected = ios.replace('\\(machine)', '$hostId');
+    const at = sheet.indexOf('approval == PhoneVault.Approval.ANOTHER_KEY ->');
+    assert.ok(at > 0, `${kt} has no ANOTHER_KEY stop`);
+    const stop = sheet.slice(at, sheet.indexOf('approval == PhoneVault.Approval.APPROVED ->', at));
+    assert.ok(stop.includes(`refusal = "${expected}"`), `${kt} says: ${stop.match(/refusal = "([^"]+)"/)?.[1]}\niOS says: ${expected}`);
+    assert.ok(stop.includes(cleared), `${kt}: the secret stays on the screen`);
+    assert.ok(stop.includes('fleet.xosetup("cancel", job = setup.job)'), `${kt}: the job is left running on the machine`);
+    // And it comes before the comparison card, which never passes on its own.
+    assert.ok(at < sheet.indexOf('else -> unvouched =', at), `${kt}: the person is asked to vouch for a key the vault already refused`);
   }
 });
 

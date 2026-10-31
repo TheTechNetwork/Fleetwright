@@ -159,7 +159,7 @@ internal fun PolicyForm(
             enabled = enabled,
             title = "Drop what the threat rules match",
             line = if (there != null && (there.blocks ?: false) != choice.edgeBlock) {
-                "$what Apply rebuilds the edge router to change this: machines behind it have no way out until the new one is up."
+                "$what Apply rebuilds the edge router to change this: machines behind it keep their way out while the new one is built, and have none while it starts."
             } else {
                 what
             },
@@ -183,7 +183,7 @@ internal fun PolicyForm(
             line = when {
                 there == null || (there.ha ?: false) == choice.edgeHa -> what
                 choice.edgeHa -> "$what Apply makes the second and hands over to it: machines behind it have no way out while it starts."
-                else -> "$what Apply removes the second and rebuilds the first: machines behind it have no way out until it is up."
+                else -> "$what Apply removes the second and rebuilds the first: machines behind it keep their way out while the new one is built, and have none while it starts."
             },
             onChange = { on -> onChange(choice.copy(edgeHa = on)) },
         )
@@ -440,7 +440,7 @@ internal fun PolicyForm(
         }
         if (XoPolicy.labsChanged(inv, choice)) {
             Text(
-                "Apply rebuilds the edge router to change the labs: machines behind it have no way out until the new one is up.",
+                "Apply rebuilds the edge router to change the labs: machines behind it keep their way out while the new one is built, and have none while it starts.",
                 style = Design.Style.bodySmall,
                 color = Design.Palette.attention.now,
             )

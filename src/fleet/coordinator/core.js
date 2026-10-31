@@ -23,7 +23,7 @@ import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
 import { actorEmail, intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
 import { Delegations } from './delegations.js';
-import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage } from '../protocol/intents.js';
+import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage, PIN_SENTENCES } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
@@ -64,6 +64,8 @@ const MAX_RUNNER_STARTS = 200;
  * rows are about 45 KiB of the 128 a value may hold (test/do-key-bounds).
  */
 const MAX_SETUPS = 20;
+/** The most of a job's sentence the coordinator keeps and pushes. */
+export const SETUP_TEXT_MAX = 700;
 /**
  * Pins one policy job may ask for, for the machine of its own it makes on the
  * pool. One is the ordinary case; a few cover a clone that failed to boot.
@@ -76,15 +78,26 @@ export const MAX_HOLDER_PINS = 3;
 export const MAX_IMAGE_REPORTERS = 3;
 /**
  * How long a build VM may report with its token: the download, the disk and
- * the install's own 25 minutes, with room. The job ending takes it back sooner.
+ * the install's own 25 minutes, with room for a Raspberry Pi's slow mirror
+ * and a pull that crawls. It was an hour, which a slow build could outlive
+ * with its last report, the one that decides the build, refused as expired.
+ * The job ending takes it back sooner.
  */
-const IMAGE_REPORT_TTL_MS = 60 * 60_000;
+const IMAGE_REPORT_TTL_MS = 3 * 60 * 60_000;
 /**
- * Reports one token carries: one per step and a retry of each, and the
- * session image's pull reported every 15 seconds through the install's whole
- * 25 minutes. It was 24 when only steps were reported.
+ * Reports one token carries: one per step and a retry of each, the session
+ * image's pull reported every 15 seconds and the heartbeat saying the last
+ * step again every minute, both through an install allowed an hour. It was
+ * 24 when only steps were reported, then 140 for the pull alone, which the
+ * heartbeat was added on top of without counting it, so a long build spent
+ * its allowance just before `done`. `done` and `failed` are not counted
+ * against it at all (imageReport): a build that reported too often is still
+ * a build that finished, and refusing the one report that decides it turns
+ * a good image into a kept VM and a sentence nobody can act on.
  */
-export const MAX_IMAGE_REPORTS = 140;
+export const MAX_IMAGE_REPORTS = 400;
+/** The terminal reports, taken past the count, each this many times at most. */
+const IMAGE_REPORT_ENDS = 30;
 /** The end of the install log a failed build sends back, at most. */
 const IMAGE_REPORT_DETAIL = 2000;
 /** The name a pool's own machine enrols under: `holder-` and six hex. */
@@ -140,7 +153,7 @@ const MINT_WINDOW_MS = 10 * 60_000;
  * sign-in ended at 18:19 is told by 18:35, against the hours it took a failed
  * session to say so; the minter refuses to ask more often than ten minutes.
  */
-const CLAUDE_CHECK_MS = 15 * 60_000;
+export const CLAUDE_CHECK_MS = 15 * 60_000;
 
 /**
  * How many times one runner may ask for its owner's Claude login in
@@ -484,7 +497,7 @@ export class CoordinatorCore {
      *
      * BOUND TO THE ENROLMENT THAT ANSWERED `begin` (`enrolment`, its key and
      * when it was let in), not only to the name: see #setupOn.
-     * @type {Map<string, { hostId: string, enrolment?: string|null, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, reporters?: number, reporter?: { hash: string, expiresAt: number, reports: number }, activityNews?: string, activityAt?: number }>}
+     * @type {Map<string, { hostId: string, enrolment?: string|null, owner: string|null, startedAt: number, last: SetupProgress|null, activities: string[], holderPins?: number, reporters?: number, reporter?: { hash: string, expiresAt: number, reports: number, ends?: number }, activityNews?: string, activityAt?: number }>}
      */
     this.setups = new Map();
     /**
@@ -1147,6 +1160,77 @@ export class CoordinatorCore {
   }
 
   /**
+   * Whether each person's Xen Orchestra has Fleetwright's reconnect
+   * watchdog, for storage: what the job that last learned it said, when,
+   * and from which box (#learnWatchdog). The most recently learned first,
+   * and at most MAX_XO_WATCHDOGS of them.
+   *
+   * ITS OWN KEY, because it outlives everything else here. A setup job is
+   * forgotten after a day (serialiseSetups) and a pool loss said is forgotten
+   * after an hour (serialisePushLimits); the watchdog's being on a Xen
+   * Orchestra is true until somebody reinstalls it, and the push that needs
+   * the answer comes months after the setup that learned it.
+   *
+   * @returns {Array<[string, { watchdog: XoWatchdogState, at: number, hostId: string }]>}
+   */
+  serialiseXoWatchdogs() {
+    return [...this.#xoWatchdogs].sort((a, b) => b[1].at - a[1].at).slice(0, MAX_XO_WATCHDOGS);
+  }
+
+  /**
+   * Back from storage, each row checked as if a stranger wrote it: an owner
+   * and address for a key, a word from the fixed list, a time that has
+   * happened, a box's name.
+   *
+   * @param {unknown} saved
+   */
+  restoreXoWatchdogs(saved) {
+    if (!Array.isArray(saved)) return;
+    const now = this.now();
+    for (const row of saved.slice(0, MAX_XO_WATCHDOGS)) {
+      if (!Array.isArray(row) || typeof row[0] !== 'string' || row[0].length > 520 || !row[0].includes('\n')) continue;
+      const v = row[1];
+      if (!v || typeof v !== 'object' || !XO_WATCHDOG_STATES.includes(v.watchdog)) continue;
+      if (typeof v.at !== 'number' || !Number.isFinite(v.at) || v.at > now || typeof v.hostId !== 'string' || v.hostId.length > 64) continue;
+      this.#xoWatchdogs.set(row[0], { watchdog: v.watchdog, at: v.at, hostId: v.hostId });
+    }
+  }
+
+  /**
+   * A job on a box learned whether a Xen Orchestra has the reconnect
+   * watchdog, and said so in its progress: kept, by the job's owner and the
+   * address, so the push about a pool that Xen Orchestra loses can say
+   * whether it should come back on its own (#poolLost).
+   *
+   * THE BOX CANNOT TELL AT THE TIME. A pool's loss is seen with the fleet's
+   * limited token, and plugins are an admin's to list; setup, which has the
+   * admin sign-in for a minute, learns it and used to throw the answer away
+   * with the job. So it is learned here, from the one job that knows, and
+   * kept past the job.
+   *
+   * FROM THE BOX RUNNING THE JOB, FOR THE JOB'S OWNER (#onSetupProgress
+   * already held it to that), and about the address the box names: the same
+   * trust the box's health frames get for `xo[].address`. What a false
+   * answer could do is word one push wrongly, towards a Reconnect button
+   * that was there anyway.
+   *
+   * @param {string} hostId @param {string|null} owner @param {any} msg
+   */
+  #learnWatchdog(hostId, owner, msg) {
+    if (!owner) return;
+    const watchdog = XO_WATCHDOG_STATES.includes(msg?.watchdog) ? /** @type {XoWatchdogState} */ (msg.watchdog) : null;
+    const address = typeof msg?.address === 'string' && msg.address.length <= 260 && XO_ADDRESS_RE.test(msg.address) ? msg.address : null;
+    if (!watchdog || !address) return;
+    const key = `${owner}\n${address}`;
+    // The oldest answer goes when the store is full, never the one just given.
+    if (!this.#xoWatchdogs.has(key) && this.#xoWatchdogs.size >= MAX_XO_WATCHDOGS) {
+      this.#xoWatchdogs.delete([...this.#xoWatchdogs].sort((a, b) => a[1].at - b[1].at)[0][0]);
+    }
+    this.#xoWatchdogs.set(key, { watchdog, at: this.now(), hostId });
+    this.onStateChanged?.();
+  }
+
+  /**
    * A host changed state. Say so, once, in words about what it means.
    *
    * @param {string} hostId
@@ -1364,9 +1448,26 @@ export class CoordinatorCore {
       : missing.length <= 2
         ? names.join(' and ')
         : `${names[0]}, ${names[1]} and ${missing.length === 3 ? names[2] : `${missing.length - 2} more`}`;
+    // AND WHETHER IT SHOULD COME BACK BY ITSELF, when a job on a box learned
+    // it (#learnWatchdog): asked for, "has to be a better way, is this a
+    // known issue?", about a push that sent a person to press Reconnect on a
+    // Xen Orchestra whose watchdog was about to do it. With the watchdog on
+    // it, the push says to wait and what it is when waiting does not help;
+    // without, that nothing will try and where both fixes are; and when no
+    // job has looked, what it always said. "Should", for `loaded` as for
+    // `added`: `added` is on its disk and was never seen loaded, and `loaded`
+    // is what setup saw the day it ran (C-5).
+    const them = shown === 0 || missing.length !== 1 ? 'them' : 'it';
+    const usually = `Reconnecting its servers usually brings ${them} back.`;
+    const known = this.#xoWatchdogs.get(key)?.watchdog ?? null;
+    const then = known === 'absent'
+      ? `This Xen Orchestra has no reconnect watchdog, so nothing will try on its own. Reconnect from the pool’s page brings ${them} back, and Add the reconnect watchdog there makes this fix itself next time.`
+      : known
+        ? `${usually} Its reconnect watchdog should bring ${them} back by itself within a few minutes. If this stays, it is something the watchdog leaves to a person: a refused password, a pool already connected through another server, or the pool master itself.`
+        : usually;
     const text = shown === 0
-      ? `Xen Orchestra at ${address} answers ${hostId} but shows none of its pools. Reconnecting its servers usually brings them back.`
-      : `Xen Orchestra at ${address} answers ${hostId} but no longer shows ${gone}. Reconnecting its servers usually brings ${missing.length === 1 ? 'it' : 'them'} back.`;
+      ? `Xen Orchestra at ${address} answers ${hostId} but shows none of its pools. ${then}`
+      : `Xen Orchestra at ${address} answers ${hostId} but no longer shows ${gone}. ${then}`;
     // THE OWNER'S, so other members do not see it (visibleEvents), and the
     // box's share of the ring, because the box chooses when it happens
     // (hostReported).
@@ -1439,6 +1540,8 @@ export class CoordinatorCore {
   #poolLostSaidAt = new Map();
   /** The losses said and not yet followed by a recovery, by person and address (#poolBack). @type {Map<string, number>} */
   #poolsLost = new Map();
+  /** Whether each person's Xen Orchestra has the reconnect watchdog, by person and address, as the last job to learn it said (#learnWatchdog). @type {Map<string, { watchdog: XoWatchdogState, at: number, hostId: string }>} */
+  #xoWatchdogs = new Map();
 
   /**
    * Record something the coordinator itself did, as opposed to something a
@@ -2021,6 +2124,8 @@ export class CoordinatorCore {
     if (!progress) return;
     rec.last = progress;
     this.onStateChanged?.();
+    // What the job learned about the watchdog on the way, kept past the job.
+    this.#learnWatchdog(hostId, rec.owner, msg);
     if (ENDED_SETUP.has(progress.state)) {
       this.relays.closeForJob(job, 'The job using this relay ended, so it was closed.');
       // A build VM's token is the job's, and goes with it.
@@ -2720,9 +2825,7 @@ export class CoordinatorCore {
     // and its ownership check runs before its first await, so before the
     // hosts are revoked below.
     const person = { email: address, admin: false };
-    for (const name of extra) {
-      void this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: address, requester: person }).catch(() => {});
-    }
+    const stops = extra.map((name) => this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: address, requester: person }).catch(() => {}));
     /** @type {string[]} */
     const hosts = [];
     for (const h of this.hostIds.list()) {
@@ -2745,8 +2848,18 @@ export class CoordinatorCore {
       }
     }
     // What they signed for the fleet to do in their name: it is not theirs to
-    // ask any more, so it is not carried.
-    if (this.delegations.forget(address)) changed = true;
+    // ask any more, so it is not carried. ONCE THE STOPS ABOVE HAVE SETTLED,
+    // when there are any: `send` covers an intent with a delegation as it
+    // goes out, and a stop that moves on from a box answering "not on these
+    // pools" is sent to the next box then. Forgotten in the same breath the
+    // stops were sent, only the first box was sent what the person signed to
+    // let the fleet end their machines, and a box that takes only signed
+    // requests refused the rest, leaving their machines running.
+    if (stops.length) {
+      void Promise.allSettled(stops).then(() => {
+        if (this.delegations.forget(address)) this.onStateChanged?.();
+      });
+    } else if (this.delegations.forget(address)) changed = true;
     for (const [code, p] of this.enrollment.pending) {
       if (emailOf(p.actor) === address) {
         this.enrollment.pending.delete(code);
@@ -2766,6 +2879,14 @@ export class CoordinatorCore {
     // Workers audit). #endSetup saves.
     for (const [job, rec] of [...this.setups]) {
       if (String(rec.owner || '').toLowerCase() === address) this.#endSetup(job, `${address} was removed from the fleet, so the setup they began ended.`);
+    }
+    // And what their setups learned about their Xen Orchestras' watchdogs:
+    // a fact about a pool that is no longer the fleet's to say anything about.
+    for (const key of [...this.#xoWatchdogs.keys()]) {
+      if (key.startsWith(`${address}\n`)) {
+        this.#xoWatchdogs.delete(key);
+        changed = true;
+      }
     }
     // AND AN ADMIN'S BOXES STOP BEING THE FLEET'S, including one that stays
     // connected, whose tier was decided when it connected (#retier), and are
@@ -4388,7 +4509,11 @@ export class CoordinatorCore {
     if (!this.minter?.claude || now - this.#claudeCheckedAt < CLAUDE_CHECK_MS) return 0;
     this.#claudeCheckedAt = now;
     /** @type {any} */
-    const r = await this.minter.claude('check', {}).catch(() => null);
+    const r = await this.minter.claude('check', {}).catch((/** @type {any} */ e) => {
+      this.log.warn(`coordinator: could not ask the minter after the Claude sign-ins: ${e?.message || e}`);
+      return null;
+    });
+    if (r && !r.ok) this.log.warn(`coordinator: the minter would not say how the Claude sign-ins are: ${String(r.text || r.code || 'no reason given').slice(0, 200)}`);
     if (!r?.ok || !Array.isArray(r.ended)) return 0;
     let told = 0;
     for (const e of r.ended.slice(0, 100)) {
@@ -4426,6 +4551,33 @@ export class CoordinatorCore {
         if (own.length) await this.push.send(own, { title: `Your Claude sign-in ${said}`, body, data });
         if (admins.length) await this.push.send(admins, { title: `${email}’s Claude sign-in ${said}`, body: body.replace('from your phone', 'from their phone'), data });
       } catch { /* recorded above; a phone not told is no reason to stop telling the next */ }
+    }
+    // REFUSED AT THE USAGE ADDRESS (claude-login.js, checkClaude): renewing
+    // works, so it is not ended, and the minter is not renewing for it, since
+    // each renewal ends the token every box holds. Told once, saying only
+    // what was seen: where it was refused, with what, and whether renewing
+    // was tried. What would mend it is not known, so it is not promised.
+    for (const e of (Array.isArray(r.refused) ? r.refused : []).slice(0, 100)) {
+      const email = String(e?.email || '').trim().toLowerCase();
+      if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
+      const at = Number(e.at);
+      const when = Number.isFinite(at) ? ` at ${new Date(at).toISOString().slice(11, 16)} UTC` : '';
+      const status = e.status === 403 ? 403 : e.status === 401 ? 401 : null;
+      const cause = status === 403
+        ? `Claude refused this sign-in’s access token${when} when the fleet asked for its usage (403: not allowed, rather than run out). Renewing does not change that, so the fleet is not renewing for it. Sessions may still work.`
+        : `Claude refused this sign-in’s access token${when} when the fleet asked for its usage${status ? ` (${status})` : ''}, and again straight after the fleet renewed it, so the fleet has stopped renewing for it until it is due. Sessions may be refused too.`;
+      this.record({ event: 'claude.refused', actor: email, text: `${email}: ${cause}` });
+      told += 1;
+      if (!this.push) continue;
+      const devices = this.#devicesOf(email);
+      const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
+      const admins = devices.filter((d) => !own.includes(d));
+      const body = `${cause} Signing in to Claude again from your phone or the signing page may mend it.`;
+      const data = { event: 'claude.refused', kind: 'claude-ended', name: '', hostId: '', url: '' };
+      try {
+        if (own.length) await this.push.send(own, { title: 'Claude refused your sign-in’s access token', body, data });
+        if (admins.length) await this.push.send(admins, { title: `Claude refused ${email}’s access token`, body: body.replace('from your phone', 'from their phone'), data });
+      } catch { /* recorded above */ }
     }
     return told;
   }
@@ -6364,7 +6516,7 @@ export class CoordinatorCore {
     }
     const secret = randomHex(24);
     const expiresAt = this.now() + IMAGE_REPORT_TTL_MS;
-    rec.reporter = { hash: await hashSecret(secret), expiresAt, reports: 0 };
+    rec.reporter = { hash: await hashSecret(secret), expiresAt, reports: 0, ends: 0 };
     this.onStateChanged?.();
     answer({ ok: true, token: `fwi_${job}_${secret}`, expiresAt });
   }
@@ -6400,7 +6552,17 @@ export class CoordinatorCore {
     if (!IMAGE_REPORT_STEPS.includes(step)) {
       return { status: 400, body: { ok: false, error: { code: 'bad_step' }, text: `step is one of ${IMAGE_REPORT_STEPS.join(', ')}` } };
     }
-    if (++reporter.reports > MAX_IMAGE_REPORTS) return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: 'This build has reported enough.' } };
+    // THE END IS ALWAYS HEARD. A build that said `image` every 15 seconds for
+    // an hour has spent its count, and `done` is the one report the box
+    // makes a template on; a count that refuses it fails a finished build.
+    // The ends have a small count of their own, so a VM that says done
+    // for ever cannot say it for ever.
+    if (step === 'done' || step === 'failed') {
+      reporter.ends = (reporter.ends ?? 0) + 1;
+      if (reporter.ends > IMAGE_REPORT_ENDS) return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: 'This build has reported its end enough.' } };
+    } else if (++reporter.reports > MAX_IMAGE_REPORTS) {
+      return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: 'This build has reported enough.' } };
+    }
     const detail = step === 'failed' && typeof body?.detail === 'string'
       ? body.detail.replace(/[^\P{C}\n\t]/gu, '').slice(-IMAGE_REPORT_DETAIL)
       : null;
@@ -6668,11 +6830,13 @@ export class CoordinatorCore {
     this.record({ event: 'vm.control', actor: spec.actor ?? null, text: `${owner} asked to ${params.action} ${name}` });
     /** @type {string[]} */
     const skipped = [];
+    let askedAny = false;
     for (const { host } of holders) {
       if (this.#cannotCarry(host, spec)) {
         skipped.push(`${host.hostId} (needs updating)`);
         continue;
       }
+      askedAny = true;
       let answer;
       try {
         answer = explainUnknownVerb(await this.send(host, { ...spec, params }), host);
@@ -6687,6 +6851,16 @@ export class CoordinatorCore {
         continue;
       }
       return { ...answer, hostId: host.hostId };
+    }
+    // NOT ASKED IS NOT "COULD NOT FIND". When every holder was too old to be
+    // sent this, no box looked, and saying none could find the machine told
+    // the person to look for it (C-5). What is known is what each needs.
+    if (!askedAny) {
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text: `None of the boxes holding your pools is new enough to work ${name}, so none was asked: ${skipped.join(', ')}. Update one and ask again.`,
+      };
     }
     return { ok: false, error: { code: 'not_found' }, text: `No box holding your pools could find ${name}: ${skipped.join(', ')}.` };
   }
@@ -6729,11 +6903,13 @@ export class CoordinatorCore {
     if (spec.verb === 'xoact') this.record({ event: 'xo.act', actor: spec.actor ?? null, text: `${owner} asked for ${params.method} on ${address}` });
     /** @type {string[]} */
     const skipped = [];
+    let askedAny = false;
     for (const { host } of holders) {
       if (this.#cannotCarry(host, spec)) {
         skipped.push(`${host.hostId} (needs updating)`);
         continue;
       }
+      askedAny = true;
       let answer;
       try {
         // AS THE OWNER CHECKED ABOVE: the box picks the token by the actor,
@@ -6751,6 +6927,16 @@ export class CoordinatorCore {
         continue;
       }
       return { ...answer, hostId: host.hostId };
+    }
+    // NOT ASKED IS NOT "COULD NOT REACH": with every holder too old for the
+    // verb, none tried, and "could not reach" sent the person to check the
+    // pool's network (C-5). What is known is that the boxes need updating.
+    if (!askedAny) {
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text: `None of the machines holding your token for ${address} is new enough to show its page from away, so none was asked: ${skipped.join('; ')}. Update one and ask again.`,
+      };
     }
     return { ok: false, error: { code: 'unreachable' }, text: `None of the machines holding your token could reach ${address}: ${skipped.join('; ')}.` };
   }
@@ -6964,16 +7150,21 @@ export class CoordinatorCore {
    * each said its pools have — narrowed to one image when `template` is
    * given. In hostId order, so the same request goes to the same box.
    *
-   * @param {string} email @param {string|null} template
+   * A box whose last look at the pool failed (`reachable: false`) is left
+   * out, since nothing can be asked of it; with `unreached` it is the only
+   * kind listed, for the refusal that says a box holds the pool and could
+   * not reach it rather than that nobody holds it.
+   *
+   * @param {string} email @param {string|null} template @param {{ unreached?: boolean }} [opts]
    * @returns {Array<{ host: any, entries: Array<{ address: string, networks: Array<{ id: string, name: string, pool: string|null, group: boolean, lab: 'open'|'closed'|null, taken: boolean|null, perPerson: number|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
    */
-  #vmHolders(email, template) {
+  #vmHolders(email, template, { unreached = false } = {}) {
     /** @type {Array<{ host: any, entries: any[] }>} */
     const out = [];
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
       const entries = xoFor(host, email)
-        .filter((/** @type {any} */ e) => e?.reachable !== false)
+        .filter((/** @type {any} */ e) => (unreached ? e?.reachable === false : e?.reachable !== false))
         .map((/** @type {any} */ e) => ({
           address: String(e.address || ''),
           networks: (Array.isArray(e.networks) ? e.networks : [])
@@ -7040,6 +7231,9 @@ export class CoordinatorCore {
     const lab = params.platform === 'lab';
     /** The Xen Orchestra the lab is on, which its hold is counted against. */
     let labAt = '';
+    /** The hold on the lab, from before the first await (below) until the box has seen the machine there. */
+    /** @type {{ owner: string, vm: string, at: number, address: string }|null} */
+    let hold = null;
     if (lab) {
       const network = typeof params.network === 'string' ? params.network : '';
       if (!network) return { ok: false, error: { code: 'bad_params' }, text: 'Say which lab: `network`, one of the labs status lists under that image.' };
@@ -7057,7 +7251,21 @@ export class CoordinatorCore {
           text: `This pool’s policy lets one person hold ${limit === 1 ? 'one lab' : `${limit} labs`} at once, and you hold ${held}. End one and ask again.`,
         };
       }
+      // THE LAB IS HELD FROM HERE, before the first await, and counted against
+      // the limit just read. It was held only once the box had answered, and
+      // requests to this object interleave at the awaits between (the ticket,
+      // the box), so two asks at once for two free labs each counted the
+      // other's as not held and both were sent: a limit of one became two.
+      // The same move noteMade made for a machine kept ready. The machine's
+      // name is filled in once there is a ticket, and the hold is let go on
+      // every refusal after this line.
+      hold = { owner, vm: '', at: this.now(), address: labAt };
+      this.labAsks.set(network, hold);
     }
+    /** Let the lab go if it is still ours to let go: a refusal after the hold was taken. */
+    const unhold = () => {
+      if (hold && this.labAsks.get(String(params.network)) === hold) this.labAsks.delete(String(params.network));
+    };
     // A MACHINE KEPT READY, when this person keeps one from that image on
     // that network: the session starts on it now, and another is made behind
     // it. A machine is taken only with the time asked for still left on it.
@@ -7073,6 +7281,24 @@ export class CoordinatorCore {
     // box's pool's, and the box checks it again against its own look.
     const holders = this.#vmHolders(owner, template).filter((h) => !lab || h.entries.some((e) => e.networks.some((n) => n.id === params.network && n.lab)));
     if (!holders.length) {
+      unhold();
+      // A BOX THAT HOLDS IT AND COULD NOT REACH IT is a different fact from
+      // nobody holding it, and was told as the second: "approve a box that
+      // can reach it" to somebody whose box is approved and whose Xen
+      // Orchestra is down or unreachable from it (C-5). #vmHolders leaves
+      // out a box whose last look at the pool failed; here they are asked
+      // for by name.
+      const blind = this.#vmHolders(owner, template, { unreached: true }).map((h) => h.host.hostId);
+      if (blind.length) {
+        return {
+          ok: false,
+          error: { code: 'unreachable' },
+          text:
+            `${blind.length === 1 ? 'The box' : 'The boxes'} holding your token for the pool with that machine image (${blind.join(', ')}) could not reach ` +
+            `Xen Orchestra the last time ${blind.length === 1 ? 'it' : 'they'} looked, so no machine can be asked for from ${blind.length === 1 ? 'it' : 'them'} now. ` +
+            'Check that Xen Orchestra is up and reachable from that network, then ask again; or approve a box that can reach it.',
+        };
+      }
       return {
         ok: false,
         error: { code: 'no_hosts' },
@@ -7090,13 +7316,22 @@ export class CoordinatorCore {
         if (spec.startAfter[k] !== undefined && spec.startAfter[k] !== null) wanted[k] = spec.startAfter[k];
       }
       const checked = checkParams('start', wanted);
-      if (checked.ok === false) return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+      if (checked.ok === false) {
+        unhold();
+        return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+      }
       start = /** @type {any} */ (checked.params);
     }
     const image = holders[0].entries[0].images[0];
     const ticket = await this.runnerTickets.mint({ owner, platform: `vm:${template}`, repository: null, start, ttlMs: VM_TICKET_TTL_MS });
-    if (!ticket) return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
+    if (!ticket) {
+      unhold();
+      return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
+    }
     const vmHost = `vm-${ticket.id}`;
+    // The hold now names the machine, so the box reporting it in the lab is
+    // what lets the hold go (#labsAskedFor).
+    if (hold) hold.vm = vmHost;
     // A MACHINE KEPT READY IS BEING MADE FROM HERE, not from the box's answer.
     // Counted only once the box said yes, a top-up set off by a health frame
     // in between saw none being made and asked for a second: two machines
@@ -7143,8 +7378,9 @@ export class CoordinatorCore {
         this.vmStandby.forget(vmHost);
         this.onStateChanged?.();
       }
-      // THE LAB IS HELD for this machine until the box reports it there.
-      if (lab && answer?.ok !== false) this.labAsks.set(String(params.network), { owner, vm: vmHost, at: this.now(), address: labAt });
+      // THE LAB STAYS HELD for this machine until the box reports it there,
+      // unless the box would not make it.
+      if (answer?.ok === false) unhold();
       // AND ONE MADE FOR A SESSION is replaced in the ready set, if this
       // person keeps some, the next time the pool is looked at.
       return { ...answer, hostId: host.hostId, vm: answer?.ok === false ? null : vmHost };
@@ -7153,6 +7389,7 @@ export class CoordinatorCore {
       this.vmStandby.forget(vmHost);
       this.onStateChanged?.();
     }
+    unhold();
     return {
       ok: false,
       error: { code: 'unreachable' },
@@ -7165,6 +7402,11 @@ export class CoordinatorCore {
    * under its owner and not revoked, connected and healthy, and with that
    * long still to run by its pool's last look (a machine whose end was not
    * reported is taken; the box sweeps it at its end either way).
+   *
+   * THIS DECIDES WHO IS CLAIMED, NOT WHO IS COUNTED. It was also what
+   * `tally` forgot a machine by, and a kept machine is not healthy for a
+   * while after it enrols (vm-standby.js says what that cost); what forgets
+   * one is #standbyGone.
    *
    * @param {string} owner @param {number} [minutes]
    * @returns {(hostId: string) => boolean}
@@ -7179,6 +7421,33 @@ export class CoordinatorCore {
       const until = ends.get(hostId);
       return typeof until !== 'number' || until - this.now() >= minutes * 60_000;
     };
+  }
+
+  /**
+   * Whether an enrolled kept machine is no longer in the fleet, which is the
+   * only thing that forgets one: its enrolment revoked or gone (a box's
+   * goodbye and retireStranded both revoke a temporary host, the latter ten
+   * minutes after it was last connected, so a machine that dropped and may
+   * dial back is still counted), no longer this person's, or past its end
+   * by its pool's last look. Not connected, not healthy: still counted, as
+   * starting.
+   *
+   * @param {string} owner
+   * @returns {(hostId: string) => boolean}
+   */
+  #standbyGone(owner) {
+    const ends = new Map(this.vmMachinesFor({ email: owner }).map((m) => [m.name, m.until]));
+    return (hostId) => {
+      const enrolled = this.hostIds.get(hostId);
+      if (!enrolled || enrolled.revokedAt || String(enrolled.owner || '').toLowerCase() !== owner) return true;
+      const until = ends.get(hostId);
+      return typeof until === 'number' && until <= this.now();
+    };
+  }
+
+  /** Both questions `tally` asks about a kept machine, for one owner. @param {string} owner */
+  #standbyBy(owner) {
+    return { gone: this.#standbyGone(owner), ready: this.#standbyReady(owner) };
   }
 
   /**
@@ -7230,10 +7499,11 @@ export class CoordinatorCore {
     const owner = String(requester?.email || '').toLowerCase();
     const wish = owner ? this.vmStandby.wishFor(owner) : null;
     if (!wish) return null;
-    const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
+    const by = this.#standbyBy(owner);
+    const { ready, starting } = this.vmStandby.tally(owner, by);
     // WHEN THE ONE BEING MADE WAS ASKED FOR, and why the last did not come:
     // "0 being made" said nothing about a machine that had just failed.
-    const since = this.vmStandby.makingSince(owner);
+    const since = this.vmStandby.makingSince(owner, by.ready);
     const failed = this.vmStandby.failureFor(owner);
     return { template: wish.template, count: wish.count, network: wish.network, ready, starting, ...(since === null ? {} : { since }), ...(failed ? { failed } : {}) };
   }
@@ -7348,7 +7618,7 @@ export class CoordinatorCore {
       // Keep button and a health frame, on a real pool) both found none
       // being made and asked for one each.
       if (this.#toppingUp.has(owner)) continue;
-      const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
+      const { ready, starting } = this.vmStandby.tally(owner, this.#standbyBy(owner));
       if (ready + starting >= wish.count) continue;
       this.#toppingUp.add(owner);
       try {
@@ -7848,6 +8118,76 @@ function takesSessions(host, requester, entry) {
   return mayActFor(entry, whose) && runsSessionsFor(entry, requester);
 }
 
+/** How many pinned admins a box's health may list. A box pins a few people; more is not a box's word. */
+const MAX_PINNED = 64;
+
+/**
+ * Who a box pins as its admins (`health.admins`, src/fleet/host/pinned-admins.js),
+ * as this person may see it, or undefined for a field that is not the shape a
+ * box sends.
+ *
+ * THE ADDRESSES ARE PEOPLE'S, so the list goes only to whoever already sees
+ * everybody (the admin, and the break-glass token) and to somebody on it, who
+ * administers the box with the others. Anybody else is told how many, and
+ * that they are not one: enough for a phone to draw Update and Reboot only
+ * where the box will take them from this person (C-2), and no list of whom
+ * to ask.
+ *
+ * `count` and `you` are null when the box said it cannot read its record,
+ * which is cannot tell (C-5): it refuses those verbs from everybody until it
+ * can, and `problem` says so. `left` is said when the box pins somebody and
+ * takes those verbs from nobody: every admin it pins left the fleet, none of
+ * them can sign, or it cannot check a signature at all (`stranded`).
+ *
+ * BOTH SENTENCES ARE THIS FILE'S, never the box's (intents.js
+ * PIN_SENTENCES). They go to everybody who sees the box, people not shown the
+ * addresses included, so a box's own text there would be a way to put an
+ * address, or anything else, in front of all of them. The box sends a code;
+ * one it does not name, or no code beside its own sentence, reads as `left`.
+ *
+ * `stranded` goes with `left`, and only ever as one of the three codes this
+ * file names, never as the box sent it. A phone reads it for one thing: on
+ * `unchecked` the box can check nobody's signature, so it refuses even a
+ * person's restore of their own work, and the phone does not draw Restore.
+ *
+ * @param {unknown} admins
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ * @returns {{ count: number|null, you: boolean|null, pinned?: string[], left?: string, stranded?: 'left'|'unlisted'|'unchecked', problem?: string }|undefined}
+ */
+export function adminsSeenBy(admins, requester) {
+  if (!admins || typeof admins !== 'object' || Array.isArray(admins)) return undefined;
+  const a = /** @type {Record<string, unknown>} */ (admins);
+  const raw = a.pinned;
+  /** @type {string[]|null} */
+  let pinned = null;
+  if (Array.isArray(raw)) {
+    if (raw.length > MAX_PINNED || !raw.every((e) => typeof e === 'string' && e.length <= 254 && emailOf(e))) return undefined;
+    pinned = [...new Set(raw.map((e) => /** @type {string} */ (emailOf(e))))];
+  } else if (raw !== null) {
+    return undefined;
+  }
+  const said = (/** @type {unknown} */ v) => typeof v === 'string' && v.length > 0;
+  // ANY CODE AT ALL IS STRANDED. One this file does not name, from a newer box
+  // or a broken one, still means the box takes those verbs from nobody, and
+  // read as nothing it drew controls the box refuses; it reads as `left`.
+  /** @type {'left'|'unlisted'|'unchecked'|null} */
+  const code = said(a.stranded) || said(a.left)
+    ? (['unlisted', 'unchecked'].includes(/** @type {string} */ (a.stranded)) ? /** @type {'unlisted'|'unchecked'} */ (a.stranded) : 'left')
+    : null;
+  const left = pinned && pinned.length > 0 && code ? PIN_SENTENCES[code] : null;
+  const problem = pinned === null ? PIN_SENTENCES.unreadable : null;
+  const email = emailOf(requester?.email ?? '');
+  const you = pinned ? Boolean(email) && pinned.includes(/** @type {string} */ (email)) : null;
+  const sees = !requester || Boolean(requester.admin) || you === true;
+  return {
+    count: pinned ? pinned.length : null,
+    you,
+    ...(sees && pinned ? { pinned } : {}),
+    ...(left && code ? { left, stranded: code } : {}),
+    ...(problem ? { problem } : {}),
+  };
+}
+
 /**
  * One host, with everything private to somebody else removed.
  *
@@ -7856,6 +8196,10 @@ function takesSessions(host, requester, entry) {
  * with it — a list of names somebody cannot act on is an existence oracle
  * wearing a convenience.
  *
+ * Its pinned admins are shaped for everybody, the admin included, because
+ * whether the asker is one of them (`you`) is the part a phone draws from
+ * (adminsSeenBy).
+ *
  * @param {any} host
  * @param {{ email?: string|null, admin?: boolean }|null} requester
  * @param {{ actsFor?: string|null }|null|undefined} entry  the host's registry
@@ -7863,6 +8207,11 @@ function takesSessions(host, requester, entry) {
  *   Without one no pool entry is believed.
  */
 function visibleHost(host, requester, entry) {
+  if (host?.health && 'admins' in host.health) {
+    const { admins, ...rest } = host.health;
+    const seen = adminsSeenBy(admins, requester);
+    host = { ...host, health: seen ? { ...rest, admins: seen } : rest };
+  }
   if (!requester || requester.admin || !host) return host;
   // WHOSE TEMPORARY MACHINE IT IS is an email, and a member is shown it only
   // when it is theirs, as /api/hosts/enrolled already did (enrolledHostsFor).
@@ -8060,6 +8409,23 @@ const HOST_PUSH_WINDOW_MS = 60 * 60_000;
  * it).
  */
 const MAX_PUSH_LIMIT_ROWS = 64;
+/**
+ * How many Xen Orchestras' watchdog answers are kept (serialiseXoWatchdogs):
+ * one row per person and address, 64 of the widest key restore admits with
+ * a word, a time and a box's name beside it is under 40 KB, and a fleet
+ * with more Xen Orchestras than that loses the oldest answer, which is the
+ * push saying what it said before anything was learned.
+ */
+const MAX_XO_WATCHDOGS = 64;
+/**
+ * What a job can say about Fleetwright's reconnect watchdog on a Xen
+ * Orchestra (xo-setup.js, status): `loaded`, setup listed it loaded or loaded
+ * it; `absent`, the plugins were listed and it was not among them; `added`,
+ * the watchdog job put it on the disk and did not see it load. Nothing else
+ * is believed, and a job that could not tell says nothing (C-5).
+ */
+const XO_WATCHDOG_STATES = Object.freeze(['loaded', 'absent', 'added']);
+/** @typedef {'loaded'|'absent'|'added'} XoWatchdogState */
 
 /** Events worth waking somebody for. The rest are for the log. */
 const NOTIFIABLE = new Set([
@@ -8184,7 +8550,13 @@ export function narrowProgress(msg) {
     phase,
     state: /** @type {SetupProgress['state']} */ (state),
     purpose: /** @type {SetupProgress['purpose']} */ (purpose),
-    text: msg?.text ? String(msg.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, 200) : '',
+    // THE WHOLE SENTENCE, within reason. A job's end says what stopped it,
+    // what it left behind and what to do next, and the box writes that as
+    // one sentence of a few hundred characters; at 200 the phone got "…so"
+    // and the person got nothing to act on. 700 is room for the longest end
+    // a box writes (600, its own cap) and fits a sealed push with room
+    // (push-encryption.test.js).
+    text: msg?.text ? String(msg.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, SETUP_TEXT_MAX) : '',
     // HOW FAR INTO THE STEP, in thousandths, for a step that is bytes
     // moving and can say so: the edge router's build is most of a policy
     // job, and "step 5 of 5" alone held the bar at four fifths for minutes.

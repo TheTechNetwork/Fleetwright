@@ -111,6 +111,20 @@ internal object XoHandoff {
     }.getOrNull()?.takeIf { XoSetup.ADDRESS_RE.matches(it) }
 
     /**
+     * The addresses the pool master answers on, as setup saw them and the
+     * record keeps them (`masters`, poolMastersOf in xo-setup.js): the
+     * management address first, then the others its PIFs carry. Empty for a
+     * record from before the field, or one whose setup could not tell, and
+     * the page then says nothing of it rather than guessing (C-5). Only what
+     * is shaped like an address is kept, since these are shown and may one
+     * day be dialled.
+     */
+    fun masters(settings: Settings, address: String): List<String> = runCatching {
+        val masters = JSONObject(settings.secret(tokenName(address)) ?: return@runCatching null).optJSONArray("masters") ?: return@runCatching null
+        (0 until masters.length()).mapNotNull { i -> masters.optString(i).takeIf { XoSetup.ADDRESS_RE.matches(it) } }
+    }.getOrNull() ?: emptyList()
+
+    /**
      * Open the token a finished job handed back and keep it. Null when there
      * is nothing to collect: not this phone's job, or not done yet.
      */

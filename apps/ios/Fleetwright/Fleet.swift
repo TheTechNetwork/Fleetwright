@@ -449,8 +449,8 @@ struct Fleet {
 
         /// The title over a start the fleet refused. Two refusals are a setting
         /// on the machine and not a fault in the asking, and asking again
-        /// changes neither: `unsandboxed`, a machine that runs sessions without
-        /// the sandbox and so only for its admins (G8), and `host_outdated`, one
+        /// changes neither: `unsandboxed`, a machine that does not contain a
+        /// session and so runs them only for its admins (G8), and `host_outdated`, one
         /// too old to carry what was asked. Those are titled as the reason, and
         /// the coordinator's sentence beneath says which setting; anything else
         /// is a start that could not happen.
@@ -1099,6 +1099,16 @@ struct Fleet {
         if let confirm, !confirm.isEmpty { params["confirm"] = confirm }
         return try await intent("reboot", params: params, host: host)
     }
+
+    /// Add or remove an admin this machine pins (`pinadmin`).
+    ///
+    /// Only an admin the machine already pins may, signed for this one
+    /// request; the first is pinned on the machine itself, so a phone never
+    /// offers it. Named for the host so the phone signs it for that box.
+    func pinAdmin(host: String, email: String, add: Bool) async throws -> Reply {
+        try await intent("pinadmin", params: ["email": email, "op": add ? "add" : "remove"], host: host)
+    }
+
     /// What can be connected on this box, and what already is.
     ///
     /// One round trip: the catalogue and the current state arrive together, so
@@ -2218,7 +2228,21 @@ struct Fleet {
         /// open, and a server-rendered string would freeze the moment it was
         /// sent.
         let expiresAt: Double?
+        /// Who forgot it, as the fleet believes the box: `fleet:<address>`.
+        /// Read for one thing, whether a machine that pins its admins takes
+        /// its restore from this person (HostHealth.mayRestore). Nil from an
+        /// older coordinator, and then it is nobody's as far as that goes.
+        let createdBy: String?
         var id: String { name }
+
+        /// Whether this person forgot it. The box reads `fleet:<address>` or a
+        /// bare address as its owner (pinned-admins.js ownerOf), and so does
+        /// this.
+        func isOwn(_ me: String) -> Bool {
+            let who = me.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !who.isEmpty, let by = createdBy?.lowercased() else { return false }
+            return by == "fleet:\(who)" || by == who
+        }
 
         /// "2 days left", "5h left", or "goes within the hour".
         var remaining: String? {
@@ -2424,6 +2448,18 @@ struct Fleet {
         /// they do not administer only on true (hosts.js runsSessionsFor), so
         /// nil, a box too old to say, is read the way it reads it: not.
         let sandboxed: Bool?
+        /// Why not, beside a false: `off`, `unsafe_args`, `userns_root`,
+        /// `userns_docker` or `userns_host` (http.js uncontained). A box can
+        /// have its sandbox on and still not contain a session, run as root,
+        /// so `resumeKept` names the reason and its way on from this rather
+        /// than saying the sandbox is off. Nil from a box too old to send it,
+        /// read as off, which is what such a box meant by false.
+        let sandboxedWhy: String?
+        /// And every reason after it, in the box's order, because a box can
+        /// have two (root with its sandbox off) and fixing the first alone
+        /// does not open it. Nil from a box that gives only the first. The
+        /// coordinator holds both to codes, so neither can fail this decode.
+        let sandboxedAlso: [String]?
         /// What `tag` matches on for this box: os, architecture, distribution,
         /// whether its image has a browser, plus anything set here or in
         /// FLEETWRIGHT_LABELS.
@@ -2454,6 +2490,75 @@ struct Fleet {
         /// which is the normal case and also what a host too old to send this
         /// looks like; the screen says nothing for it rather than guessing.
         let houseRules: Int?
+        /// WHO THIS MACHINE TAKES UPDATE, UPGRADE, REBOOT AND RESTORING
+        /// SOMEBODY ELSE'S WORK FROM, when it pins its own admins
+        /// (src/fleet/host/pinned-admins.js, shaped per person by core.js
+        /// adminsSeenBy). Nil is a box that cannot pin, which is every box
+        /// from before this: nothing about pins is drawn there, and the
+        /// buttons are drawn as before.
+        let admins: Admins?
+
+        struct Admins: Codable, Hashable {
+            /// How many it pins. Zero is nobody, and the box takes the fleet's
+            /// word as before. Nil is a record the box cannot read, and then
+            /// it takes those verbs from nobody.
+            let count: Int?
+            /// Whether this person is one of them. Nil with `count`.
+            let you: Bool?
+            /// Their addresses, sent only to somebody on the list and to the
+            /// fleet's admin.
+            let pinned: [String]?
+            /// Said when the box pins somebody and takes those verbs from
+            /// nobody: every admin it pins left the fleet, none of them can
+            /// sign, or it cannot check a signature. The coordinator's
+            /// sentence, never the box's own (intents.js PIN_SENTENCES).
+            let left: String?
+            /// Why, beside `left`: `left`, `unlisted` or `unchecked`, always
+            /// one of the coordinator's three. Nil from a coordinator too old
+            /// to send it, and then Restore is drawn as before.
+            let stranded: String?
+            /// Said when the box cannot read its record. The coordinator's
+            /// sentence too.
+            let problem: String?
+
+            /// Whether the box takes those verbs from this person. Not while
+            /// it is stranded, from anybody: a pinned person whose key the
+            /// fleet does not list cannot sign either (C-2).
+            var takesFromYou: Bool { count == 0 || (you == true && left == nil) }
+
+            /// Whether the box can check anybody's signature, which a person's
+            /// restore of their own work needs. Not while it cannot read its
+            /// record, and not on `unchecked`: it holds no key list to check
+            /// with, so it refuses their own restore too.
+            var checksSignatures: Bool { count != nil && stranded != "unchecked" }
+        }
+
+        /// Whether the box takes update, upgrade, reboot, a new channel and a
+        /// new image from this person as far as its pins go. True where it
+        /// pins nobody or cannot pin, so only the coordinator's rule decides
+        /// there, as before.
+        var boxWideAllowed: Bool { admins?.takesFromYou ?? true }
+
+        /// Whether the box takes this restore from this person: their own
+        /// work on their signature, anybody's from a pinned admin, nothing
+        /// while it cannot read its record or check a signature.
+        func mayRestore(_ item: Binned, as me: String) -> Bool {
+            boxWideAllowed || (admins?.checksSignatures == true && item.isOwn(me))
+        }
+
+        /// What a session started here with no mode does: "asks" before each
+        /// tool, or runs with permissions "bypassed" (FLEETWRIGHT_SKIP_PERMISSIONS
+        /// on the box, http.js #hostFacts). New session labels its "Box
+        /// default" choice from this, and offers "Permissions bypassed" only
+        /// where every machine it could land on says "bypassed", because a box
+        /// that asks refuses a start from the fleet that asks to bypass
+        /// (commands.js permissionCeiling), and nil may be a box that asks.
+        ///
+        /// NIL IS CANNOT TELL: a box too old to say, and then the sheet says
+        /// nothing about which way the default goes. A `var` with a default,
+        /// so it is decoded like the rest and every rebuild below that does
+        /// not name it still compiles.
+        var permissions: String? = nil
 
         /// Mirrors `waiting` in the host's `/updates` reply.
         struct Waiting: Codable, Hashable {
@@ -2513,7 +2618,8 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: next,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
+                permissions: permissions,
             )
         }
 
@@ -2522,7 +2628,8 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
+                permissions: permissions,
             )
         }
 
@@ -2535,7 +2642,8 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
+                permissions: permissions,
             )
         }
 
@@ -2550,7 +2658,8 @@ struct Fleet {
                 account: account, credential: credential, version: version, updates: updates,
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
-                sandbox: sandbox, sandboxed: sandboxed, labels: all, setLabels: set, logs: logs, houseRules: houseRules,
+                sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: all, setLabels: set, logs: logs, houseRules: houseRules, admins: admins,
+                permissions: permissions,
             )
         }
     }
@@ -2598,11 +2707,67 @@ struct Fleet {
         /// that it is off (C-5). A coordinator too old to send `administers`
         /// is older than the rule too, so nil offers Resume as before, and a
         /// refusal still says why.
+        ///
+        /// WHY NOT IS THE BOX'S WORD TOO (`sandboxedWhy`). A box run as root
+        /// has its sandbox on and still does not contain a session, and
+        /// "without the sandbox" would send its operator to a switch that is
+        /// already on. So each reason is named with what opens it, in the
+        /// coordinator's words for the same refusal (scheduler.js
+        /// NOT_CONTAINED); a reason this app does not know is not guessed at.
+        ///
+        /// AND EVERY ONE OF THEM when there are more (`sandboxedAlso`). A box
+        /// run as root with its sandbox off would have read "until its sandbox
+        /// is on", and with it on, still not taken the session. So two or more
+        /// are named together with everything that has to change, from
+        /// `notContained`; one this app does not know makes the rest a
+        /// partial list, and then the line says only "not contained".
         var resumeKept: String? {
             guard administers == false, health?.sandboxed != true else { return nil }
-            return health?.sandboxed == false
-                ? "\(hostId) runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
-                : "\(hostId) has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
+            guard health?.sandboxed == false else {
+                return "\(hostId) has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
+            }
+            var said = ["off"]
+            if let first = health?.sandboxedWhy { said = [first] + (health?.sandboxedAlso ?? []) }
+            if said.count > 1 {
+                let known = said.compactMap { Self.notContained[$0] }
+                guard known.count == said.count else {
+                    return "\(hostId) says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
+                }
+                return "\(hostId) \(Self.together(known.map { $0.does })), so only this fleet’s admin, or the one person it works for, can resume one there until \(Self.together(known.map { $0.until }))."
+            }
+            switch said[0] {
+            case "off":
+                return "\(hostId) runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
+            case "unsafe_args":
+                return "\(hostId) lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out."
+            case "userns_root":
+                return "\(hostId) runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user."
+            case "userns_docker":
+                return "\(hostId) runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman."
+            case "userns_host":
+                return "\(hostId) has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap."
+            default:
+                return "\(hostId) says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
+            }
+        }
+
+        /// Each reason a machine can give, as `resumeKept` joins two or more:
+        /// what the machine does, in the coordinator's `short` words, and what
+        /// has to be true before it takes the session, its `step` said as a
+        /// condition (scheduler.js NOT_CONTAINED). Fleet.kt has the same table.
+        private static let notContained: [String: (does: String, until: String)] = [
+            "off": ("runs sessions without the sandbox", "its sandbox is on"),
+            "unsafe_args": ("lets FLEETWRIGHT_SANDBOX_ARGS end its sandbox", "the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox is taken out"),
+            "userns_root": ("runs fleetwright as root", "fleetwright runs as its own user"),
+            "userns_docker": ("runs its sandbox with docker", "its sessions run under podman"),
+            "userns_host": ("has FLEETWRIGHT_SANDBOX_USERNS=host", "FLEETWRIGHT_SANDBOX_USERNS is set back to nomap"),
+        ]
+
+        /// Clauses as one, joined as the coordinator joins them: `a and b`,
+        /// or `a, b, and c`.
+        private static func together(_ parts: [String]) -> String {
+            guard parts.count > 2 else { return parts.joined(separator: " and ") }
+            return parts.dropLast().joined(separator: ", ") + ", and " + parts[parts.count - 1]
         }
 
         /// Is there anything of ours to apply? Asked once, so the version line

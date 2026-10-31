@@ -15,7 +15,10 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, chmodSync 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { debVersion, shasumFor, pinnedNodeVersion, buildDeb } from '../tools/build-host-deb.mjs';
+import {
+  debVersion, shasumFor, pinnedNodeVersion, buildDeb,
+  neededLibraries, undeclaredLibraries, dependsPackages,
+} from '../tools/build-host-deb.mjs';
 
 const DEB = new URL('../install/deb/', import.meta.url);
 const read = (f) => readFileSync(new URL(f, DEB), 'utf8');
@@ -58,6 +61,24 @@ test('the pinned Node is read from node.env, and Renovate can see it', () => {
   const m = re.exec(env);
   assert.ok(m, 'the renovate regex does not match node.env');
   assert.equal(m.groups.currentValue, pinnedNodeVersion());
+});
+
+// THE NODE THAT RUNS THIS TEST IS NODE'S OWN BUILD TOO, so what it links is
+// what the deb will carry on the lane of the same major. Node 25 began linking
+// libatomic, which a stock Debian 13 does not have; the deb named no libatomic1
+// and the first box to take Node 26 would have had a node that could not
+// start. The control template has to cover every soname, on every lane.
+test('every library the bundled Node links is one the deb depends on', () => {
+  const needed = neededLibraries(readFileSync(process.execPath));
+  assert.ok(needed.includes('libc.so.6'), `the ELF reader found ${JSON.stringify(needed)} and not libc`);
+  assert.deepEqual(undeclaredLibraries(read('control.in'), needed), [], 'control.in Depends does not cover what node links');
+  // The table is what makes a missing library a refusal with a package name
+  // in it, and a library nobody has named a refusal too.
+  assert.deepEqual(
+    undeclaredLibraries('Depends: tmux, libc6', ['libc.so.6', 'libatomic.so.1', 'libfoo.so.9']),
+    [{ soname: 'libatomic.so.1', package: 'libatomic1' }, { soname: 'libfoo.so.9', package: null }],
+  );
+  assert.deepEqual(dependsPackages('Depends: debconf (>= 0.5) | debconf-2.0, tmux,\n  libc6'), ['debconf', 'debconf-2.0', 'tmux']);
 });
 
 test('SHASUMS256.txt is read by file name, and only a real digest counts', () => {

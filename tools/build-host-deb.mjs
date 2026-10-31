@@ -41,6 +41,103 @@ const DEB_SRC = path.join(ROOT, 'install', 'deb');
 /** Debian's name for an architecture, and Node's. */
 export const ARCHES = Object.freeze({ amd64: 'x64', arm64: 'arm64' });
 
+/**
+ * THE LIBRARIES NODE'S OWN BUILD LINKS, AND THE DEBIAN PACKAGE EACH LIVES IN.
+ *
+ * dpkg-shlibdeps would work this out for a package built from source; this
+ * one carries a binary somebody else built, so the table is written down.
+ * Node 24 wanted libc, libgcc_s and libstdc++, which every Debian has because
+ * apt itself needs them. Node 25 moved to linking libatomic, which a stock
+ * Debian 13 does not install, so a deb that did not name libatomic1 put a
+ * node on the box that could not start, and the service with it. The build
+ * reads bin/node's NEEDED entries and refuses to ship one that wants a
+ * library `Depends` does not cover; a soname this table does not know is a
+ * refusal too, since nobody can say which package would satisfy it.
+ */
+export const SHARED_LIBRARY_PACKAGES = Object.freeze({
+  'libc.so.6': 'libc6',
+  'libm.so.6': 'libc6',
+  'libdl.so.2': 'libc6',
+  'libpthread.so.0': 'libc6',
+  'librt.so.1': 'libc6',
+  'ld-linux-x86-64.so.2': 'libc6',
+  'ld-linux-aarch64.so.1': 'libc6',
+  'libgcc_s.so.1': 'libgcc-s1',
+  'libstdc++.so.6': 'libstdc++6',
+  'libatomic.so.1': 'libatomic1',
+});
+
+/** True when the bytes begin as an ELF file does. A fixture that is a shell script is not one. */
+export function isElf(buf) {
+  return buf.length >= 4 && buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46;
+}
+
+/**
+ * The DT_NEEDED sonames of a 64-bit little-endian ELF, read from its
+ * .dynamic section and the string table that section links to. Only what the
+ * two Node builds we ship are; anything else is refused by name rather than
+ * misread.
+ *
+ * @param {Buffer} buf
+ * @returns {string[]}
+ */
+export function neededLibraries(buf) {
+  if (!isElf(buf)) throw new Error('not an ELF file');
+  if (buf[4] !== 2 || buf[5] !== 1) throw new Error('not a 64-bit little-endian ELF');
+  const shoff = Number(buf.readBigUInt64LE(0x28));
+  const shentsize = buf.readUInt16LE(0x3a);
+  const shnum = buf.readUInt16LE(0x3c);
+  const section = (i) => {
+    const o = shoff + i * shentsize;
+    return {
+      type: buf.readUInt32LE(o + 4),
+      offset: Number(buf.readBigUInt64LE(o + 24)),
+      size: Number(buf.readBigUInt64LE(o + 32)),
+      link: buf.readUInt32LE(o + 40),
+    };
+  };
+  for (let i = 0; i < shnum; i++) {
+    const dyn = section(i);
+    if (dyn.type !== 6) continue; // SHT_DYNAMIC
+    const strtab = section(dyn.link);
+    const names = [];
+    for (let o = dyn.offset; o + 16 <= dyn.offset + dyn.size; o += 16) {
+      const tag = Number(buf.readBigUInt64LE(o));
+      if (tag === 0) break; // DT_NULL
+      if (tag !== 1) continue; // DT_NEEDED
+      const at = strtab.offset + Number(buf.readBigUInt64LE(o + 8));
+      names.push(buf.toString('latin1', at, buf.indexOf(0, at)));
+    }
+    return names;
+  }
+  throw new Error('no .dynamic section: a static binary, or not one of ours');
+}
+
+/** The package names a `Depends:` value names, alternatives included. */
+export function dependsPackages(control) {
+  const m = /^Depends:\s*(.*)$/m.exec(control);
+  if (!m) return [];
+  return m[1].split(',').flatMap((d) => d.split('|')).map((d) => d.trim().split(/[\s(]/)[0]).filter(Boolean);
+}
+
+/**
+ * Which of a binary's sonames `Depends` does not cover: each with the package
+ * that would, or with nothing when the table has no row for it.
+ *
+ * @param {string} control  the control file, or the template
+ * @param {string[]} sonames
+ * @returns {{ soname: string, package: string | null }[]}
+ */
+export function undeclaredLibraries(control, sonames) {
+  const have = new Set(dependsPackages(control));
+  const out = [];
+  for (const soname of sonames) {
+    const pkg = SHARED_LIBRARY_PACKAGES[soname] ?? null;
+    if (pkg === null || !have.has(pkg)) out.push({ soname, package: pkg });
+  }
+  return out;
+}
+
 /** The Node version install/deb/node.env pins. */
 export function pinnedNodeVersion(text = readFileSync(path.join(DEB_SRC, 'node.env'), 'utf8')) {
   const m = /^NODE_VERSION=(\d+\.\d+\.\d+)\s*$/m.exec(text);
@@ -185,6 +282,14 @@ export async function buildDeb({ arch, manifest, tarball, nodeVersion, epoch, ou
   execFileSync('tar', ['-xJf', nodeTar, '-C', work, `${top}/bin/node`, `${top}/LICENSE`]);
   const nodeDir = path.join(stage, 'usr/lib/fleetwright/node');
   mkdirSync(path.join(nodeDir, 'bin'), { recursive: true });
+  const nodeBin = readFileSync(path.join(work, top, 'bin/node'));
+  if (isElf(nodeBin)) {
+    const missing = undeclaredLibraries(readFileSync(path.join(DEB_SRC, 'control.in'), 'utf8'), neededLibraries(nodeBin));
+    if (missing.length) {
+      const said = missing.map((m) => (m.package ? `${m.soname} (${m.package})` : `${m.soname} (no package named for it in SHARED_LIBRARY_PACKAGES)`));
+      throw new Error(`node v${nodeVersion} for ${arch} links libraries install/deb/control.in does not depend on: ${said.join(', ')} — refusing to ship a node that cannot start`);
+    }
+  }
   copyFileSync(path.join(work, top, 'bin/node'), path.join(nodeDir, 'bin/node'));
   chmodSync(path.join(nodeDir, 'bin/node'), 0o755);
   const doc = path.join(stage, 'usr/share/doc/fleetwright');

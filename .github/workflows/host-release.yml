@@ -1,7 +1,15 @@
 name: Host release
 
-# Built on every merge to main that changes something a host runs, and attached
-# to a GitHub release when one is published.
+# Built on every merge to main that changes something a host runs, attached to
+# a GitHub release when one is published, AND BUILT ON EVERY PULL REQUEST THAT
+# TOUCHES THOSE PATHS. The pull-request run publishes nothing: it builds the
+# tarball twice and the debs twice, runs every entry point, installs a deb on
+# Debian 13 and starts the bundled node. That last step is the only place the
+# runtime a box will actually get is ever run, and it used to run only after
+# the merge: the Node 26 bump (#1418) was green on its pull request with a node
+# that could not start on Debian, because nothing before main had started it.
+# The two path lists below are the same list on purpose, and
+# test/release-upload.test.js holds them equal.
 #
 # NOTHING CONSUMES IT YET AND THAT IS DELIBERATE — docs/packaging.md, step 2:
 # "Nothing consumes them yet; they can be wrong without hurting anybody." A
@@ -11,6 +19,18 @@ name: Host release
 on:
   push:
     branches: [main]
+    paths:
+      - 'bin/**'
+      - 'src/**'
+      - 'install/**'
+      - 'sandbox/**'
+      - 'openapi.json'
+      - 'package.json'
+      - 'tools/build-host-package.mjs'
+      - 'tools/build-host-deb.mjs'
+      - 'tools/build-apt-repo.sh'
+      - '.github/workflows/host-release.yml'
+  pull_request:
     paths:
       - 'bin/**'
       - 'src/**'
@@ -66,7 +86,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '24.22.1'
+          node-version: '24.22.2'
 
       # esbuild only. The build bundles the ONE runtime dependency into the
       # artifact, which is the whole point — `npm ci` here is about what the
@@ -424,7 +444,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '24.22.1'
+          node-version: '24.22.2'
       - uses: actions/download-artifact@v8.0.2
         with:
           name: fleetwright-host

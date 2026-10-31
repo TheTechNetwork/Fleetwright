@@ -94,7 +94,9 @@ async function fleet(opts = {}) {
   };
   // Given the Worker's environment, as the runtime gives it, so the object
   // opens what the Worker sealed with the same deposit key.
-  const logins = new ClaudeLogins({ storage: { get: async (k) => rows.get(k), put: async (k, v) => { rows.set(k, v); } } }, env);
+  // A copy each way, as a Durable Object's storage reads and writes: a row is
+  // never the same object twice (test/vault.test.js, minter()).
+  const logins = new ClaudeLogins({ storage: { get: async (k) => structuredClone(rows.get(k)), put: async (k, v) => { rows.set(k, structuredClone(v)); } } }, env);
   /** Every body the minter was sent, as it arrived. @type {any[]} */
   const toMinter = [];
   const core = new CoordinatorCore({

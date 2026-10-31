@@ -74,14 +74,18 @@ test('a wrong secret, a replaced token, an ended job and an old token are all th
   assert.equal((await core.imageReport({ token: first, step: 'started' })).status, 403, 'a build started over leaves nothing for the VM it gave up on');
   assert.equal((await core.imageReport({ token: second, step: 'started' })).status, 202);
 
+  // Three hours: a Raspberry Pi behind a slow mirror outlived an hour, and
+  // its last report, the one that decides the build, was refused as expired.
   at += 61 * 60_000;
-  assert.equal((await core.imageReport({ token: second, step: 'packages' })).status, 403, 'an hour, and it is gone');
+  assert.equal((await core.imageReport({ token: second, step: 'packages' })).status, 202, 'an hour is not the limit any more');
+  at += 2 * 60 * 60_000;
+  assert.equal((await core.imageReport({ token: second, step: 'packages' })).status, 403, 'three hours, and it is gone');
 
   at = Date.now();
   const third = (await ask('laptop')).token;
   await core.onHostMessage('laptop', { kind: 'event', event: 'xosetup.progress', job: JOB, step: 5, of: 5, phase: 'apply', purpose: 'policy', state: 'failed', text: 'Stopped.' });
   assert.equal((await core.imageReport({ token: third, step: 'packages' })).status, 403, 'the job ending takes it back');
-  assert.equal(reports('laptop').length, 1, 'only the one good report got through');
+  assert.equal(reports('laptop').length, 2, 'only the two good reports got through');
   for (const r of [await core.imageReport({}), await core.imageReport({ token: 'fwt_x_y', step: 'done' })]) {
     assert.equal(r.status, 403);
     assert.equal(r.body.error.code, 'unknown');
@@ -93,11 +97,12 @@ test('a step is a word from the list, and only a failure carries the log, stripp
   const token = (await ask('laptop')).token;
   assert.equal((await core.imageReport({ token, step: 'Installing everything' })).status, 400);
   assert.equal((await core.imageReport({ token, step: 'packages', detail: 'ignored' })).status, 202);
+  assert.equal((await core.imageReport({ token, step: 'dns' })).status, 202, 'the wait for a name is a step, so it is not silence');
   assert.equal('detail' in reports('laptop')[0], false, 'words ride on a failure only');
 
   const log = `${'x'.repeat(3000)}\nE: Unable to locate package‮ nope\u001b[0m\n`;
   assert.equal((await core.imageReport({ token, step: 'failed', detail: log })).status, 202);
-  const failed = reports('laptop')[1];
+  const failed = reports('laptop')[2];
   assert.equal(failed.step, 'failed');
   assert.equal(failed.detail.length, 2000, 'the end of the log, not all of it');
   assert.ok(failed.detail.endsWith('E: Unable to locate package nope[0m\n'), 'control and direction characters are dropped');
@@ -124,12 +129,25 @@ test('the session image’s pull carries its bytes, and only whole counts on tha
 });
 
 test('a token carries the pull reported every 15 seconds through the whole install, and none when its box is away', async () => {
-  const { core, ask } = fleet();
+  const { core, ask, reports } = fleet();
   const token = (await ask('laptop')).token;
-  assert.ok(MAX_IMAGE_REPORTS >= (25 * 60) / 15 + 12, 'the install’s 25 minutes at one report per 15 seconds, and its steps');
+  // The pull every 15 seconds AND the heartbeat every minute, for the hour
+  // the token is good for, and the steps. The heartbeat was added without
+  // being counted, and a long build spent the count just before done.
+  assert.ok(MAX_IMAGE_REPORTS >= (60 * 60) / 15 + 60 + 12, 'an hour of the pull every 15 seconds, the heartbeat every minute, and the steps');
   let last;
   for (let i = 0; i <= MAX_IMAGE_REPORTS; i++) last = await core.imageReport({ token, step: 'image', got: i });
   assert.equal(last?.status, 429);
+  // THE END IS HEARD PAST THE COUNT. A build that reported too often is still
+  // a build that finished, and done is the one report the box makes a
+  // template on: on the old code this was 429, and the image a kept VM.
+  assert.equal((await core.imageReport({ token, step: 'done' })).status, 202, 'done refused for the count');
+  assert.equal(reports('laptop').at(-1).step, 'done');
+  assert.equal((await core.imageReport({ token, step: 'failed', detail: 'x' })).status, 202, 'failed refused for the count');
+  // But not for ever: the ends have a small count of their own.
+  let end;
+  for (let i = 0; i < 40; i++) end = await core.imageReport({ token, step: 'done' });
+  assert.equal(end?.status, 429, 'a VM that says done for ever is heard for ever');
 
   const fresh = (await ask('laptop')).token;
   core.registry.disconnect('laptop');

@@ -845,6 +845,14 @@ enum Manage {
         static func limitedUser(_ user: String) -> String {
             "Signed in as \(user), the limited user setup made, so only what its resource set allows is listed."
         }
+        /// The pool master's addresses as setup saw them, the management one
+        /// first: what to try when it stops answering on one. The same words
+        /// as Android.
+        static func poolMaster(_ masters: [String]) -> String {
+            guard let first = masters.first else { return "" }
+            let rest = masters.dropFirst()
+            return "Pool master: \(first)" + (rest.isEmpty ? "" : ", also \(rest.joined(separator: ", "))")
+        }
         static let tuneNeedsStopped = "vCPUs and memory change only while it is stopped."
         static let growNote = "A disk can grow while the VM runs. It cannot be made smaller again."
         static func refused(_ why: String) -> String { "Xen Orchestra refused: \(why)" }

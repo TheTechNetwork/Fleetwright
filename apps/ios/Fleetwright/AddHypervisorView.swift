@@ -1228,7 +1228,7 @@ struct AddHypervisorView: View {
             ? "On: Suricata drops it, and while it cannot inspect, nothing leaves."
             : "Off: Suricata logs it by machine and lets it through."
         guard let there, (there.blocks ?? false) != choice.edgeBlock else { return what }
-        return "\(what) Apply rebuilds the edge router to change this: machines behind it have no way out until the new one is up."
+        return "\(what) Apply rebuilds the edge router to change this: machines behind it keep their way out while the new one is built, and have none while it starts."
     }
 
     /// What a pair does, and what changing it costs on a router that is
@@ -1240,7 +1240,7 @@ struct AddHypervisorView: View {
         guard let there, (there.ha ?? false) != choice.edgeHa else { return what }
         return choice.edgeHa
             ? "\(what) Apply makes the second and hands over to it: machines behind it have no way out while it starts."
-            : "\(what) Apply removes the second and rebuilds the first: machines behind it have no way out until it is up."
+            : "\(what) Apply removes the second and rebuilds the first: machines behind it keep their way out while the new one is built, and have none while it starts."
     }
 
     private func edgeLine(_ there: XOPolicy.Inventory.Edge?) -> String {
@@ -1471,7 +1471,7 @@ struct AddHypervisorView: View {
                 .disabled(busy)
             }
             if choice.labsChanged(in: inv) {
-                Text("Apply rebuilds the edge router to change the labs: machines behind it have no way out until the new one is up.")
+                Text("Apply rebuilds the edge router to change the labs: machines behind it keep their way out while the new one is built, and have none while it starts.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.attention)
             }

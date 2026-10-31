@@ -874,6 +874,37 @@ test('a fact of the wrong shape is dropped rather than forwarded', async (t) => 
   assert.deepEqual(r.health.labels, ['debian13', 'gpu']);
 });
 
+test('why a box does not contain a session rides the frame beside the false, and only there', async (t) => {
+  // The coordinator names the way on from it (scheduler.js NOT_CONTAINED),
+  // so the code is carried as the hub said it. Beside `true` or cannot tell
+  // it is a reason for nothing, and prose is not a code.
+  const { sidecar, stub } = await setup(t, { facts: { sandboxed: false, sandboxedWhy: 'userns_root' } });
+  const frame = async (/** @type {string} */ id) => (await sidecar.handle(intent({ verb: 'health', id }))).health;
+  assert.equal((await frame('idem-why-0001')).sandboxedWhy, 'userns_root');
+  stub.setFacts({ sandboxed: true, sandboxedWhy: 'userns_root' });
+  assert.equal((await frame('idem-why-0002')).sandboxedWhy, null, 'beside true');
+  stub.setFacts({ sandboxed: false, sandboxedWhy: 'Turn the sandbox on.' });
+  // A sentence is not a code, and not a hub from before the field either:
+  // null would read as `off` and be told "turn its sandbox on".
+  assert.equal((await frame('idem-why-0003')).sandboxedWhy, 'unreadable', 'a sentence is not a code');
+  stub.setFacts({ sandboxed: false, sandboxedWhy: undefined });
+  assert.equal((await frame('idem-why-0004')).sandboxedWhy, null, 'a hub from before it');
+
+  // The reasons after the first ride with it, whole: an entry dropped would
+  // leave a list read as complete, and a refusal naming too few fixes. One
+  // that is not a code is carried as a code nobody knows instead.
+  stub.setFacts({ sandboxed: false, sandboxedWhy: 'off', sandboxedAlso: ['userns_root', 'userns_docker'] });
+  assert.deepEqual((await frame('idem-why-0005')).sandboxedAlso, ['userns_root', 'userns_docker']);
+  stub.setFacts({ sandboxed: false, sandboxedWhy: 'off', sandboxedAlso: ['userns_root', 'Run it as a user.'] });
+  assert.deepEqual((await frame('idem-why-0006')).sandboxedAlso, ['userns_root', 'unreadable'], 'prose is not a code');
+  stub.setFacts({ sandboxed: false, sandboxedWhy: 'off', sandboxedAlso: Array(9).fill('off') });
+  assert.deepEqual((await frame('idem-why-0007')).sandboxedAlso, ['unreadable'], 'more than a hub sends');
+  stub.setFacts({ sandboxed: false, sandboxedWhy: 'userns_root' });
+  assert.deepEqual((await frame('idem-why-0008')).sandboxedAlso, [], 'a hub that gives one');
+  stub.setFacts({ sandboxed: true, sandboxedWhy: null, sandboxedAlso: ['userns_root'] });
+  assert.deepEqual((await frame('idem-why-0009')).sandboxedAlso, [], 'beside true');
+});
+
 test('a label added from an app reaches the scheduler without a restart', async (t) => {
   // Health goes out every fifteen seconds and the coordinator filters and ranks
   // on the last frame it received. A list frozen at construction would mean a

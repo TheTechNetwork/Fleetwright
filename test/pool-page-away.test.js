@@ -82,6 +82,17 @@ test('when no holder can reach the pool, the refusal names each and why', async 
   assert.match(r.text, /old \(needs updating\)/);
 });
 
+test('when every holder is too old to be asked, the refusal says so, not that none could reach the pool', async () => {
+  // Skipped as "needs updating" fell through to "None of the machines holding
+  // your token could reach xo.lan", which sent the person to check the
+  // pool's network when no box had tried (C-5).
+  const { core, asked } = fleet({ old: { xo: [pool(ELI, 'xo.lan')], protocol: 12 } }, () => ({ ok: true }));
+  const r = await core.dispatch(look(eli));
+  assert.equal(r.error.code, 'host_outdated');
+  assert.equal(r.text, 'None of the machines holding your token for xo.lan is new enough to show its page from away, so none was asked: old (needs updating). Update one and ask again.');
+  assert.deepEqual(asked, []);
+});
+
 test('a pool’s page is its owner’s: nobody signed in and somebody else are refused before any box is asked', async () => {
   const { core, asked } = fleet({ aaa: { xo: [pool(ELI, 'xo.lan')] } }, () => ({ ok: true }));
   assert.equal((await core.dispatch(look(null))).error.code, 'not_signed_in');

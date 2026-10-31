@@ -41,6 +41,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -549,6 +550,9 @@ private fun MachinePage(
     var labels by remember(hostId) { mutableStateOf(reporting?.labels ?: emptyList()) }
     var setLabels by remember(hostId) { mutableStateOf(reporting?.setLabels ?: emptyList()) }
     var newLabel by remember { mutableStateOf("") }
+    // The address being typed to pin as an admin here. Cleared when it is
+    // sent, as a label is.
+    var newAdmin by remember { mutableStateOf("") }
     var rebooting by remember { mutableStateOf(false) }
     var rebootPin by remember { mutableStateOf("") }
     var rebootConfirm by remember { mutableStateOf("") }
@@ -674,6 +678,13 @@ private fun MachinePage(
         // explicit false hides them; null is a coordinator too old to say, and
         // draws them as before.
         val administers = h?.administers != false
+        // AND THEN THE MACHINE'S OWN RULE for update, upgrade, reboot, the
+        // channel and the image, when it pins its admins and this person is
+        // not one, or nobody pinned can sign (C-2). A machine that pins
+        // nobody, or cannot pin, leaves the coordinator's rule alone, as
+        // before. Labels are the coordinator's alone and stay on
+        // `administers`. Same rule as iOS's `mayActOnBox`.
+        val actsOnBox = administers && h?.boxWideAllowed != false
 
         if (h != null) {
             SectionHead("Software")
@@ -683,14 +694,14 @@ private fun MachinePage(
             // CHECK ALWAYS; APPLY ONLY WHEN THERE IS SOMETHING TO APPLY.
             Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                 OutlinedButton(enabled = !busy, onClick = { run { it.updates(hostId) } }) { Text("Check") }
-                if (h.appPending && administers) {
+                if (h.appPending && actsOnBox) {
                     OutlinedButton(enabled = !busy, onClick = { run { it.update(hostId, restart = true) } }) { Text("Apply update") }
                 }
             }
             if (administers) {
                 // ONLY WHERE IT WOULD WORK. Null is cannot tell (an older host) and
                 // keeps the button; the box's own refusal explains.
-                if (h.systemPending && h.grantUpgrades != false) {
+                if (h.systemPending && h.grantUpgrades != false && actsOnBox) {
                     OutlinedButton(enabled = !busy, onClick = { run { it.upgrade(hostId, apply = true) } }) { Text("Apply upgrade") }
                 }
                 // WHAT THIS BOX ALLOWS FROM THE APP, said only when it is off: the
@@ -702,6 +713,69 @@ private fun MachinePage(
                         Hint("System upgrades from the app: not allowed")
                         GrantOff("Turning it on is one line on the box:", grantLine("upgrades"))
                     }
+                }
+            }
+
+            // WHO THIS MACHINE TAKES ITS UPDATES AND REBOOTS FROM, beside the
+            // buttons it decides, when it pins its own admins
+            // (src/fleet/host/pinned-admins.js). Drawn only where it pins
+            // somebody, or cannot read its record, and for somebody the
+            // coordinator lets administer it at all. NO "PIN ME": the first
+            // admin is pinned on the machine by whoever runs it, never from a
+            // phone. A pinned admin adds and removes the others here; the last
+            // one is removed only on the machine, so its Remove is not drawn.
+            // While nobody pinned can sign (`left`), the machine's state is all
+            // there is to say: a Pin or Remove from here would be refused, and
+            // nobody is promised they can be added. Same words as iOS, held
+            // equal by test/pinned-admins-in-apps.test.js.
+            val admins = h.admins
+            if (administers && admins != null && admins.count != 0) {
+                SectionHead("Pinned admins")
+                // WHAT IS WRONG, when something is: a record the machine cannot
+                // read, or nobody pinned who can sign. The coordinator's words.
+                admins.problem?.let { Hint(it, color = Design.Palette.attention.now) }
+                admins.left?.let { Hint(it, color = Design.Palette.attention.now) }
+                if (admins.you == true && admins.left == null) {
+                    val pinned = admins.pinned ?: emptyList()
+                    pinned.forEach { email ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(email, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                            if (pinned.size > 1) {
+                                TextButton(
+                                    enabled = !busy,
+                                    onClick = { run { it.pinAdmin(hostId, email, add = false) } },
+                                    modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Remove $email" },
+                                ) { Text("Remove", color = Design.Palette.bad.now) }
+                            }
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = newAdmin,
+                            onValueChange = { newAdmin = it },
+                            label = { Text("Address to pin") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.None,
+                                autoCorrectEnabled = false,
+                                keyboardType = KeyboardType.Email,
+                                imeAction = ImeAction.Done,
+                            ),
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(Design.Space.insideTight))
+                        TextButton(
+                            enabled = !busy && "@" in newAdmin,
+                            onClick = {
+                                val email = newAdmin.trim()
+                                newAdmin = ""
+                                run { it.pinAdmin(hostId, email, add = true) }
+                            },
+                        ) { Text("Pin") }
+                    }
+                    Hint("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.")
+                } else if (admins.left == null && admins.count != null) {
+                    Hint("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from the admins pinned on it, and you are not one of them.")
                 }
             }
 
@@ -746,7 +820,7 @@ private fun MachinePage(
                 SectionHead("Releases")
                 if (h.channelPinned) {
                     Hint("$current, set on the box")
-                } else if (!administers) {
+                } else if (!actsOnBox) {
                     Hint(current)
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
@@ -777,7 +851,7 @@ private fun MachinePage(
                     color = Design.Palette.inkDim.now,
                 )
                 // The answer without the choice, for somebody who may not make it.
-                !administers -> Hint(if (v == "browser") "Browser" else "No browser")
+                !actsOnBox -> Hint(if (v == "browser") "Browser" else "No browser")
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     listOf("minimal" to "No browser", "browser" to "Browser").forEach { (value, label) ->
                         FilterChip(
@@ -862,7 +936,8 @@ private fun MachinePage(
         }
         // NOR FOR ONE THE COORDINATOR REFUSES: a reboot's first step names
         // every session on the box, whoever's, and its second ends them.
-        if (h != null && administers) {
+        // AND NOT WHERE THE MACHINE PINS ITS ADMINS AND THIS PERSON IS NOT ONE.
+        if (h != null && actsOnBox) {
             // NO BUTTON FOR A THING THE BOX REFUSES. Same words as iOS, held
             // equal by test/grants-in-apps.test.js.
             if (h.grantReboot == false) {
