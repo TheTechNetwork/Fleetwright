@@ -606,6 +606,14 @@ publishes beside it. The version is `install/deb/node.env`, which Renovate
 moves with `versioning=node`: LTS lines only, and a Node security release skips
 the three-day soak like every other advisory.
 
+Node's build is linked against libc, libgcc_s, libstdc++ and, from Node 25,
+libatomic, which a stock Debian 13 does not install. `Depends` names all four
+packages, and the builder reads `bin/node`'s NEEDED entries and refuses a Node
+that wants a library the control file does not cover, naming the package to
+add (`SHARED_LIBRARY_PACKAGES` in `tools/build-host-deb.mjs`).
+`test/host-deb.test.js` holds the Node running the tests to the same table,
+so a bump that links something new fails before the deb is built.
+
 It lives in `/usr/lib/fleetwright/node`, off `PATH`, so it neither shadows nor
 is shadowed by a distro nodejs. The units name it outright, and the CLIs in
 `/usr/local/bin` are short wrappers that name it too. It is also the node root

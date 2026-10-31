@@ -17,6 +17,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
+import { XOSETUP_STEPS, XOWATCHDOG_STEPS } from '../src/fleet/protocol/intents.js';
 import { admit } from './helpers/enrolled-hosts.js';
 
 const ELI = 'eli@example.com'; // the admin
@@ -91,6 +92,8 @@ test('a pool gone for five minutes is said once an hour, however many boxes hold
   assert.equal(sent.length, 1, `one pool held by two boxes was said ${sent.length} times`);
   assert.deepEqual(sent[0].message.data, { kind: 'pool-lost', name: 'pool-lost-xo.lan', hostId: 'deb14', address: 'xo.lan' });
   assert.equal(sent[0].message.title, 'xo.lan shows no pools');
+  // No job has said whether this Xen Orchestra has the reconnect watchdog,
+  // so the push says what it can: the sentence the watchdog cases build on.
   assert.equal(
     sent[0].message.body,
     'Xen Orchestra at xo.lan answers deb14 but shows none of its pools. Reconnecting its servers usually brings them back.',
@@ -213,4 +216,108 @@ test('one person’s box naming many addresses is heard about a few, not each', 
   clock.now += 60 * 60_000;
   await frame('aaa-sam', Array.from({ length: 20 }, (_, i) => gone(SAM, 120 * 60_000, { address: `xo${i + 20}.lan` })));
   assert.equal(said(), 16);
+});
+
+/**
+ * A setup job begun by the admin on `hostId`, so that its progress is
+ * believed, and that progress's last word with whatever `extra` says about
+ * the watchdog. The machine is played the way xosetup-coordinator.test.js
+ * plays one: `begin` answered with a job id.
+ */
+async function setupSaid(/** @type {any} */ core, /** @type {string} */ hostId, /** @type {string} */ job, /** @type {any} */ extra, purpose = 'setup') {
+  core.send = async () => ({ ok: true, text: 'Ready.', xosetup: { job, state: 'waiting', key: 'k', keySig: 's', hostKey: 'h', ...(purpose === 'watchdog' ? { can: ['watchdog'] } : {}) } });
+  const requester = { email: ELI, admin: true };
+  const params = purpose === 'watchdog' ? { phase: 'watchdog', address: '10.0.0.2', pin: 'a'.repeat(64) } : { phase: 'begin', address: 'xo.lan', pin: 'a'.repeat(64) };
+  const begun = await core.dispatch({ verb: 'xosetup', params, actor: `fleet:${ELI}`, requester, preferHost: hostId });
+  assert.equal(begun.ok, true, begun.text);
+  const of = purpose === 'watchdog' ? XOWATCHDOG_STEPS.length : XOSETUP_STEPS.length;
+  await core.onHostMessage(hostId, { kind: 'event', event: 'xosetup.progress', job, step: of, of, phase: 'done', state: 'done', text: 'Done.', ...(purpose === 'watchdog' ? { purpose } : {}), ...extra });
+}
+
+test('a push about a lost pool says whether its Xen Orchestra will try by itself, from what setup learned', async () => {
+  // ASKED FOR, about the push above: "Has to be a better way, is this a
+  // known issue?" The box that sees the pool go holds the fleet's limited
+  // token and cannot list plugins; setup, with the admin sign-in, learns
+  // whether the reconnect watchdog is on it and said so once, in a sentence
+  // nobody kept. Now the coordinator keeps it, and the push is worded from
+  // it: wait, or press Reconnect and add the watchdog, or what it said before
+  // anything was learned.
+  const { core, sent: every, frame } = await fleet({ deb14: null });
+  await frame('deb14', [there(ELI)]);
+  // The setups' own pushes ("Hypervisor added") are not the ones in question.
+  const sent = /** @type {typeof every} */ ([]);
+  every.push = (...p) => sent.push(...p.filter((x) => x.message.data?.kind === 'pool-lost'));
+
+  // Setup found no watchdog on xo.lan.
+  await setupSaid(core, 'deb14', 'a1b2c3d4e5f6', { watchdog: 'absent', address: 'xo.lan' });
+  await frame('deb14', [gone(ELI, POOL_LOST_AFTER_MS, { pools: [] })]);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].message.title, 'xo.lan shows no pools', 'the title changed');
+  assert.equal(
+    sent[0].message.body,
+    'Xen Orchestra at xo.lan answers deb14 but shows none of its pools. This Xen Orchestra has no reconnect watchdog, so nothing will try on its own. Reconnect from the pool’s page brings them back, and Add the reconnect watchdog there makes this fix itself next time.',
+  );
+  assert.deepEqual(sent[0].message.data, { kind: 'pool-lost', name: 'pool-lost-xo.lan', hostId: 'deb14', address: 'xo.lan' }, 'what the phone matches on changed');
+  assert.equal(sent[0].message.category, 'fleet.pool.reconnect', 'the Reconnect button went');
+  assert.equal(lost(core).at(-1)?.text, sent[0].message.body, 'the feed says something else than the phone');
+
+  // Setup loaded it on xo2.lan. The same box, so the address is the fact's
+  // key and not the box.
+  await setupSaid(core, 'deb14', 'b1b2c3d4e5f6', { watchdog: 'loaded', address: 'xo2.lan' });
+  await frame('deb14', [gone(ELI, POOL_LOST_AFTER_MS, { address: 'xo2.lan' })]);
+  assert.equal(sent.length, 2);
+  assert.equal(
+    sent[1].message.body,
+    'Xen Orchestra at xo2.lan answers deb14 but shows none of its pools. Reconnecting its servers usually brings them back. Its reconnect watchdog should bring them back by itself within a few minutes. If this stays, it is something the watchdog leaves to a person: a refused password, a pool already connected through another server, or the pool master itself.',
+  );
+
+  // The watchdog job put it on xo3.lan's disk, never seeing it load: the
+  // same "should", and nothing stronger (C-5).
+  await setupSaid(core, 'deb14', 'c1b2c3d4e5f6', { watchdog: 'added', address: 'xo3.lan' }, 'watchdog');
+  await frame('deb14', [gone(ELI, POOL_LOST_AFTER_MS, { address: 'xo3.lan', pools: [{ id: 'p-2', name: 'lab' }] })]);
+  assert.equal(sent.length, 3);
+  assert.equal(
+    sent[2].message.body,
+    'Xen Orchestra at xo3.lan answers deb14 but no longer shows tn-pool. Reconnecting its servers usually brings it back. Its reconnect watchdog should bring it back by itself within a few minutes. If this stays, it is something the watchdog leaves to a person: a refused password, a pool already connected through another server, or the pool master itself.',
+  );
+
+  // A word that is not one of the three is not believed, and a job that
+  // said nothing leaves nothing: xo4.lan is said as it always was.
+  await setupSaid(core, 'deb14', 'd1b2c3d4e5f6', { watchdog: 'probably', address: 'xo4.lan' });
+  await frame('deb14', [gone(ELI, POOL_LOST_AFTER_MS, { address: 'xo4.lan' })]);
+  assert.equal(sent.length, 4);
+  assert.equal(sent[3].message.body, 'Xen Orchestra at xo4.lan answers deb14 but shows none of its pools. Reconnecting its servers usually brings them back.');
+});
+
+test('what setup learned about a watchdog outlives the setup and a deploy, and goes with the person', async () => {
+  // A setup job is forgotten after a day and the Durable Object is rebuilt
+  // on every deploy; the push that needs the answer comes months later.
+  const { core, frame } = await fleet({ deb14: null });
+  await frame('deb14', [there(ELI)]);
+  await setupSaid(core, 'deb14', 'a1b2c3d4e5f6', { watchdog: 'absent', address: 'xo.lan' });
+  const saved = JSON.parse(JSON.stringify(core.serialiseXoWatchdogs()));
+  assert.equal(saved.length, 1);
+  assert.deepEqual(Object.keys(saved[0][1]).sort(), ['at', 'hostId', 'watchdog'], 'when and which box said it are kept with the answer');
+  assert.equal(saved[0][1].hostId, 'deb14');
+
+  const after = await fleet({ deb14: null });
+  after.core.restoreXoWatchdogs(saved);
+  await after.frame('deb14', [gone(ELI, POOL_LOST_AFTER_MS)]);
+  assert.match(after.sent[0]?.message.body, /^Xen Orchestra at xo\.lan answers deb14 but shows none of its pools\. This Xen Orchestra has no reconnect watchdog/);
+
+  // A row a stranger might have written: not a word from the list, a time
+  // that has not happened, or no address in the key.
+  const bad = await fleet({ deb14: null });
+  bad.core.restoreXoWatchdogs([
+    [`${ELI}\nxo.lan`, { watchdog: 'yes', at: 1, hostId: 'deb14' }],
+    [`${ELI}\nxo.lan`, { watchdog: 'absent', at: Date.UTC(2099, 0, 1), hostId: 'deb14' }],
+    ['xo.lan', { watchdog: 'absent', at: 1, hostId: 'deb14' }],
+  ]);
+  assert.deepEqual(bad.core.serialiseXoWatchdogs(), []);
+
+  // Removed from the fleet, the person's answers go with their setups: a
+  // fact about a pool that is no longer the fleet's to say anything about.
+  const eli = [...core.clients.clients.values()].find((c) => c.email === ELI);
+  core.revokeClient(eli.id);
+  assert.deepEqual(core.serialiseXoWatchdogs(), []);
 });
