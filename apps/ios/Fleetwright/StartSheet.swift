@@ -127,8 +127,18 @@ struct StartSheet: View {
     @State private var task = ""
     @State private var title = ""
     @State private var kind: SessionKind?
+    /// The permission mode this start asks for: "" is the box's own default
+    /// and sends no mode at all, "safe" keeps permission prompts on, and
+    /// "dangerous" bypasses them. The box default is selected first because
+    /// only the box knows what it is, and a start that names no mode is never
+    /// refused for it.
+    @State private var permission = ""
     @State private var host = ""
     @State private var hosts: [String] = []
+    /// The same machines as `hosts`, with what each last reported, so the
+    /// permission choice can say what the box default is and offer bypassing
+    /// only where the box allows it.
+    @State private var offeredHosts: [Fleet.FleetHost] = []
     @State private var profiles: [Fleet.Profile] = []
     /// Distinct from `profiles.isEmpty`. A fleet with no profiles has ANSWERED;
     /// a fleet whose hosts are too old to know the verb has not, and the two
@@ -186,6 +196,79 @@ struct StartSheet: View {
     }
 
     private var kinds: [SessionKind] { SessionKinds.all() }
+
+    /// The machines this start could land on, as the snapshot has them: the
+    /// one chosen, or every one offered while the fleet picks. None for a new
+    /// machine, which has not reported anything yet.
+    private var reachableHosts: [Fleet.FleetHost] {
+        if chosenPlatform != nil { return [] }
+        return host.isEmpty ? offeredHosts : offeredHosts.filter { $0.hostId == host }
+    }
+
+    /// What the box default is, when every machine this could land on says
+    /// the same thing: "asks" or "bypassed". Nil otherwise, and then nothing
+    /// on this sheet says which way the default goes (C-5).
+    private var boxPermissions: String? {
+        let said = Set(reachableHosts.map { $0.health?.permissions ?? "" })
+        guard said.count == 1, let only = said.first, only == "asks" || only == "bypassed" else { return nil }
+        return only
+    }
+
+    /// Whether this start may ask to bypass permissions: only when every
+    /// machine it could land on has said it bypasses them. A machine set to
+    /// ask refuses the start (C-2), and one that has not said, because its
+    /// host is too old to or the list did not load, may be set to ask with no
+    /// refusal to stop it, so cannot tell is not taken as allowed (C-5). No
+    /// machine to judge, a new one or a kind's host that is not offered, is
+    /// the same. The box default covers all of these.
+    private var bypassAllowed: Bool {
+        !reachableHosts.isEmpty && reachableHosts.allSatisfy { $0.health?.permissions == "bypassed" }
+    }
+
+    /// Why "Permissions bypassed" is missing, said as what the machines told
+    /// us: one set to ask, or one that has not said. Empty when it is offered.
+    private var bypassMissingLine: String {
+        if bypassAllowed { return "" }
+        if reachableHosts.isEmpty {
+            return " Permissions bypassed is not offered: no machine this could start on has said what it allows."
+        }
+        let asks = reachableHosts.contains { $0.health?.permissions == "asks" }
+        if host.isEmpty {
+            return asks
+                ? " Permissions bypassed is not offered while the fleet picks the machine: one of them is set to ask before each tool."
+                : " Permissions bypassed is not offered while the fleet picks the machine: one of them has not said what it allows."
+        }
+        return asks
+            ? " Permissions bypassed is not offered here: this machine is set to ask before each tool."
+            : " Permissions bypassed is not offered here: this machine has not said what it allows."
+    }
+
+    private var boxDefaultLabel: String {
+        switch boxPermissions ?? "" {
+        case "asks": return "Box default — asks before each tool"
+        case "bypassed": return "Box default — permissions bypassed"
+        default: return "Box default"
+        }
+    }
+
+    /// The sentence under the choice. The selected one still has to say what
+    /// it does, and the box default says it only when the box has said.
+    private var permissionLine: String {
+        let line: String
+        switch permission {
+        case "safe":
+            line = "It stops and asks before each tool, whatever its machine is set to."
+        case "dangerous":
+            line = "It runs each tool without asking first."
+        default:
+            switch boxPermissions ?? "" {
+            case "asks": line = "It asks before each tool, because that is how its machine is set."
+            case "bypassed": line = "It runs each tool without asking, because that is how its machine is set."
+            default: line = "It runs the way its machine is set."
+            }
+        }
+        return line + bypassMissingLine
+    }
 
     private var taskIsEmpty: Bool { task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -332,6 +415,12 @@ struct StartSheet: View {
                         // a decision made last month that cannot be revisited.
                         .onChange(of: kind) { _, now in
                             if let kindHost = now?.host, !kindHost.isEmpty { host = kindHost }
+                            // A kind that saved a mode fills that too. One that
+                            // saved none leaves the choice where it is, which
+                            // is the box default unless somebody moved it.
+                            if let kindMode = now?.mode, kindMode == "safe" || (kindMode == "dangerous" && bypassAllowed) {
+                                permission = kindMode
+                            }
                             // And a kind that names a task fills that too, on
                             // the same terms — but only if the fleet still has
                             // it. A kind naming a profile somebody deleted would
@@ -481,6 +570,34 @@ struct StartSheet: View {
                     }
                 }
 
+                // HOW IT RUNS, after Where because the answer depends on it.
+                // The box's own default comes first and is selected: it sends
+                // no mode, so the operator's setting decides, and it is named
+                // from what the machine reported, or not at all when it has
+                // not (C-5). Bypassing is offered only where every machine
+                // this could land on has said it bypasses, because a box set
+                // to ask refuses it (C-2) and one that has not said may be set
+                // to ask (C-5), and the sentence below says why it is missing.
+                Section {
+                    Picker("Permissions", selection: $permission) {
+                        Text(boxDefaultLabel).tag("")
+                        Text("Permission prompts on").tag("safe")
+                        if bypassAllowed {
+                            Text("Permissions bypassed").tag("dangerous")
+                        }
+                    }
+                    // A choice that vanished cannot stay chosen.
+                    .onChange(of: bypassAllowed) { _, allowed in
+                        if !allowed, permission == "dangerous" { permission = "" }
+                    }
+                } header: {
+                    Text("Permissions").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+                } footer: {
+                    Text(permissionLine)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+
                 // ASKED WHERE IT MATTERS. A runner fetches its owner's Claude
                 // login when it joins; with none kept it falls back to the
                 // runner repository's API key, and with neither it refuses the
@@ -523,9 +640,9 @@ struct StartSheet: View {
                 // Loaded here rather than passed in so the sheet works from
                 // every place that presents it, App Intents included.
                 let fleet = Fleet(settings: settings)
-                hosts = ((try? await fleet.fleetHosts()) ?? [])
+                offeredHosts = ((try? await fleet.fleetHosts()) ?? [])
                     .filter { $0.holder != true && ($0.takesSessions ?? ($0.state == "healthy")) }
-                    .map(\.hostId)
+                hosts = offeredHosts.map(\.hostId)
                 // A THROW IS NOT AN EMPTY FLEET. Hosts too old to know the verb
                 // refuse it by name, and so does a coordinator that has not been
                 // updated — treating either as "no profiles" would quietly hide
@@ -636,7 +753,9 @@ struct StartSheet: View {
         onStart(StartRequest(
             title: finalTitle.isEmpty ? nil : finalTitle,
             brief: trimmedBrief.isEmpty ? nil : trimmedBrief,
-            mode: kind?.mode,
+            // NO MODE FOR THE BOX DEFAULT, so the box's own setting decides,
+            // and never a bypass the box would refuse.
+            mode: permission == "safe" || (permission == "dangerous" && bypassAllowed) ? permission : nil,
             host: host.isEmpty || platform != nil ? nil : host,
             profile: profile.isEmpty || platform != nil || !trimmedTask.isEmpty ? nil : profile,
             task: trimmedTask.isEmpty ? nil : trimmedTask,

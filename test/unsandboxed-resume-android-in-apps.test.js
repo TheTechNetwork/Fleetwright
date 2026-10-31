@@ -24,6 +24,11 @@ const IOS = bare(iosSources());
 const KEPT = [
   ' runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there.',
   ' has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated.',
+  ' lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out.',
+  ' runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user.',
+  ' runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman.',
+  ' has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap.',
+  ' says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there.',
 ];
 const TITLES = ['Not started: only admins run sessions there', 'Not started: the machine needs an update'];
 
@@ -34,7 +39,31 @@ test('Android says why Resume is not offered, in the iPhone’s words and by the
   }
   // Read under the key the box sends, absent kept apart from false.
   assert.match(ANDROID, /sandboxed = health\?\.takeIf \{ it\.has\("sandboxed"\) && !it\.isNull\("sandboxed"\) \}\?\.optBoolean\("sandboxed"\)/);
-  assert.match(ANDROID, /val resumeKept: String\?\s*get\(\) = when \{\s*administers != false \|\| sandboxed == true -> null\s*sandboxed == false ->/);
+  assert.match(ANDROID, /val resumeKept: String\?\s*get\(\) = when \{\s*administers != false \|\| sandboxed == true -> null\s*sandboxed == false && saidWhy\.size > 1 -> \{/);
+  assert.match(ANDROID, /sandboxed == false -> when \(saidWhy\[0\]\) \{/);
+  // Why not, read under the keys the box sends, every entry of the rest; a
+  // box too old to say why is off.
+  assert.match(ANDROID, /sandboxedWhy = health\?\.optString\("sandboxedWhy"\)\?\.takeIf \{ it\.isNotBlank\(\) && it != "null" \},/);
+  assert.match(ANDROID, /sandboxedAlso = health\?\.optJSONArray\("sandboxedAlso"\)\?\.let \{ arr ->\s*\(0 until arr\.length\(\)\)\.map \{ i -> arr\.optString\(i\) \}/);
+  assert.match(ANDROID, /get\(\) = sandboxedWhy\?\.let \{ listOf\(it\) \+ sandboxedAlso \} \?: listOf\("off"\)/);
+});
+
+test('both phones join two or more reasons from the same table, in the same words', () => {
+  // What each reason's machine does and what has to change, as the line
+  // joins them when a box gives more than one. iOS's table is held to the
+  // coordinator's words by unsandboxed-resume-ios-in-apps.test.js; this
+  // holds Android's to iOS's, row for row.
+  const rows = (/** @type {RegExp} */ re, /** @type {string} */ src) =>
+    Object.fromEntries([...src.matchAll(re)].map(([, code, does, until]) => [code, [does, until]]));
+  const ios = rows(/"([a-z_]+)": \("([^"]+)", "([^"]+)"\)/g, IOS);
+  const android = rows(/"([a-z_]+)" to \("([^"]+)" to "([^"]+)"\)/g, ANDROID);
+  assert.deepEqual(Object.keys(ios).sort(), ['off', 'unsafe_args', 'userns_docker', 'userns_host', 'userns_root']);
+  assert.deepEqual(android, ios);
+  // Said in the same sentence around them; how each joins is pinned by
+  // ResumeKeptTest.kt and ResumeKeptTests.swift, word for word.
+  const sentence = ', so only this fleet’s admin, or the one person it works for, can resume one there until ';
+  assert.ok(ANDROID.includes(`"$hostId \${together(known.map { it.first })}${sentence}\${together(known.map { it.second })}."`));
+  assert.ok(IOS.includes(`"\\(hostId) \\(Self.together(known.map { $0.does }))${sentence}\\(Self.together(known.map { $0.until }))."`));
 });
 
 test('Android: every Resume on a session gives way to the reason where the fleet would refuse it', () => {

@@ -78,6 +78,11 @@ test('the verb set is exactly what is documented', () => {
     // else. See src/core/repo-tokens.js.
     'mint',
     'peek',
+    // Who else a box takes reboot, upgrade, update and restoring somebody
+    // else's work from, changed by an admin it already pins. A new verb, so an
+    // older host answers `unknown_verb`. No version bump: the parameters are
+    // new on the new verb.
+    'pinadmin',
     // v3, and the FREE half of it: an old host answers `unknown_verb`, which
     // strands nothing. The costly half is `start { profile }` — a parameter on
     // an existing verb, which is what the version number was actually spent on.
@@ -161,6 +166,11 @@ test('a credential cannot be aimed at somebody else', () => {
   // already gives it on the same box. docs/trust.md says so plainly.
   for (const [verb, spec] of Object.entries(VERBS)) {
     for (const key of Object.keys(spec.params)) {
+      // pinadmin names whose pin to change on the box, and the box takes it
+      // only from an admin it already pins, signed by them; the first is set
+      // on the box itself. It is not a credential row: connect and link still
+      // have no parameter that names an account.
+      if (verb === 'pinadmin' && key === 'email') continue;
       assert.ok(
         !/email|account|user|owner|as$/i.test(key),
         `${verb} exposes an identity-shaped parameter "${key}" — whose credential must never be a parameter`,
@@ -282,7 +292,7 @@ test('only state-changing verbs are marked mutating', () => {
     // forgetperson bins a removed person's sessions and deletes their
     // sign-ins; a retry must not report nothing done for what it just did.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'forgetperson', 'labels', 'link', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'vmctl', 'writefile', 'xoact', 'xosetup'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'forgetperson', 'labels', 'link', 'pinadmin', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'vmctl', 'writefile', 'xoact', 'xosetup'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

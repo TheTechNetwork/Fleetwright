@@ -117,10 +117,31 @@ test('reboot and upgrade do NOT fan out on a tag', () => {
   // DELIBERATELY NOT THE SAME RULE. "Reboot everything labelled prod" is a
   // fleet-wide outage expressible in one line, and an upgrade is four apt runs
   // merged into one reply. A setting is reversible and says nothing while it
-  // works; these are neither.
-  for (const verb of ['reboot', 'upgrade', 'update', 'logs']) {
+  // works; these are neither. Pinning an admin is the same shape: one box,
+  // said out loud.
+  for (const verb of ['reboot', 'upgrade', 'update', 'pinadmin', 'logs']) {
     const p = place(fleet(), { verb, params: {} }, { preferLabels: ['gpu'] });
     assert.equal(p.kind, 'refused', `${verb} fanned out on a tag`);
     assert.equal(p.code, 'ambiguous_host');
   }
+});
+
+test('a member cannot pin an admin on a box that does not act for them', () => {
+  // The same gate as reboot. The boxes in this fleet act for nobody, so a
+  // member is not an admin of any of them. An admin still names one box, and
+  // that box then wants an admin it pinned itself (test/pinned-admins.test.js).
+  const member = place(
+    fleet(),
+    { verb: 'pinadmin', params: { email: 'ada@example.com', op: 'add' } },
+    { preferHost: 'gpu-1', requester: { admin: false, email: 'ada@example.com' } },
+  );
+  assert.equal(member.kind, 'refused');
+  assert.equal(member.code, 'not_admin');
+  const admin = place(
+    fleet(),
+    { verb: 'pinadmin', params: { email: 'ada@example.com', op: 'add' } },
+    { preferHost: 'gpu-1', requester: { admin: true, email: 'ops@example.com' } },
+  );
+  assert.equal(admin.kind, 'host');
+  assert.equal(admin.host.hostId, 'gpu-1');
 });

@@ -5,6 +5,8 @@
 //   fleetwright-sidecar enrol 123456   present this box to a coordinator, once
 //   fleetwright-sidecar identity   show this box's key fingerprint
 //   fleetwright-sidecar doctor     check this box can actually drive its fleetwright
+//   fleetwright-sidecar admins     who this box takes reboots and updates from
+//                                  (pin-admin, unpin-admin, reset-admins change it)
 //
 // Config comes from the environment — see src/fleet/host/config.js. This process
 // does not touch the session manager's state directly: it is an HTTP client of it.
@@ -31,6 +33,7 @@ import { loadMinter } from '../src/fleet/host/minter-config.js';
 import { sign } from '../src/fleet/crypto.js';
 import { actionsJobToken, serveRunnerBroker } from '../src/fleet/host/runner-broker.js';
 import { enrolVmOnce, vmLogin, forgetJoin, waitToBeLetIn } from '../src/fleet/host/vm-join.js';
+import { adminCommand, seedPins } from '../src/fleet/host/pinned-admins.js';
 
 // Before loadSidecarConfig, so the CLI sees exactly what the service sees.
 // systemd supplies this file with EnvironmentFile=; a shell does not, which is
@@ -52,6 +55,7 @@ if (sub === 'doctor') await doctor();
 else if (sub === 'enrol' || sub === 'enroll') await doEnrol(process.argv[3]);
 else if (sub === 'enrol-actions' || sub === 'enroll-actions') await doEnrolActions(process.argv[3]);
 else if (sub === 'identity') await identity();
+else if (['admins', 'pin-admin', 'unpin-admin', 'reset-admins'].includes(sub)) await admins(sub, process.argv.slice(3));
 else if (sub === 'help' || sub === '--help' || sub === '-h') usage();
 else await run();
 
@@ -65,6 +69,18 @@ function usage() {
                                  token admits the machine; CLAIM says whose runner it is.
   fleetwright-sidecar identity   print this box's key fingerprint
   fleetwright-sidecar doctor     check this box can drive its hub
+  fleetwright-sidecar admins     who this box takes update, upgrade, reboot, a new channel
+                                 or sandbox image and restoring somebody else's work
+                                 from (docs/signed-intents.md)
+  fleetwright-sidecar pin-admin ADDRESS...
+                                 pin them; the first admin is only ever pinned here.
+                                 Drops the admins who left the fleet.
+  fleetwright-sidecar unpin-admin ADDRESS
+                                 unpin one, the last one included
+  fleetwright-sidecar reset-admins
+                                 pin nobody: the box takes the fleet's word again
+                                 These three run as the account that owns the box's
+                                 key, never as root: sudo -u <that account> ...
 
 Environment:
   FLEETWRIGHT_COORDINATOR_URL    required — the origin this sidecar pins
@@ -77,6 +93,7 @@ Environment:
   FLEETWRIGHT_HOOK_SOCKETS       1 to serve per-session hook sockets, 0 to skip
   FLEETWRIGHT_VM_JOIN            on a machine from a hypervisor: the file it was booted with,
                                  which it enrols itself with once (install/fleetwright-vm-join)
+  FLEETWRIGHT_ADMINS             addresses to pin when nobody is pinned yet
 
 Repository tokens for runners (docs/runner-central.md) — on ONE permanent box:
   FLEETWRIGHT_GITHUB_APP_KEY        the GitHub App's private key, a PEM file (or the
@@ -202,6 +219,18 @@ let lastUpdates = null;
 const mint = loadMinter(cfg.mint);
 if (mint.problem) log.warn(`config: ${mint.problem}`);
 if (mint.minter) log.info(`this box mints repository tokens for runners, into ${mint.minter.owners.join(', ')}`);
+// THE FIRST PINNED ADMINS, from this box's own env file, while nobody is
+// pinned (src/fleet/host/pinned-admins.js). Before the sidecar answers
+// anything, so no reboot slips in between starting and pinning.
+if (cfg.admins.length) {
+  try {
+    const pinned = await seedPins(path.dirname(cfg.hostKeyFile), cfg.admins);
+    if (pinned) log.info(`pinned ${pinned.join(', ')} as this box's admins, from FLEETWRIGHT_ADMINS`);
+  } catch (e) {
+    log.error(`could not pin FLEETWRIGHT_ADMINS: ${/** @type {Error} */ (e).message}`);
+    process.exit(1);
+  }
+}
 if (cfg.requireSigned === 'all') log.info('this box takes only requests a person signed or delegated (FLEETWRIGHT_REQUIRE_SIGNED=all)');
 else if (cfg.requireSigned === 'signers') log.info('this box takes only signed or delegated requests from people it has seen a signing key for, and none with nobody named (FLEETWRIGHT_REQUIRE_SIGNED=signers)');
 
@@ -604,6 +633,26 @@ async function identity() {
   console.log(`key file     ${cfg.hostKeyFile}`);
   console.log(`fingerprint  ${await keyFingerprint(key.publicJwk)}`);
   console.log(`coordinator  ${cfg.coordinatorUrl || '(unset)'}`);
+}
+
+// WHO THIS BOX TAKES REBOOTS AND UPDATES FROM, read and changed here, on the
+// box, by whoever runs it (src/fleet/host/pinned-admins.js, adminCommand).
+// Run as the sidecar's user, beside whose key the record lives:
+// `sudo -u fleetwright-sidecar fleetwright-sidecar pin-admin ...` on Linux.
+// Run as root, a change is refused with that sentence wherever another
+// account could change the way to the record, because root writing there is
+// a link that account can plant (pinned-admins.js rootRefusal). The running sidecar reads the record on
+// every request, so nothing needs restarting.
+/** @param {string} sub @param {string[]} args */
+async function admins(sub, args) {
+  try {
+    const r = await adminCommand(path.dirname(cfg.hostKeyFile), sub, args, { envAdmins: cfg.admins });
+    (r.code === 0 ? console.log : console.error)(r.text);
+    process.exitCode = r.code;
+  } catch (e) {
+    console.error(`${sub}: ${/** @type {Error} */ (e).message}`);
+    process.exitCode = 1;
+  }
 }
 
 async function doctor() {

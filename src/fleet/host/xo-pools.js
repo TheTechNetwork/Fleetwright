@@ -71,8 +71,28 @@ const GRACE_MS = 60_000;
 /** How long a machine made here is remembered for its login, and how many at most (XoPools#made). */
 const MADE_FORGET_MS = 24 * 60 * 60_000;
 const MAX_MADE = 64;
-/** A machine being resized is stopped on purpose, and the sweep leaves it be. */
+/**
+ * A machine being resized is stopped on purpose, and the sweep leaves it be:
+ * `fleetwright-busy:<seconds since the epoch>`, honoured for BUSY_MS from the
+ * time in it. It used to be the bare tag, which a sidecar that died between
+ * marking and unmarking (#work) left on for good, and the machine with it:
+ * stopped, never swept, never started. A bare one found now (BUSY_TAG, from a
+ * box older than this) is given the time it was first seen at, so that it
+ * runs out like the rest and the sweep does not take a machine from under a
+ * resize still going on an older box.
+ */
 const BUSY_TAG = 'fleetwright-busy';
+const BUSY_PREFIX = 'fleetwright-busy:';
+const BUSY_MS = 30 * 60_000;
+/**
+ * How long after it was made a stopped machine may still be booting rather
+ * than done: vm.create clones and tags it before it is started, and any box
+ * that looked in that window took it for a stopped machine and removed it,
+ * disk and all, before it had booted once (#sweep).
+ */
+const YOUNG_MS = 5 * 60_000;
+/** The sweep started this machine again once, found stopped before its end (#sweep). */
+const RESTARTED_PREFIX = 'fleetwright-restarted:';
 /** When a machine was made, its image and its network, as tags beside its end. */
 const MADE_PREFIX = 'fleetwright-made:';
 const FROM_PREFIX = VM_IMAGE.fromPrefix;
@@ -439,6 +459,15 @@ export class XoPools {
      * @type {Map<string, { vm: string, owner: string, at: number }>}
      */
     this.made = new Map();
+    /**
+     * THE MACHINES BEING HANDED THEIR LOGIN THIS MOMENT, by name: taken out
+     * of `made` before `handLogin` first waits on anything, and put back if
+     * the hand-over does not happen. Two asks for one machine at once (the
+     * machine's and a copy's, or the coordinator's twice) both read `made`
+     * before either had deleted from it, and both were handed the login.
+     * @type {Set<string>}
+     */
+    this.handing = new Set();
     /** @type {Map<string, Seen>} what the last look found, keyed as `held` */
     this.seen = new Map();
     /**
@@ -652,30 +681,88 @@ export class XoPools {
   }
 
   /**
-   * Machines that are done, removed with their disks: stopped (a machine
-   * powers itself off at its end), or still running well past the end it was
-   * given. Only machines this fleet made, by their tag and made in its set
-   * (fleetSetOf: the tag alone is anybody's); nothing else on the pool is
-   * touched.
+   * Machines that are done, removed with their disks: stopped past their end
+   * (a machine powers itself off at its end), or still running well past the
+   * end it was given. Only machines this fleet made, by their tag and made in
+   * its set (fleetSetOf: the tag alone is anybody's); nothing else on the
+   * pool is touched.
+   *
+   * STOPPED IS NOT DONE UNTIL ITS END HAS COME. It used to be: every stopped
+   * machine went, and with it two that were not done. One just made, which
+   * vm.create clones and tags before it boots, so a box looking in that
+   * window removed it before it ran once; and one a host reboot or an
+   * evacuation stopped mid-session, with its disk and the session's work on
+   * it. Now a stopped machine goes only when it is older than YOUNG_MS and
+   * past its end. Younger, it is left to boot. Older but before its end, it
+   * is started again, once (RESTARTED_PREFIX says it was): stopped again
+   * after that, somebody meant it, and it waits for its end. A machine
+   * without an end in its tags was never given one to wait for, and goes as
+   * it did; this box makes none like that. The running case is as it was.
    *
    * @param {any} rpc @param {{ ids: Set<string> }} set
    */
   async #sweep(rpc, set) {
     const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
+    const now = this.now();
     for (const vm of vms) {
       const tags = Array.isArray(vm?.tags) ? vm.tags : [];
-      if (!tags.includes(VM_IMAGE.sessionTag) || tags.includes(BUSY_TAG) || !inFleetSet(vm, set)) continue;
-      const until = Number(tags.find((/** @type {string} */ t) => t.startsWith(VM_IMAGE.untilPrefix))?.slice(VM_IMAGE.untilPrefix.length)) * 1000;
-      const overdue = Number.isFinite(until) && this.now() > until + GRACE_MS;
+      if (!tags.includes(VM_IMAGE.sessionTag) || !inFleetSet(vm, set)) continue;
+      if (await this.#busy(rpc, vm, tags, now)) continue;
+      const name = vm.name_label || vm.id;
+      const untilTag = tagValue(vm, VM_IMAGE.untilPrefix);
+      const until = untilTag === null ? NaN : Number(untilTag) * 1000;
+      const overdue = Number.isFinite(until) && now > until + GRACE_MS;
       if (vm.power_state !== 'Halted' && !overdue) continue;
+      if (vm.power_state === 'Halted') {
+        const made = Number(tagValue(vm, MADE_PREFIX)) * 1000;
+        if (made > 0 && now - made < YOUNG_MS) continue;
+        if (Number.isFinite(until) && now <= until) {
+          if (tagValue(vm, RESTARTED_PREFIX) !== null) continue;
+          try {
+            await rpc.call('tag.add', { id: vm.id, tag: `${RESTARTED_PREFIX}${Math.floor(now / 1000)}` });
+            await rpc.call('vm.start', { id: vm.id });
+            this.log.info(`sidecar: started ${name} again, which was stopped ${Math.round((until - now) / 60_000)} minutes before its end`);
+          } catch (e) {
+            this.log.warn(`sidecar: could not start ${name} again, stopped before its end: ${/** @type {Error} */ (e).message}`);
+          }
+          continue;
+        }
+      }
       try {
         if (vm.power_state !== 'Halted') await rpc.call('vm.stop', { id: vm.id, force: true });
         await rpc.call('vm.delete', { id: vm.id, deleteDisks: true });
-        this.log.info(`sidecar: removed ${vm.name_label || vm.id}, which had ${overdue && vm.power_state !== 'Halted' ? 'run past its end' : 'stopped'}`);
+        this.log.info(`sidecar: removed ${name}, which had ${overdue && vm.power_state !== 'Halted' ? 'run past its end' : 'stopped'}`);
       } catch (e) {
-        this.log.warn(`sidecar: could not remove ${vm.name_label || vm.id}: ${/** @type {Error} */ (e).message}`);
+        this.log.warn(`sidecar: could not remove ${name}: ${/** @type {Error} */ (e).message}`);
       }
     }
+  }
+
+  /**
+   * Whether the sweep leaves this machine be because a resize has it: marked
+   * busy less than BUSY_MS ago (BUSY_PREFIX). A mark older than that is a
+   * resize that never finished, from a sidecar that died in the middle, and
+   * is taken off so the machine is swept by the rules again. A bare mark
+   * from an older box is dated from now and honoured, this once.
+   *
+   * @param {any} rpc @param {any} vm @param {string[]} tags @param {number} now
+   * @returns {Promise<boolean>}
+   */
+  async #busy(rpc, vm, tags, now) {
+    let stamp = tagValue(vm, BUSY_PREFIX);
+    if (tags.includes(BUSY_TAG)) {
+      if (stamp === null) {
+        stamp = String(Math.floor(now / 1000));
+        await rpc.call('tag.add', { id: vm.id, tag: `${BUSY_PREFIX}${stamp}` }).catch(() => {});
+      }
+      await rpc.call('tag.remove', { id: vm.id, tag: BUSY_TAG }).catch(() => {});
+    }
+    if (stamp === null) return false;
+    const since = Number(stamp) * 1000;
+    if (since > 0 && now - since < BUSY_MS) return true;
+    await rpc.call('tag.remove', { id: vm.id, tag: `${BUSY_PREFIX}${stamp}` }).catch(() => {});
+    this.log.warn(`sidecar: ${vm.name_label || vm.id} was marked busy ${since > 0 ? `${Math.round((now - since) / 60_000)} minutes ago` : 'at no time it could say'}, longer than a resize takes, so the mark is taken off`);
+    return false;
   }
 
   /**
@@ -861,16 +948,43 @@ export class XoPools {
    * `notHere` when this box did not make it, so the coordinator asks the
    * next; after a restart this box made nothing, as far as it knows.
    *
+   * ONCE MEANS ONE ASK AT A TIME TOO. The machine is taken out of `made` and
+   * put in `handing` before the first wait on Xen Orchestra, so a second ask
+   * arriving while the first is out finds nothing to hand and says the
+   * first has it; two asks at once used to both read `made` and both be
+   * handed the login. The entry goes back (`keep`) when the hand-over did
+   * not happen for a reason that may pass: the machine not running yet, a
+   * pool that would not say or could not be reached. It stays gone when
+   * the machine is not the one made here, or is on no pool that answered.
+   *
+   * A POOL THAT COULD NOT BE REACHED MAY BE THE ONE IT IS ON. With two
+   * pools, one down and the other without the machine, this used to answer
+   * "not on any of your pools any more", with neither `unreachable` nor
+   * `notHere`, so the coordinator stopped there and the machine never got
+   * its login. Now any pool unreached with the machine found nowhere is
+   * `unreachable`, and the entry is kept for the next ask.
+   *
    * @param {{ owner: string, name: string, key: string }} ask
    * @returns {Promise<{ ok: boolean, text: string, sealed?: any, notHere?: boolean, unreachable?: boolean }>}
    */
   async handLogin({ owner, name, key }) {
     const who = String(owner || '').toLowerCase();
     const made = this.made.get(String(name));
-    if (!made || made.owner !== who) return { ok: false, notHere: true, text: `${name} was not made by this box for ${who}, as far as it knows.` };
+    if (!made || made.owner !== who) {
+      if (!made && this.handing.has(String(name))) return { ok: false, text: `${name} is being handed its login already, so this ask is handed nothing.` };
+      return { ok: false, notHere: true, text: `${name} was not made by this box for ${who}, as far as it knows.` };
+    }
     const token = this.claude.get(who);
     if (!token) return { ok: false, text: `This box holds no Claude login of ${who}\u2019s to hand ${name}. Keep one in your vault (claude setup-token), then ask for the machine again.` };
     const mine = [...this.held.values()].filter((h) => h.owner === who);
+    // CLAIMED, before anything is waited on.
+    this.made.delete(String(name));
+    this.handing.add(String(name));
+    const keep = () => {
+      this.handing.delete(String(name));
+      if (!this.made.has(String(name))) this.made.set(String(name), made);
+    };
+    const spent = () => this.handing.delete(String(name));
     /** @type {string[]} */
     const unreachable = [];
     for (const { record } of mine) {
@@ -888,15 +1002,19 @@ export class XoPools {
         if (!vm) continue;
         const set = await fleetSetOf(rpc);
         if (vm.name_label !== name || tagValue(vm, FOR_PREFIX) !== who || !inFleetSet(vm, set)) {
-          this.made.delete(String(name));
+          spent();
           return { ok: false, text: `${name} is not the machine this box made any more, so it is handed nothing.` };
         }
-        if (vm.power_state !== 'Running') return { ok: false, text: `${name} is ${String(vm.power_state || 'not running').toLowerCase()}, so it is handed nothing.` };
-        this.made.delete(String(name));
+        if (vm.power_state !== 'Running') {
+          keep();
+          return { ok: false, text: `${name} is ${String(vm.power_state || 'not running').toLowerCase()}, so it is handed nothing.` };
+        }
         const sealed = await seal({ to: key, aad: await claudeBindingFor(key), payload: { token } });
+        spent();
         this.log.info(`sidecar: handed ${name} ${who}\u2019s Claude login`);
         return { ok: true, text: `Handed ${name} your Claude login.`, sealed };
       } catch (e) {
+        keep();
         return { ok: false, text: `${record.address} would not say whether ${name} is the machine made here: ${/** @type {Error} */ (e).message}` };
       } finally {
         try {
@@ -906,8 +1024,18 @@ export class XoPools {
         }
       }
     }
-    if (mine.length && unreachable.length === mine.length) return { ok: false, unreachable: true, text: `Your pools could not be reached from here: ${unreachable.join('; ')}` };
-    this.made.delete(String(name));
+    if (unreachable.length) {
+      keep();
+      return {
+        ok: false,
+        unreachable: true,
+        text:
+          unreachable.length === mine.length
+            ? `Your pools could not be reached from here: ${unreachable.join('; ')}`
+            : `${name} is not on the pools of yours that answered, and the rest could not be reached from here: ${unreachable.join('; ')}`,
+      };
+    }
+    spent();
     return { ok: false, text: `${name} is not on any of your pools any more, so it is handed nothing.` };
   }
 
@@ -963,7 +1091,19 @@ export class XoPools {
         }
       }
     }
-    if (unreachable.length === mine.length) return { ok: false, unreachable: true, text: `Your pools could not be reached from here: ${unreachable.join('; ')}` };
+    // NOT FOUND ON THE POOLS THAT ANSWERED is not "not on any of your pools"
+    // while one did not answer: it may well be on that one (handLogin says
+    // the same of a login).
+    if (unreachable.length) {
+      return {
+        ok: false,
+        unreachable: true,
+        text:
+          unreachable.length === mine.length
+            ? `Your pools could not be reached from here: ${unreachable.join('; ')}`
+            : `${name} is not on the pools of yours that answered, and the rest could not be reached from here: ${unreachable.join('; ')}`,
+      };
+    }
     return { ok: false, notHere: true, text: `${name} is not on any of your pools this box holds.` };
   }
 
@@ -1200,11 +1340,22 @@ export class XoPools {
       if (cpus != null) size.CPUs = Math.max(1, Math.min(64, Math.floor(Number(cpus))));
       if (memory != null) size.memory = Math.max(1, Math.min(512, Number(memory))) * 1024 ** 3;
       if (!Object.keys(size).length) return { ok: false, text: 'Say how many vCPUs, or how much memory.' };
+      const said = [size.CPUs ? `${size.CPUs} vCPU${size.CPUs === 1 ? '' : 's'}` : null, size.memory ? `${size.memory / 1024 ** 3} GiB` : null].filter(Boolean).join(' and ');
       // STOPPED ON PURPOSE, which the sweep would otherwise take for done:
-      // marked busy first, and started again whatever the change did.
-      await rpc.call('tag.add', { id: vm.id, tag: BUSY_TAG });
+      // marked busy first, with the time (BUSY_PREFIX), and started again
+      // whatever the change did.
+      const busy = `${BUSY_PREFIX}${Math.floor(this.now() / 1000)}`;
+      await rpc.call('tag.add', { id: vm.id, tag: busy });
+      // What it had, of what is being changed, for when the change takes and
+      // the machine will not start with it.
+      /** @type {Record<string, number>} */
+      const old = {
+        ...(size.CPUs && Number.isInteger(vm?.CPUs?.number) ? { CPUs: vm.CPUs.number } : {}),
+        ...(size.memory && Number.isFinite(Number(vm?.memory?.size)) && Number(vm.memory.size) > 0 ? { memory: Number(vm.memory.size) } : {}),
+      };
       /** @type {Error|null} */
       let refused = null;
+      let stuck = false;
       try {
         if (vm.power_state !== 'Halted') await this.#cleanOrHard(rpc, 'vm.stop', vm);
         try {
@@ -1212,11 +1363,41 @@ export class XoPools {
         } catch (e) {
           refused = /** @type {Error} */ (e);
         }
-        await rpc.call('vm.start', { id: vm.id });
+        try {
+          await rpc.call('vm.start', { id: vm.id });
+        } catch (e) {
+          // WOULD NOT START WITH THE NEW SIZE (no host has that much memory
+          // free: HOST_NOT_ENOUGH_FREE_MEMORY): the old size back, and started
+          // again. This used to fall through to the sweep, which took the
+          // stop for done and removed the machine with its disk. If it will
+          // not start at its old size either, it is left stopped and marked
+          // busy, so the sweep leaves it for BUSY_MS and then applies its
+          // rules (started once more before its end, removed after it), and
+          // the person is told what state it is in.
+          const first = /** @type {Error} */ (e);
+          const back = !refused && Object.keys(old).length > 0;
+          if (back) await rpc.call('vm.set', { id: vm.id, ...old }).catch(() => {});
+          try {
+            await rpc.call('vm.start', { id: vm.id });
+          } catch (again) {
+            stuck = true;
+            const why = refused
+              ? `the pool would not give it ${said} (${refused.message}), and it would not start (${first.message}; then ${/** @type {Error} */ (again).message})`
+              : `it would not start with ${said} (${first.message}), nor ${back ? 'at its old size' : 'on a second try'} (${/** @type {Error} */ (again).message})`;
+            this.log.warn(`sidecar: ${name} is stopped after a resize: ${why}`);
+            return {
+              ok: false,
+              text: `${name} is stopped: ${why}. It was not removed. It is left as it is for ${BUSY_MS / 60_000} minutes; after that the sweep starts it once more if its end has not come, and removes it when it has. Resize it again to try now, or end it.`,
+            };
+          }
+          // Started on the second try: at its old size when that was put
+          // back, which is a refusal of the new one; else at the new size,
+          // which is what was asked for.
+          if (back) refused ??= first;
+        }
       } finally {
-        await rpc.call('tag.remove', { id: vm.id, tag: BUSY_TAG }).catch(() => {});
+        if (!stuck) await rpc.call('tag.remove', { id: vm.id, tag: busy }).catch(() => {});
       }
-      const said = [size.CPUs ? `${size.CPUs} vCPU${size.CPUs === 1 ? '' : 's'}` : null, size.memory ? `${size.memory / 1024 ** 3} GiB` : null].filter(Boolean).join(' and ');
       if (refused) return { ok: false, text: `${name} was restarted at its old size: the pool would not give it ${said} (${refused.message}).` };
       this.log.info(`sidecar: ${name} resized to ${said}`);
       return { ok: true, text: `${name} restarted with ${said}. A session that was running on it ended with the restart.` };

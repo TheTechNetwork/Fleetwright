@@ -80,11 +80,11 @@ export const DEBIAN_IMAGE = Object.freeze({
   algorithm: /** @type {'sha512'} */ ('sha512'),
   release: '13',
   // renovate: datasource=custom.debian-cloud depName=trixie
-  build: '20261021-2638',
-  url: 'https://cloud.debian.org/images/cloud/trixie/20261021-2638/debian-13-genericcloud-amd64-20261021-2638.qcow2',
+  build: '20261026-2643',
+  url: 'https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2',
   /** As published in that build's SHA512SUMS, and as downloaded. */
-  sha512: '16e0965312c56feb331049d45d2b1b5778f3f942a33d4300eedbb97527707f2bea87c0006f3e4cc7a25fadbff739c4e235a51fb9bcd1b66fd554f7f8e80ba45c',
-  compressedSize: 342294528,
+  sha512: '3ace18e33bdd036edb49d1f79342bd01d2ab980e35194edb0b410435cd543538d286a0bd13bbb0835f7862306e3d385ce2f6a70d8ecf0bd961111166adbc1b8e',
+  compressedSize: 341114880,
   /** The disk's size inside the qcow2, before it is grown. */
   rawSize: 3221225472,
 });
@@ -377,12 +377,19 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     `origin='${origin}'`,
     `token='${token ?? ''}'`,
     `pinned='${pinned.length ? `${url.hostname}:${port}:${pinned.join(',')}` : ''}'`,
+    // THE LAST STEP SAID, for the heartbeat below; and how often it beats.
+    'stepfile=/run/fleetwright-image.step',
+    'beat=60',
     // THE BODY BY PYTHON, which has JSON and is there before anything is
     // installed; SENT BY CURL once there is one, with a user agent of its
     // own. curl is what fetched /install through the same front door, and a
     // stock Python-urllib agent is the kind a CDN's bot check turns away.
+    // `sent` says whether anything got through, for the one report that
+    // decides the build (done, below); report itself never fails a step.
     'report() {',
+    '  sent=0',
     '  [ -n "$token" ] || return 0',
+    '  printf "%s\\n" "$1" >"$stepfile" 2>/dev/null || true',
     "  body=$(python3 -c '",
     'import json, sys',
     'body = {"token": sys.argv[1], "step": sys.argv[2]}',
@@ -398,15 +405,35 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     'print(json.dumps(body))',
     `' "$token" "$1" "$log" "\${2-}" "\${3-}" 2>/dev/null) || return 0`,
     '  if command -v curl >/dev/null 2>&1; then',
-    `    curl -fsS -m 10 -A fleetwright-image -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1 ||`,
-    `      { [ -n "$pinned" ] && curl -fsS -m 10 -A fleetwright-image --resolve "$pinned" -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1; } || true`,
+    `    { curl -fsS -m 10 -A fleetwright-image -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1 ||`,
+    `      { [ -n "$pinned" ] && curl -fsS -m 10 -A fleetwright-image --resolve "$pinned" -H 'content-type: application/json' --data-binary "$body" "$origin/api/xosetup/report" >/dev/null 2>&1; }; } && sent=1 || true`,
     '  else',
     "    python3 -c '",
     'import sys, urllib.request',
     'req = urllib.request.Request(sys.argv[1] + "/api/xosetup/report", sys.argv[2].encode(), {"content-type": "application/json", "user-agent": "fleetwright-image"})',
     'urllib.request.urlopen(req, timeout=10).read()',
-    `' "$origin" "$body" >/dev/null 2>&1 || true`,
+    `' "$origin" "$body" >/dev/null 2>&1 && sent=1 || true`,
     '  fi',
+    '}',
+    // A HEARTBEAT, so silence means something. Between steps the VM used to
+    // say nothing for minutes (apt, a slow mirror, the pull's unpack), and a
+    // phone could not tell a slow step from a VM that had hung, because the
+    // box only warned of a VM that had never reported at all. Every minute
+    // the last step is said again; a box hearing nothing for a few minutes
+    // now knows it is hearing nothing (ensureImage, STALL_MS). `command
+    // sleep`, so it is the real one whatever the shell has by that name.
+    'heartbeat() {',
+    '  [ -n "$token" ] || return 0',
+    // Its sleep goes with it when it is killed, or a sleep left behind holds
+    // the script's pipes open past the power-off.
+    "  trap 'kill \"${napper:-}\" 2>/dev/null; exit 0' TERM",
+    '  while :; do',
+    '    command sleep "$beat" & napper=$!',
+    '    wait "$napper" || return 0',
+    '    s=$(cat "$stepfile" 2>/dev/null) || continue',
+    "    case \"$s\" in ''|done|failed) continue ;; esac",
+    '    report "$s"',
+    '  done',
     '}',
     // THE SESSION IMAGE'S PULL, WATCHED FROM BESIDE IT. The installer pulls
     // it inside `apt-get install fleetwright` (install.sh, 5b), and it is
@@ -490,23 +517,38 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     '}',
     'steps() {',
     '  set -eo pipefail',
-    '  export DEBIAN_FRONTEND=noninteractive',
+    // NO CONTAINER ON A MACHINE IMAGE. The VM is the sandbox
+    // (docs/hypervisors.md, "Inside the VM"): FLEETWRIGHT_SANDBOX is off by
+    // default and nothing on a clone turns it on, so the podman the package
+    // recommends and the session image its installer pulls (293 MB) were
+    // installed into every image and used by nothing. Both are told not to,
+    // which is most of what a build took.
+    '  export DEBIAN_FRONTEND=noninteractive FLEETWRIGHT_NO_SANDBOX=1 FLEETWRIGHT_BUILD_IMAGE=0',
     // WHETHER IT HAS A NETWORK, first, on the screen: an address, a route,
     // and a name looked up. A VM that never reports in is most often this.
     '  echo "fleetwright: building the machine image"',
     '  ip -4 -br addr || true',
     '  ip -4 route || true',
-    // A NAME, GIVEN HALF A MINUTE. The first real run looked once, in the
-    // VM's first second, and said it had no DNS while its resolver may not
-    // yet have been told the server DHCP named. Every step after this needs
+    // A NAME, GIVEN A MINUTE. The first real run looked once, in the VM's
+    // first second, and said it had no DNS while its resolver may not yet
+    // have been told the server DHCP named. Every step after this needs
     // names, so without them it stops here, saying which server it asked.
+    // BOUNDED: each look is told to wait two seconds for one answer
+    // (RES_OPTIONS, which glibc's resolver reads), where the default is five
+    // seconds, twice, per server, so fifteen looks at a server that drops
+    // queries took many minutes and not the half minute the message said. A
+    // build sat at "started" for twelve minutes on a phone for this. And
+    // SAID, as a step of its own, so the wait is not silence.
+    '  report dns',
     '  named=',
+    '  t0=$SECONDS',
     '  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do',
-    '    if getent hosts deb.debian.org; then named=1; break; fi',
+    "    if RES_OPTIONS='timeout:2 attempts:1' getent hosts deb.debian.org; then named=1; break; fi",
+    '    [ $((SECONDS - t0)) -lt 60 ] || break',
     '    sleep 2',
     '  done',
     '  if [ -z "$named" ]; then',
-    '    echo "fleetwright: cannot look up deb.debian.org after 30 seconds, so this VM has no working DNS. The servers it was told to ask:"',
+    '    echo "fleetwright: cannot look up deb.debian.org after $((SECONDS - t0)) seconds, so this VM has no working DNS. The servers it was told to ask:"',
     "    resolvectl dns 2>/dev/null || grep '^nameserver' /etc/resolv.conf || echo '(none)'",
     // AND WHO ANSWERS WHEN ASKED STRAIGHT: each server it was told, its
     // gateway and whichever router gave it its lease, by a DNS query of its
@@ -566,7 +608,9 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     '  watch_pull &',
     '  watcher=$!',
     `  trap 'kill "$watcher" 2>/dev/null || true' EXIT`,
-    '  apt-get install -y fleetwright',
+    // WITHOUT ITS RECOMMENDS: podman and uidmap, which the image does not
+    // use (above); the installer inside the package is told the same.
+    '  apt-get install -y --no-install-recommends fleetwright',
     '  kill "$watcher" 2>/dev/null || true',
     '  test -x /opt/fleetwright/current/install/fleetwright-vm-join',
     '  report cleaning',
@@ -583,11 +627,23 @@ export function buildCloudConfig({ coordinatorUrl, token = null, addresses = [],
     // FIRST, so Xen Orchestra has its address before anything can fail.
     '[ -x /usr/sbin/xen-guest-agent ] && systemctl enable --now xen-guest-agent.service',
     'report started',
+    'heartbeat &',
+    'beater=$!',
     // tee carries on past a screen it cannot open, and the status is the
     // steps', not tee's.
     '( steps ) 2>&1 | tee -a "$log" $screens >/dev/null',
-    'if [ "${PIPESTATUS[0]}" -eq 0 ]; then',
-    '  report done',
+    'status=${PIPESTATUS[0]}',
+    'kill "$beater" 2>/dev/null || true',
+    'if [ "$status" -eq 0 ]; then',
+    // SAID UNTIL IT IS HEARD, within reason: the box makes nothing a
+    // template that did not say it was done (ensureImage), so this is the
+    // one report worth a minute of trying. A VM with no token powers off as
+    // it did, and is judged by that alone.
+    '  for _ in 1 2 3 4 5 6; do',
+    '    report done',
+    '    [ -n "$token" ] && [ "$sent" != 1 ] || break',
+    '    sleep 10',
+    '  done',
     '  systemctl poweroff',
     'else',
     '  report failed',
@@ -692,7 +748,7 @@ export function imageFill(downloaded, written, spec = DEBIAN_IMAGE) {
  * when the VM could say how many there are to come.
  */
 const STEP_SHARE = Object.freeze({
-  started: [0.05, 0.1], packages: [0.1, 0.2], installer: [0.2, 0.3], image: [0.3, 0.9], cleaning: [0.9, 0.95], done: [0.95, 0.95], failed: [0, 0.95],
+  started: [0.05, 0.08], dns: [0.08, 0.1], packages: [0.1, 0.2], installer: [0.2, 0.3], image: [0.3, 0.9], cleaning: [0.9, 0.95], done: [0.95, 0.95], failed: [0, 0.95],
 });
 
 /**
@@ -715,6 +771,7 @@ export function installFill(elapsed, step = null, part = null, head = BYTES_SHAR
 /** What the phone says the build VM is doing, for each step it reports. */
 const STEP_WORDS = Object.freeze({
   started: 'its VM is up and has started the install',
+  dns: 'its VM is waiting for its network to answer a name',
   packages: 'installing Debian’s packages',
   installer: 'installing Fleetwright',
   image: 'fetching the session image',
@@ -750,8 +807,21 @@ function pulled(report) {
   return part >= 0.98 ? `: all ${mb(Number(report.of))} MB are in and being unpacked` : `: ${mb(got)} of ${mb(Number(report.of))} MB`;
 }
 
-/** How long a build VM with a token may say nothing before the phone says so. */
-const SILENT_MS = 5 * 60_000;
+/**
+ * How long a build VM with a token may say nothing before the phone says so:
+ * nothing at all since it started, or nothing since its last step. The VM
+ * says its step again every minute (buildCloudConfig, heartbeat), so three
+ * minutes of silence is silence, not a slow step. A phone used to show a
+ * frozen "started, 12 min so far" with no warning, because the box only
+ * warned of a VM that had never reported.
+ */
+const STALL_MS = 3 * 60_000;
+/**
+ * How long after its VM halts a build waits for a late `done`: the report
+ * goes out just before the power-off and may arrive after Xen Orchestra has
+ * already said Halted.
+ */
+const DONE_GRACE_MS = 30_000;
 
 /** The last few lines of a log, for a sentence on a phone. @param {string|null|undefined} log */
 // Enough for the DNS probe above, its servers and who answered ARP; and still
@@ -1118,6 +1188,8 @@ export async function ensureImage({
     const started = now();
     /** @type {number|null} */
     let firstStart = null;
+    /** @type {number|null} when the VM was first seen Halted without having said done */
+    let haltedAt = null;
     for (;;) {
       signal?.throwIfAborted();
       await sleep(pollMs);
@@ -1127,7 +1199,21 @@ export async function ensureImage({
       if (report?.step === 'failed') throw await failed(report);
       const seen = /** @type {any} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { id: vm } })) || {})[0]);
       if (!seen) throw new Error('the machine image’s build VM disappeared from Xen Orchestra while it was installing');
-      if (seen.power_state === 'Halted') break;
+      if (seen.power_state === 'Halted') {
+        // STOPPED IS NOT DONE. The install powers the VM off when every step
+        // worked, and this used to take any halt for that: a host rebooted
+        // for maintenance, a VM stopped from Xen Orchestra, or an install
+        // cut off mid-step became the template every session was cloned
+        // from. A VM given a token says `done` before it powers off, and is
+        // waited on for it a little past the halt; without one (no token,
+        // as before reports existed) the power state is all there is.
+        if (!token || report?.step === 'done') break;
+        if (haltedAt === null) haltedAt = now();
+        if (now() - haltedAt < DONE_GRACE_MS) continue;
+        const kept = await giveUp('stopped before done');
+        const last = report ? `the last it said was that ${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}` : 'it never reported in';
+        throw new Error(`the machine image’s build VM stopped before it said the install was done (${last}), so it was not made the template. ${kept}`);
+      }
       if (seen.power_state === 'Running') {
         const at = Number(seen.startTime) || null;
         if (firstStart === null) firstStart = at;
@@ -1141,9 +1227,14 @@ export async function ensureImage({
         const last = report ? `; the last it said was that ${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}` : token ? ', and its VM never reported in, so it most likely has no network or its start-up script did not run' : '';
         throw new Error(`the install on the machine image did not finish within ${Math.round(VM_IMAGE.installMs / 60_000)} minutes${last}. ${await giveUp('install timed out')}`);
       }
+      // HONEST ABOUT SILENCE: what it last said and how long ago, once that
+      // is longer than its heartbeat allows; never a step as if it were news.
+      const quiet = report ? now() - report.at : elapsed;
       const words = report
-        ? `${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}${pulled(report)}, ${minutes} min so far.`
-        : token && elapsed > SILENT_MS
+        ? quiet > STALL_MS
+          ? `its VM last said that ${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}${pulled(report)}, ${Math.max(1, Math.round(quiet / 60_000))} min ago, and nothing since. ${minutes} min so far.`
+          : `${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}${pulled(report)}, ${minutes} min so far.`
+        : token && elapsed > STALL_MS
           ? `${minutes} min so far, and its VM has not reported in. It may have no network, or its start-up script did not run.`
           : `${minutes} min so far, usually about ${Math.round(VM_IMAGE.installTypicalMs / 60_000)}.`;
       say(`Installing Fleetwright on the machine image: ${words}`, stage(3, installFill(elapsed, report?.step ?? null, pullPart(report), head)));

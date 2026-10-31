@@ -78,7 +78,7 @@ export const XOSETUP_JOB_RE = /^[0-9a-f]{12}$/;
  * end of the install log, because that is the one thing nobody can read
  * anywhere else (the VM has no password to log in with).
  */
-export const IMAGE_REPORT_STEPS = Object.freeze(['started', 'packages', 'installer', 'image', 'cleaning', 'done', 'failed']);
+export const IMAGE_REPORT_STEPS = Object.freeze(['started', 'dns', 'packages', 'installer', 'image', 'cleaning', 'done', 'failed']);
 /**
  * `image` alone carries numbers: `got`, the bytes the build VM has received
  * since the session image's pull began, and `of`, that image's size as its
@@ -612,6 +612,43 @@ const ID_RE = /^[A-Za-z0-9._:-]{8,128}$/;
  * phone was refused as a bad envelope. The set stays a deliberate allowlist
  * rather than "anything", because this ends up in a state file and in logs. */
 const ACTOR_RE = /^[A-Za-z0-9._:@+-]{1,128}$/;
+
+/** An address a box pins as an admin (`pinadmin`, src/fleet/host/pinned-admins.js).
+ * Narrower than an actor: a pin is a fleet address, never `telegram:12345`,
+ * because the minter files signing keys under addresses and an admin is
+ * checked by the key that signed. Exported so the box's own command line and
+ * env setting refuse what the wire would. */
+export const PIN_EMAIL_RE = /^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,63}$/;
+
+/** What a box that pins its admins will not take from anybody while it is stranded. */
+const PIN_GUARDED = 'update, upgrade or reboot it, change its release channel or session image, or restore somebody else’s work on it';
+
+/**
+ * What a person is told when a box that pins its admins takes those verbs from
+ * nobody (src/fleet/host/pinned-admins.js, pinReport), keyed by why.
+ *
+ * FIXED HERE, AND NOT THE BOX'S OWN WORDS. The coordinator shows these to
+ * everybody who sees the box, members who are not shown the addresses
+ * included, so a box's health carries a code and the coordinator says the
+ * sentence (core.js adminsSeenBy): a box cannot put an address, or anything
+ * else, in front of every viewer through this field. None of them names
+ * anybody.
+ *
+ *  - `left`: every admin pinned there left the fleet (forgetperson).
+ *  - `unlisted`: none of them has a key the minter lists, so none can sign: a
+ *    mistyped address, or somebody who never signed in on a phone.
+ *  - `unchecked`: the box holds no key list it may check with (intent-keys.js
+ *    check): it has no key of its own to fetch one with, it has
+ *    not fetched one yet, or the one it holds is older than it takes. Either
+ *    way it can check nobody's signature, a person's own restore included.
+ *  - `unreadable`: the record itself cannot be read.
+ */
+export const PIN_SENTENCES = Object.freeze({
+  left: `Every admin pinned on this machine has left the fleet, so nobody can ${PIN_GUARDED}. A new admin is pinned on the machine itself: fleetwright-sidecar pin-admin with their address.`,
+  unlisted: `None of the admins pinned on this machine has a signing key the fleet lists, so nobody can ${PIN_GUARDED}. On the machine, fleetwright-sidecar admins shows who is pinned, and pin-admin pins somebody who can sign.`,
+  unchecked: `This machine pins its admins but holds no current list of the fleet’s signing keys, so it can check nobody’s signature and nobody can ${PIN_GUARDED}. A connected machine with a key of its own fetches the list every ten minutes; on the machine, fleetwright-sidecar reset-admins takes the fleet’s word instead.`,
+  unreadable: `The record of who is pinned on this machine cannot be read, so nobody can ${PIN_GUARDED}. On the machine, fleetwright-sidecar admins says what is wrong with it.`,
+});
 
 /**
  * @typedef {object} ParamSpec
@@ -1210,6 +1247,47 @@ export const VERBS = Object.freeze({
     mutating: true,
     summary: 'Reboot one host. Two steps: ask, then send back the pin and the hostname.',
   },
+  // WHO ELSE THIS BOX TAKES REBOOT, UPGRADE, UPDATE, A NEW CHANNEL OR
+  // SANDBOX IMAGE AND A RESTORE OF SOMEBODY ELSE'S WORK FROM, recorded on
+  // the box (src/fleet/host/pinned-admins.js, docs/signed-intents.md
+  // "Pinned admins").
+  //
+  // NEVER THE FIRST ONE. The first pinned admin is set on the box by whoever
+  // runs it (FLEETWRIGHT_ADMINS, or `fleetwright-sidecar pin-admin`), because
+  // anything that arrives over the wire arrived through the coordinator, and a
+  // coordinator that can list a member can list a throwaway account it signed
+  // up itself. Over the wire this only lets an admin the box already pins add
+  // or remove another, with their own signature: a delegation is the
+  // coordinator holding a standing permission, and this is not one to hold.
+  //
+  // A new verb, so an older host answers `unknown_verb`, and the phones offer
+  // it only on a box whose health carries `admins`. No version bump: the
+  // parameters are new on a new verb.
+  pinadmin: {
+    params: {
+      email: {
+        type: 'text',
+        required: true,
+        max: 128,
+        pattern: PIN_EMAIL_RE,
+        shapeName: 'an email address',
+        since: 16,
+        describe: 'Whose pin to add or remove: their fleet address. Only an admin this box already pins may change it.',
+      },
+      op: {
+        type: 'enum',
+        required: true,
+        values: ['add', 'remove'],
+        since: 16,
+        describe: 'add pins them; remove takes them off. The last pinned admin can be removed only on the box itself.',
+      },
+    },
+    mutating: true,
+    summary:
+      'Add or remove an admin this box pins for reboot, upgrade, update, changing its release channel or session image, ' +
+      'and restoring somebody else\u2019s work. ' +
+      'Only a pinned admin may, with their own signature; the first is pinned on the box by whoever runs it.',
+  },
   answer: {
     params: {
       name: { type: 'name', required: true },
@@ -1640,7 +1718,7 @@ export const VERBS = Object.freeze({
         type: 'enum',
         required: true,
         values: ['reboot', 'extend', 'resize', 'stop'],
-        describe: '`reboot` restarts it; `extend` gives it `minutes` longer, up to six hours from when it was made; `resize` gives it `cpus` and `memory` (GiB), which restarts it; `stop` removes it with everything on it.',
+        describe: '`reboot` restarts it; `extend` gives it `minutes` longer, up to 350 minutes from when it was made; `resize` gives it `cpus` and `memory` (GiB), which restarts it; `stop` removes it with everything on it.',
       },
       minutes: { type: 'int', required: false, min: 5, max: 350, describe: 'For `extend`: how many minutes longer.' },
       cpus: { type: 'int', required: false, min: 1, max: 64, describe: 'For `resize`: vCPUs.' },
@@ -1648,7 +1726,7 @@ export const VERBS = Object.freeze({
     },
     mutating: true,
     summary:
-      'Work a machine from your own hypervisor: reboot it, extend it (up to six hours from when it was made), resize ' +
+      'Work a machine from your own hypervisor: reboot it, extend it (up to 350 minutes from when it was made), resize ' +
       'it (vCPUs and memory, which restarts it), or stop it, which removes it and everything on it. Yours only.',
   },
 

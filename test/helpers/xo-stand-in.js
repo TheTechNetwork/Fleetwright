@@ -90,9 +90,14 @@ export function certificate() {
  * disable of that server answers, and `stumble` refuses the first look
  * after one and keeps the connection.
  *
- * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[], tls?: { key: string, cert: string, pin: string }, adminPassword?: string, more?: string[], vms?: Record<string, any>, templates?: Record<string, any>, nets?: Record<string, string>, servers?: XoServer[] }} [opts]
+ * `refuse` names methods the server lists and still turns down, each with the
+ * words it refuses them in, for a job that must say what it could not do.
+ * `on` is called with a call's params when it arrives, before it is answered:
+ * how a test lands a cancel while that call is in flight.
+ *
+ * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[], tls?: { key: string, cert: string, pin: string }, adminPassword?: string, more?: string[], vms?: Record<string, any>, templates?: Record<string, any>, nets?: Record<string, string>, servers?: XoServer[], refuse?: Record<string, string>, on?: Record<string, (params: any) => void> }} [opts]
  */
-export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, watchdog = /** @type {any} */ (null), maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}), servers = /** @type {XoServer[]|null} */ (null) } = {}) {
+export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, watchdog = /** @type {any} */ (null), maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}), servers = /** @type {XoServer[]|null} */ (null), refuse: refused = /** @type {Record<string, string>} */ ({}), on = /** @type {Record<string, (params: any) => void>} */ ({}) } = {}) {
   const { key, cert, pin } = givenTls ?? certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
@@ -101,8 +106,15 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
   /** @type {Map<string, string[]>} the tags each network carries, as tag.add and tag.remove leave them */
   const tags = new Map([['net-mgmt', ['fleetwright-egress']], ['net-lab', []], ['net-dmz', []]]);
   const passwords = new Map([['admin@admin.net', adminPassword]]);
+  /**
+   * @type {Map<string, string[]>} each user's tokens, as xo-server keeps them
+   * by user: `token.create` adds one and `token.deleteAll` removes the
+   * signed-in user's but the one named in `except`. The limited user's first
+   * is `tok-limited-123`, which the handoff tests collect; later ones count up.
+   */
+  const tokens = new Map();
   const methods = Object.fromEntries(
-    ['session.signIn', 'system.getMethodsInfo', 'xo.getAllObjects', 'user.getAll', 'user.create', 'user.set', 'resourceSet.getAll', 'resourceSet.create', 'resourceSet.set', 'token.create', 'plugin.get', 'plugin.load', 'plugin.enableAutoload', 'plugin.configure', 'tag.add', 'tag.remove']
+    ['session.signIn', 'system.getMethodsInfo', 'xo.getAllObjects', 'user.getAll', 'user.create', 'user.set', 'resourceSet.getAll', 'resourceSet.create', 'resourceSet.set', 'token.create', 'token.deleteAll', 'plugin.get', 'plugin.load', 'plugin.enableAutoload', 'plugin.configure', 'tag.add', 'tag.remove']
       .concat(servers ? ['server.getAll', 'server.enable', 'server.disable'] : [])
       .concat(more)
       .filter((m) => !drop.includes(m))
@@ -177,6 +189,15 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
         const refuse = (message, code = 1, data = undefined) => socket.write(frame(0x1, Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code, message, ...(data ? { data } : {}) } })), { mask: false }));
         const p = msg.params || {};
         const server = servers?.find((s) => s.id === p.id);
+        // ONLY A HOOK A TEST GAVE, by its own name: the method name is off the
+        // wire, and an object's inherited names (`constructor`, say) are not hooks.
+        if (Object.hasOwn(on, msg.method)) on[msg.method](p);
+        // A METHOD THE SERVER LISTS AND REFUSES, in the words a test gave it:
+        // what a limited user gets for a call above its station, say.
+        if (Object.hasOwn(refused, msg.method)) {
+          refuse(refused[msg.method]);
+          continue;
+        }
         switch (msg.method) {
           case 'server.getAll':
             if (servers?.some((s) => s.stumbling)) {
@@ -309,10 +330,22 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
           case 'vm.create': answer(`vm-made-${calls.filter((c) => c.method === 'vm.create').length}`); break;
           case 'tag.add': tags.set(p.id, [...(tags.get(p.id) ?? []), p.tag]); answer(true); break;
           case 'tag.remove': tags.set(p.id, (tags.get(p.id) ?? []).filter((x) => x !== p.tag)); answer(true); break;
-          case 'token.create':
+          case 'token.create': {
             // Xen Orchestra's own cap, and the words a limited user is given for going over it.
-            if (p.expiresIn !== undefined && p.expiresIn > maxTokenMs) refuse('unknown error from the peer');
-            else answer(as === FLEET_USER ? 'tok-limited-123' : 'tok-WRONG-USER');
+            if (p.expiresIn !== undefined && p.expiresIn > maxTokenMs) {
+              refuse('unknown error from the peer');
+              break;
+            }
+            const mine = tokens.get(String(as)) ?? [];
+            const made = as === FLEET_USER ? `tok-limited-${123 + mine.length}` : 'tok-WRONG-USER';
+            tokens.set(String(as), [...mine, made]);
+            answer(made);
+            break;
+          }
+          case 'token.deleteAll':
+            // As xo-server's token.deleteAll: the signed-in user's own, all but `except`.
+            tokens.set(String(as), (tokens.get(String(as)) ?? []).filter((tok) => tok === p.except));
+            answer(true);
             break;
           case 'plugin.get': answer([plugin, watchdog].filter(Boolean)); break;
           default: answer(true);
@@ -325,5 +358,5 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
   await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
   t.after(() => server.close());
   const address = `127.0.0.1:${/** @type {import('node:net').AddressInfo} */ (server.address()).port}`;
-  return { address, pin, calls, users, sets, tags, passwords, connections: () => conns, live: () => live };
+  return { address, pin, calls, users, sets, tags, passwords, tokens, connections: () => conns, live: () => live };
 }

@@ -48,6 +48,50 @@ import { readMarker } from '../core/restart-watch.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
+/** @typedef {'off'|'unsafe_args'|'userns_root'|'userns_docker'|'userns_host'} UncontainedWhy */
+
+/**
+ * Why a session on this box is not contained: every reason, or none when it is.
+ *
+ * In the order an operator would fix them: no sandbox at all; a
+ * FLEETWRIGHT_SANDBOX_ARGS the operator let through that ends it
+ * (sandbox-args.js), because a `--privileged` sandbox is not one; and a
+ * sandbox in the host user namespace. Under `host` container root is this
+ * process's uid, which owns the credentials and the loopback token, or is
+ * real root on a root-run hub. config.js resolveUserns downgrades a root
+ * service and a docker engine to it, and an operator can ask for it. Which
+ * it was is kept apart because each is opened differently. A namespace that
+ * is not `nomap`, set or not, has not said nomap, so it is not contained
+ * either.
+ *
+ * EVERY REASON, NOT THE FIRST. With one, the fleet told a root-run box with
+ * its sandbox off that turning it on would open it, and once on, the box
+ * said root. So the later reasons are read even while an earlier one holds:
+ * the arguments and the namespace are known with the sandbox off, and
+ * `host` asked for still meets whatever would downgrade nomap here
+ * (`sandboxUsernsBlockedBy`), so a root box that asked for `host` says both.
+ * The list is empty exactly when the box is contained, as before.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @returns {UncontainedWhy[]}
+ */
+function uncontained(cfg) {
+  /** @type {UncontainedWhy[]} */
+  const why = [];
+  if (!cfg.sandbox) why.push('off');
+  if (unsafeSandboxArgs(cfg.sandboxExtraArgs ?? []).length) why.push('unsafe_args');
+  if (cfg.sandboxUserns !== 'nomap') {
+    const forced = cfg.sandboxUsernsForcedBy ?? null;
+    // What forced it is always among them, so a config that carries only
+    // that still says not contained.
+    const blocked = new Set([...(cfg.sandboxUsernsBlockedBy ?? []), ...(forced ? [forced] : [])]);
+    if (!forced) why.push('userns_host');
+    if (blocked.has('root')) why.push('userns_root');
+    if (blocked.has('docker')) why.push('userns_docker');
+  }
+  return why;
+}
+
 export class HttpAdapter {
   /**
    * @param {import('../config.js').Config} cfg
@@ -594,6 +638,18 @@ export class HttpAdapter {
       }
       const actor = claimed || 'web';
 
+      // FROM THE FLEET OR FROM THIS BOX, which decides whether the operator's
+      // FLEETWRIGHT_SKIP_PERMISSIONS off binds a start (commands.js
+      // permissionCeiling). The sidecar's token says so on its own; the
+      // sidecar also says so in a field, for a box where it still holds the
+      // operator's token. A field that only ever takes something away needs
+      // no more trust than the token it arrives with, so it is accepted from
+      // either — and anything but the one word is refused, not ignored.
+      if (body.via !== undefined && body.via !== null && body.via !== 'fleet') {
+        return json(res, 400, { ok: false, text: 'via is not in the form this accepts' });
+      }
+      const via = principal === 'sidecar' || body.via === 'fleet' ? 'fleet' : undefined;
+
       // THE SIDECAR'S TOKEN RUNS THE SIDECAR'S COMMANDS. Judged on the same
       // canonical word dispatch will run, so an alias is not a way round, and
       // on the sub-form for the two words that cover both a person's action
@@ -613,7 +669,7 @@ export class HttpAdapter {
       const reply = await dispatch(
         // Split back into a list here, so a command reads labels and never a
         // string it has to remember to parse.
-        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, usage: this.usage, ...meta,
+        { sessions: this.sessions, login: this.login, cfg: this.cfg, actor, usage: this.usage, ...meta, ...(via ? { via } : {}),
           ...(meta.hostLabels ? { hostLabels: String(meta.hostLabels).split(',').filter(Boolean) } : {}) },
         line,
       );
@@ -660,10 +716,11 @@ export class HttpAdapter {
    * apps already render null as "not reported". Caught per field rather than
    * around the whole object so one bad file does not blank the others.
    *
-   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, sandboxed: boolean, houseRules: number|null }}
+   * @returns {{ labels: { auto: string[], set: string[] }|null, channel: 'stable'|'rolling'|null, channelPinned: boolean|null, sandbox: { variant: string, image: string, pinned: boolean }|null, sandboxed: boolean, sandboxedWhy: UncontainedWhy|null, sandboxedAlso: UncontainedWhy[], houseRules: number|null, permissions: 'asks'|'bypassed' }}
    */
   #hostFacts() {
     const cfg = this.cfg;
+    const why = uncontained(cfg);
     /** @template T @param {() => T} read @returns {T|null} */
     const tell = (read) => {
       try {
@@ -685,14 +742,24 @@ export class HttpAdapter {
       // say: it is null for a box that could not read its variant too, and a
       // sidecar from before #681 sent one whether or not the box used it. The
       // coordinator lets a member's session onto a box they do not administer
-      // only on `true`, because without the sandbox a session is a pane under
-      // this account, which holds every person's credentials here and the
-      // loopback token (docs/security.md G8). So `true` is said only when it
-      // is so: the sandbox on, and no FLEETWRIGHT_SANDBOX_ARGS the operator
-      // let through that end containment (sandbox-args.js), because a box
-      // whose sandbox is `--privileged` is not one. Read from configuration
-      // that cannot fail, so it is a boolean and never null.
-      sandboxed: Boolean(cfg.sandbox) && !unsafeSandboxArgs(cfg.sandboxExtraArgs ?? []).length,
+      // only on `true`, because without containment a session holds what this
+      // account holds: every person's credentials here and the loopback token
+      // (docs/security.md G8). So `true` is said only when it is so, and
+      // uncontained(), above the class, is the list of what makes it not
+      // so. Read from configuration that cannot fail, so it is a boolean and
+      // never null.
+      sandboxed: why.length === 0,
+      // AND WHY NOT, beside a `false`: the way on is a different setting for
+      // each, and a refusal that names the wrong one sent the operator of a
+      // root-run box to turn on a sandbox that was already on. The first
+      // reason, so a coordinator or phone that reads one still has the one
+      // to fix first, and null beside `true`. Additive: a coordinator from
+      // before it reads `false` alone, and a newer one reads a box without
+      // it as `off` (scheduler.js NOT_CONTAINED).
+      sandboxedWhy: why[0] ?? null,
+      // AND EVERY OTHER, in order, because when a box has two no one fix
+      // opens it. Empty when there is one reason or none.
+      sandboxedAlso: why.slice(1),
       // How many characters of house rules every session here is given, 0 when
       // the file exists and is refused (too big, not a file), null when there
       // is none — the shape the sidecar always sent, moved here unchanged.
@@ -701,6 +768,15 @@ export class HttpAdapter {
         if (!rules) return null;
         return rules.ok ? rules.chars : 0;
       }),
+      // WHAT A SESSION STARTED WITH NO MODE DOES HERE: `asks` before each
+      // tool, or runs with permissions `bypassed` (FLEETWRIGHT_SKIP_PERMISSIONS,
+      // on unless the operator turned it off). A phone labels its "Box default"
+      // choice from this, and offers "Permissions bypassed" only on a box that
+      // says `bypassed`, because on one that says `asks` a start from the fleet
+      // asking for it is refused (commands.js permissionCeiling). Read from
+      // configuration that cannot fail, so it is never null here; a hub too
+      // old to send it is the sidecar's null, which is cannot tell.
+      permissions: cfg.skipPermissions ? 'bypassed' : 'asks',
     };
   }
 

@@ -239,7 +239,9 @@ test('from the phone: shut down, added, started again, and Xen Orchestra waited 
   assert.equal(signed, true, 'the phone can tell the key is this machine’s, for this pool master');
   assert.equal(ran.ok, true, ran.text);
   assert.equal(end.state, 'done', end.text);
-  assert.match(end.text, /reconnect watchdog is in Xen Orchestra at 10\.10\.10\.230, and it is answering again/);
+  // WHAT IT SAYS IS WHAT IT CHECKED: a TCP connect to the port, not the
+  // plugin loading, which it used to claim (C-5).
+  assert.equal(end.text, 'The reconnect watchdog is on fleetwright-xo’s disk, and Xen Orchestra at 10.10.10.230 answers on its port again. Whether it loaded the plugin as it started was not checked from here: Settings, Plugins in Xen Orchestra lists it, and once loaded it reconnects a pool it loses by itself.');
   assert.deepEqual(m.waited, [XO]);
 
   // IN THIS ORDER, and only this: the disk is never opened while the VM
