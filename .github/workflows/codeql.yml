@@ -297,19 +297,36 @@ jobs:
     name: analyze (swift)
     needs: changes
     if: github.event_name != 'pull_request' && needs.changes.outputs.swift == 'true'
-    # GitHub's Xcode 27 image: macos-latest carries Xcode 26 only, and the
-    # Duo needs the 27.1 SDK. scripts/select-xcode.sh picks 27.1 on it.
-    runs-on: xcode-27
+    # XCODE 26, NOT THE 27 THE APP SHIPS WITH, AND NOT BY OVERSIGHT. CodeQL
+    # traces a build by relocating the binaries it starts and inserting its
+    # library into the copies, and that needs the x86-64 slice Apple stopped
+    # shipping with macOS 27 and Xcode 27. CodeQL's own changelog for 2.27.3:
+    #
+    #   CodeQL's `autobuild` and `manual` build modes will not be supported for
+    #   compiled languages on macOS 27 with any Xcode version, and on macOS 26
+    #   when Xcode 27 is selected.
+    #
+    # On the xcode-27 image the first binary it relocated was
+    # /usr/bin/sandbox-exec, which SwiftPM runs to read a package's manifest,
+    # and the copy could not be spawned ("Bad CPU type in executable"), so no
+    # line was compiled and this job was red on every merge from the day it
+    # moved there (#1370) until it moved back. Resolving the packages untraced
+    # first and installing Rosetta were both tried and both failed the same way.
+    #
+    # macos-latest carries Xcode 26, whose toolchain the tracer still handles.
+    # The 27 SDK decides how iPhone Duo DRAWS the app (scripts/select-xcode.sh),
+    # which is ios.yml's concern and not this job's: the analysis wants the
+    # compiler to see every line, and the 26 SDK compiles the same lines. The
+    # deployment target is iOS 26, and nothing in the app is gated on iOS 27.
+    # If that changes, this job is the one that will say so, by failing to
+    # build; it is not to be moved back to xcode-27 until CodeQL supports it.
+    runs-on: macos-latest
     permissions:
       security-events: write
       actions: read
       contents: read
     steps:
       - uses: actions/checkout@v7.0.1
-
-      - name: Select Xcode
-        # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
-        run: ./scripts/select-xcode.sh
 
       - name: Install XcodeGen
         # Without this, brew refreshes its entire formula index before
@@ -339,32 +356,6 @@ jobs:
       - name: Generate the Xcode project
         working-directory: apps/ios
         run: xcodegen generate
-
-      # ROSETTA, FOR ONE PROCESS THE TRACER COPIES. To read a package's
-      # Package.swift, SwiftPM runs it inside `/usr/bin/sandbox-exec`. CodeQL
-      # traces a build by inserting its library into every process the build
-      # starts; a protected system binary will not take it, so the tracer
-      # copies the binary somewhere it will. A copy of an Apple binary on this
-      # Mac has two slices and can run neither as itself: the arm64e slice
-      # loads only for binaries Apple signed, which the copy no longer is, and
-      # the x86_64 slice needs Rosetta, which GitHub's xcode-27 image does not
-      # carry. The spawn fails as
-      #
-      #   Could not resolve package dependencies:
-      #   posix_spawn error: Bad CPU type in executable (86), `["/usr/bin/sandbox-exec", ...
-      #
-      # before a line is compiled, and this job was red on every merge from the
-      # day the app took its first package (sentry-cocoa, #1370) with nobody
-      # seeing it, because it does not run on pull requests.
-      #
-      # With Rosetta installed the copy runs as x86_64, the manifest is read
-      # inside its sandbox as always, and the tracer sees the compile it came
-      # for. Nothing about what the build may do changes; this is the one
-      # machine-level fact the job was missing. Resolving the packages
-      # untraced beforehand was tried and does not help: SwiftPM keys its
-      # manifest cache on the process environment, which the tracer changes.
-      - name: Install Rosetta
-        run: sudo softwareupdate --install-rosetta --agree-to-license
 
       - uses: github/codeql-action/init@v4.39.1
         with:
