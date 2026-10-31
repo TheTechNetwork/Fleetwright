@@ -36,6 +36,13 @@ on:
   workflow_run:
     workflows: ['Host release']
     types: [completed]
+  # AND A PUSH THAT CHANGES ONLY THE WORKER OR THIS FILE. Host release does not
+  # run for apt/, so a change to the Worker alone used to wait for the next
+  # host change to be deployed. tools/build-apt-repo.sh is in Host release's
+  # paths already and is left out here, or one merge would publish twice.
+  push:
+    branches: [main]
+    paths: ['apt/**', '.github/workflows/apt-repo.yml']
   workflow_dispatch:
 
 permissions:
@@ -48,9 +55,11 @@ concurrency:
 jobs:
   publish:
     # A release's build that succeeded, a merge to main's (which republishes
-    # the rolling suite, and leaves stable as it was), or somebody asking.
+    # the rolling suite, and leaves stable as it was), a push to main that
+    # changed the Worker, or somebody asking.
     if: >
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event.workflow_run.conclusion == 'success' && (
         github.event.workflow_run.event == 'release' ||
         (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')))
