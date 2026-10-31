@@ -39,6 +39,21 @@ internal class PhoneVault(private val settings: Settings) {
      */
     data class Grant(val key: String, val fingerprint: String, val label: String, val email: String, val only: List<String> = emptyList())
 
+    /** What this vault says about the key a machine answered with. PhoneVault.swift's `Approval`. */
+    enum class Approval {
+        /** Approved for the whole vault, under that machine's name, by that key. */
+        APPROVED,
+
+        /**
+         * Approved for the whole vault under that machine's name, by another
+         * key: a machine that was re-keyed would have been re-approved.
+         */
+        ANOTHER_KEY,
+
+        /** Nothing that counts, which asks the person. */
+        NONE,
+    }
+
     data class Contents(val items: List<Item>, val grants: List<Grant>)
 
     /** Seal one request, relay it, open the answer. */
@@ -212,10 +227,18 @@ internal class PhoneVault(private val settings: Settings) {
          * sign-in to a machine holding one pool's record, without anyone being
          * asked. So only a whole-vault grant counts, under the name that
          * answered, by the whole hash of the key; anything else asks.
+         *
+         * A WHOLE-VAULT GRANT UNDER THAT NAME BY ANOTHER KEY IS NOT "ASKS"
+         * EITHER: it is [Approval.ANOTHER_KEY], a hard stop. A machine that
+         * was re-keyed would have been re-approved, so whatever answered with
+         * this key under that name is not the machine this phone approved,
+         * and the comparison card would be asking the person to vouch for
+         * it. iOS stops there too (PhoneVault.swift, `approval`).
          */
-        fun approves(grants: List<Grant>, hostId: String, jwk: JSONObject): Boolean {
-            val hash = keyHash(jwk)
-            return grants.any { it.only.isEmpty() && it.label == hostId && it.key == hash }
+        fun approval(grants: List<Grant>, hostId: String, jwk: JSONObject): Approval {
+            val named = grants.filter { it.only.isEmpty() && it.label == hostId }
+            if (named.any { it.key == keyHash(jwk) }) return Approval.APPROVED
+            return if (named.isEmpty()) Approval.NONE else Approval.ANOTHER_KEY
         }
 
         /**

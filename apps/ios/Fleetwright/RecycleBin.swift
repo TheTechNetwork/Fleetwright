@@ -23,9 +23,13 @@ struct RecycleBinView: View {
     /// Everything binned anywhere, soonest to go first. Flattened across hosts
     /// on purpose: the deadline is what somebody is deciding on, and which
     /// machine holds the volume is a detail they can see but need not sort by.
-    private var items: [(host: String, item: Fleet.Binned)] {
+    private var items: [(host: String, item: Fleet.Binned, restorable: Bool)] {
         hosts
-            .flatMap { host in (host.health?.bin ?? []).map { (host: host.hostId, item: $0) } }
+            .flatMap { host in
+                (host.health?.bin ?? []).map {
+                    (host: host.hostId, item: $0, restorable: host.health?.mayRestore($0, as: settings.signedInAs) ?? true)
+                }
+            }
             .sorted { ($0.item.expiresAt ?? 0) < ($1.item.expiresAt ?? 0) }
     }
 
@@ -54,7 +58,13 @@ struct RecycleBinView: View {
                             .foregroundStyle((entry.item.remaining ?? "").hasPrefix("goes")
                                              ? Design.Palette.attention : Design.Palette.inkDim)
                         HStack(spacing: 16) {
-                            Button("Restore") { Task { await act(entry.host, entry.item.name, restore: true) } }
+                            // ONLY WHERE THE MACHINE TAKES IT FROM THIS PERSON
+                            // (C-2): one that pins its admins restores
+                            // somebody else's work for those admins alone
+                            // (HostHealth.mayRestore).
+                            if entry.restorable {
+                                Button("Restore") { Task { await act(entry.host, entry.item.name, restore: true) } }
+                            }
                             Button("Delete now", role: .destructive) {
                                 purgeTarget = (entry.host, entry.item.name)
                             }

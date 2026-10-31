@@ -33,6 +33,16 @@ export const MINTER_KEY_FILE = 'minter-signing.json';
 /** A key list older than this is not taken: a coordinator could hold on to an old one. */
 export const KEY_LIST_MAX_AGE_MS = 10 * 60_000;
 /**
+ * How often a signature by a key the list does not have makes this box ask
+ * again before answering. A phone the minter listed a moment ago is not on a
+ * list this box took up to ten minutes earlier, and its person was refused
+ * until the next one: a new phone's first request, every time. Asking again
+ * at most this often keeps a stream of unknown keys from spending the twelve
+ * asks in ten minutes the coordinator allows a box (core.js), which the
+ * regular refresh needs one of.
+ */
+export const MISS_REFRESH_MS = 2 * 60_000;
+/**
  * The people this box has been shown a key for, kept across restarts: a box
  * that enforces for people with keys (the default) goes on enforcing for them
  * when a later list leaves them out, which is all a coordinator that drops
@@ -129,6 +139,8 @@ export class IntentKeys {
         for (const e of Array.isArray(kept) ? kept.slice(0, MAX_SIGNERS) : []) if (actorEmail(e)) this.signers.add(String(e).toLowerCase());
       } catch { /* none kept yet */ }
     }
+    /** @type {number|null} when a key the list did not have last made this box ask again */
+    this.missAskedAt = null;
     /** What every intent checked so far was found to be. */
     this.counts = {
       signed: 0, delegated: 0, 'not-needed': 0, unsigned: 0, 'unknown-key': 0, 'bad-signature': 0, 'no-directory': 0, 'not-covered': 0, revoked: 0,
@@ -244,21 +256,69 @@ export class IntentKeys {
   }
 
   /**
+   * The key list while it may still be checked with, or null: twice the age a
+   * list is taken at, so one missed refresh does not refuse everybody. What
+   * check() uses, and so who this box can take a signature from now, which
+   * is also what its pins report (pinned-admins.js pinReport): a box holding
+   * a list too old to use refuses everybody, and must not say otherwise.
+   */
+  get current() {
+    return this.directory && this.listAt !== null && this.now() - this.listAt <= 2 * KEY_LIST_MAX_AGE_MS ? this.directory : null;
+  }
+
+  /**
    * What one intent was found to be, counted. A list past its age is not used.
    * A signature is checked when there is one; a delegation only when there is
    * not, because what the person signed for this request is the stronger word.
    *
+   * A KEY THE LIST DOES NOT HAVE makes this box ask the minter again, once,
+   * and check again with what comes back (MISS_REFRESH_MS). Nothing about
+   * what is taken changes: the new list is the minter's or it is not used,
+   * as every list is. Only the intent's final verdict is counted.
+   *
    * @param {{ actor?: string, id: string, issuedAt: number, params?: Record<string, unknown>, verb: string, sig?: string, kid?: string, delegation?: unknown }} intent
    * @param {string} host  this box's id
-   * @returns {Promise<{ verdict: import('../protocol/intent-signature.js').Verdict | import('../protocol/intent-signature.js').DelegationVerdict, label?: string, gap?: string }>}
+   * @returns {Promise<{ verdict: import('../protocol/intent-signature.js').Verdict | import('../protocol/intent-signature.js').DelegationVerdict, label?: string, gap?: string,
+   *   askedAgain?: 'taken'|'failed'|'held' }>}
+   *   `askedAgain`, for an unknown key: whether the box asked again and took a
+   *   list, asked and got none, or held back because it asked moments ago
    */
   async check(intent, host) {
-    const fresh = this.directory && this.listAt !== null && this.now() - this.listAt <= 2 * KEY_LIST_MAX_AGE_MS ? this.directory : null;
-    const r = !intent.sig && intent.delegation
-      ? await checkDelegation({ intent, delegation: intent.delegation, host, directory: fresh, revoked: this.revoked, now: this.now() })
-      : await checkIntentSignature({ intent, sig: intent.sig, kid: intent.kid, host, directory: fresh });
-    this.counts[r.verdict] += 1;
+    const once = async () => {
+      const fresh = this.current;
+      return !intent.sig && intent.delegation
+        ? checkDelegation({ intent, delegation: intent.delegation, host, directory: fresh, revoked: this.revoked, now: this.now() })
+        : checkIntentSignature({ intent, sig: intent.sig, kid: intent.kid, host, directory: fresh });
+    };
+    /** @type {any} */
+    let r = await once();
+    if (r.verdict === 'unknown-key') {
+      const askedAgain = await this.#askAgain();
+      if (askedAgain === 'taken') r = await once();
+      if (r.verdict === 'unknown-key') r = { ...r, askedAgain };
+    }
+    this.counts[/** @type {keyof IntentKeys['counts']} */ (r.verdict)] += 1;
     return r;
+  }
+
+  /** @type {Promise<boolean>|null} */
+  #asking = null;
+
+  /**
+   * Ask for the list again because a key was not on it, unless a key that was
+   * not on it made this box ask within MISS_REFRESH_MS. Intents arriving
+   * together wait for the same ask.
+   *
+   * @returns {Promise<'taken'|'failed'|'held'>}
+   */
+  async #askAgain() {
+    if (!this.#asking) {
+      const now = this.now();
+      if (this.missAskedAt !== null && now - this.missAskedAt < MISS_REFRESH_MS) return 'held';
+      this.missAskedAt = now;
+      this.#asking = this.refresh().finally(() => { this.#asking = null; });
+    }
+    return (await this.#asking) ? 'taken' : 'failed';
   }
 
   /** For this box's health. */

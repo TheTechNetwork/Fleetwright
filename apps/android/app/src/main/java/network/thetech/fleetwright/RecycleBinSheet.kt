@@ -43,7 +43,11 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
     // Flattened across hosts, soonest to go first: the deadline is what
     // somebody is deciding on, and which machine holds the volume is a detail
     // they can see but need not sort by.
-    val items = hosts.flatMap { host -> host.bin.map { host.hostId to it } }.sortedBy { it.second.expiresAt }
+    // AND WHETHER ITS MACHINE TAKES THE RESTORE FROM THIS PERSON: one that
+    // pins its admins restores somebody else's work for those admins alone
+    // (FleetHost.mayRestore).
+    val items = hosts.flatMap { host -> host.bin.map { Triple(host.hostId, it, host.mayRestore(it, settings.signedInAs)) } }
+        .sortedBy { it.second.expiresAt }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -66,7 +70,7 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
                     )
                 }
 
-                items.forEach { (hostId, item) ->
+                items.forEach { (hostId, item, restorable) ->
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair / 2)) {
                         Text(item.title ?: item.name, style = MaterialTheme.typography.titleSmall)
                         Text(
@@ -75,7 +79,8 @@ fun RecycleBinSheet(settings: Settings, hosts: List<Fleet.FleetHost>, onDismiss:
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-                            TextButton(
+                            // ONLY WHERE THE MACHINE TAKES IT FROM THIS PERSON (C-2).
+                            if (restorable) TextButton(
                                 enabled = !busy,
                                 onClick = {
                                     scope.launch {

@@ -817,6 +817,16 @@ internal object Manage {
         const val seesNothing = "This token sees nothing on the pool."
         fun limitedUser(user: String) =
             "Signed in as $user, the limited user setup made, so only what its resource set allows is listed."
+        /**
+         * The pool master's addresses as setup saw them, the management one
+         * first: what to try when it stops answering on one. The same words
+         * as iOS.
+         */
+        fun poolMaster(masters: List<String>): String {
+            val first = masters.firstOrNull() ?: return ""
+            val rest = masters.drop(1)
+            return "Pool master: $first" + (if (rest.isEmpty()) "" else ", also ${rest.joinToString(", ")}")
+        }
         const val tuneNeedsStopped = "vCPUs and memory change only while it is stopped."
         const val growNote = "A disk can grow while the VM runs. It cannot be made smaller again."
         fun refused(why: String) = "Xen Orchestra refused: $why"

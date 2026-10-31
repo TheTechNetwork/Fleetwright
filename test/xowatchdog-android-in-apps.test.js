@@ -64,7 +64,7 @@ test('Android: the job key is checked under `xowatchdog-key` before the root pas
   assert.ok(check > 0 && sealed > 0, 'both are on the screen');
   // The seal happens only in run, which begin reaches after the check.
   assert.match(SHEET, /setup\.key == null \|\| !XoSetup\.verifyKeySig\(setup\.hostKey, setup\.keySig, runCatching \{ XoWatchdog\.signingInput\(where, setup\.job, setup\.key, pin\) \}/);
-  assert.ok(SHEET.includes('PhoneVault.approves(it, hostId, setup.hostKey!!)'), 'approved only by a whole-vault grant for that machine');
+  assert.ok(SHEET.includes('PhoneVault.approval(it, hostId, setup.hostKey!!)'), 'approved only by a whole-vault grant for that machine');
 });
 
 test('Android: the root password and Xen Orchestra’s address are sealed under the job’s own binding, with no reply key', () => {

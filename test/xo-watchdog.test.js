@@ -239,8 +239,16 @@ test('from the phone: shut down, added, started again, and Xen Orchestra waited 
   assert.equal(signed, true, 'the phone can tell the key is this machine’s, for this pool master');
   assert.equal(ran.ok, true, ran.text);
   assert.equal(end.state, 'done', end.text);
-  assert.match(end.text, /reconnect watchdog is in Xen Orchestra at 10\.10\.10\.230, and it is answering again/);
+  // WHAT IT SAYS IS WHAT IT CHECKED: a TCP connect to the port, not the
+  // plugin loading, which it used to claim (C-5).
+  assert.equal(end.text, 'The reconnect watchdog is on fleetwright-xo’s disk, and Xen Orchestra at 10.10.10.230 answers on its port again. Whether it loaded the plugin as it started was not checked from here: Settings, Plugins in Xen Orchestra lists it, and once loaded it reconnects a pool it loses by itself.');
   assert.deepEqual(m.waited, [XO]);
+  // SAID AS `added`, NEVER `loaded`, to the coordinator that words the
+  // lost-pool push from it (core.js #learnWatchdog), under Xen Orchestra's
+  // address and not the pool master's the job began with.
+  assert.equal(end.watchdog, 'added');
+  assert.equal(end.address, XO);
+  assert.deepEqual([m.events.at(-1).watchdog, m.events.at(-1).address], ['added', XO]);
 
   // IN THIS ORDER, and only this: the disk is never opened while the VM
   // runs, and the VM is never started while the disk is the pool master's.
@@ -264,6 +272,7 @@ test('a watchdog that cannot be added leaves Xen Orchestra running, and says so'
   const { end } = await addWatchdog(m, pool.pin);
   assert.equal(end.state, 'failed');
   assert.match(end.text, /^Adding the watchdog to its disk stopped: .*could not be opened for writing.* Xen Orchestra’s VM was started again, as it was\.$/);
+  assert.ok(!('watchdog' in end), 'a watchdog that was not added was said to be');
   assert.equal(d.read().vms['vm-xo'].running, true);
   assert.deepEqual(d.xe().filter((c) => ['vm-shutdown', 'vm-start'].includes(c)), ['vm-shutdown', 'vm-start']);
 });

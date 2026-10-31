@@ -2365,6 +2365,7 @@ const OPENAPI = JSON.stringify({
                       "logs",
                       "mint",
                       "peek",
+                      "pinadmin",
                       "profiles",
                       "provision",
                       "purge",

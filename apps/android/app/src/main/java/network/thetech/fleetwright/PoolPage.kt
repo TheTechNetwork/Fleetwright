@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -94,6 +95,9 @@ internal fun PoolPage(
 ) {
     val scope = rememberCoroutineScope()
     val watch = remember(pool.address) { PoolWatch(settings, pool.address, scope) }
+    // The pool master's addresses from the record this phone keeps, read
+    // once: empty when the record does not say, and then not a line.
+    val masters = remember(pool.address) { XoHandoff.masters(settings, pool.address) }
     var showing by remember { mutableStateOf<String?>(null) }
     val reduced = Design.Motion.reduced()
 
@@ -134,7 +138,7 @@ internal fun PoolPage(
     }
 
     FullScreen(pool.address, onDismiss) {
-        StatusCard(watch)
+        StatusCard(watch, masters)
         if (edgesAsked && edgesKnown) EdgeCard(edges, edgesFailed)
         if (watch.phase == PoolWatch.Phase.Live && watch.snapshot.isEmpty) Hint(Manage.Words.seesNothing)
         for (kind in Manage.Kind.values()) {
@@ -166,7 +170,7 @@ internal fun PoolPage(
 }
 
 @Composable
-private fun StatusCard(watch: PoolWatch) {
+private fun StatusCard(watch: PoolWatch, masters: List<String>) {
     val scope = rememberCoroutineScope()
     val phase = watch.phase
     val line = when (phase) {
@@ -202,6 +206,15 @@ private fun StatusCard(watch: PoolWatch) {
             }
         }
         watch.user?.let { Text(Manage.Words.limitedUser(it), style = Design.Style.label, color = Design.Palette.inkDim.now) }
+        // WHERE THE POOL MASTER ANSWERS, as setup saw it, so a master that
+        // stops answering on one address has its others to hand. Only when
+        // the record says (C-5); offering one of them to Xen Orchestra as a
+        // second server is designed and not built.
+        if (masters.isNotEmpty()) {
+            SelectionContainer {
+                Text(Manage.Words.poolMaster(masters), style = Design.Style.label, color = Design.Palette.inkDim.now)
+            }
+        }
         if (canLookAgain) {
             OutlinedButton(onClick = { scope.launch { watch.start() } }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(Manage.Words.lookAgain)

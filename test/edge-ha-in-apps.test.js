@@ -28,7 +28,11 @@ const SHARED = [
   'On: they share the way out, so one carries the machines while the other restarts for an update.',
   'Off: one router, and when it restarts for an update, machines behind it have no way out for those minutes.',
   ' Apply makes the second and hands over to it: machines behind it have no way out while it starts.',
-  ' Apply removes the second and rebuilds the first: machines behind it have no way out until it is up.',
+  // Going back to one, as the box says it: the first is rebuilt beside the
+  // second while the second still carries the machines (ONE_BOOT in
+  // src/fleet/host/edge-router.js), so the way out is gone for one boot and
+  // not for the whole build.
+  ' Apply removes the second and rebuilds the first: machines behind it keep their way out while the new one is built, and have none while it starts.',
 ];
 
 test('offered only by a machine whose `can` says so, and only with the router asked for', () => {
@@ -56,5 +60,8 @@ test('both phones say it in the same words', () => {
   for (const words of SHARED) {
     assert.ok(I_FORM.includes(words), `iOS: ${words}`);
     assert.ok(A_FORM.includes(words), `Android: ${words}`);
+  }
+  for (const [name, form] of [['iOS', I_FORM], ['Android', A_FORM]]) {
+    assert.ok(!form.includes('no way out until it is up'), `${name}: going back to one still says the way out is gone for the whole build`);
   }
 });
