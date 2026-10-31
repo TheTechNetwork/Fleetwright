@@ -166,7 +166,13 @@ test('the structural half is identical in both, key by key', () => {
       .map((e) => `${e.table}.${e.key}=${e.value}`)
       .sort();
 
-  assert.deepEqual(structural(PRODUCTION), structural(DEFAULT));
+  // ONE DELIBERATE DIFFERENCE: the decision model's AI binding and its rate
+  // limit are production's alone, so a fork deploying the default can never
+  // spend on Workers AI (docs/decide.md). Cut out by name, and the next test
+  // holds the default to having neither.
+  const DECIDE_BLOCK = /\n\[ai\]\nbinding = "AI"\n\n\[\[ratelimits\]\]\nname = "DECIDE_RATE_LIMIT"\n[^\n]*\n[^\n]*\n/;
+  assert.match(PRODUCTION, DECIDE_BLOCK, 'the decide bindings moved or were reworded; this exception has to follow them');
+  assert.deepEqual(structural(PRODUCTION.replace(DECIDE_BLOCK, '\n')), structural(DEFAULT));
 
   // Named so the list cannot quietly become empty and pass — `deepEqual([], [])`
   // is true, and two files that both stopped declaring a Durable Object would
@@ -194,6 +200,18 @@ test('the structural half is identical in both, key by key', () => {
   for (const key of ['name', 'main', 'compatibility_date', 'compatibility_flags']) {
     const of = (/** @type {string} */ t) => parse(t).find((e) => e.table === null && e.key === key)?.value;
     assert.equal(of(PRODUCTION), of(DEFAULT), `${key} differs between the two configs`);
+  }
+});
+
+test('a fork cannot spend on the decision model: the default binds no AI and no decide rate limit', () => {
+  // Both are needed before the coordinator will call the model at all
+  // (fleet-do.js, `decide:`), and the switch is unset everywhere. The default
+  // config is the one the deploy button ships.
+  const tables = parse(DEFAULT).map((e) => `${e.table}.${e.key}=${e.value}`);
+  assert.ok(!tables.some((t) => t.startsWith('ai.')), 'wrangler.toml declares an [ai] binding; a fork deploying it could spend');
+  assert.ok(!/^\s*name\s*=\s*"DECIDE_RATE_LIMIT"/m.test(DEFAULT), 'wrangler.toml declares the decide rate limit');
+  for (const [name, toml] of [['wrangler.toml', DEFAULT], ['wrangler.production.toml', PRODUCTION]]) {
+    assert.ok(!/^\s*FLEETWRIGHT_DECIDE\s*=/m.test(toml), `${name} turns the decision model on; that is the operator's to do, not a committed default`);
   }
 });
 

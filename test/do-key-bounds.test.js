@@ -94,6 +94,9 @@ const BOUNDED = {
   // What people signed for the fleet to do in their name: a refusal past
   // MAX_DELEGATIONS_PER_PERSON and a byte backstop on the whole store.
   delegations: 'src/fleet/coordinator/delegations.js',
+  // The decision model's day of spend and its windows: a ten-minute and an
+  // hour's window, and MAX_DECIDE_WINDOW_ROWS of each.
+  decide: 'src/fleet/coordinator/decide.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */
@@ -272,6 +275,23 @@ test('a full store of spent push allowances still fits in one Durable Object val
   assert.ok(kept.pushes.length < FILL_CAP && kept.poolsLost.length < FILL_CAP, 'the store took every row it was given, so it has no ceiling');
   const bytes = new TextEncoder().encode(JSON.stringify(kept)).length;
   assert.ok(bytes < DO_VALUE_LIMIT, `a full store of push allowances is ${bytes} bytes, which does not fit in a DO value`);
+});
+
+test('a full store of decision-model windows still fits in one Durable Object value', async () => {
+  // Every id as long as restore admits, every host at its full hour, and more
+  // rows than are kept.
+  const { DecideLimits, DECIDE_HOST_EACH } = await import('../src/fleet/coordinator/decide.js');
+  const now = Date.now();
+  const limits = new DecideLimits({ now: () => now });
+  limits.restore({
+    spend: { day: new Date(now).toISOString().slice(0, 10), neurons: 7999.99, calls: 1e6, refused: 1e6, warned: true },
+    sessions: Array.from({ length: FILL_CAP }, (_, i) => [String(i).padStart(300, 'e'), now - 1]),
+    hosts: Array.from({ length: FILL_CAP }, (_, i) => [String(i).padStart(128, 'e'), Array.from({ length: DECIDE_HOST_EACH * 2 }, (_, j) => now - j)]),
+  });
+  const kept = limits.serialise();
+  assert.ok(kept.sessions.length < FILL_CAP && kept.hosts.length < FILL_CAP, 'the store took every row it was given, so it has no ceiling');
+  const bytes = new TextEncoder().encode(JSON.stringify(kept)).length;
+  assert.ok(bytes < DO_VALUE_LIMIT, `a full store of decide windows is ${bytes} bytes, which does not fit in a DO value`);
 });
 
 test('a full store of watchdog answers still fits in one Durable Object value', async () => {

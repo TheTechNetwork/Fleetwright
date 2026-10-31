@@ -31,6 +31,7 @@ import { identify } from '../../src/fleet/coordinator/identity.js';
 import { emailOf, installCommand, PINS_FULL } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbeat.js';
+import { decideRequest, DECIDE_MODEL } from '../../src/core/decide-questions.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
 const ALARM_MS = 30_000;
@@ -179,6 +180,19 @@ export class Fleet {
             vault: async (route, ask) => minterCall(env.MINTER, `/vault/${route}`, ask),
           }
         : null,
+      // THE DECISION MODEL, only where all three are set: the switch, which
+      // is exactly "1" and unset in every committed config; the AI binding
+      // and the platform rate limit, which only wrangler.production.toml
+      // declares. So a fork deploying wrangler.toml cannot spend, whatever it
+      // sets (docs/decide.md).
+      decide:
+        env.FLEETWRIGHT_DECIDE === '1' && env.AI && env.DECIDE_RATE_LIMIT
+          ? {
+              ask: (/** @type {string} */ state) => this.#decide(state),
+              rateLimit: async () => (await /** @type {any} */ (env.DECIDE_RATE_LIMIT).limit({ key: 'decide' }))?.success === true,
+              budget: env.DECIDE_NEURONS_PER_DAY,
+            }
+          : null,
     });
     // A runner ticket is minted at dispatch and spent by a job that starts
     // minutes later — a gap this object is evicted across as a matter of
@@ -228,6 +242,10 @@ export class Fleet {
         // What people signed for the fleet to send in their name while they
         // are not there, kept ready machines' for a month (delegations.js).
         this.state.storage.put('delegations', this.core.delegations.serialise()),
+        // The day's spend on the decision model and its per-host and
+        // per-session windows: a cap held in memory is a cap per rebuild
+        // (src/fleet/coordinator/decide.js).
+        this.state.storage.put('decide', this.core.decideLimits.serialise()),
       ])
         // Caught for the same reason the event ring's write is: an unhandled
         // rejection on a floating promise aborts the whole Durable Object, and
@@ -302,6 +320,7 @@ export class Fleet {
       this.core.restoreBoxSignIns(await this.state.storage.get('boxSignIns'));
       this.core.restoreRemovals(await this.state.storage.get('removals'));
       this.core.delegations.restore(await this.state.storage.get('delegations'));
+      this.core.decideLimits.restore(await this.state.storage.get('decide'));
       this.core.invites.load((await this.state.storage.get('invites')) || []);
       // Written straight back when a pin saved before pins had ids was given
       // one, so the id a listing shows still cancels it after the next restart.
@@ -1705,6 +1724,19 @@ export class Fleet {
     // minutes of these thirty-second passes, after the next is armed so a slow
     // minter cannot stop the health pings.
     await this.#checkClaude();
+  }
+
+  /**
+   * THE ONE PLACE THIS WORKER SPENDS ON A MODEL. Every wall is in front of it
+   * (core.js #onHostDecide); this is the call and nothing else: the model id a
+   * constant, the questions the pinned ones, never an `images` field, no
+   * retry. test/worker-ai-sites.test.js fails on a second reader of the
+   * binding anywhere in the Worker.
+   *
+   * @param {string} state  masked pane text, already through the gate
+   */
+  async #decide(state) {
+    return /** @type {any} */ (this.env.AI).run(DECIDE_MODEL, decideRequest(state));
   }
 
   /** The Claude check, said in the log when it throws rather than swallowed. */

@@ -176,6 +176,13 @@ SENTRY_DSN = "https://08d0e1e893370804857f8ce9e2f39f17@o4512012096765952.ingest.
 SENTRY_ENVIRONMENT = "production"
 SENTRY_TRACES_SAMPLE_RATE = "0.05"
 
+# THE DECISION MODEL'S DAILY BUDGET, in neurons (docs/decide.md). 8,000 is
+# inside the free 10,000 a day, so this spends nothing; the code clamps any
+# value here to 100,000, about a dollar a day. The feature itself stays off
+# until FLEETWRIGHT_DECIDE is set to 1 beside this, which no committed
+# config does.
+DECIDE_NEURONS_PER_DAY = "8000"
+
 [[send_email]]
 name = "EMAIL"
 # `remote = true` so a local `wrangler dev` sends through the real service
@@ -196,6 +203,20 @@ remote = true
 name = "SIGNIN_RATE_LIMIT"
 namespace_id = "1002"
 simple = { limit = 10, period = 60 }
+
+# THE DECISION MODEL, and only in this file. The fork-safe wrangler.toml binds
+# neither, so a fork that deploys it can never spend on Workers AI whatever it
+# sets. The rate limit is the platform's, approximate per location, and
+# survives anything the Durable Object forgets; the day's budget and the
+# per-host windows behind it are the object's, persisted (src/fleet/
+# coordinator/decide.js). Namespace 1003, distinct from sign-in's 1002.
+[ai]
+binding = "AI"
+
+[[ratelimits]]
+name = "DECIDE_RATE_LIMIT"
+namespace_id = "1003"
+simple = { limit = 30, period = 60 }
 
 # THE MINTING WORKER, which holds the GitHub App key so this Worker never does.
 # The coordinator relays a runner's request for a repository token to it and

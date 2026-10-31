@@ -267,6 +267,16 @@ function describeHealth(h) {
         'Run `fleetwright update --restart` on it.',
     );
   }
+  // WHAT THE FLEET SPENT TODAY ON THE DECISION MODEL (docs/decide.md). Said
+  // only where it is on: a fleet that never turned it on has nothing to read
+  // here, and a line saying so on every health call is noise.
+  const d = h.decide;
+  if (d?.enabled === true && [d.today, d.budget, d.calls, d.refused].every((n) => typeof n === 'number')) {
+    lines.push(
+      `decide: ${Math.round(d.today)} of ${d.budget} neurons today, ${d.calls} call${d.calls === 1 ? '' : 's'}` +
+        (d.refused > 0 ? `, ${d.refused} refused by the gate — some host's mask let something through, and the coordinator's log names it` : ''),
+    );
+  }
   return lines.length ? lines.join('\n') : 'ok';
 }
 

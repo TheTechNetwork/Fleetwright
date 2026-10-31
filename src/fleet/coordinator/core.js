@@ -40,6 +40,8 @@ import { VmStandby, MAX_READY, PENDING_MS } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
 import { SpentTokens } from './spent-tokens.js';
 import { HolderJoins } from './holder-joins.js';
+import { DecideLimits, refuseUnlessMasked, DECIDE_TIMEOUT_MS } from './decide.js';
+import { readDecideAnswer } from '../../core/decide-questions.js';
 
 /**
  * How long a start waits for a host that has connected and not yet reported
@@ -382,6 +384,7 @@ export class CoordinatorCore {
    *     vault?: (route: 'device'|'box'|'keys', ask: Record<string, unknown>) => Promise<any> }|null,
    *   oauthRelay?: { url: string, fleet: string, privateJwk: import('node:crypto').webcrypto.JsonWebKey, publicKey: string }|null,
    *   signingOrigin?: string|null,
+   *   decide?: { ask: (state: string) => Promise<any>, rateLimit: () => Promise<boolean>, budget?: unknown }|null,
    * }} [opts]
    */
   constructor({
@@ -440,6 +443,12 @@ export class CoordinatorCore {
     // started is sent back to. Configured, never taken from a request.
     // Absent is a fleet whose browser page does not sign.
     signingOrigin = null,
+    // THE DECISION MODEL (decide.js, docs/decide.md): `ask` is the Durable
+    // Object's one call to Workers AI, `rateLimit` its platform rate limit,
+    // `budget` the day's neurons from [vars]. Absent is the normal case and
+    // is what the fork-safe config gives: every decide frame is answered
+    // `off`, and nothing can spend.
+    decide = null,
   } = {}) {
     this.now = now;
     this.newId = newId;
@@ -460,6 +469,9 @@ export class CoordinatorCore {
     this.minter = minter;
     this.oauthRelay = oauthRelay?.url && oauthRelay?.fleet && oauthRelay?.privateJwk && oauthRelay?.publicKey ? oauthRelay : null;
     this.signingOrigin = typeof signingOrigin === 'string' && signingOrigin.startsWith('https://') ? normaliseOrigin(signingOrigin) : null;
+    this.decide = typeof decide?.ask === 'function' && typeof decide?.rateLimit === 'function' ? decide : null;
+    /** The day's spend on the decision model and its two windows, stored as `decide` (decide.js). */
+    this.decideLimits = new DecideLimits({ now: () => this.now(), budget: decide?.budget, log: this.log });
     // Single-use, minutes-long, and minted only when this coordinator itself
     // dispatches a run — so a runner's owner is decided before the job exists
     // rather than by a reusable secret sitting in a repository. Separate store
@@ -884,6 +896,9 @@ export class CoordinatorCore {
     if (msg.kind === 'claude-login') return this.#onRunnerClaude(hostId, msg);
     // ANY BOX ASKING FOR WHAT ITS PEOPLE APPROVED IT TO HOLD, the same way.
     if (msg.kind === 'vault') return this.#onHostVault(hostId, msg);
+    // AND WHETHER A STILL PANE NOBODY CAN READ IS A PERSON BEING ASKED, which
+    // is the one question here that costs money (decide.js).
+    if (msg.kind === 'decide') return this.#onHostDecide(hostId, msg);
     if (msg.kind === 'keys') return this.#onHostKeys(hostId, msg);
     // AND THE BOX RUNNING A POLICY JOB, for the pin its pool's own machine
     // enrols with.
@@ -4112,7 +4127,10 @@ export class CoordinatorCore {
       if (spec.verb === 'health' && answer?.health && typeof answer.health === 'object') {
         const entry = placement.host;
         const health = visibleHost({ health: attributed(entry ?? {}, answer.health) }, spec.requester ?? null, entry).health;
-        return withArchiveNote({ ...answer, health }, spec, entry);
+        // AND WHAT THE FLEET SPENT TODAY ASKING A MODEL ABOUT PANES, which is
+        // the coordinator's to say and no box's (decide.js). Counters only:
+        // nothing a pane said is kept anywhere to show.
+        return withArchiveNote({ ...answer, health: { ...health, decide: { enabled: Boolean(this.decide), ...this.decideLimits.snapshot() } } }, spec, entry);
       }
       return withArchiveNote(answer, spec, placement.host);
     } catch (e) {
@@ -6127,6 +6145,99 @@ export class CoordinatorCore {
         ? { ok: true, sealed, owner, text: `handed by ${reply.box}, which made this machine` }
         : { ok: false, owner, error: reply?.error || { code: 'refused' }, text: why },
     );
+  }
+
+  /**
+   * A host asks whether a still pane that nothing else can read is a person
+   * being asked something (docs/decide-design.md, section B). Answered on the
+   * same socket by a `decided` frame, the `vault`/`minted` shape.
+   *
+   * THE WALLS, IN ORDER, and each refusal is an answer, never a silence, so a
+   * host can tell "off" from "your mask is wrong" from "the day is spent":
+   * the feature and its bindings; the gate (refuses, never cleans, and is not
+   * written to storage on its own); this session's window, this host's
+   * window and the day's neurons; and only then the platform's rate limit,
+   * which is one key for the whole fleet and which no rebuild of this object
+   * resets. A box already at its own cap must not spend that key. Then one
+   * call, no retry, and the masked state is dropped: nothing of it is kept
+   * or logged.
+   *
+   * WHAT THE ANSWER IS FOR. `asked` and `p` go back to the host, which alone
+   * decides what a yes may do, and may only mark the pane as waiting
+   * (watcher.js). `dialog` and `confidence` are evidence for the journal.
+   * Nothing here sets a prompt, an answer or a ready state.
+   *
+   * @param {string} hostId @param {any} msg
+   */
+  async #onHostDecide(hostId, msg) {
+    const host = this.registry.hosts.get(hostId);
+    const id = typeof msg.id === 'string' && FRAME_ID_RE.test(msg.id) ? msg.id : null;
+    if (!id) {
+      this.log.warn(`coordinator: ${hostId} asked for a decision without an id to answer on`);
+      return;
+    }
+    /** @param {Record<string, unknown>} answer */
+    const answer = (answer) => {
+      try {
+        host?.send?.({ v: PROTOCOL_VERSION, kind: 'decided', id, ...answer });
+      } catch { /* the socket is going; an unanswered ask is nothing, which is what the host does with it */ }
+    };
+    if (!this.decide) return answer({ ok: false, why: 'off' });
+    const refusal = refuseUnlessMasked(msg);
+    if (refusal) {
+      this.decideLimits.refused();
+      this.log.warn(`coordinator: decide refused from ${hostId}: ${refusal}`);
+      return answer({ ok: false, why: `refused:${refusal}` });
+    }
+    const session = typeof msg.name === 'string' && msg.name.length <= 128 ? msg.name : null;
+    if (!session) return answer({ ok: false, why: 'refused:no-session' });
+    const state = /** @type {string} */ (msg.state);
+    const bytes = new TextEncoder().encode(state).length;
+    // LOCAL WALLS BEFORE THE FLEET'S ONE KEY. The platform limit is 30 a
+    // minute for every box together. Asking it first meant a session already
+    // decided, or a host that had had its hour, spent a token to be told no.
+    const blocked = this.decideLimits.blocked(hostId, session, bytes);
+    if (blocked) {
+      if (blocked === 'budget') this.log.warn(`coordinator: decide refused from ${hostId}: the day's budget of ${this.decideLimits.budget} neurons is spent`);
+      return answer({ ok: false, why: blocked });
+    }
+    let allowed = false;
+    try {
+      allowed = (await this.decide.rateLimit()) === true;
+    } catch { /* a rate limit that cannot be asked is a no */ }
+    if (!allowed) return answer({ ok: false, why: 'ratelimited' });
+    const held = this.decideLimits.admit(hostId, session, bytes);
+    if (held) {
+      if (held === 'budget') this.log.warn(`coordinator: decide refused from ${hostId}: the day's budget of ${this.decideLimits.budget} neurons is spent`);
+      return answer({ ok: false, why: held });
+    }
+    // Charged before the call, so a rebuild during it cannot forget the spend.
+    this.onStateChanged?.();
+    /** @type {ReturnType<typeof readDecideAnswer>} */
+    let read = null;
+    let timer;
+    try {
+      const raw = await Promise.race([
+        this.decide.ask(state),
+        new Promise((_, reject) => {
+          timer = this.setTimer(() => reject(new Error('timed out')), DECIDE_TIMEOUT_MS);
+        }),
+      ]);
+      read = readDecideAnswer(raw);
+    } catch (e) {
+      this.log.warn(`coordinator: decide for ${hostId} failed: ${/** @type {Error} */ (e)?.message || e}`);
+    } finally {
+      this.clearTimer(timer);
+    }
+    if (!read) return answer({ ok: false, why: 'error' });
+    this.decideLimits.reconcile(bytes, read.inputTokens);
+    this.onStateChanged?.();
+    return answer({
+      ok: true,
+      asked: read.p >= 0.5,
+      p: read.p,
+      ...(read.kind ? { dialog: read.kind, confidence: read.confidence } : {}),
+    });
   }
 
   /**
