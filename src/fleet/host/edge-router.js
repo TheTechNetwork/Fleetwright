@@ -199,6 +199,24 @@ export const EDGE_UPDATES = Object.freeze({ plugin: 'os-xen', hours: '10' });
  */
 export const EDGE_HA = Object.freeze({ vhid: 1, second: 'fleetwright-edge-b', nodeTag: 'fleetwright-edge-node:' });
 
+/**
+ * HOW LONG A ROUTER JUST STARTED IS WATCHED before the one it replaces is
+ * removed (settled): two minutes, Xen Orchestra asked every five seconds.
+ * Long enough for OPNsense's boot, which is where a disk that does not
+ * boot or a configuration it refuses shows as the VM stopping again; short
+ * enough that a pair's rebuild, which does this twice, stays well inside the
+ * policy job's ten minutes (xo-setup.js, POLICY_WAIT_MS).
+ */
+export const EDGE_SETTLE = Object.freeze({ ms: 120_000, every: 5_000 });
+
+/**
+ * What a rebuild costs the machines behind one router, said before it
+ * starts: the new one is built while the old one runs (replaceRouter), so
+ * the way out is gone for one boot. It was gone for the whole build, and the
+ * sentence said so.
+ */
+const ONE_BOOT = 'Machines behind it keep their way out while the new one is built, and have none while it starts.';
+
 /** The rule files' ids, less their last digit, which is each one's place in EDGE_FILTER.rules. */
 const RULE_FILE_UUID = '5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e1';
 
@@ -1097,12 +1115,16 @@ export function buildFill(downloaded, written) {
  * rules match, false one that only logs it, and null leaves an edge that is
  * there as it is (a phone that predates the choice sends nothing, and must
  * not cost anybody their edge). The edge cannot be changed in place, since
- * it has no login, so an edge built the other way is REBUILT: stopped, a new
- * one built beside it, and only then removed. If the new one fails or is
- * cancelled, it is removed and the old one started again, so the pool is
- * never left with neither. What the machines behind it notice is the way out
- * gone for as long as the build takes. `rebuilding` is told first, so the job
- * can say "rebuilding" rather than "building" if it is cancelled.
+ * it has no login, so an edge built the other way is REBUILT (replaceRouter):
+ * a new one built beside it while it runs, then the old one stopped and the
+ * new one started and watched for a while (settled), and only then the old
+ * one removed. If the build fails the old one was never touched; if the new
+ * one cannot start, or stops again while it is watched, it is removed and
+ * the old one started again, so the pool is never left with neither. What
+ * the machines behind it notice is the way out gone while the new one
+ * boots. It was gone for as long as the build took, the old one stopped
+ * before the download. `rebuilding` is told first, so the job can say
+ * "rebuilding" rather than "building" if it is cancelled.
  *
  * LABS (`labs`): the lab networks the edge is to have an interface on, in
  * order, each open or closed (ensureLabs makes them), and `fleet`, the hosts
@@ -1138,6 +1160,8 @@ export function buildFill(downloaded, written) {
  *   imageDir: string,
  *   say: (text: string, part?: BuildPart) => void,
  *   signal?: AbortSignal,
+ *   sleep?: (ms: number) => Promise<void>,
+ *   settle?: { ms: number, every: number },
  *   getImage?: typeof fetchImage,
  *   unpackImpl?: typeof unpack,
  *   upload?: typeof uploadDisk,
@@ -1165,22 +1189,40 @@ export async function ensureEdge(opts) {
   // its configuration gives the gateway address to CARP rather than to it.
   if (!wantPair && second) {
     rebuilding?.();
-    say('Going back to one edge router: the second is removed and the first is rebuilt on its own. Machines behind it have no way out until it is up.');
+    say(`Going back to one edge router: the second is removed, and the first is rebuilt on its own while it still carries the machines. ${ONE_BOOT}`);
     if (second.power_state !== 'Halted') await admin.call('vm.stop', { id: second.id, force: true });
     await admin.call('vm.delete', { id: second.id, deleteDisks: true });
     return ensureOne(opts, edge, true);
   }
 
   const now = edge ? await edgeState(admin, edge, opts) : null;
-  const keep = opts.block ?? now?.blocks ?? false;
-  const both = [edge, second].filter(Boolean);
-  const changed = now && (now.filterChanged || now.wantLabs !== now.hasLabs || !now.onLabs || !now.updates || now.unwatched || exposed);
   const secondState = second ? await edgeState(admin, second, opts) : null;
-  const secondOnLabs = secondState ? secondState.onLabs && !secondState.unwatched : true;
+  // HALF A PAIR: a router beside the second that does not carry the first's
+  // node tag is not the pair's first. It is the single router from before
+  // "two" was applied, left stopped when the first failed to build (FROM ONE
+  // TO TWO, below), with 10.254.0.1 as its own address and the whole DHCP
+  // range; or there is no router beside the second at all, the first deleted
+  // by hand. The first version read the stopped one as the pair's first,
+  // found nothing to change, and started it beside the second, which holds
+  // that address by CARP and hands out half of that range: two routers
+  // answering for each other, which is what "applying again finishes the
+  // pair" delivered. With no router beside the second it built a second
+  // second, with a new password, beside the old one. Either is the pair
+  // unfinished (FINISHING THE PAIR, below): the first is built fresh beside
+  // the second, with the password the second carries the mark of, and the
+  // old single router is removed without ever being started.
+  const halfPair = Boolean(second) && !(edge && edge.tags.includes(`${EDGE_HA.nodeTag}0`));
+  /** Whether a router differs from what the policy asks of it. @param {Awaited<ReturnType<typeof edgeState>>|null} st */
+  const differs = (st) => Boolean(st && (st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || st.unwatched));
+  // EITHER OF THEM. Only the first was asked, so a pair whose second differs
+  // (finished in two runs that were answered differently) stayed so for good.
+  const changed = differs(now) || differs(secondState) || exposed;
+  const keep = opts.block ?? (halfPair ? secondState?.blocks : now?.blocks) ?? false;
+  const both = [edge, second].filter(Boolean);
 
   // A PAIR THAT IS THERE AND WANTS NOTHING NEW: its WANs follow the way out
   // and a stopped one is started, as one edge's would be.
-  if (edge && second && now && !changed && secondOnLabs) {
+  if (edge && second && now && !halfPair && !changed) {
     /** @type {string[]} */
     const said = [];
     for (const v of both) {
@@ -1203,31 +1245,65 @@ export async function ensureEdge(opts) {
   }
 
   rebuilding?.();
+  // THE LABS A REBUILD CARRIES: the ones asked for, or, when the policy asks
+  // nothing of labs (null: a phone from before them, a box that offers none,
+  // the one-time rebuilds for the key or the daily update), the ones the
+  // routers have, read from the tag and the interfaces (labsOf); the second's
+  // when the first is not the pair's. This was `labs ?? []`, so a rebuild
+  // for any other reason took every lab off the edge.
+  const carried = labs ?? labsOf(halfPair ? secondState : now);
   /** @param {0|1} node @param {string} password @param {string} wanMac */
-  const build = (node, password, wanMac, start = true) => buildEdge({ ...opts, block: keep, labs: labs ?? [], ha: { node, password }, wanMac, start });
+  const build = (node, password, wanMac, start = true) => buildEdge({ ...opts, block: keep, labs: carried, ha: { node, password }, wanMac, start });
+  const replacing = { admin, say, signal: opts.signal, sleep: opts.sleep, settle: opts.settle };
+  const nameOf = (/** @type {0|1} */ node) => (node ? EDGE_HA.second : EDGE.vm);
+  const labsIn = carried.length ? `, with ${labsSaid(labsKey(carried))}` : '';
 
   // ONE AT A TIME, when both are there: the second is replaced while the
   // first carries the machines, then the first while the second does, with
-  // the password the pair has, so the new one and the old one agree.
+  // the password the pair has, so the new one and the old one agree. Each
+  // the way replaceRouter does it: built while the old one runs, and watched
+  // after it starts before the old one goes.
   const kept = await keptFor(admin, pool);
   // KNOWN only when a router carries its mark: what was kept for a build that
   // never finished is not what the routers have.
   const known = kept.carp && [edge, second].some((v) => keptOn(v, EDGE_KEPT.carpMark) === markCarp(/** @type {string} */ (kept.carp))) ? kept.carp : null;
-  if (edge && second && known) {
-    say('Rebuilding the edge routers one at a time. Machines behind them keep their way out, apart from a moment as each hands over.');
-    for (const [node, old] of /** @type {Array<[0|1, any]>} */ ([[1, second], [0, edge]])) {
-      if (old.power_state !== 'Halted') await admin.call('vm.stop', { id: old.id, force: true });
+  /** @param {Array<[0|1, any]>} list @param {string} password */
+  const oneAtATime = async (list, password) => {
+    /** @type {string[]} */
+    const watched = [];
+    for (const [node, old] of list) {
       const mac = await wanMacFor(admin, old, pool, node);
-      try {
-        await build(node, known, mac);
-      } catch (e) {
-        await admin.call('vm.start', { id: old.id }).catch(() => {});
-        /** @type {Error} */ (e).message = `${/** @type {Error} */ (e).message}. ${old.name_label}, which it was replacing, was started again, as it was`;
-        throw e;
-      }
+      const { up } = await replaceRouter(replacing, { old, name: nameOf(node), was: `${old.name_label || nameOf(node)}, which it was replacing,`, build: (start) => build(node, password, mac, start) });
       await admin.call('vm.delete', { id: old.id, deleteDisks: true });
+      watched.push(settledSaid(nameOf(node), up));
     }
-    return `Both edge routers were rebuilt, one at a time, ${keep ? 'dropping' : 'logging'} what their threat rules match${labs?.length ? `, with ${labsSaid(labsKey(labs))}` : ''}. They share ${EDGE.lan.address}, and each updates itself an hour apart from the other, from ${EDGE_UPDATES.hours}:00 UTC.`;
+    return watched.join(' ');
+  };
+  if (edge && second && known && !halfPair) {
+    say('Rebuilding the edge routers one at a time. Machines behind them keep their way out, apart from a moment as each hands over.');
+    const watched = await oneAtATime([[1, second], [0, edge]], known);
+    return `Both edge routers were rebuilt, one at a time, ${keep ? 'dropping' : 'logging'} what their threat rules match${labsIn}. They share ${EDGE.lan.address}, and each updates itself an hour apart from the other, from ${EDGE_UPDATES.hours}:00 UTC. ${watched}`;
+  }
+
+  // FINISHING THE PAIR (HALF A PAIR, above), with the password the second
+  // carries the mark of: the first is built beside the running second and
+  // watched, then the old single router, which was never started, is
+  // removed. Should the second differ from what is asked as well, it is
+  // then replaced beside the new first, one at a time as above.
+  if (second && known && halfPair) {
+    if (edge) {
+      say(`Finishing the pair: ${EDGE.vm} is built beside ${EDGE_HA.second}, which carries the machines meanwhile, and the edge router from before the pair, left stopped since it would clash with ${EDGE_HA.second}, is then removed.`);
+      // Running beside the second, by hand or by the first version of this:
+      // the two answer for each other, so that ends before anything else.
+      if (edge.power_state !== 'Halted') await admin.call('vm.stop', { id: edge.id, force: true });
+    } else {
+      say(`${EDGE_HA.second} is on its own: ${EDGE.vm} is built beside it, with the password the pair has.`);
+    }
+    const mac = await wanMacFor(admin, edge, pool, 0);
+    const { up } = await replaceRouter(replacing, { old: null, name: EDGE.vm, alone: alone(Boolean(edge)), build: (start) => build(0, known, mac, start) });
+    if (edge) await admin.call('vm.delete', { id: edge.id, deleteDisks: true });
+    const more = differs(secondState) ? ` ${EDGE_HA.second} was then rebuilt beside it, since it too differed from what is asked. ${await oneAtATime([[1, second]], known)}` : '';
+    return `The pair is complete: ${EDGE.vm} was built beside ${EDGE_HA.second}, sharing ${EDGE.lan.address}${edge ? ', and the edge router from before the pair was removed' : ''}. ${settledSaid(EDGE.vm, up)}${more}`;
   }
 
   // FROM ONE TO TWO, or a pair whose password is lost: the new second is
@@ -1245,31 +1321,38 @@ export async function ensureEdge(opts) {
       if (v.power_state !== 'Halted') await admin.call('vm.stop', { id: v.id, force: true });
       await admin.call('vm.delete', { id: v.id, deleteDisks: true });
     }
-    const b = await build(1, password, macs[1], false);
-    if (edge.power_state !== 'Halted') await admin.call('vm.stop', { id: edge.id, force: true });
-    try {
-      await admin.call('vm.start', { id: b.vm });
-    } catch (e) {
-      await admin.call('vm.start', { id: edge.id }).catch(() => {});
-      await admin.call('vm.delete', { id: b.vm, deleteDisks: true }).catch(() => {});
-      /** @type {Error} */ (e).message = `${/** @type {Error} */ (e).message}. The edge router that was there was started again, as it was`;
-      throw e;
-    }
-    try {
-      await build(0, password, macs[0]);
-    } catch (e) {
-      // Not started again: it has the gateway address as its own, which the
-      // second now holds.
-      /** @type {Error} */ (e).message = `${/** @type {Error} */ (e).message}. ${EDGE_HA.second} carries the machines on its own; the old edge router is left stopped, since it would clash with it, and applying again finishes the pair`;
-      throw e;
-    }
+    const { up: upB } = await replaceRouter(replacing, { old: edge, name: EDGE_HA.second, was: 'the edge router that was there', build: (start) => build(1, password, macs[1], start) });
+    // The old one is not started again if this fails: it has the gateway
+    // address as its own, which the second now holds (HALF A PAIR).
+    const { up: upA } = await replaceRouter(replacing, { old: null, name: EDGE.vm, alone: alone(true), build: (start) => build(0, password, macs[0], start) });
     await admin.call('vm.delete', { id: edge.id, deleteDisks: true });
-    return `There are two edge routers now, sharing ${EDGE.lan.address}: when one restarts, the other carries the machines behind them. Each updates itself an hour apart from the other, from ${EDGE_UPDATES.hours}:00 UTC. The one that was there was replaced.`;
+    return `There are two edge routers now, sharing ${EDGE.lan.address}: when one restarts, the other carries the machines behind them. Each updates itself an hour apart from the other, from ${EDGE_UPDATES.hours}:00 UTC. The one that was there was replaced. ${settledSaid(EDGE_HA.second, upB)} ${settledSaid(EDGE.vm, upA)}`;
+  }
+  // A SECOND ON ITS OWN WHOSE PASSWORD IS KEPT NOWHERE (HALF A PAIR): a new
+  // first with a new password cannot run beside it, since the two would not
+  // hear each other and both would claim the gateway address. So the first
+  // replaces it, as one router replaces another, and the second is built
+  // again beside the new first.
+  if (second) {
+    say(`${EDGE_HA.second} is on its own and the pair’s password is kept nowhere, so both routers are made again with a new one. Machines behind it have no way out while the first starts.`);
+    const mac = await wanMacFor(admin, null, pool, 0);
+    const { up } = await replaceRouter(replacing, { old: second, name: EDGE.vm, was: `${EDGE_HA.second}, which it was replacing,`, build: (start) => build(0, password, mac, start) });
+    await admin.call('vm.delete', { id: second.id, deleteDisks: true });
+    await build(1, password, await wanMacFor(admin, null, pool, 1));
+    return `There are two edge routers again, sharing ${EDGE.lan.address}: when one restarts, the other carries the machines behind them, and each updates itself an hour apart from the other, from ${EDGE_UPDATES.hours}:00 UTC. The second that was on its own was replaced. ${settledSaid(EDGE.vm, up)}`;
   }
   const a = await build(0, password, await wanMacFor(admin, null, pool, 0));
   await build(1, password, await wanMacFor(admin, null, pool, 1));
   return `${a.text} There are two edge routers, sharing ${EDGE.lan.address}: when one restarts, the other carries the machines behind them, and each updates itself an hour apart from the other, from ${EDGE_UPDATES.hours}:00 UTC.`;
 }
+
+/**
+ * What is said when the first of a pair fails beside a second that carries
+ * the machines: the next apply finishes the pair (FINISHING THE PAIR).
+ *
+ * @param {boolean} withOld whether the single router from before the pair is still there, stopped
+ */
+const alone = (withOld) => `${EDGE_HA.second} carries the machines on its own${withOld ? '; the old edge router is left stopped, since it would clash with it,' : ','} and applying again finishes the pair`;
 
 /**
  * What an edge router has and what the policy asks of it.
@@ -1318,30 +1401,26 @@ async function ensureOne(opts, edge, force = false) {
     if (!force) {
       say(
         st.exposed
-          ? 'Rebuilding the edge router with a new key: the one it had was readable by everybody signed in to Xen Orchestra. Machines behind it have no way out until it is up.'
+          ? `Rebuilding the edge router with a new key: the one it had was readable by everybody signed in to Xen Orchestra. ${ONE_BOOT}`
           : st.filterChanged
             ? keep
-              ? 'Rebuilding the edge router to drop what its threat rules match. Machines behind it have no way out until it is up.'
-              : 'Rebuilding the edge router to log what its threat rules match and drop nothing. Machines behind it have no way out until it is up.'
+              ? `Rebuilding the edge router to drop what its threat rules match. ${ONE_BOOT}`
+              : `Rebuilding the edge router to log what its threat rules match and drop nothing. ${ONE_BOOT}`
             : st.wantLabs !== st.hasLabs || !st.onLabs
-              ? `Rebuilding the edge router with ${labsSaid(st.wantLabs)}. Machines behind it have no way out until it is up.`
+              ? `Rebuilding the edge router with ${labsSaid(st.wantLabs)}. ${ONE_BOOT}`
               : !st.updates
-                ? 'Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. Machines behind it have no way out until it is up.'
-                : 'Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. Machines behind it have no way out until it is up.',
+                ? `Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. ${ONE_BOOT}`
+                : `Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. ${ONE_BOOT}`,
       );
     }
-    if (edge.power_state !== 'Halted') await admin.call('vm.stop', { id: edge.id, force: true });
-    let said;
-    try {
-      said = (await buildEdge({ ...opts, ha: null, block: keep, labs: labs ?? [], wanMac: await wanMacFor(admin, edge, opts.pool, 0) })).text;
-    } catch (e) {
-      // Never neither: the one that was there comes back as it was.
-      await admin.call('vm.start', { id: edge.id }).catch(() => {});
-      /** @type {Error} */ (e).message = `${/** @type {Error} */ (e).message}. The edge router it was replacing was started again, as it was`;
-      throw e;
-    }
+    // Built while the old one runs, started once the old one has stopped,
+    // and watched before the old one goes (replaceRouter). With the labs it
+    // has when nobody asked for others (labsOf): `labs ?? []` here took them
+    // all off on a rebuild for the key, the update or what it filters.
+    const mac = await wanMacFor(admin, edge, opts.pool, 0);
+    const { text, up } = await replaceRouter(opts, { old: edge, name: EDGE.vm, was: 'the edge router it was replacing', build: (start) => buildEdge({ ...opts, ha: null, block: keep, labs: labs ?? labsOf(st), wanMac: mac, start }) });
     await admin.call('vm.delete', { id: edge.id, deleteDisks: true });
-    return `${said} It replaced the one that was there, which was removed.`;
+    return `${text} It replaced the one that was there, which was removed. ${settledSaid(EDGE.vm, up)}`;
   }
   if (edge && st) {
     const wan = st.vifs.find((v) => String(v?.device) === '0');
@@ -1398,6 +1477,142 @@ async function wanMacFor(admin, old, pool, node) {
   }
   const h = createHash('sha256').update(`fleetwright-edge-wan:${pool}:${node}`).digest();
   return ['02', ...[...h.subarray(0, 5)].map((b) => b.toString(16).padStart(2, '0'))].join(':');
+}
+
+/**
+ * THE LABS AN EDGE HAS, as a rebuild is given them: each from its tag
+ * (edgeLabsOf), open or closed, with the network its interface is on, in
+ * order (device 2 and up, as buildEdge makes them). A lab the tag names that
+ * no interface is on is left out: there is no network to put the new router
+ * on, and edgeState's `onLabs` is what notices that.
+ *
+ * @param {Awaited<ReturnType<typeof edgeState>>|null} st
+ * @returns {Array<{ id: string, open: boolean }>}
+ */
+function labsOf(st) {
+  if (!st) return [];
+  /** @type {Array<{ id: string, open: boolean }>} */
+  const labs = [];
+  [...st.hasLabs].forEach((c, i) => {
+    const id = st.vifs.find((v) => String(v?.device) === String(i + 2))?.$network;
+    if (typeof id === 'string' && id) labs.push({ id, open: c === 'o' });
+  });
+  return labs;
+}
+
+/** A span of time as a person says it: whole minutes from one, seconds below. @param {number} ms */
+const span = (ms) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} minute${Math.round(ms / 60_000) === 1 ? '' : 's'}` : `${Math.round(ms / 1000)} seconds`);
+
+/**
+ * WHAT CAN BE TOLD OF A ROUTER JUST STARTED, which is what Xen Orchestra
+ * shows of it and nothing more: the job cannot log in to it, and it has no
+ * guest agent until its first update (EDGE_UPDATES), since a rebuild is a
+ * copy of the published image. So for a new router Xen Orchestra knows
+ * whether it is running, and not whether it answers; nothing here says it
+ * does. What the watch catches is a router that stops again on its own, a
+ * disk that does not boot or a configuration OPNsense refuses, before the
+ * router it replaces is removed; before this, the old one was removed as
+ * soon as `vm.start` returned. A router that does carry the agent would
+ * show an address, which ends the watch early and is said as its agent
+ * answering, which is all an address proves.
+ *
+ * `halted`: Xen Orchestra showed it stopped. `answers`: it showed an address
+ * from the guest agent. `running`: the whole watch passed with it running,
+ * which is as much as can be told, and the rebuild goes on; holding the old
+ * router for an answer that cannot come for a day would mean no rebuild
+ * ever finishes.
+ *
+ * @param {{ admin: any, vm: string, name: string, say: (text: string) => void, signal?: AbortSignal, sleep?: (ms: number) => Promise<void>, settle?: { ms: number, every: number } }} opts
+ * @returns {Promise<{ state: 'halted'|'answers'|'running', address: string|null, after: number }>}
+ */
+async function settled({ admin, vm, name, say, signal, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), settle = EDGE_SETTLE }) {
+  say(`${name} is started. Xen Orchestra is watched for ${span(settle.ms)} for it stopping again; whether it answers cannot be told from here until its guest agent arrives with its first update.`);
+  for (let waited = 0; ; waited += settle.every) {
+    signal?.throwIfAborted();
+    const vms = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM', id: vm } })) || {}));
+    // By its id and not the filter's word: a Xen Orchestra answers the filter it understands.
+    const seen = vms.find((v) => v?.id === vm);
+    if (seen?.power_state === 'Halted') return { state: 'halted', address: null, after: waited };
+    const address = wanAddressOf(seen);
+    if (address) return { state: 'answers', address, after: waited };
+    if (waited >= settle.ms) return { state: 'running', address: null, after: waited };
+    await sleep(settle.every);
+  }
+}
+
+/**
+ * What the watch could tell, for the sentence the job ends with: an address
+ * is the agent answering and no more; running for the whole watch is not
+ * knowing, and said as such (CLAUDE.md, C-5).
+ *
+ * @param {string} name @param {Awaited<ReturnType<typeof settled>>} up
+ */
+function settledSaid(name, up) {
+  if (up.state === 'answers') return `${name}’s guest agent answers: Xen Orchestra has its WAN address, ${up.address}.`;
+  return `Xen Orchestra reported ${name} running for the ${span(up.after)} it was watched; whether it answers cannot be told from here until its guest agent arrives with its first update, after ${EDGE_UPDATES.hours}:00 UTC.`;
+}
+
+/**
+ * ONE ROUTER REPLACED BY ANOTHER, with the way out gone for one boot and not
+ * for the whole build. The new one is built first, which is the slow part
+ * (a download of up to 490 MB, then a disk of up to 3 GiB through Xen
+ * Orchestra), while the old one runs; only then is the old one stopped and
+ * the new one started. Stopped before, not after: one router has 10.254.0.1
+ * as its own address and one of a pair its .2 or .3, and two routers with
+ * the same address on the uplink answer for each other. The new one is then
+ * watched (settled) before the caller removes the old. Before this the old
+ * one was stopped first and the machines behind it waited out the download.
+ *
+ * WHEN IT GOES WRONG, which is the point. If the build fails, the old one
+ * was never touched and is left running (or started, if it was stopped: the
+ * pool keeps a way out). If the new one cannot start, or stops again while
+ * watched, it is removed and the old one started again. `old` null is a
+ * router built beside a pair's other half (FINISHING THE PAIR), where there
+ * is nothing to stop and nothing to start again: `alone` says what carries
+ * the machines then. Cancel, while watching, is the same as a failure.
+ *
+ * @param {{ admin: any, say: (text: string) => void, signal?: AbortSignal, sleep?: (ms: number) => Promise<void>, settle?: { ms: number, every: number } }} opts
+ * @param {{ old: any, name: string, was?: string, alone?: string, build: (start: boolean) => Promise<{ vm: string|null, text: string }> }} what
+ *   `was`: the old router as the sentence names it ("the edge router it was replacing"); `alone`: what is said instead when there is no old one.
+ * @returns {Promise<{ vm: string, text: string, up: Awaited<ReturnType<typeof settled>> }>}
+ */
+async function replaceRouter({ admin, say, signal, sleep, settle }, { old, name, was = 'the edge router it was replacing', alone = '', build }) {
+  let stopped = false;
+  /** The old one back, when that is right, and what was done said. */
+  const back = async () => {
+    if (!old) return alone;
+    if (stopped || old.power_state !== 'Running') {
+      await admin.call('vm.start', { id: old.id }).catch(() => {});
+      return `${was} was started again, as it was`;
+    }
+    return `${was} was left running, as it was`;
+  };
+  // A sentence of its own, so "the edge router" takes a capital; a router's name does not.
+  const cap = (/** @type {string} */ s) => (s.startsWith('the ') ? `T${s.slice(1)}` : s);
+  let made;
+  try {
+    made = await build(false);
+  } catch (e) {
+    /** @type {Error} */ (e).message = `${/** @type {Error} */ (e).message}. ${cap(await back())}`;
+    throw e;
+  }
+  // Made, so it has its id: buildEdge's `vm` is null only until the VM is created.
+  const vm = /** @type {string} */ (made.vm);
+  if (old && old.power_state !== 'Halted') {
+    await admin.call('vm.stop', { id: old.id, force: true });
+    stopped = true;
+  }
+  try {
+    await admin.call('vm.start', { id: vm });
+    const up = await settled({ admin, vm, name, say, signal, sleep, settle });
+    if (up.state === 'halted') throw new Error(`${name} stopped again ${up.after ? `within ${span(up.after)} of starting` : 'as soon as it was started'}, which a router that boots does not do`);
+    return { vm, text: made.text, up };
+  } catch (e) {
+    await admin.call('vm.delete', { id: vm, deleteDisks: true }).catch(() => {});
+    // "The new", since in a pair the old one has the same name.
+    /** @type {Error} */ (e).message = `${/** @type {Error} */ (e).message}. The new ${name} was removed, and ${await back()}`;
+    throw e;
+  }
 }
 
 /** How many labs of each kind, as a person says it. @param {string} key */
