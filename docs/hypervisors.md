@@ -1351,15 +1351,22 @@ admin sign-in for as long as it runs:
   stops the rest; they used to run where bash ignores `set -e`, and a broken
   install could power off and become the template. **And stopped is not
   done**: a build VM given a report token has to say `done` before it halts,
-  and the box waits half a minute past the halt for a late one. A VM that
-  stops without it, by a host rebooted for maintenance, a stop from Xen
-  Orchestra or an install cut off mid-step, is kept, stopped, as
-  `fleetwright-image-build (stopped before done)` and never made the
-  template, and the failure says what it last reported; any halt used to be
-  taken for success and cloned from. The VM says `done` up to six times, ten
-  seconds apart, until one gets through, since it is the one report that
-  decides the build. Without a token the power state is still all there is,
-  as before reports existed.
+  and the box waits two minutes past the halt for a late one, since the
+  report comes by way of the coordinator and a forward can take longer than
+  the half minute this used to wait. A VM that stops without it, by a host
+  rebooted for maintenance, a stop from Xen Orchestra or an install cut off
+  mid-step, is kept, stopped, as `fleetwright-image-build (stopped before
+  done)` and never made the template, and the failure says what it last
+  reported and how long before the halt, that the image that was there is
+  still the template and machines keep being made from it (or that the pool
+  still has none), and where the VM is; any halt used to be taken for success
+  and cloned from. The VM says `done` for up to five minutes, every ten
+  seconds, until one gets through, since it is the one report that decides
+  the build, and it writes what each report was answered (`report done: 200`,
+  `report done: 429`, `report done: no answer`) to its log and to its
+  console, which Xen Orchestra shows for the kept VM and which is the one
+  place to read why a report did not get through. Without a token the power
+  state is still all there is, as before reports existed.
 
   **It carries the guest agent.** XCP-ng's `xen-guest-agent` 0.4.0,
   upstream's own release build, pinned by size and SHA-256 like the images:
@@ -1425,7 +1432,11 @@ admin sign-in for as long as it runs:
   kept, stopped, as `fleetwright-image-build (install failed)`, one that
   runs past 25 minutes as `fleetwright-image-build (install timed out)`, and
   one that halted without saying done as `(stopped before done)`; applying
-  again removes it. A good one is named Fleetwright Debian 13,
+  again removes it. An Apply that stops partway says what it had done before
+  it stopped, in the words each part ended with, after why: a router built
+  and a resource set changed minutes before the image build failed used to
+  go unmentioned, and the person had no idea what state the pool was in. A
+  good one is named Fleetwright Debian 13,
   tagged `fleetwright-image`, converted to a template and put in the resource
   set.
 - **OPNsense, built and proved for the edge router.** Not from a second disk:

@@ -882,7 +882,13 @@ test('the guest agent goes in the cloud-init drive and starts before anything th
  *   a command that fails; and, offline, a VM that cannot look up a name, so
  *   curl gets nowhere by name and only by an address it is given
  */
-function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offline = false, pull = false, beat = 60, slow = false, deaf = false } = {}) {
+/**
+ * The install script, run against stubs. `deaf` is the fleet not answering a
+ * report: `true` is no HTTP answer at all, a number is that status with
+ * nothing behind it. `log` collects the lines the script writes to its log
+ * and screen, which is where it records what each report was answered.
+ */
+function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offline = false, pull = false, beat = 60, slow = false, deaf = false, log = /** @type {string[]} */ ([]) } = {}) {
   const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token, addresses });
   const lines = config.split('\n');
   const script = lines.slice(lines.indexOf('    content: |') + 1, lines.indexOf('runcmd:')).map((l) => l.slice(6)).join('\n');
@@ -918,10 +924,16 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
     ].join('\n');
     const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test', 'ip', 'getent', 'sleep', 'resolvectl', 'dpkg', 'debconf-set-selections'].map((c) => {
       // `deaf`: the fleet cannot be reached for reports, and nothing else fails.
-      const fails = c === fail ? 'return 1' : offline && c === 'getent' ? 'return 2' : offline && c === 'curl' ? '[[ "$*" == *--resolve* ]] || return 6' : deaf && c === 'curl' ? '[[ "$*" != */api/xosetup/report ]] || return 6' : '';
+      // A report's curl prints the status it got, as the real one is asked to
+      // (-w '%{http_code}'); the stand-in's fleet answers 200, a deaf one by
+      // status answers that and nothing, one with no answer exits as curl
+      // does when nothing spoke.
+      const report = '[[ "$*" != */api/xosetup/report ]]';
+      const fails = c === fail ? 'return 1' : offline && c === 'getent' ? 'return 2' : offline && c === 'curl' ? '[[ "$*" == *--resolve* ]] || return 6' : deaf === true && c === 'curl' ? `${report} || return 6` : deaf && c === 'curl' ? `${report} || { printf ${deaf}; return 0; }` : '';
+      const answers = c === 'curl' ? `${report} || printf 200; ` : '';
       // `slow` holds apt-get update long enough for the heartbeat to beat.
       const held = `${pull && c === 'apt-get' ? `${holdPull}\n` : ''}${slow && c === 'apt-get' ? 'if [ "$*" = update ]; then command sleep 0.4; fi\n' : ''}`;
-      return `${c}() { echo "${c} $*" >>"$CALLS"; ${held}${fails}${fails ? '; ' : ''}return 0; }`;
+      return `${c}() { echo "${c} $*" >>"$CALLS"; ${held}${fails}${fails ? '; ' : ''}${answers}return 0; }`;
     });
     // python3 builds a report's body, whose fourth argument is the step and
     // all the body need be here (curl is what sends it), with the pull's
@@ -941,12 +953,14 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
       .replace('#!/bin/bash', '');
     const run = spawnSync('bash', ['-c', `${stubs.join('\n')}\n${body}`], { env: { CALLS: join(dir, 'calls'), PATH: process.env.PATH }, encoding: 'utf8' });
     assert.equal(run.status, 0, run.stderr);
+    if (existsSync(join(dir, 'image.log'))) log.push(...readFileSync(join(dir, 'image.log'), 'utf8').trim().split('\n'));
     // A report is a curl to the report route under an agent of its own, not
     // a stock one a CDN's bot check turns away, and reads back as
     // `report <step>`, or `report <step> to <host:port:address>` when it went
-    // to an address rather than by name.
+    // to an address rather than by name. Whether it asked for the status it
+    // got is the log's to show (`report done: 200`), not this parse's.
     return readFileSync(join(dir, 'calls'), 'utf8').trim().split('\n').map((c) => {
-      const sent = /^curl -fsS -m 10 -A fleetwright-image (?:--resolve (\S+) )?.*--data-binary (\S+) https:\/\/fleet\.test\/api\/xosetup\/report$/.exec(c);
+      const sent = /^curl -f?sS -m 10 (?:-o \/dev\/null -w %\{http_code\} )?-A fleetwright-image (?:--resolve (\S+) )?.*--data-binary (\S+) https:\/\/fleet\.test\/api\/xosetup\/report$/.exec(c);
       return sent ? `report ${sent[2]}${sent[1] ? ` to ${sent[1]}` : ''}` : c;
     });
   } finally {
@@ -1407,25 +1421,46 @@ test('a build VM that halts without saying it finished is kept, named for it, an
     now: () => at,
     sleep: async () => { at += 10_000; },
   }).catch((e) => e);
-  assert.match(String(err), /build VM stopped before it said the install was done \(it never reported in\), so it was not made the template\. Its build VM was kept, stopped, as "fleetwright-image-build \(stopped before done\)"/);
+  assert.match(String(err), /build VM stopped before it said the install was done \(it never reported in\), so it was not made the template\. rack still has no Debian 13 machine image\. Its build VM was kept, stopped, as "fleetwright-image-build \(stopped before done\)"/);
   assert.ok(!p.calls.some((c) => c.method === 'vm.convertToTemplate' && c.params.id === 'build-vm'), 'a half-built VM became the template');
   assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), 'kept, to be looked at');
-  assert.ok(at >= 30_000, 'given half a minute for a late done first');
+  // TWO MINUTES for a late done, which comes by way of the coordinator: a
+  // build on a Raspberry Pi that had said every step through cleaning was
+  // failed at the thirty seconds this used to wait.
+  assert.ok(at >= 20_000 + 120_000, `given two minutes for a late done first, not ${(at - 20_000) / 1000} s`);
 
-  // Cut off after a step it had reported: that step is named.
+  // Cut off after a step it had reported: that step is named, and how long
+  // before the halt it was said, so a VM that died mid-step (seconds) reads
+  // differently from one whose last report never got through (minutes).
   const q = buildPool({ then: 'Halted' });
   at = 0;
   const cut = await ensureImage({
     ...buildArgs(q), reporter: async () => REPORT_TOKEN, now: () => at, sleep: async () => { at += 10_000; },
     vmReport: () => ({ step: 'installer', detail: null, at: 10_000 }),
   }).catch((e) => e);
-  assert.match(String(cut), /stopped before it said the install was done \(the last it said was that installing Fleetwright\)/);
+  assert.match(String(cut), /stopped before it said the install was done \(the last it said, 10 seconds before it stopped, was that installing Fleetwright\)/);
   assert.ok(!q.calls.some((c) => c.method === 'vm.convertToTemplate' && c.params.id === 'build-vm'));
+
+  // A REBUILD THAT STOPS SO says the image that was there still is, and that
+  // machines keep being made from it: the person whose Apply failed this
+  // way had no word on whether the pool still had an image at all. A report
+  // without a time, from before times were kept, says nothing about one.
+  const r = buildPool({ then: 'Halted', existing: [{ type: 'VM-template', id: 'img', name_label: 'Fleetwright Debian 13', $pool: 'pool-1', tags: [VM_IMAGE.tag] }] });
+  at = 0;
+  const kept = await ensureImage({
+    ...buildArgs(r), replace: true, reporter: async () => REPORT_TOKEN, now: () => at, sleep: async () => { at += 10_000; },
+    vmReport: () => ({ step: 'cleaning', detail: null }),
+  }).catch((e) => e);
+  assert.match(String(kept), /\(the last it said was that clearing what would make two machines cloned from it the same\), so it was not made the template\. The Debian 13 machine image that was there, Fleetwright Debian 13, is still the template, and machines keep being made from it\. Its build VM was kept/);
+  assert.ok(!r.calls.some((c) => c.method === 'vm.delete' && c.params.id === 'img'), 'the image that was there was removed');
 });
 
 test('a build VM whose done report lands after Xen Orchestra already said Halted is still the template', async () => {
   // The VM reports done just before it powers off; the report can arrive
-  // after the halt. It is waited for, a little.
+  // after the halt, and it comes by way of the coordinator, which forwards
+  // it when it next speaks to the box. Here it lands 90 seconds after the
+  // halt was seen (at 20 s): within the two minutes waited now, and past
+  // the thirty seconds that failed a real build.
   const p = buildPool({ then: 'Halted' });
   let at = 0;
   const text = await ensureImage({
@@ -1433,7 +1468,7 @@ test('a build VM whose done report lands after Xen Orchestra already said Halted
     reporter: async () => REPORT_TOKEN,
     now: () => at,
     sleep: async () => { at += 10_000; },
-    vmReport: () => (at >= 40_000 ? { step: 'done', detail: null, at } : { step: 'cleaning', detail: null, at: 10_000 }),
+    vmReport: () => (at >= 110_000 ? { step: 'done', detail: null, at } : { step: 'cleaning', detail: null, at: 10_000 }),
   });
   assert.match(text, /machine image is ready on rack/);
   assert.ok(p.calls.some((c) => c.method === 'vm.convertToTemplate' && c.params.id === 'build-vm'));
@@ -1469,15 +1504,32 @@ test('the install script says its step again every minute, so a box can tell sil
   assert.equal(calls.at(-1), 'systemctl poweroff');
 });
 
-test('the done report is tried again until it is heard, and a VM with no token powers off at once', () => {
+test('the done report is tried for five minutes until it is heard, each answer on the VM’s screen, and a VM with no token powers off at once', () => {
   // A VM that halts without a heard `done` is not made the template, so the
-  // one report that decides the build is worth a minute of trying.
-  const deaf = runImageScript({ deaf: true });
-  assert.equal(deaf.filter((c) => c === 'report done').length, 6, 'six tries');
-  assert.equal(deaf.filter((c) => c === 'sleep 10').length, 6);
+  // one report that decides the build is worth five minutes of trying: a
+  // build on a Raspberry Pi had its six tries go unanswered and powered off
+  // into "stopped before done" with nothing anywhere about why. What each
+  // report was answered now goes on the log and the console Xen Orchestra
+  // shows, which is the one place a person can read it from a kept VM.
+  /** @type {string[]} */
+  const log = [];
+  const deaf = runImageScript({ deaf: true, log });
+  assert.equal(deaf.filter((c) => c === 'report done').length, 30, 'thirty tries, ten seconds apart');
+  assert.equal(deaf.filter((c) => c === 'sleep 10').length, 30);
   assert.equal(deaf.at(-1), 'systemctl poweroff', 'and it still powers off, kept for the box to look at');
-  const heard = runImageScript();
+  assert.equal(log.filter((l) => l === 'report done: no answer').length, 30, `nothing spoke HTTP back, and the screen says so: ${log.join(' | ')}`);
+  // A fleet that answers and refuses, as a front door does with 429, is told
+  // apart from one that cannot be reached, and a refusal is not "sent".
+  /** @type {string[]} */
+  const refused = [];
+  const turnedAway = runImageScript({ deaf: 429, log: refused });
+  assert.equal(turnedAway.filter((c) => c === 'report done').length, 30, 'a refusal is not heard');
+  assert.ok(refused.includes('report cleaning: 429') && refused.filter((l) => l === 'report done: 429').length === 30, refused.join(' | '));
+  /** @type {string[]} */
+  const fine = [];
+  const heard = runImageScript({ log: fine });
   assert.equal(heard.filter((c) => c === 'report done').length, 1);
+  assert.deepEqual(fine.filter((l) => /^report (started|done)/.test(l)), ['report started: 200', 'report done: 200']);
   assert.equal(runImageScript({ token: null }).filter((c) => c === 'sleep 10').length, 0);
 });
 
