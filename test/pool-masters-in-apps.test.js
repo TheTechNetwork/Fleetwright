@@ -19,6 +19,10 @@ const bare = (/** @type {string} */ s) => s.replace(/\/\*[\s\S]*?\*\//g, '').rep
 const I_HANDOFF = read('apps/ios/Fleetwright/XOSetupHandoff.swift');
 const I_WORDS = read('apps/ios/Fleetwright/Manage.swift');
 const I_PAGE = read('apps/ios/Fleetwright/ManageView.swift');
+const A = (/** @type {string} */ f) => read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`);
+const A_HANDOFF = A('XoHandoff.kt');
+const A_WORDS = A('Manage.kt');
+const A_PAGE = A('PoolPage.kt');
 const HOST = read('src/fleet/host/xo-setup.js');
 
 /** What both phones say, word for word: the line, and how a second address joins it. */
@@ -31,6 +35,15 @@ test('the field the phones read is the one the machine writes, and the record is
   // know rides along and is there to read later.
   assert.match(I_HANDOFF, /let json = try\? JSONSerialization\.data\(withJSONObject: record\)/);
   assert.match(I_HANDOFF, /let masters = object\["masters"\] as\? \[String\]/);
+  assert.match(bare(A_HANDOFF), /val record = Seal\.open\(key, aad\(job, address\), sealed\)[\s\S]{0,400}?record\.toString\(\)/);
+  assert.match(A_HANDOFF, /\.optJSONArray\("masters"\)/);
+});
+
+test('Android: the pool’s page says where the master answers, only when the record says, and keeps the words selectable', () => {
+  assert.match(bare(A_PAGE), /val masters = remember\(pool\.address\) \{ XoHandoff\.masters\(settings, pool\.address\) \}/);
+  assert.match(bare(A_PAGE), /if \(masters\.isNotEmpty\(\)\) \{\s*SelectionContainer \{\s*Text\(Manage\.Words\.poolMaster\(masters\)/);
+  // An address that is not one is not shown.
+  assert.match(A_HANDOFF, /masters\.optString\(i\)\.takeIf \{ XoSetup\.ADDRESS_RE\.matches\(it\) \}/);
 });
 
 test('iOS: the pool’s page says where the master answers, only when the record says, and keeps the words selectable', () => {
@@ -43,9 +56,15 @@ test('iOS: the pool’s page says where the master answers, only when the record
 });
 
 test('both phones say it in the same words, and no button offers a second server yet', () => {
-  for (const words of SHARED) assert.ok(I_WORDS.includes(words), `iOS: ${words}`);
-  // The sentence: the management address, then the others after "also".
+  for (const words of SHARED) {
+    assert.ok(I_WORDS.includes(words), `iOS: ${words}`);
+    assert.ok(A_WORDS.includes(words), `Android: ${words}`);
+  }
+  // The sentence: the management address, then the others after "also",
+  // joined the same way on both phones.
   assert.match(I_WORDS, /"Pool master: \\\(first\)" \+ \(rest\.isEmpty \? "" : ", also \\\(rest\.joined\(separator: ", "\)\)"\)/);
-  // Nothing on the page acts on them: a line, not a verb (C-2).
+  assert.match(A_WORDS, /"Pool master: \$first" \+ \(if \(rest\.isEmpty\(\)\) "" else ", also \$\{rest\.joinToString\(", "\)\}"\)/);
+  // Nothing on either page acts on them: a line, not a verb (C-2).
   assert.ok(!/Button\([^)]*(?:master|Master)/.test(bare(I_PAGE)), 'iOS offers no action on the pool master');
+  assert.ok(!/(?:OpenRow|Button)\([^)]*(?:master|Master)/.test(bare(A_PAGE)), 'Android offers no action on the pool master');
 });
