@@ -2434,6 +2434,7 @@ export class XoSetups {
       // hand-off
       async (/** @type {any} */ ctx) => {
         const deployed = ctx.rec.purpose === 'deploy';
+        const masters = poolMastersOf(ctx.pools, ctx.hosts, ctx.pifs);
         const record = {
           v: 1,
           // An install's Xen Orchestra, where the installer put it; the pool
@@ -2455,6 +2456,14 @@ export class XoSetups {
           plain: ctx.rec.plain === true,
           limits: ctx.limits,
           pools: ctx.pools.map((/** @type {any} */ p) => ({ id: p.id, name: String(p.name_label || '').slice(0, 80) })),
+          // THE POOL MASTER'S ADDRESSES, management first (poolMastersOf),
+          // from the hosts and PIFs the inventory step read with the admin
+          // session, because `xo.getAllObjects` shows the limited user
+          // what its resource set holds and a PIF is in no resource set.
+          // Left out, not empty, when nothing says what they are: a phone from
+          // before the field never looks, and the boxes' poolRecord
+          // (xo-pools.js) parses around it.
+          ...(masters.length ? { masters } : {}),
           savedAt: new Date(this.now()).toISOString(),
         };
         const box = await seal({ to: ctx.rec.reply, aad: xosetupHandoffAad(ctx.rec.job, ctx.rec.address), payload: record });
@@ -2874,6 +2883,49 @@ export function limitsFrom(hosts, srs, pools) {
     memory: Math.max(1024 ** 3, Math.floor(memory / 2)),
     disk: Math.max(10 * 1024 ** 3, Math.floor(disk / 2)),
   };
+}
+
+/** How many of a pool master's addresses the record keeps: a flapping master has two, a bonded one a few, and nobody reads twenty. */
+const MASTERS_MAX = 8;
+const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/**
+ * THE ADDRESSES A POOL MASTER ANSWERS ON, as Xen Orchestra sees them: for
+ * each pool, the master's management address (the host object's `address`,
+ * for the host the pool names as `master`) first, then every other IPv4 on
+ * the master's PIFs that carries one, with nothing twice and at most
+ * MASTERS_MAX in all. Kept in the record the phone holds (`masters`) so
+ * that when the master stops answering on one address the person has the
+ * others to hand, rather than finding them by hand. ASKED FOR: a master
+ * that flaps between two addresses, listed twice in Xen Orchestra so it is
+ * reachable on either (docs/hypervisors.md, "When Xen Orchestra loses a
+ * pool").
+ *
+ * What it says is what it saw (C-5): a pool whose master is not among the
+ * hosts, or whose master has no address, adds nothing; a PIF list with
+ * nothing for the master leaves the management address alone; a Xen
+ * Orchestra with several pools lists each pool's master in turn, management
+ * first. Everything is held to an address shape before it is kept, because
+ * the phone shows these words and the next version may dial them.
+ *
+ * @param {any[]} pools @param {any[]} hosts @param {any[]} pifs
+ * @returns {string[]}
+ */
+export function poolMastersOf(pools, hosts, pifs) {
+  /** @type {string[]} */
+  const out = [];
+  const keep = (/** @type {unknown} */ a, /** @type {RegExp} */ re) => {
+    if (typeof a === 'string' && a && re.test(a) && !out.includes(a) && out.length < MASTERS_MAX) out.push(a);
+  };
+  for (const pool of Array.isArray(pools) ? pools : []) {
+    const master = (Array.isArray(hosts) ? hosts : []).find((h) => h?.id && h.id === pool?.master);
+    if (!master) continue;
+    keep(master.address, XO_ADDRESS_RE);
+    for (const pif of Array.isArray(pifs) ? pifs : []) {
+      if (pif?.$host === master.id) keep(pif.ip, IPV4_RE);
+    }
+  }
+  return out;
 }
 
 /**
