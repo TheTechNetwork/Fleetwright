@@ -54,3 +54,32 @@ test('it only asks for write permission on the job that writes', () => {
   assert.match(attach, /permissions:\n      contents: write/);
   assert.match(attach, /if: github\.event_name == 'release'/);
 });
+
+// THE PROOF RUNS BEFORE THE MERGE. The package and deb jobs are the only place
+// the runtime a box will get is ever started, and for weeks they ran only on
+// a push to main: the Node 26 bump (#1418) was green on its pull request with
+// a bundled node that could not start on Debian, and main would have found
+// out. So the workflow runs on pull requests that touch the same paths, and
+// the jobs that write stay gated on the events that may write.
+test('the host package and deb are built on pull requests, and nothing is published from one', async () => {
+  const { load } = await import('js-yaml');
+  /** @type {any} */
+  const doc = load(YML);
+  // `on` parses as the boolean true under YAML 1.1, so the key is `true`.
+  const on = doc.on ?? doc[true];
+  assert.ok(Array.isArray(on.pull_request?.paths), 'no pull_request trigger with paths');
+  assert.deepEqual(on.pull_request.paths, on.push.paths, 'the pull_request paths drifted from the push paths');
+  for (const [name, job] of Object.entries(/** @type {Record<string, any>} */ (doc.jobs))) {
+    if (job.permissions?.contents !== 'write') continue;
+    assert.ok(job.if, `${name} may write and runs on every event`);
+    assert.match(String(job.if), /github\.event_name == '(release|push)'|workflow_dispatch/, `${name} may write and its condition does not name an event`);
+    assert.doesNotMatch(String(job.if), /pull_request/, `${name} may write on a pull request`);
+  }
+
+  // apt-repo.yml: a change to the Worker alone used to wait for the next host
+  // change to be deployed, because Host release does not run for apt/.
+  const apt = /** @type {any} */ (load(readFileSync(new URL('../.github/workflows/apt-repo.yml', import.meta.url), 'utf8')));
+  const aptOn = apt.on ?? apt[true];
+  assert.deepEqual(aptOn.push, { branches: ['main'], paths: ['apt/**', '.github/workflows/apt-repo.yml'] });
+  assert.match(String(apt.jobs.publish.if), /github\.event_name == 'push'/);
+});
