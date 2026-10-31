@@ -10,8 +10,8 @@ machine of its own** that holds it ("A machine of its own"), and **labs**: netwo
 own on the edge router, open or closed, a session's machine alone on one
 ("Labs"). **Not yet run:** a real XCP-ng pool behind Xen Orchestra, and the
 install on one. Seeing inside a lab is designed and not built ("Seeing what
-crossed a lab"). XCP-ng first, through Xen Orchestra; Proxmox second, behind
-the same interface.
+crossed a lab"). XCP-ng, through Xen Orchestra; Proxmox is a direction ("The
+interface", below) with nothing built for it.
 
 A session today runs in a container on a box, or on a GitHub Actions runner
 that is gone in six hours. Neither is a real machine on a network you own:
@@ -51,7 +51,10 @@ What happens, from the phone to a session on a VM:
    mints a single-use ticket bound to you, holds the session, and asks a box
    that holds your pool with that image; one that cannot reach the pool hands
    on to the next, and a refusal from the pool itself (no room in its limits)
-   is the answer.
+   is the answer. A box whose last look at the pool failed is not asked, and
+   when it is the only one holding the pool the refusal names it and says to
+   check Xen Orchestra from its network, rather than that no box holds the
+   pool.
 5. **The box clones the image** onto the uplink, behind the edge router, or
    onto a network of the pool you chose (protocol 9, below), counted against
    the resource set, tagged `fleetwright-session`, with the time it must be
@@ -151,6 +154,14 @@ from "1 being made" to "0 being made" with nothing to say a machine had failed.
 A kept machine counts as being made from its ticket, before the box is asked,
 and one person's top-ups run one at a time: a real pool was asked for two
 machines for one kept ready, by the Keep button and a health frame at once.
+And a kept machine is counted until it is gone, not until it is unwell: one
+that has enrolled but cannot take a session yet (its socket not up, or no
+Claude login for it yet) counts as being made, and is forgotten only when
+its enrolment is revoked or missing, it is no longer the person's, or it is
+past its end by the pool's last look. It used to fall out of the count the
+moment it was not ready, so the next top-up made another and Keep fewer could
+not end one it had forgotten: two, three, four machines on a real pool for
+one kept ready.
 
 ## Machines that work together
 
@@ -232,7 +243,12 @@ each person their own as `vmMachines`.
 coordinator asks the boxes holding your pools in turn, the one that last saw
 the machine first, and the box signs in with your pool's token and works only
 a machine tagged as made for you (`fleetwright-for:`), since two people can
-hold the same Xen Orchestra.
+hold the same Xen Orchestra. A box too old for the verb is skipped, and when
+every box was, the answer is `host_outdated`: none was new enough to be
+asked, each named with what it needs, rather than that none could find the
+machine, which would send you looking for it. A pool's page from away
+(`xolook`, `xoact`, [`manage.md`](./manage.md)) answers the same way, rather
+than that none could reach the pool.
 
 | Action | What the box does |
 |---|---|
@@ -752,9 +768,13 @@ for nothing.
   `10.250.<n>.1/24` and its DHCP handing out `.100` to `.250`. The rules are
   written into the edge's configuration with the uplink's, so nothing in the
   fleet can change them, and changing the labs rebuilds the edge the way
-  blocking mode does: stopped, a new one built beside it, the old one removed
-  only once the new one is up, and how it filters kept as it was. The phone
-  says that before Apply.
+  blocking mode does: a new one built beside it while it runs, the old one
+  stopped only then and removed once the new one has run for two minutes,
+  and how it filters kept as it was. Machines behind it keep their way out
+  while the new one is built, and have none while it starts; the phone says
+  that before Apply. A rebuild for any other reason keeps the labs the edge
+  has, read back from its tag and its interfaces, so a block toggle or a key
+  rebuild takes no lab off it.
 - **What every lab gets**, the same three rules as the uplink: names only
   from the edge, never another resolver, so the threat blocklists apply; and nothing
   private, so not the uplink and its machines, not your LAN, not the pool's
@@ -807,7 +827,11 @@ labs the pool has. The policy job keeps it as a tag on each lab network
 and reports it; the coordinator refuses a lab past it, saying the number. A
 pool whose policy predates the setting has no tag, which is no limit and
 never 0. The coordinator counts a person's labs on that Xen Orchestra: their
-machines seen in a lab there and the ones asked for and not yet seen.
+machines seen in a lab there and the ones asked for and not yet seen. The
+hold on a lab is taken before the coordinator waits on anything, a ticket or
+a box, so two asks arriving together cannot both pass the limit, and is let
+go on every refusal after it; it is named for the machine once there is a
+ticket and kept until a box has seen the machine on the lab.
 
 **A lab ends when its machine does**, the way every machine from the pool
 ends: at the end in its tag, which *Give it longer* moves to the same 350
@@ -1043,9 +1067,12 @@ out, a machine that can build it offers *Build the edge router on it*
    It also filters what the machines behind it do ("What the edge filters",
    below).
    It hands out 10.254.0.100–250 and answers DNS with Unbound. It has **no
-   login** (root's password is `*`) and no anti-lockout rule, because the only
-   thing that could reach it is a lab, and it is not tagged `fleetwright`, so
-   the fleet's token cannot touch the fleet's own way out.
+   login** (root's password is `*`) and no anti-lockout rule: from inside,
+   what reaches it is a lab or the uplink, and from the way out only the
+   watch key's HTTPS ("Watching the edge routers"), which reads its status
+   pages and cannot change its configuration (what it can do is in
+   `security.md`). It is not tagged `fleetwright`, so the fleet's token
+   cannot touch the fleet's own way out.
 3. When it is already there, moves its WAN if the way out changed and starts
    it if it was stopped, and says the WAN address Xen Orchestra has for it,
    or that Xen Orchestra does not know it, which is not the same as it having
@@ -1072,8 +1099,9 @@ changed. **Every machine behind it has no way out for those minutes.** It does
 not move to a new major release on its own.
 
 An edge built before this is **rebuilt once**, on the next Apply, because its
-configuration is fixed when it is built; the phone says so before it starts,
-and the machines behind it have no way out while it runs. A new edge is tagged
+configuration is fixed when it is built; the phone says so before it starts.
+Machines behind it keep their way out while the new one is built, and have
+none while it starts. A new edge is tagged
 `fleetwright-edge-updates`, which is how the next policy tells the two apart.
 **Not yet run** on a real pool: that the first update installs `os-xen` on the
 nano image, and that Xen Orchestra then reads the WAN address as interface 0's.
@@ -1115,10 +1143,15 @@ hands over. Going **from one to two** makes the second without starting it
 (the old router has the gateway address as its own), stops the old one,
 starts the second, and rebuilds the first beside it: the machines have no
 way out only while the second starts. If the first then fails to build, the
-second carries the machines alone and applying again finishes the pair.
-Going **back to one** removes the second and rebuilds the first on its own,
-and the machines have no way out until it is up. Before Apply, the phone
-says what going to two or back to one costs.
+second carries the machines alone, and applying again finishes the pair by
+building the first fresh beside the second, with the password the second
+carries the mark of; the old single router, if it is still there, is removed
+without being started, since started beside the second it would hold
+10.254.0.1 as its own address and hand out the whole range. Going **back to
+one** removes the second and rebuilds the first on its own while it still
+carries the machines: they keep their way out while the new one is built,
+and have none while it starts. Before Apply, the phone says what going to
+two or back to one costs.
 
 A phone that predates the switch sends nothing, and the edge is left as one
 or two as it is. Each router is tagged `fleetwright-edge-node:0` or `:1`.
@@ -1183,10 +1216,18 @@ would see the packet.
   so: *"while it cannot inspect, nothing leaves."*
 - **Changing it rebuilds the edge.** The edge has no login, so its
   configuration cannot be changed in place. An edge built the other way is
-  stopped, a new one is built beside it, and only then is the old one removed.
-  If the new one fails or is cancelled, it is removed and the old one is
-  started again, so the pool is never left with neither. The machines behind
-  it have no way out while that runs, and the screen says that before Apply.
+  replaced: a new one is built beside it while it runs, which is the slow
+  part (a download of up to 490 MB, then a disk of up to 3 GiB through Xen
+  Orchestra); then the old one is stopped, the new one started and watched in
+  Xen Orchestra for two minutes (`EDGE_SETTLE`), and only then is the old one
+  removed. A build that fails leaves the old one untouched; a new one that
+  stops again while it is watched, or is cancelled, is removed and the old
+  one started again, so the pool is never left with neither. Machines behind
+  it keep their way out while the new one is built, and have none while it
+  starts, and the screen says that before Apply. What the watch cannot tell
+  is whether the new router answers: it has no guest agent until its first
+  daily update, so running for the whole watch is said as not knowing, and
+  an address, when the agent is there, as the agent answering and no more.
   The edge is tagged `fleetwright-edge-blocks` when it drops, which is how the
   next policy knows which kind it has.
 - **A phone that predates the switch sends nothing**, and its edge is left as
@@ -1274,7 +1315,15 @@ torn down, and what was made is removed: the VM with its disk, the disk on
 its own, or a partial disk an upload left (attached to nothing, named for
 the router, on the storage it was going to; nothing else of that name is
 touched). The policy itself was already applied by then, and the job says
-so rather than that nothing changed.
+so rather than that nothing changed. One cancel is one signal for the whole
+job, handed to every build and every wait, so a cancel that lands between
+two images, or during a build that was ignoring it, does not let the next
+build start on a fresh signal and the job end `done` with "Stopping" the
+last thing on the screen. A cancelled policy job ends `cancelled`: during a
+build, with what that build undid; between two, naming what was built before
+it and that nothing more was started; as its last thing finished, saying so.
+The build's own last sentences still reach the screen after the cancel; its
+bar does not.
 
 A failure part-way deletes what it made. A pool with more than one host keeps
 labs on the edge's host, because a network with no interface is host-local
@@ -1300,7 +1349,17 @@ admin sign-in for as long as it runs:
   a VM that stays up, and its start time moving is read as the failure at
   once. The steps run in a subshell of their own, so the first one that fails
   stops the rest; they used to run where bash ignores `set -e`, and a broken
-  install could power off and become the template.
+  install could power off and become the template. **And stopped is not
+  done**: a build VM given a report token has to say `done` before it halts,
+  and the box waits half a minute past the halt for a late one. A VM that
+  stops without it, by a host rebooted for maintenance, a stop from Xen
+  Orchestra or an install cut off mid-step, is kept, stopped, as
+  `fleetwright-image-build (stopped before done)` and never made the
+  template, and the failure says what it last reported; any halt used to be
+  taken for success and cloned from. The VM says `done` up to six times, ten
+  seconds apart, until one gets through, since it is the one report that
+  decides the build. Without a token the power state is still all there is,
+  as before reports existed.
 
   **It carries the guest agent.** XCP-ng's `xen-guest-agent` 0.4.0,
   upstream's own release build, pinned by size and SHA-256 like the images:
@@ -1330,31 +1389,43 @@ admin sign-in for as long as it runs:
 
   **It says where it has got to.** The box running the job asks the
   coordinator for a report token for it, and the script posts each step to
-  `/api/xosetup/report` with it: started, packages, installer (Fleetwright),
-  image (the session image's pull, most of the time), cleaning, done. The
-  coordinator passes each step to the box, and the phone shows it in place
-  of a guess against time. **The pull is counted in bytes.** It runs inside
-  `apt-get install fleetwright`, so the script watches it from beside that
-  one command: it finds the `podman pull` among the VM's processes, asks the
-  image's registry for its size (the layers for the VM's architecture,
-  anonymously, as the pull does), and reports the bytes the VM has received
-  since, every 15 seconds, until the pull is gone. The phone reads "fetching
-  the session image: 131 of 262 MB", then that all of it is in and being
-  unpacked, which rootless podman does after the download and which nothing
-  counts; the bar moves by those bytes. A rebuild that starts from a kept
-  disk spends seconds on the disk, so it gives the disk 5% of the bar and
-  the install the rest, where it used to open at 45%. A VM that has said nothing after five minutes is named as the likely
-  problem: no network behind the edge router, or a start-up script that did
-  not run. Its screen shows its address, its route and a name looked up
-  first; a VM that cannot look up a name for half a minute stops there and
-  prints the servers DHCP told it to ask. Its reports still reach the
+  `/api/xosetup/report` with it: started, dns (its network answering a name,
+  below), packages, installer (Fleetwright), cleaning, done. The coordinator
+  passes each step to the box, and the phone shows it in place of a guess
+  against time. **And it says its step again every minute**, so that silence
+  means something: a box that has heard nothing for three minutes says what
+  the VM last said and how long ago ("its VM last said that installing
+  Fleetwright, 4 min ago, and nothing since"), where it used to repeat the
+  step as if it were news, and a phone showed "started, 12 min so far" with
+  no warning. **No container goes on the image.** The VM is the sandbox ("Inside the
+  VM"): `FLEETWRIGHT_SANDBOX` is off by default and nothing on a clone turns
+  it on, yet every image used to install podman, a Recommends of the
+  package, and pull the 293 MB session image, most of a build, for nothing.
+  The package is installed without its Recommends and the installer is told
+  `FLEETWRIGHT_NO_SANDBOX=1` and `FLEETWRIGHT_BUILD_IMAGE=0`, which
+  `install.sh` honours by installing no podman and building no sandbox
+  image. The `image` step, which counted that pull in bytes from beside
+  `apt-get` ("fetching the session image: 131 of 262 MB"), stays in the
+  script and reports only if a pull appears, so a build now goes from
+  installer to cleaning without it. A rebuild that starts from a kept disk
+  spends seconds on the disk, so it gives the disk 5% of the bar and the
+  install the rest. A VM that has said nothing after three minutes is named
+  as the likely problem: no network behind the edge router, or a start-up
+  script that did not run. Its screen shows its address, its route and a
+  name looked up first, and the looking is a step of its own, `dns`: fifteen
+  looks at most, each given two seconds for one answer (`RES_OPTIONS`), the
+  whole wait held to a minute, where the first run's fifteen unbounded
+  `getent` calls against a server that dropped queries took many minutes and
+  showed on the phone as a build frozen at "started"; a VM that gets no name
+  in that minute stops there and prints the servers DHCP told it to ask. Its reports still reach the
   coordinator then: the box writes the coordinator's addresses into the
   script, and a report that cannot go by name is sent to those under the
   same name, so TLS still checks the coordinator's certificate. A failure sends the end of the install log with it, which is the
   only way to read it, because the VM has no password. A failed build's VM is
-  kept, stopped, as `fleetwright-image-build (install failed)`, and one that
-  runs past 25 minutes as `fleetwright-image-build (install timed out)`;
-  applying again removes it. A good one is named Fleetwright Debian 13,
+  kept, stopped, as `fleetwright-image-build (install failed)`, one that
+  runs past 25 minutes as `fleetwright-image-build (install timed out)`, and
+  one that halted without saying done as `(stopped before done)`; applying
+  again removes it. A good one is named Fleetwright Debian 13,
   tagged `fleetwright-image`, converted to a template and put in the resource
   set.
 - **OPNsense, built and proved for the edge router.** Not from a second disk:
@@ -1478,7 +1549,14 @@ pool's own machine is asked for, since that machine is cloned from it. Asked
 for after the first three images were built with the install script that did
 not stop at a failed step: any of them may be one to replace.
 
-## The interface, so Proxmox is a second driver and not a second design
+## The interface, if Proxmox is ever a second driver
+
+**A direction, not a feature.** Nothing in `src/` speaks to Proxmox, and no
+interface of this shape exists in the code: `src/fleet/host/xo-pools.js` calls
+Xen Orchestra's own methods by name (`vm.create`, `vm.start`, `vm.delete`,
+`xo.getAllObjects`). What is written down here is the shape those calls have,
+so that a second hypervisor would be a second driver behind it and not a
+second design:
 
 ```
 create({ name, template, userData, networks, tags, expiresAt }) → { id }
@@ -1486,11 +1564,13 @@ start(id)  destroy(id, { disks: true })  list({ tag })  status(id)
 createNetwork(name) → { id }  destroyNetwork(id)
 ```
 
-**Xen Orchestra** maps onto it directly. **Proxmox** maps onto it as a clone
-of a template VM, user data through a cloud-init snippet, a VNet under SDN for
-a lab network, and a token whose role is granted on one resource pool. That
-is the same bound as the resource set, and the same reason. Template and lab
-files do not change between the two.
+**Xen Orchestra** maps onto it directly. **Proxmox** would map onto it as a
+clone of a template VM, user data through a cloud-init snippet, a VNet under
+SDN for a lab network, and a token whose role is granted on one resource
+pool, which is the same bound as the resource set, and the same reason.
+Template and lab files would not change between the two. Until somebody
+builds it, this section is the whole of Proxmox in Fleetwright, and
+`ROADMAP.md` carries it as asked for.
 
 ## Order of work
 
@@ -1498,11 +1578,14 @@ Following `CONTRIBUTING.md`, coordinator first. **Done:** protocol 8
 (`template` on `provision`), the VM ticket and `/api/enroll/vm`, placement
 onto a box that holds the pool, the vault's `hypervisor:` kind; on the host,
 the pool holder, the clone, the sweep, the join and the machine image; both
-phones; these docs; the pool's own machine (A machine of its own). **Next:** a network per machine and a group network for
-tests that need several machines to reach each other; machines kept booted
-and waiting so a session starts in seconds; DNS filtering and intrusion
-detection on the edge router. What each machine did on the network is built
-(What a machine did on the network). Labs are built ("Labs"); seeing what crossed one is designed and not built.
+phones; these docs; the pool's own machine ("A machine of its own"); group
+networks ("Machines that work together"); machines kept booted and waiting
+("Machines kept ready"); DNS filtering and intrusion detection on the edge
+router ("What the edge filters"); what each machine did on the network; labs
+("Labs"), and the edge routers watched from the phone. **Next:** seeing what
+crossed a lab, which is designed and not built; a pool's first machine image
+through the phone ("Next: a pool's first machine image"); and a second
+hypervisor, which is a direction (above).
 
 ## Onboarding: nothing made by hand
 
@@ -1575,8 +1658,17 @@ owner's: `xoprobe`, then `xosetup` on the machine the person picks.
    user (a password nobody sees) → its resource set (half of the pool's
    vCPUs, memory and default storage) → a token, minted signed in as that
    user for 180 days (under the half a year Xen Orchestra allows out of the
-   box; a server capped lower gives its own default) → updates → hand-off,
-   sealing the token back to the phone and keeping nothing.
+   box; a server capped lower gives its own default), **and the user's
+   earlier tokens removed**: `token.deleteAll`, asked as that user for all
+   but the one just made, so a setup run again for a lost phone closes the
+   token that phone held, which used to stay good for its 180 days. A Xen
+   Orchestra that does not list the method, or refuses it, still gets its
+   token, and the summary says the earlier ones stayed and why, never that
+   they went → updates, the one step that cannot stop the job: a failure
+   there is a warning the summary carries, with the token made all the same,
+   and whether Xen Orchestra updates itself is left to its own plugin page
+   to say → hand-off, sealing the token back to the phone and keeping
+   nothing.
 5. **Updates** come from [XenOrchestraInstallerUpdater](https://github.com/00o-sh/XenOrchestraInstallerUpdater)'s
    own `installer-updates` plugin when the pool has it: loaded, kept loaded,
    and set to update itself daily unless a person had switched that off, in
@@ -1634,10 +1726,18 @@ otherwise cancels the job and names the machine to update. Seen: a box with
 the new release on disk and a sidecar still running the old one, which
 `/update --restart` now fixes ([`packaging.md`](./packaging.md)). Losing
 the phone loses the token, not the pool: running the setup again finds the
-user and its resource set and makes a new token. This is the phone-direct
-model [`manage.md`](./manage.md) sets out for managing the pool; holding the
-token on a fleet machine as well, so the pool can be acted on with the app
-closed, is the opt-in route that page describes, not the default.
+user and its resource set, makes a new token and removes the old ones
+(above). This is the phone-direct model [`manage.md`](./manage.md) sets out
+for managing the pool. **The phone also keeps the record in your vault**, as
+`hypervisor:<address>`, the moment it has collected a token
+(`XOSetupHandoff.collectAndKeep` on iOS, `XoHandoff.collectAndKeep` on
+Android), so the boxes you approved can make machines on the pool
+("Machines from your pool"); a phone not signed in to GitHub is told to sign
+in first, since the vault is kept under that account, and says when the
+fleet refused. That is the default, not a choice: the switch a pool set up
+before it offers (Machines › the pool › Keep its token in the fleet) is for
+catching up, and nothing on either phone keeps a token out of the vault
+except not being signed in.
 
 Run against a real Xen Orchestra over HTTPS and plain HTTP: the phone's key
 opened the token, the token signed in as the limited user and an admin call
@@ -1695,14 +1795,20 @@ new password for Xen Orchestra's admin. In order:
    its default storage, the network of the master's management interface, and
    whether an earlier install's VM (`fleetwright-xo`) is already there, which
    stops the job with what to do.
-6. **The installer** (`installer`), pinned: commit `f9b299f` of
+6. **The installer** (`installer`), pinned to one commit of
    [00o-sh/XenOrchestraInstallerUpdater](https://github.com/00o-sh/XenOrchestraInstallerUpdater),
    the fork the update plugin above comes from (ronivay's upstream does not
-   have the script). `xo-remote-deploy.sh`, `xo-install.sh` and the update
-   plugin's files are downloaded from that commit and each is checked against
-   its SHA-256 in `INSTALLER` (`src/fleet/host/xo-deploy.js`) before anything
-   runs. Moving the pin is reading the new script and changing the commit and
-   the hashes, as for OPNsense's image.
+   have the script). The commit lives in `INSTALLER` in
+   `src/fleet/host/xo-deploy.js` and nowhere else, so it is not repeated
+   here; `xo-remote-deploy.sh`, `xo-install.sh` and the update plugin's files
+   are downloaded from that commit and each is checked against the SHA-256
+   pinned beside it before anything runs. **Renovate moves the pin**: it
+   follows the fork's `master` by commit, and the pin workflow runs
+   `scripts/pin-xo-installer.mjs` on its pull request, which refuses a commit
+   younger than three days and writes the files' hashes for the one it
+   accepts (`renovate.json`, `test/pin-xo-installer.test.js`). The pull
+   request links what changed upstream, which is what to read before merging
+   it: the script runs as root in a VM made with the pool's admin sign-in.
 7. **The installer's six stages** (`network` to `build`), as the script prints
    them: the network, Debian 13's cloud image (checked by the script against
    the SHA512SUMS Debian publishes and cached on the storage), the VM, its
@@ -1711,15 +1817,20 @@ new password for Xen Orchestra's admin. In order:
    `BatchMode=yes` come first, and OpenSSH takes the first value it is given
    for each option, so every `ssh` the script makes rides the master and none
    can ask for a password. The download's percentage is the bar. The VM is
-   `fleetwright-xo`, 2 vCPUs, 4 GiB and 20 GiB, on the pool's default storage,
-   on the management network with an address from DHCP: the network the
-   machine reached the pool master on.
+   `fleetwright-xo`, on the pool's default storage, on the management network
+   with an address from DHCP: the network the machine reached the pool master
+   on. Its size is the script's own default, since Fleetwright passes none
+   (2 vCPUs, 4 GiB and 20 GiB at the commit pinned as this is written, and
+   the script prints what it made as it goes).
 8. **The default admin password replaced** (`admin`). The installer leaves
    `admin@admin.net` / `admin`, and anybody on that network can sign in with it
    until it changes. The moment the script says Xen Orchestra is up, the
-   machine signs in with the default and sets the person's password. If the
-   default no longer works, somebody signed in first, and the job stops saying
-   so rather than going on. The admin stays `admin@admin.net`.
+   machine signs in with the default and sets the person's password. If Xen
+   Orchestra refuses the default (invalid credentials, and only that),
+   somebody signed in first, and the job stops saying so rather than going
+   on; a sign-in that times out or drops says the machine could not sign in
+   and why, and that the default stands unless somebody changed it. The
+   admin stays `admin@admin.net`.
 9. **Onboarding's own steps**, against the new Xen Orchestra, signing in with
    the new password, which is the proof it took. The hand-off record names the
    Xen Orchestra's address, with `poolMaster` beside it; the phone opens it
@@ -1745,8 +1856,12 @@ password stays locked. Xen Orchestra is how the VM is managed.
 **Cancel** stops the script where it is. Before the installer ran, nothing was
 made. While it ran, the script removes what it made if it is stopped before its
 VM starts and keeps the VM after, and the job says what to look for on the pool
-rather than claiming either. A failed install keeps its VM, as the script does,
-and the job names it.
+rather than claiming either. Once the installer has finished, every cancel,
+wherever it lands, says where Xen Orchestra is and which password it has:
+replaced with the one chosen, asked to be and not answered (the one case the
+job cannot settle, said as that), or still the default, with anybody on the
+network able to sign in until it is changed. A failed install keeps its VM, as
+the script does, and the job names it.
 
 **What it needs.** The machine needs the tools above, so a Mac needs GNU
 `getopt` (`brew install gnu-getopt`, first on PATH). The pool master downloads
@@ -2333,9 +2448,11 @@ master opening a VM's disk, or a real pool being lost and found.
 
 ### Next: a pool's first machine image
 
-- **A pool without Xen Orchestra** is built ("A pool without Xen Orchestra").
-  The same image cache on the storage repository could build the templates
-  and the pool's own machine, which today download their own images.
+What is left here, with everything above it built:
+
+- **One image cache.** "A pool without Xen Orchestra" caches the cloud image
+  on the storage repository; the templates and the pool's own machine still
+  download their own. The same cache could serve all three.
 - **A pool's first machine image through the phone.** A pool that has none
   cannot be given its own machine through a relay, because the image is a
   disk of gigabytes. Xen Orchestra fetching the cloud image itself, or the
