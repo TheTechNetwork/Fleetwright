@@ -28,9 +28,18 @@ const DEFAULT_INTERVAL_MS = 20_000;
  *  Still here, and still the backstop: prompt.js recognises the shapes it can
  *  describe, and this catches the case where a person is plainly needed and we
  *  cannot say why. "Something is waiting" is worth a notification even when the
- *  question is not one we know how to read. */
+ *  question is not one we know how to read.
+ *
+ *  /cd's dialog is that case, by both of its titles. It asks whether to move
+ *  the session to another directory (or, once moved, whether that directory's
+ *  own settings may apply), and it holds the session until somebody answers.
+ *  prompt.js leaves it undescribed on purpose, so the notification says the
+ *  session is waiting and nothing it does not know. The titles and not the
+ *  question, because "Is this a directory you created or one you trust?" is
+ *  long enough to wrap in a narrow pane and the title is one short line.
+ *  scripts/claude-dialog-check.mjs fails when the pinned CLI retitles it. */
 export const AWAITING_RE =
-  /Resume from summary|Resume full session|Do you want to proceed|Do you trust the files|Is this a project you created or one you trust|Do you want to use this API key/i;
+  /Resume from summary|Resume full session|Do you want to proceed|Do you trust the files|Is this a project you created or one you trust|Do you want to use this API key|Moving to a new directory:|Now in a new directory:/i;
 
 /**
  * The CLI is drawing its own chrome, so it is not wedged.

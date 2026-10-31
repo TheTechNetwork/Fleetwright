@@ -10,6 +10,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `ci.yml` | every push and PR — **no paths filter**, see `ci-scope.md` | none |
 | `ci.yml` — `root` | every push and PR — the root-gated tests, under `sudo`, on Node 24 and 26; see [below](#the-tests-only-root-can-run) | none |
 | `ci.yml` — `gate` (`CI passed`) | every push, PR and merge-queue run | none |
+| `ci.yml` — `checks` | the same, and `scripts/claude-dialog-check.mjs`: the Claude Code release the macOS hosts and the session image pin, read for the dialogs the fleet watches for; see [below](#the-pinned-claude-codes-dialogs) | none |
 | `ios.yml` — `build` | PRs touching `apps/ios` | **none** |
 | `android.yml` — `debug` | PRs touching `apps/android` | none |
 | `worker.yml` — `check` | PRs touching the bundle (`worker/`, `src/fleet/`, `src/core/`) | none |
@@ -119,6 +120,54 @@ deploy     ... 30 bundled files, all named
 It exists because the hand-maintained version was wrong twice, and the second
 time cost a deploy — see `docs/ci-scope.md`. When it fails it prints the
 uncovered files and the exact `- 'dir/**'` lines to add.
+
+## The pinned Claude Code's dialogs
+
+A session that sits on a dialog nobody sees is a session doing nothing, and the
+dialog's wording is somebody else's to change: the trust question was reworded
+once and the watcher went blind to it (`src/fleet/host/prompt.js` has the
+story). `scripts/claude-dialog-check.mjs`, a step in `checks`, fetches the
+release this repository pins and reads its dialogs out of the binary, where
+the JavaScript is plain text. No session, no login, no secret.
+
+**Which release.** The one `mac-host.yml`, `ephemeral-mac.yml` and
+`sandbox/Containerfile` pin, read with the patterns of the Renovate manager
+that bumps all three in one pull request. So a Claude Code bump is checked on
+its own pull request, and the check refuses if the three ever disagree. A
+Linux host that runs sessions without the sandbox is not held to it:
+`install/install.sh` installs the latest release with Claude's own installer,
+which updates itself, so such a box meets a reworded dialog before this check
+does. Only the session image turns the updater off.
+
+**What fails.** Each dialog in `DIALOGS` (`src/fleet/host/claude-dialogs.js`)
+is found by its title and read as a whole component, then held to three
+things: `readPrompt` reads it as the kind of question it is, the watcher's
+`AWAITING_RE` notices a session waiting on it, and a dialog the fleet claims
+to answer with a digit draws digits. A listed dialog that cannot be found
+fails too, as does a trust question drawn by a component nobody listed: a
+check that finds nothing has not passed. The output quotes what the dialog
+says now, which is where the fix starts: the matcher in `prompt.js` or
+`watcher.js`, or the entry in `DIALOGS` if Claude Code removed or retitled it.
+
+**What the app cannot answer, on the pinned release,** and the check prints
+every time:
+
+| dialog | noticed | answerable from a notification |
+|---|---|---|
+| workspace trust ("Accessing workspace:") | yes, asked as "Do you trust the files in this folder?" | **no** — its two choices are drawn without numbers, so there is nothing to send |
+| Remote Control's trust line | yes, the same question | **no** — it takes `y` or `n` |
+| `/cd` ("Moving to a new directory:", "Now in a new directory:") | yes, as a session waiting, with no question of the fleet's own | **no** — no numbers, and no kind for it in the published vocabulary |
+| Bash permission | yes | yes |
+| resume | yes | yes |
+
+What it cannot see is anything decided at run time. The Bash permission
+dialog draws no question in one of its layouts (the one the source calls
+"fitted"); a session waiting on that is noticed through its permission hook
+(`src/core/activity.js`) where the session reports hooks, and not from the
+pane. The general permission dialog, unlike the Bash one, hides its numbers
+when its default is no, decided per request; then `readPrompt` finds no
+numbered options and offers no buttons, which is safe, and the check cannot
+see it.
 
 ## Testing the apps
 
