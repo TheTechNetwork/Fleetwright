@@ -1748,7 +1748,11 @@ in first, since the vault is kept under that account, and says when the
 fleet refused. That is the default, not a choice: the switch a pool set up
 before it offers (Machines › the pool › Keep its token in the fleet) is for
 catching up, and nothing on either phone keeps a token out of the vault
-except not being signed in.
+except not being signed in. The record also carries the pool master's
+addresses as setup saw them (`masters`, the management one first), shown on
+the pool's page as one line so that a master which stops answering on one
+address has its others to hand; offering a second server from them is
+designed and not built.
 
 Run against a real Xen Orchestra over HTTPS and plain HTTP: the phone's key
 opened the token, the token signed in as the limited user and an admin call
