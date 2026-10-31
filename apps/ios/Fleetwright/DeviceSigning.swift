@@ -173,18 +173,37 @@ struct DeviceKey {
 struct DeviceSigning {
     let settings: Settings
 
-    private static let listedKey = "deviceKeyListed"
+    /// Which key the minter listed for which account, kept as the SHA-256 of
+    /// "<kid> <email>" in hex: this phone signs only for the account its key
+    /// is listed under. A digest and not the pair itself, because the pair
+    /// put the address in the preference store a second time (CodeQL, "Cleartext
+    /// storage of sensitive information in an application preference store";
+    /// it is there once as `signedInAs`, which the app displays), and the
+    /// marker only ever answers whether this pair is the one listed, which a
+    /// digest answers as well. The same on Android (DeviceSigning.kt).
+    private static let listedKey = "deviceKeyListedDigest"
+    /// Where the pair itself was kept before the digest: removed the next time
+    /// listing is considered, so an upgraded phone does not carry it on.
+    private static let legacyListedKey = "deviceKeyListed"
     private static let triedKey = "deviceKeyListTriedAt"
 
     private var email: String { settings.signedInAs.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// The marker for `kid` listed under `email`.
+    static func listedDigest(kid: String, email: String) -> String {
+        SHA256.hash(data: Data("\(kid) \(email)".utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Whether this phone's key is listed for the account it is signed in as.
+    private func isListed(_ key: DeviceKey) -> Bool {
+        UserDefaults.standard.string(forKey: Self.listedKey) == Self.listedDigest(kid: key.kid, email: email)
+    }
 
     /// The signature for an intent to `host`, when this phone's key is listed
     /// for the account it is signed in as. Nil otherwise, and the intent goes
     /// as it always has.
     func signature(verb: String, params: [String: Any], id: String, host: String) -> (sig: String, kid: String, issuedAt: Int)? {
-        guard !email.isEmpty, !host.isEmpty, let key = try? DeviceKey.load(),
-              UserDefaults.standard.string(forKey: Self.listedKey) == "\(key.kid) \(email)"
-        else { return nil }
+        guard !email.isEmpty, !host.isEmpty, let key = try? DeviceKey.load(), isListed(key) else { return nil }
         let issuedAt = Int(Date().timeIntervalSince1970 * 1000)
         let input = IntentSigning.input(actor: email, id: id, issuedAt: issuedAt, params: params, verb: verb, host: host)
         guard let sig = try? key.sign(input) else { return nil }
@@ -197,9 +216,7 @@ struct DeviceSigning {
     /// (docs/signed-intents.md, "Delegations"). A box checks it as it checks a
     /// signature. Nil until this phone's key is listed, as `signature` is.
     func delegation(verbs: [String], hosts: [String], match: [String: Any], lifetime: TimeInterval) -> [String: Any]? {
-        guard !email.isEmpty, let key = try? DeviceKey.load(),
-              UserDefaults.standard.string(forKey: Self.listedKey) == "\(key.kid) \(email)"
-        else { return nil }
+        guard !email.isEmpty, let key = try? DeviceKey.load(), isListed(key) else { return nil }
         let now = Int(Date().timeIntervalSince1970 * 1000)
         let grant: [String: Any] = [
             "v": 1, "id": Self.delegationId(), "actor": email, "verbs": verbs, "hosts": hosts, "match": match,
@@ -219,15 +236,14 @@ struct DeviceSigning {
     /// At most once in ten minutes, so a minter that is down is not asked on
     /// every tap. Never throws: until it is listed, nothing is signed.
     func listIfNeeded(_ fleet: Fleet) async {
-        guard !email.isEmpty, PhoneGitHub(settings: settings).signedIn, let key = try? DeviceKey.load() else { return }
-        let listedAs = "\(key.kid) \(email)"
         let defaults = UserDefaults.standard
-        guard defaults.string(forKey: Self.listedKey) != listedAs else { return }
+        defaults.removeObject(forKey: Self.legacyListedKey)
+        guard !email.isEmpty, PhoneGitHub(settings: settings).signedIn, let key = try? DeviceKey.load(), !isListed(key) else { return }
         let now = Date().timeIntervalSince1970
         guard now - defaults.double(forKey: Self.triedKey) > 600 else { return }
         defaults.set(now, forKey: Self.triedKey)
         if (try? await PhoneVault(settings: settings).listDeviceKey(fleet, key: key)) != nil {
-            defaults.set(listedAs, forKey: Self.listedKey)
+            defaults.set(Self.listedDigest(kid: key.kid, email: email), forKey: Self.listedKey)
         }
     }
 }
