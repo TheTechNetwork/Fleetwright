@@ -150,9 +150,15 @@ export class Console {
    */
   static LINE_MAX = 200;
 
-  /** @param {string} text  a line about to be sent, sentinel included */
+  /**
+   * The refusal names the length and nothing of the line: the same check
+   * guards the password, and an error's words end up on stderr and in the
+   * log, which is where a password must not be.
+   *
+   * @param {string} text  a line about to be sent, sentinel included
+   */
   #fits(text) {
-    if (text.length > Console.LINE_MAX) throw new Error(`a line of ${text.length} characters is more than the console takes (${Console.LINE_MAX}), so it was not sent: ${text.slice(0, 60)}…`);
+    if (text.length > Console.LINE_MAX) throw new Error(`a line of ${text.length} characters is more than the console takes (${Console.LINE_MAX}), so it was not sent`);
   }
 
   /** Type a line, carriage return and all, as a terminal would. @param {string} text */

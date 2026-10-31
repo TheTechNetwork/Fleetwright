@@ -111,6 +111,6 @@ test('a line longer than the console takes is refused before it is sent', () => 
   c.type('x'.repeat(Console.LINE_MAX));
   assert.equal(sent.length, 1, 'a line at the limit is sent');
   assert.throws(() => c.type('x'.repeat(Console.LINE_MAX + 1)), /more than the console takes/);
-  assert.throws(() => c.typeSecret('x'.repeat(Console.LINE_MAX + 1), 'a secret'), /more than the console takes/);
+  assert.throws(() => c.typeSecret('hunter2'.repeat(40), 'a secret'), (e) => /more than the console takes/.test(e.message) && !e.message.includes('hunter2'), 'the refusal repeats the secret');
   assert.equal(sent.length, 1, 'the long lines were sent anyway');
 });
