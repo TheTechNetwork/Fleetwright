@@ -29,7 +29,7 @@ and nowhere else, including here.
 
 | event | notifies | why |
 |---|---|---|
-| `session.awaiting-input` | ✅ | the whole reason for this |
+| `session.awaiting-input` | ✅ | the whole reason for this. When no matcher could read the dialog and the decision model read the pane as waiting, the text is *is waiting for you; the fleet could not read what it is asking, open it to see*, with no prompt and so no buttons ([`decide.md`](decide.md)) |
 | `session.error` | ✅ | it stopped and it was not supposed to |
 | `session.ended` | ✅ | the work finished |
 | `session.rc-online` | ✅ | it is now drivable from the phone that just buzzed |

@@ -11,6 +11,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `ci.yml` — `root` | every push and PR — the root-gated tests, under `sudo`, on Node 24 and 26; see [below](#the-tests-only-root-can-run) | none |
 | `ci.yml` — `gate` (`CI passed`) | every push, PR and merge-queue run | none |
 | `ci.yml` — `checks` | the same, and `scripts/claude-dialog-check.mjs`: the Claude Code release the macOS hosts and the session image pin, read for the dialogs the fleet watches for; see [below](#the-pinned-claude-codes-dialogs) | none |
+| `ci.yml` — `checks`, unlisted dialogs | the same; advisory, never red: dialogs of the pinned Claude Code that `DIALOGS` does not list, read by the decision model; see [below](#unlisted-dialogs-read-by-a-model) | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_TOKEN`; skips with a notice without them |
 | `ios.yml` — `build` | PRs touching `apps/ios` | **none** |
 | `android.yml` — `debug` | PRs touching `apps/android` | none |
 | `worker.yml` — `check` | PRs touching the bundle (`worker/`, `src/fleet/`, `src/core/`) | none |
@@ -170,6 +171,31 @@ pane. The general permission dialog, unlike the Bash one, hides its numbers
 when its default is no, decided per request; then `readPrompt` finds no
 numbered options and offers no buttons, which is safe, and the check cannot
 see it.
+
+### Unlisted dialogs, read by a model
+
+The check above can only hold the dialogs `DIALOGS` names. The step after it,
+`scripts/claude-dialog-drift.mjs`, finds every component of the same binary
+that looks like a dialog (a question and a choice-like option among its
+strings) and holds no `DIALOGS` anchor, and asks Clef-flash the fleet's two
+pinned questions about its strings ([`decide.md`](decide.md)). A confident
+"asked" with a confident kind becomes a warning annotation and a line in the
+job summary, quoting the strings. It never fails the build: the model's label
+is a claim, and the deterministic check stays the gate. It posts no pull
+request comment, because this workflow's token is `contents: read` on purpose.
+On Claude Code 2.1.312 it reads 41 such components and flags none.
+
+It needs two repository secrets, `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_AI_TOKEN`, a token with **Account → Workers AI → Read** and nothing
+else. Without them, as on a fork's pull request, it prints a notice and does
+nothing, as `apt-repo.yml` does. Renovate's Claude Code bumps are
+in-repository, so they get it. A run is a few hundred calls a week, inside the
+free allowance.
+
+**The billing alert is yours to set.** Nothing in this repository can set
+Cloudflare's usage alert for Workers AI, and the coordinator's own budget
+(`decide.md`) is the only cap in code. Set one in the Cloudflare dashboard
+before turning the coordinator's decision model on.
 
 ## Testing the apps
 
