@@ -167,7 +167,7 @@ test('where a router is comes from Xen Orchestra now, asked on the first poll an
   await watch.poll();
   let r = /** @type {any} */ (watch.reportFor(ELI, 'xo.lan')).routers[0];
   assert.equal(r.reached, null);
-  assert.match(r.problem, /does not know its address yet: its guest agent arrives with its first update, after 10:00 UTC/, 'Xen Orchestra was asked and said none, which is not the same as not asked');
+  assert.match(r.problem, /does not know its address yet: its guest agent has not reported it \(one built before the image carried the agent gets it with its first update, after 10:00 UTC\)/, 'Xen Orchestra was asked and said none, which is not the same as not asked');
 
   xo = new Map([['fleetwright-edge', '127.0.0.1']]);
   now += 60_000;

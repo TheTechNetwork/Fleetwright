@@ -17,23 +17,33 @@
 // a key press at the console, so neither a config drive nor a second disk is
 // read unattended. What first boot does read is /usr/local/etc/config.xml:
 // with no /conf/config.xml yet, the importer's boot mode times out and copies
-// that file into place (opnsense-importer, bootstrap_and_exit). The nano image
-// is a plain UFS2 file system written by makefs, and that file is 5,234
-// contiguous bytes at a fixed offset in it (found by reading the published
-// 26.7 image; the whole image is pinned by its SHA-256 below, so nothing can
-// drift under us). The build gives the file a whole free block of its own,
-// by the file system's rules (OPNSENSE_IMAGE.grow), and streams the image
-// from the download to Xen Orchestra with that block holding this file's
-// configuration, padded to its length, and the few bytes of the file system
-// that record the move changed. XML allows the trailing whitespace the
-// padding is made of. Before a byte is replaced, the original is checked
-// against what must be there, so a wrong offset fails instead of corrupting
-// the disk.
+// that file into place (opnsense-importer, bootstrap_and_exit). The image is
+// a plain UFS2 file system written by makefs, and that file is 5,234
+// contiguous bytes at a fixed offset in it. The build gives the file a whole
+// free block of its own, by the file system's rules (EDGE_IMAGE.grow), and
+// streams the image from the download to Xen Orchestra with that block
+// holding this file's configuration, padded to its length, and the few bytes
+// of the file system that record the move changed. XML allows the trailing
+// whitespace the padding is made of. Before a byte is replaced, the original
+// is checked against what must be there, so a wrong offset fails instead of
+// corrupting the disk.
+//
+// WHICH IMAGE. This repository's own, not OPNsense's: the OPNsense nano image
+// pinned below (OPNSENSE_IMAGE) booted once in CI, updated to its release's
+// current patch level and given the Xen guest agent, cleaned of that boot and
+// published as a GitHub release (.github/workflows/edge-image.yml), with the
+// offsets above measured from the image as published and written in a
+// manifest beside it. EDGE_IMAGE pins that release, and everything in it is
+// copied from the manifest (scripts/pin-edge-image.mjs), so nothing is worked
+// out at run time that could disagree with what was measured, and the image
+// is checked against its pinned SHA-256 on every use, so nothing can drift
+// under us.
 //
 // WHAT RUNS WHERE. The machine running the policy job downloads the image
 // (once, kept in its state directory, checked before every use), unpacks it
-// with bzip2 and uploads it through Xen Orchestra's own disk import, over the
-// same pinned connection as everything else. Xen Orchestra makes the VDI;
+// as it reads it (zstd, which Node has of its own) and uploads it through Xen
+// Orchestra's own disk import, over the same pinned connection as everything
+// else. Xen Orchestra makes the VDI;
 // the VM is made from the pool's built-in "Other install media" template with
 // no disks of its own, the imported disk attached, TX checksum offload turned
 // off on both interfaces (XCP-ng's advice for FreeBSD guests, which otherwise
@@ -45,13 +55,13 @@
 // Xen Orchestra where the whole disk is 3 GiB (buildEdge, THE KEPT DISK).
 
 import { createHash, randomBytes } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import zlib from 'node:zlib';
 
 import { REQUIRED_HOSTS } from '../../core/egress.js';
 import { connectPinnedTls, splitAddress } from './xo-ws.js';
@@ -60,17 +70,22 @@ import { VHD_BLOCK, sparseVhd } from './vhd.js';
 import { forgetMade, outsideSets, recordMade, setsOf } from './xo-made.js';
 
 /**
- * The image, pinned. A new OPNsense release is a new entry here, with the
- * offset found again in its image: nothing is worked out at run time that
- * could disagree with what was checked.
+ * The OPNsense image the edge router's own image is built from, pinned: the
+ * input of .github/workflows/edge-image.yml, which downloads it, checks it
+ * against this digest and OPNsense's published one, and builds EDGE_IMAGE
+ * below from it. The host downloads EDGE_IMAGE, not this.
  *
  * RENOVATE NAMES THE RELEASE; A PERSON DOES THE REST. Renovate moves
- * `release` from OPNsense's mirror listing (renovate.json). A new release is
- * a new file system, so the address, digest and sizes, the configuration's
- * offset, length and digest, and `grow` are all found again in its image
- * (scripts/opnsense-room.mjs), and EDGE_FILTER's names are read again from its
- * models. `checked` is the release that was done for, written last; until the
- * address and `checked` both name `release`, test/pin-images.test.js fails.
+ * `release` from OPNsense's mirror listing (renovate.json). The address,
+ * digest and sizes are the release's own, from its checksum file; `config`
+ * is /usr/local/etc/config.xml as its nano image carries it, found by
+ * unpacking the image, which the build measures its own against (the
+ * manifest's same_as_pinned); and EDGE_FILTER's names are read again from
+ * the release's models. `checked` is the release that was done for, written
+ * last; until the address and `checked` both name `release`,
+ * test/pin-images.test.js fails. Then the image is built for it (the
+ * workflow, run by hand), and its release is what Renovate proposes for
+ * EDGE_IMAGE.
  */
 export const OPNSENSE_IMAGE = Object.freeze({
   // renovate: datasource=custom.opnsense depName=opnsense
@@ -84,38 +99,79 @@ export const OPNSENSE_IMAGE = Object.freeze({
   rawSize: 3221225472,
   /** /usr/local/etc/config.xml, as the nano build left it, and its SHA-256. */
   config: Object.freeze({ offset: 712876032, length: 5234, sha256: '1e81cde6bebe59e0aa769bd6b187f2247bd1155cddb52253ca1f2a17c51fe2e5' }),
-  /**
-   * ROOM: A WHOLE BLOCK FOR THE CONFIGURATION, 32 KiB, made by the file
-   * system's own rules (src/fleet/host/ufs-room.js). The default file is two
-   * 4 KiB fragments in cylinder group 1, which `makefs` packed full, so it
-   * cannot grow where it is: it moves to the first wholly free block (in
-   * group 4), its fragments are marked free, and every count that records
-   * either (the inode's size, sectors and first block; both groups' bitmaps,
-   * free counts and run sums; group 4's cluster map; the per-group summary
-   * array; the superblock's totals) is changed with it. Planned and checked
-   * as fsck would by scripts/opnsense-room.mjs against the 26.7 image pinned
-   * above, and carried here as each byte it changes and what must be there
-   * before it is: the build checks every one, and that the block is zeros,
-   * before writing anything. 8 KiB, the file's own fragments, was the room
-   * until two routers' rules (HA) needed more.
-   */
+});
+
+/**
+ * The image the host downloads: this repository's own edge router image,
+ * OPNSENSE_IMAGE booted once in CI, updated to its release's current patch
+ * level the way OPNsense's own update does it, given the Xen guest agent the
+ * way OPNsense installs a plugin, cleaned of that boot and published as the
+ * GitHub release `edge-image/<build>` (.github/workflows/edge-image.yml;
+ * scripts/edge-image/README.md says what is in one). So a router has the
+ * agent from its first boot, and the router is one thing, built in one place
+ * and fetched by name, as the sandbox container is.
+ *
+ * RENOVATE NAMES THE BUILD; THE PIN WORKFLOW WRITES THE REST. Renovate moves
+ * `build` from this repository's releases (renovate.json, the github-releases
+ * rule). Everything else here is in the release's manifest.json, measured
+ * from the image it was published with: the asset and its digest, the
+ * configuration file's place in the file system, and the room plan that
+ * moves it (ROOM, below). scripts/pin-edge-image.mjs copies them here after
+ * checking the manifest against the release's SHA256SUMS, run on Renovate's
+ * pull request by .github/workflows/renovate-pin.yml. It writes this whole
+ * block, and test/pin-images.test.js fails until `checked` and the address
+ * both name `build`, and whenever the block is not what the script writes.
+ *
+ * ROOM: A WHOLE BLOCK FOR THE CONFIGURATION, 32 KiB, made by the file
+ * system's own rules (src/fleet/host/ufs-room.js). The stock file is two
+ * 4 KiB fragments in a block makefs packed full, so it cannot grow where it
+ * is: it moves to the first wholly free block, its fragments are marked free,
+ * and every count that records either (the inode's size, sectors and first
+ * block; the groups' bitmaps, free counts and run sums; the per-group summary
+ * array; the superblock's totals) is changed with it. Planned and checked as
+ * fsck would by scripts/opnsense-room.mjs, in CI, against the image as
+ * published, and carried as each byte it changes and what must be there
+ * before it is: the build checks every one, and that the block is zeros,
+ * before writing anything. Where the first free block is differs from image
+ * to image (the update fills and frees blocks), which is why the plan is
+ * this release's and not the OPNsense release's. 8 KiB, the file's own
+ * fragments, was the room until two routers' rules (HA) needed more.
+ */
+export const EDGE_IMAGE = Object.freeze({
+  // renovate: datasource=github-releases depName=edge-image packageName=TheTechNetwork/Fleetwright
+  build: '26.7.8_1-20261031-10',
+  /** The build everything below was copied from. */
+  checked: '26.7.8_1-20261031-10',
+  /** The OPNsense release it is, and the version of its core package it was updated to. */
+  release: '26.7',
+  version: '26.7.8_1',
+  url: 'https://github.com/TheTechNetwork/Fleetwright/releases/download/edge-image/26.7.8_1-20261031-10/fleetwright-edge-26.7-26.7.8_1-amd64.img.zst',
+  /** As the release's SHA256SUMS lists it, and as downloaded. */
+  sha256: 'ffd9131c19b0a51060932bb8f6c5d5b6fb888b17a16f2573c0a5337da0648de7',
+  compressedSize: 423879602,
+  rawSize: 3221225472,
+  /** /usr/local/etc/config.xml, as the image carries it, and its SHA-256. */
+  config: Object.freeze({ offset: 712876032, length: 5234, sha256: '1e81cde6bebe59e0aa769bd6b187f2247bd1155cddb52253ca1f2a17c51fe2e5' }),
+  /** The room plan for it (imagePatches): the free block it moves to, and each byte of the file system that records the move. */
   grow: Object.freeze({
     room: 32768,
     inode: 6523,
-    data: Object.freeze({ offset: 2345304064, length: 32768 }),
+    data: Object.freeze({ offset: 31588352, length: 32768 }),
     edits: Object.freeze([
-      { offset: 66552, was: 'eb60000000000000', becomes: 'ea60000000000000', what: 'superblock: free blocks' },
-      { offset: 66568, was: '0000000000000000', becomes: '0200000000000000', what: 'superblock: free fragments' },
+      { offset: 66552, was: 'db50000000000000', becomes: 'da50000000000000', what: 'superblock: free blocks' },
+      { offset: 66568, was: 'e50f000000000000', becomes: 'e70f000000000000', what: 'superblock: free fragments' },
+      { offset: 131100, was: '5a', becomes: '59', what: 'cylinder group 0' },
+      { offset: 147532, was: 'ff', becomes: '00', what: 'cylinder group 0' },
+      { offset: 161896, was: '08', becomes: '07', what: 'cylinder group 0' },
+      { offset: 162024, was: '10', becomes: '00', what: 'cylinder group 0' },
       { offset: 1833744, was: '72140000000000001000000000000000', becomes: '00800000000000004000000000000000', what: 'inode 6523: size and sectors' },
-      { offset: 1833840, was: 'daa7020000000000', becomes: 'a8bc080000000000', what: 'inode 6523: first block' },
-      { offset: 31555600, was: '000000000000000000df010000000000', becomes: '000000000000000000df010002000000', what: 'summary of cylinder group 1' },
-      { offset: 31555648, was: '00000000cb13000000df010000000000', becomes: '00000000ca13000000df010000000000', what: 'summary of cylinder group 4' },
-      { offset: 502399012, was: '00', becomes: '02', what: 'cylinder group 1' },
-      { offset: 502399036, was: '00', becomes: '01', what: 'cylinder group 1' },
-      { offset: 502420899, was: '00', becomes: '0c', what: 'cylinder group 1' },
-      { offset: 2009202716, was: 'cb', becomes: 'ca', what: 'cylinder group 4' },
-      { offset: 2009228445, was: 'ff', becomes: '00', what: 'cylinder group 4' },
-      { offset: 2009234802, was: 'e0', becomes: 'c0', what: 'cylinder group 4' },
+      { offset: 1833840, was: 'daa7020000000000', becomes: '201e000000000000', what: 'inode 6523: first block' },
+      { offset: 31555584, was: 'a61300005a030000fab300005f010000', becomes: 'a613000059030000fab300005f010000', what: 'summary of cylinder group 0' },
+      { offset: 31555600, was: '1e0000008101000086de0100d8000000', becomes: '1e0000008101000086de0100da000000', what: 'summary of cylinder group 1' },
+      { offset: 502399012, was: 'd8', becomes: 'da', what: 'cylinder group 1' },
+      { offset: 502399036, was: '0f', becomes: '0e', what: 'cylinder group 1' },
+      { offset: 502399044, was: '07', becomes: '08', what: 'cylinder group 1' },
+      { offset: 502420899, was: '30', becomes: '3c', what: 'cylinder group 1' },
     ]),
   }),
 });
@@ -142,10 +198,10 @@ export const EDGE = Object.freeze({
   memory: 2 * 1024 ** 3,
   /**
    * On the kept disk's template (buildEdge, THE KEPT DISK), and as
-   * `fleetwright-base:opnsense:<release>` beside it, saying which pinned image
-   * it holds. The same tag as the machine image's kept disks (VM_IMAGE.baseTag
-   * in vm-image.js), written here rather than imported because vm-image.js
-   * imports from this file.
+   * `fleetwright-base:opnsense:<build>` beside it, saying which edge image
+   * (EDGE_IMAGE.build) it holds. The same tag as the machine image's kept
+   * disks (VM_IMAGE.baseTag in vm-image.js), written here rather than
+   * imported because vm-image.js imports from this file.
    */
   baseTag: 'fleetwright-base',
   baseKey: 'opnsense',
@@ -175,21 +231,23 @@ export const EDGE_FILTER = Object.freeze({
 });
 
 /**
- * HOW THE EDGE KEEPS ITSELF UP TO DATE, and how it gets the Xen guest agent,
- * which are the same thing. Nobody can log in to it and the build can only
- * write its configuration, so the one way to put a package on it is
- * OPNsense's own: a plugin named in `system.firmware.plugins` is installed by
- * the firmware update when it is missing (scripts/firmware/sync.subr.sh,
- * from update.sh `sync`), and that update is the cron action "Automatic
- * firmware update" (`firmware auto-update`, rc.firmware with up to 25
- * minutes' random delay). Plugin install itself has no cron action.
+ * HOW THE EDGE KEEPS ITSELF UP TO DATE. Nobody can log in to it and the
+ * build can only write its configuration, so the one way to put a package on
+ * it is OPNsense's own: a plugin named in `system.firmware.plugins` is
+ * installed by the firmware update when it is missing
+ * (scripts/firmware/sync.subr.sh, from update.sh `sync`), and that update is
+ * the cron action "Automatic firmware update" (`firmware auto-update`,
+ * rc.firmware with up to 25 minutes' random delay). Plugin install itself
+ * has no cron action. That is how the Xen guest agent reached a router
+ * before the image carried it (EDGE_IMAGE), and how it would come back were
+ * it ever gone.
  *
  * WHAT THAT COSTS, chosen with the person: the update takes OPNsense's
  * stable updates within its release and reboots when the kernel or base
  * system changed, so every machine behind it loses its way out for those
  * minutes. Once a day at 10:00 UTC, which is 04:00 in Mountain time, where
- * the first pool is. The agent is `os-xen`, so Xen Orchestra shows the
- * edge's addresses from its first update on.
+ * the first pool is. The agent is `os-xen`, in the image from the first boot
+ * (EDGE_IMAGE), so Xen Orchestra shows the edge's addresses once it reports.
  */
 export const EDGE_UPDATES = Object.freeze({ plugin: 'os-xen', hours: '10' });
 
@@ -351,7 +409,7 @@ export function fleetHosts(coordinatorUrl) {
  * decide before Suricata would see the packet.
  *
  * ROOM. It has to fit in the block the build gives the file
- * (OPNSENSE_IMAGE.grow, 32 KiB). It once had to fit in the 5,234 bytes the
+ * (EDGE_IMAGE.grow, 32 KiB). It once had to fit in the 5,234 bytes the
  * default fills, then the 8,192 of its own fragments, and what was cut for
  * those is what OPNsense does anyway: the web interface's theme (nobody can
  * log in to see it), pf's
@@ -388,7 +446,7 @@ export function fleetHosts(coordinatorUrl) {
  * rest (fleetHosts says why not Unbound itself). The uplink and open labs
  * ask Unbound as before. Suricata watches the labs as it watches the uplink.
  * Every configuration is the block the build gives the file
- * (OPNSENSE_IMAGE.grow), which holds four closed labs and blocking with a
+ * (EDGE_IMAGE.grow), which holds four closed labs and blocking with a
  * coordinator name as long as DNS allows, written twice for a closed lab; a
  * configuration that did not fit would be refused here, before anything is
  * downloaded.
@@ -426,7 +484,7 @@ export function fleetHosts(coordinatorUrl) {
  * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null, watch?: import('./edge-credentials.js').Watch|null, syslog?: string[] }} [opts]
  * @returns {Buffer}
  */
-export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], ha = null, watch = null, syslog = [], length = OPNSENSE_IMAGE.grow.room } = {}) {
+export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], ha = null, watch = null, syslog = [], length = EDGE_IMAGE.grow.room } = {}) {
   const watched = watch ? watchConfig(watch, syslog) : null;
   const { address, prefix } = EDGE.lan;
   if (ha && !((ha.node === 0 || ha.node === 1) && /^[0-9a-f]{16,64}$/.test(ha.password))) throw new Error('a pair of edges needs which one this is and their shared password');
@@ -575,27 +633,29 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
 }
 
 /**
- * Is this the default configuration the nano image ships, byte for byte?
+ * Is this the default configuration the image carries, byte for byte?
  * Checked on the bytes about to be replaced, so an offset that is wrong for
  * the image fails the build before the disk is written.
  *
  * @param {Buffer} original
  */
 export function isDefaultConfig(original) {
-  return createHash('sha256').update(original).digest('hex') === OPNSENSE_IMAGE.config.sha256;
+  return createHash('sha256').update(original).digest('hex') === EDGE_IMAGE.config.sha256;
 }
 
 /**
  * What the build writes into the image: the configuration in the free block
  * it moves to, and each byte of the file system that records the move
- * (OPNSENSE_IMAGE.grow), every one checked against what must be there before
- * it is replaced, and the block checked to be zeros.
+ * (EDGE_IMAGE.grow), every one checked against what must be there before
+ * it is replaced, and the block checked to be zeros. In the order the image
+ * streams in: where the free block falls among the edits is the image's
+ * business (in the first release it is before the last cylinder group's).
  *
  * @param {Buffer} replacement  edgeConfig's answer
  * @returns {Array<{ offset: number, replacement: Buffer, check: (original: Buffer) => boolean, what: string }>}
  */
 export function imagePatches(replacement) {
-  const { grow } = OPNSENSE_IMAGE;
+  const { grow } = EDGE_IMAGE;
   if (replacement.length !== grow.room) throw new Error(`a configuration is ${grow.room} bytes, not ${replacement.length}`);
   return [
     ...grow.edits.map((e) => {
@@ -603,7 +663,7 @@ export function imagePatches(replacement) {
       return { offset: e.offset, replacement: Buffer.from(e.becomes, 'hex'), check: (/** @type {Buffer} */ b) => b.equals(was), what: e.what };
     }),
     { offset: grow.data.offset, replacement, check: (/** @type {Buffer} */ b) => b.every((x) => x === 0), what: 'the free block the configuration moves to' },
-  ];
+  ].sort((a, b) => a.offset - b.offset);
 }
 
 /**
@@ -677,7 +737,8 @@ export class ConfigPatch extends Transform {
 /**
  * The image, downloaded once into `dir` and checked against its pinned
  * SHA-256 every time it is used, so a file damaged on disk is downloaded
- * again rather than built from.
+ * again rather than built from. From this repository's release (EDGE_IMAGE),
+ * the same place the sandbox container comes from.
  *
  * @param {{ dir: string, fetchImpl?: typeof fetch, onProgress?: (done: number, total: number) => void, signal?: AbortSignal }} opts
  * @returns {Promise<string>} the path of the checked file
@@ -685,11 +746,11 @@ export class ConfigPatch extends Transform {
 export function fetchImage({ dir, fetchImpl = fetch, onProgress = () => {}, signal }) {
   return fetchPinned({
     dir,
-    url: OPNSENSE_IMAGE.url,
-    size: OPNSENSE_IMAGE.compressedSize,
+    url: EDGE_IMAGE.url,
+    size: EDGE_IMAGE.compressedSize,
     algorithm: 'sha256',
-    digest: OPNSENSE_IMAGE.sha256,
-    label: 'OPNsense',
+    digest: EDGE_IMAGE.sha256,
+    label: 'edge router',
     fetchImpl,
     onProgress,
     signal,
@@ -753,30 +814,23 @@ async function digestOf(file, algorithm) {
 }
 
 /**
- * The raw disk, unpacked by bzip2 as it is read. Node has no bzip2 of its
- * own; a machine without the tool is told which package to install.
+ * The raw disk, unpacked as it is read. The release is compressed with zstd,
+ * which Node has had of its own since 24 (node:zlib), so a host installs
+ * nothing for it; OPNsense's own image was bzip2, which Node has not, and
+ * the apply stopped to ask for the tool. A file that is not the image, or
+ * ends early, is an error on the stream, as is the download going missing
+ * under it; the signal stops the read, which is how patchedBlocks stops once
+ * it has what it needs.
  *
  * @param {string} file
- * @param {{ spawnImpl?: typeof spawn, signal?: AbortSignal }} [opts]
+ * @param {{ signal?: AbortSignal }} [opts]
+ * @returns {import('node:stream').Readable}
  */
-export function unpack(file, { spawnImpl = spawn, signal } = {}) {
-  const child = spawnImpl('bzip2', ['-dc', file], { stdio: ['ignore', 'pipe', 'pipe'] });
-  signal?.addEventListener('abort', () => child.kill(), { once: true });
-  let said = '';
-  child.stderr?.on('data', (d) => {
-    said = (said + d).slice(-400);
-  });
-  child.on('error', (/** @type {any} */ e) => {
-    child.stdout?.destroy(
-      e?.code === 'ENOENT'
-        ? new Error('this machine has no bzip2 to unpack the OPNsense image with. Install it (apt install bzip2) and apply again')
-        : e,
-    );
-  });
-  child.on('close', (code) => {
-    if (code) child.stdout?.destroy(new Error(`bzip2 could not unpack the OPNsense image: ${said.trim() || `exit ${code}`}`));
-  });
-  return /** @type {import('node:stream').Readable} */ (child.stdout);
+export function unpack(file, { signal } = {}) {
+  const out = zlib.createZstdDecompress();
+  const source = createReadStream(file, signal ? { signal } : {});
+  source.on('error', (e) => out.destroy(e));
+  return source.pipe(out);
 }
 
 /**
@@ -1058,7 +1112,7 @@ export async function ensureLabs({ admin, pool, networks, setId, inSet, open, cl
  */
 export function edgeStorage({ pool, srs, fleetSrs, sr = null }) {
   const room = (/** @type {any} */ s) => (Number(s?.size) || 0) - (Number(s?.physical_usage) || 0);
-  const fits = (/** @type {any} */ s) => s?.$pool === pool && room(s) > OPNSENSE_IMAGE.rawSize;
+  const fits = (/** @type {any} */ s) => s?.$pool === pool && room(s) > EDGE_IMAGE.rawSize;
   if (sr) {
     const chosen = srs.find((s) => s?.id === sr);
     if (!chosen || chosen.$pool !== pool) throw new Error('the storage chosen for the edge router is not in the way out’s pool. Nothing was built');
@@ -1090,8 +1144,8 @@ export const BUILD_STAGES = 3;
 const MAKING = 980;
 /** @param {number} downloaded @param {number} written */
 export function buildFill(downloaded, written) {
-  const bytes = OPNSENSE_IMAGE.compressedSize + OPNSENSE_IMAGE.rawSize;
-  return Math.min(MAKING, Math.floor((MAKING * (Math.min(downloaded, OPNSENSE_IMAGE.compressedSize) + Math.min(written, OPNSENSE_IMAGE.rawSize))) / bytes));
+  const bytes = EDGE_IMAGE.compressedSize + EDGE_IMAGE.rawSize;
+  return Math.min(MAKING, Math.floor((MAKING * (Math.min(downloaded, EDGE_IMAGE.compressedSize) + Math.min(written, EDGE_IMAGE.rawSize))) / bytes));
 }
 
 /**
@@ -1437,7 +1491,7 @@ async function ensureOne(opts, edge, force = false) {
     return [
       `The edge router was already there, on ${egress.name}${at ? ` at ${at}` : ''}, ${st.blocks ? 'dropping' : 'logging'} what its threat rules match${st.hasLabs ? `, with ${labsSaid(st.hasLabs)}` : ''}.`,
       ...said,
-      ...(at ? [] : [`Xen Orchestra does not know its WAN address: it has none, or its guest agent has not arrived yet, which comes with its first update after ${EDGE_UPDATES.hours}:00 UTC.`]),
+      ...(at ? [] : [`Xen Orchestra does not know its WAN address: it has none, or its guest agent has not reported it (one built before the image carried the agent gets it with its first update, after ${EDGE_UPDATES.hours}:00 UTC).`]),
     ].join(' ');
   }
   return (await buildEdge({ ...opts, ha: null, block: block === true, labs: labs ?? [], wanMac: await wanMacFor(admin, null, opts.pool, 0) })).text;
@@ -1505,11 +1559,10 @@ const span = (ms) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} minute${Math.ro
 
 /**
  * WHAT CAN BE TOLD OF A ROUTER JUST STARTED, which is what Xen Orchestra
- * shows of it and nothing more: the job cannot log in to it, and it has no
- * guest agent until its first update (EDGE_UPDATES), since a rebuild is a
- * copy of the published image. So for a new router Xen Orchestra knows
- * whether it is running, and not whether it answers; nothing here says it
- * does. What the watch catches is a router that stops again on its own, a
+ * shows of it and nothing more: the job cannot log in to it, and its guest
+ * agent (in the image, EDGE_IMAGE) reports only once the router is up, later
+ * than this watches. So for a new router Xen Orchestra knows whether it is
+ * running, and not whether it answers; nothing here says it does. What the watch catches is a router that stops again on its own, a
  * disk that does not boot or a configuration OPNsense refuses, before the
  * router it replaces is removed; before this, the old one was removed as
  * soon as `vm.start` returned. A router that does carry the agent would
@@ -1526,7 +1579,7 @@ const span = (ms) => (ms >= 60_000 ? `${Math.round(ms / 60_000)} minute${Math.ro
  * @returns {Promise<{ state: 'halted'|'answers'|'running', address: string|null, after: number }>}
  */
 async function settled({ admin, vm, name, say, signal, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), settle = EDGE_SETTLE }) {
-  say(`${name} is started. Xen Orchestra is watched for ${span(settle.ms)} for it stopping again; whether it answers cannot be told from here until its guest agent arrives with its first update.`);
+  say(`${name} is started. Xen Orchestra is watched for ${span(settle.ms)} for it stopping again; whether it answers cannot be told from here until its guest agent reports to Xen Orchestra.`);
   for (let waited = 0; ; waited += settle.every) {
     signal?.throwIfAborted();
     const vms = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM', id: vm } })) || {}));
@@ -1549,7 +1602,7 @@ async function settled({ admin, vm, name, say, signal, sleep = (ms) => new Promi
  */
 function settledSaid(name, up) {
   if (up.state === 'answers') return `${name}’s guest agent answers: Xen Orchestra has its WAN address, ${up.address}.`;
-  return `Xen Orchestra reported ${name} running for the ${span(up.after)} it was watched; whether it answers cannot be told from here until its guest agent arrives with its first update, after ${EDGE_UPDATES.hours}:00 UTC.`;
+  return `Xen Orchestra reported ${name} running for the ${span(up.after)} it was watched; whether it answers cannot be told from here until its guest agent, which the image carries, reports to Xen Orchestra.`;
 }
 
 /**
@@ -1631,9 +1684,9 @@ function labsSaid(key) {
  * through Xen Orchestra to the pool's storage, and the edge router is rebuilt
  * for every change of what it filters, its labs or its pair. So the image as
  * published is kept on the pool, as the machine image's is (vm-image.js,
- * baseOf): a template that has never booted, `Fleetwright base: OPNsense
- * <release>`, tagged EDGE.baseTag and `fleetwright-base:opnsense:<release>`,
- * one per release and storage, since a copy is fast only on the storage the
+ * baseOf): a template that has never booted, `Fleetwright base: edge image
+ * <build>`, tagged EDGE.baseTag and `fleetwright-base:opnsense:<build>`, one
+ * per build and storage, since a copy is fast only on the storage the
  * template's disk is on. Not tagged `fleetwright-image` and never put in the
  * resource set, so no box offers it and the fleet's token cannot clone it.
  *
@@ -1652,14 +1705,14 @@ function labsSaid(key) {
  * A REBUILD COPIES IT AND WRITES ONLY THE CONFIGURATION. The router's VM is
  * made from that template, which copies its disk (a copy-on-write clone on
  * the storage XCP-ng keeps as VHD files: seconds, the way a session's machine
- * is made from the image). Then the blocks imagePatches changes, five of them,
+ * is made from the image). Then the blocks imagePatches changes, a handful,
  * 2 MiB each, are written into the copy by `disk.importContent` as a VHD that
  * holds those blocks and nothing else (vhd.js says why that leaves the rest
  * as it is). What goes in each block is the published image's own bytes with
  * the change made, read from the download on this machine and unpacked only
  * as far as the last of them, through the same ConfigPatch the whole disk
  * goes through, so every byte replaced is checked first, before anything on
- * the pool is made. About 10 MiB is sent where the whole disk is 3 GiB.
+ * the pool is made. A few MiB are sent where the whole disk is 3 GiB.
  *
  * WHEN XEN ORCHESTRA CANNOT, the whole disk is sent, as before, and the
  * person is told why. `disk.importContent` as Xen Orchestra ships it never
@@ -1694,8 +1747,8 @@ function labsSaid(key) {
  * (test/vhd.test.js); what XAPI does with it is read from vhd-tool's source.
  */
 
-/** The kept disk's tag for a release. @param {string} [release] */
-const baseTagFor = (release = OPNSENSE_IMAGE.release) => `${EDGE.baseTag}:${EDGE.baseKey}:${release}`;
+/** The kept disk's tag for an edge image build. @param {string} [build] */
+const baseTagFor = (build = EDGE_IMAGE.build) => `${EDGE.baseTag}:${EDGE.baseKey}:${build}`;
 
 /**
  * A VM's or template's disks: every one that is not a CD drive. The same
@@ -1801,11 +1854,11 @@ async function patchedBlocks({ file, regions, unpackImpl, signal, onProgress }) 
   const wanted = blocksOf(regions);
   const end = (/** @type {number} */ (wanted.at(-1)) + 1) * VHD_BLOCK;
   const blocks = new Map(wanted.map((b) => [b, Buffer.alloc(VHD_BLOCK)]));
-  // STOPPED ONCE IT HAS THEM: bzip2 is killed rather than left to unpack the
-  // rest of the disk for nobody.
+  // STOPPED ONCE IT HAS THEM: the read is stopped rather than left to unpack
+  // the rest of the disk for nobody.
   const stop = new AbortController();
   const source = unpackImpl(file, { signal: signal ? AbortSignal.any([signal, stop.signal]) : stop.signal });
-  const patched = new ConfigPatch({ regions, total: OPNSENSE_IMAGE.rawSize });
+  const patched = new ConfigPatch({ regions, total: EDGE_IMAGE.rawSize });
   source.on('error', (e) => patched.destroy(e));
   source.pipe(patched);
   let at = 0;
@@ -1882,7 +1935,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
   const name = ha?.node ? EDGE_HA.second : EDGE.vm;
   const sr = edgeStorage({ pool, srs, fleetSrs, sr: chosenSr });
   const on = srName(sr);
-  const { release, rawSize, compressedSize } = OPNSENSE_IMAGE;
+  const { build, version, rawSize, compressedSize } = EDGE_IMAGE;
 
   const templates = /** @type {any[]} */ (Object.values((await admin.call('xo.getAllObjects', { filter: { type: 'VM-template' } })) || {}));
   const template = builtInTemplate(templates, pool, EDGE.template, 'the edge router');
@@ -1894,18 +1947,18 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
   const stage = (/** @type {number} */ n, /** @type {number} */ fill) => ({ stage: n, stages: BUILD_STAGES, fill });
   /** The part with its bytes: what they are doing, and how many of how many, in MB. */
   const moving = (/** @type {BuildPart} */ part, /** @type {string} */ doing, /** @type {number} */ d, /** @type {number} */ t) => ({ ...part, doing, done: mb(d), total: mb(t) });
-  say(`Downloading OPNsense ${release}.`, stage(1, 0));
+  say(`Downloading the edge router image, OPNsense ${version}.`, stage(1, 0));
   let downloaded = 0;
   const file = await getImage({
     dir: imageDir,
     signal,
     onProgress: (d, t) => {
       downloaded = d;
-      say(`Downloading OPNsense ${release}: ${mb(d)} of ${mb(t)} MB.`, moving(stage(1, buildFill(d, 0)), 'download', d, t));
+      say(`Downloading the edge router image: ${mb(d)} of ${mb(t)} MB.`, moving(stage(1, buildFill(d, 0)), 'download', d, t));
     },
   });
   signal?.throwIfAborted();
-  if (!downloaded) say(`OPNsense ${release} was already downloaded and checked.`, stage(1, buildFill(compressedSize, 0)));
+  if (!downloaded) say(`The edge router image, OPNsense ${version}, was already downloaded and checked.`, stage(1, buildFill(compressedSize, 0)));
 
   const regions = imagePatches(config);
   const send = (/** @type {string} */ sendTo, /** @type {Buffer} */ body) => writeInto({ address, pin, plain, sendTo, body, signal });
@@ -1914,8 +1967,8 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
   let base = await keptBaseOn(admin, templates, pool, sr.id, sets);
   /** Why a copy of the kept disk cannot be written into here, once that is known. */
   let refused = base ? null : await writesInto({ admin, sr: sr.id, send, signal });
-  const baseName = `OPNsense ${release} (as published)`;
-  const description = `OPNsense ${release}, configured by Fleetwright as the edge router`;
+  const baseName = `Edge router image ${build} (as published)`;
+  const description = `OPNsense ${version}, edge router image ${build}, configured by Fleetwright as the edge router`;
   const vmParams = {
     name_label: name,
     name_description: 'The only way out of every lab. Made by Fleetwright; its rules are fixed and it has no login.',
@@ -1948,8 +2001,8 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
       const bar = (/** @type {number} */ done) => stage(2, from + Math.floor(((MAKING - from) * Math.min(done, work)) / work));
       say(
         base
-          ? `OPNsense ${release} is already on ${on}, kept from an earlier build, so the edge router starts from a copy of it and only its configuration is written.`
-          : `Reading the blocks the edge router’s configuration goes in from OPNsense ${release}.`,
+          ? `Edge router image ${build} is already on ${on}, kept from an earlier build, so the edge router starts from a copy of it and only its configuration is written.`
+          : `Reading the blocks the edge router’s configuration goes in from edge router image ${build}.`,
         bar(0),
       );
       const blocks = await patchedBlocks({
@@ -1957,18 +2010,18 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
         regions,
         unpackImpl,
         signal,
-        onProgress: (d, t) => say(`Reading the blocks the configuration goes in from OPNsense ${release}: ${mb(d)} of ${mb(t)} MB.`, moving(bar(d), 'read', d, t)),
+        onProgress: (d, t) => say(`Reading the blocks the configuration goes in from the edge router image: ${mb(d)} of ${mb(t)} MB.`, moving(bar(d), 'read', d, t)),
       });
       const vhd = sparseVhd({ size: rawSize, blocks });
 
       if (!base) {
-        say(`Writing OPNsense ${release} as published to ${on}, where it is kept so a rebuild writes only the configuration.`, bar(read));
+        say(`Writing edge router image ${build} as published to ${on}, where it is kept so a rebuild writes only the configuration.`, bar(read));
         keeping = true;
         const { $sendTo } = await admin.call('disk.import', {
           sr: sr.id,
           type: 'iso',
           name: baseName,
-          description: `OPNsense ${release}'s nano image as published, kept by Fleetwright so the edge router is built from a copy of it`,
+          description: `Edge router image ${build} (OPNsense ${version}) as published, kept by Fleetwright so the edge router is built from a copy of it`,
         });
         keptVdi = await upload({
           address,
@@ -1979,13 +2032,13 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
           body: unpackImpl(file, { signal }).pipe(new ConfigPatch({ regions: [], total: rawSize })),
           size: rawSize,
           signal,
-          onProgress: (d, t) => say(`Writing OPNsense ${release} as published to ${on}: ${mb(d)} of ${mb(t)} MB.`, moving(bar(read + d), 'keep', d, t)),
+          onProgress: (d, t) => say(`Writing edge router image ${build} as published to ${on}: ${mb(d)} of ${mb(t)} MB.`, moving(bar(read + d), 'keep', d, t)),
         });
         signal?.throwIfAborted();
         making = await admin.call('vm.create', {
           template: template.id,
-          name_label: `Fleetwright base: OPNsense ${release}`,
-          name_description: `OPNsense ${release}'s nano image as published, never booted. Fleetwright builds the edge router from a copy of it, so a rebuild writes only its configuration; it is not offered for sessions.`,
+          name_label: `Fleetwright base: edge image ${build}`,
+          name_description: `Fleetwright's edge router image ${build} (OPNsense ${version}) as published, never booted. Fleetwright builds the edge router from a copy of it, so a rebuild writes only its configuration; it is not offered for sessions.`,
           VIFs: [],
           VDIs: [],
           CPUs: EDGE.cpus,
@@ -2087,13 +2140,13 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
     throw e;
   }
   const { address: lan, prefix } = EDGE.lan;
-  if (ha) return { vm, text: `${name} is ${start ? 'up' : 'made'}: OPNsense ${OPNSENSE_IMAGE.release}, at 10.254.0.${2 + ha.node} on ${EDGE.uplink} and sharing ${lan} with the other, its disk on ${on}.` };
+  if (ha) return { vm, text: `${name} is ${start ? 'up' : 'made'}: OPNsense ${version}, at 10.254.0.${2 + ha.node} on ${EDGE.uplink} and sharing ${lan} with the other, its disk on ${on}.` };
   return {
     vm,
     text:
-    `The edge router is up: OPNsense ${OPNSENSE_IMAGE.release}, its WAN on ${egress.name} and its LAN on ${EDGE.uplink} at ${lan}/${prefix}, its disk on ${on}. ` +
+    `The edge router is up: OPNsense ${version}, its WAN on ${egress.name} and its LAN on ${EDGE.uplink} at ${lan}/${prefix}, its disk on ${on}. ` +
     `Labs on the uplink reach the internet and nothing private, and what its threat rules match is ${block ? 'dropped' : 'logged'}.${labs.length ? ` It has ${labsSaid(labsKey(labs))} of their own.` : ''} It has no login; its rules are fixed. ` +
-    `It updates itself every day after ${EDGE_UPDATES.hours}:00 UTC, restarting when OPNsense needs it to, and gets the Xen guest agent with its first update.`,
+    `It updates itself every day after ${EDGE_UPDATES.hours}:00 UTC, restarting when OPNsense needs it to, and carries the Xen guest agent, so Xen Orchestra shows its addresses once it reports.`,
   };
 }
 

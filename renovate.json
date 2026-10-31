@@ -188,8 +188,24 @@
         "custom.opnsense"
       ],
       "prBodyNotes": [
-        "**A person pins this.** The three-day soak has passed by the time this pull request exists (the datasource reads the month out of the release's name). For the new release, in `src/fleet/host/edge-router.js` `OPNSENSE_IMAGE`: the nano image's `url`, its `sha256` from `OPNsense-<release>-checksums-amd64.sha256`, `compressedSize`, and `rawSize` (the unpacked size). Then unpack it (`bzip2 -dc \u2026 > nano.img`), find `/usr/local/etc/config.xml` and write its `config` offset, length and SHA-256, and run `node scripts/opnsense-room.mjs nano.img <inode>` for `grow`. Read `EDGE_FILTER`'s blocklist keys and rule file names again from the release's own models. Set `checked` to the release last. CI stays red until the address and `checked` both name it.",
+        "**A person pins this.** The three-day soak has passed by the time this pull request exists (the datasource reads the month out of the release's name). For the new release, in `src/fleet/host/edge-router.js` `OPNSENSE_IMAGE`: the nano image's `url`, its `sha256` from `OPNsense-<release>-checksums-amd64.sha256`, `compressedSize`, and `rawSize` (the unpacked size). Then unpack it (`bzip2 -dc \u2026 > nano.img`), find `/usr/local/etc/config.xml` and write its `config` offset, length and SHA-256. Read `EDGE_FILTER`'s blocklist keys and rule file names again from the release's own models. Set `checked` to the release last. CI stays red until the address and `checked` both name it.",
+        "**Then build the edge router image for it**: once this is merged, run the *Edge router image* workflow (`workflow_dispatch`, with the release left empty so it builds the pinned one). The host downloads that image, not this one, and Renovate proposes its release here as `edge-image` once it has soaked; its offsets and room plan come from that build's own manifest, so nothing is measured by hand.",
         "**What changed upstream:** [OPNsense {{{newMajor}}}.{{{newMinor}}} release notes](https://docs.opnsense.org/releases/CE_{{{newMajor}}}.{{{newMinor}}}.html), which also cover its point releases. The mirror the version is read from lists files and nothing else, so Renovate cannot find these by itself."
+      ]
+    },
+    {
+      "description": "The edge router's image, this repository's own edge-image/<build> releases (.github/workflows/edge-image.yml). A build is <OPNsense version>-<day>-<run>, read as the version, then the day, then the run: a rebuild of the same version on a later day is newer, and the _n of a package revision is no part at all, since Renovate compares each part as a number. The host releases (v*) do not match and are not offered.",
+      "matchDatasources": [
+        "github-releases"
+      ],
+      "matchDepNames": [
+        "edge-image"
+      ],
+      "extractVersion": "^edge-image/(?<version>.+)$",
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)(?:\\.(?<patch>\\d+))?(?:_\\d+)?-(?<build>\\d{8})-(?<revision>\\d+)$",
+      "prBodyNotes": [
+        "**The rest of the pin is written on this branch by the Renovate pin workflow**, which runs `node scripts/pin-edge-image.mjs` and commits what it writes: the asset's address, digest and sizes, where the configuration file is in the image and the room plan that moves it, all copied from the release's own manifest after checking it against the release's SHA256SUMS. CI is red until that commit is here. The script refuses a release built from another OPNsense release than `OPNSENSE_IMAGE` names; that pin moves first, by its own pull request.",
+        "**What is in it:** the [release's notes](https://github.com/TheTechNetwork/Fleetwright/releases/tag/edge-image/{{{newValue}}}) list the OPNsense version it was updated to, the guest agent's version and every package, and link the workflow run that built it and its provenance. Read them before merging: every pool's edge router is rebuilt from this image on its next build."
       ]
     },
     {
@@ -400,13 +416,20 @@
       ]
     },
     {
-      "description": "The OPNsense release the edge router is built from, OPNSENSE_IMAGE.release in src/fleet/host/edge-router.js.",
+      "description": [
+        "The two pins in src/fleet/host/edge-router.js: the OPNsense release the edge router's image is built from, OPNSENSE_IMAGE.release, and the build of that image the host downloads, EDGE_IMAGE.build, from this repository's own edge-image/<build> releases.",
+        "",
+        "Renovate moves each name and nothing else. For the OPNsense release the rest is a person's (the package rule above says what); for the edge image it is the release's manifest, copied by scripts/pin-edge-image.mjs, which the pin workflow runs. Until then the name and the address disagree and test/pin-images.test.js is red, which is the point.",
+        "",
+        "Named `edge-image`, with the repository as packageName, because Renovate puts the name in its commit subject and commitlint stops at 80 characters."
+      ],
       "customType": "regex",
       "managerFilePatterns": [
         "/^src/fleet/host/edge-router\\.js$/"
       ],
       "matchStrings": [
-        "// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+release: '(?<currentValue>[^']+)'"
+        "// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+release: '(?<currentValue>[^']+)'",
+        "// renovate: datasource=(?<datasource>github-releases) depName=(?<depName>\\S+) packageName=(?<packageName>\\S+)\\s+build: '(?<currentValue>[^']+)'"
       ]
     },
     {

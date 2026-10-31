@@ -224,7 +224,8 @@ pins itself*).
 | What | Where | Renovate reads it with | The rest of the pin |
 |---|---|---|---|
 | Debian 13 and Ubuntu 24.04 / 26.04 cloud images | `DEBIAN_IMAGE`, `UBUNTU_*` in `src/fleet/host/vm-image.js` | each vendor's directory listing (`custom.debian-cloud`, `custom.ubuntu-cloud`) | `node scripts/pin-images.mjs`: address, digest from the vendor's own SHA256SUMS or SHA512SUMS, both sizes |
-| OPNsense nano image | `OPNSENSE_IMAGE` in `src/fleet/host/edge-router.js` | OPNsense's mirror listing (`custom.opnsense`) | a person: a new release is a new file system under the configuration (the pull request says what), and `checked` is set last |
+| Edge router image | `EDGE_IMAGE` in `src/fleet/host/edge-router.js` | this repository's `edge-image/*` releases (github-releases) | `node scripts/pin-edge-image.mjs`: address, digest, sizes, the configuration's offset and the room plan, all from the release's own manifest, checked against its SHA256SUMS |
+| OPNsense nano image, the edge image's upstream | `OPNSENSE_IMAGE` in `edge-router.js` | OPNsense's mirror listing (`custom.opnsense`) | a person: the address, digest, sizes and the stock configuration's offset (the pull request says what), and `checked` set last; then the image is built for it by hand (`edge-image.yml`), and its release arrives as the row above |
 | Xen guest agent | `GUEST_AGENT` in `vm-image.js` | GitLab releases | `node scripts/pin-guest-agent.mjs` |
 | Xen Orchestra installer | `INSTALLER` in `src/fleet/host/xo-deploy.js` | git-refs, the fork's master | `node scripts/pin-xo-installer.mjs`: `base` and every file's SHA-256 |
 | Node bundled in the deb | `install/deb/node.env` | node-version, LTS lines | checked against nodejs.org's SHASUMS256.txt when the deb is built |

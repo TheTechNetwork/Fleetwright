@@ -1,12 +1,15 @@
-// Work out, from an OPNsense nano image, the bytes that give its
-// configuration file a whole block (src/fleet/host/ufs-room.js), check them
-// the way fsck would, and print them for OPNSENSE_IMAGE.grow in
-// src/fleet/host/edge-router.js.
+// Work out, from an OPNsense image, the bytes that give its configuration
+// file a whole block (src/fleet/host/ufs-room.js), check them the way fsck
+// would, and print them: the plan the edge router build writes by
+// (EDGE_IMAGE.grow in src/fleet/host/edge-router.js). The edge image
+// workflow runs it against each image it publishes (scripts/edge-image,
+// measure.mjs), and the plan goes into the release's manifest, from which
+// the pin is copied; nobody runs it by hand for a release any more.
 //
-// For a new OPNsense release: download its nano image, check it against the
-// published SHA-256, unpack it (`bzip2 -dc … > nano.img`; a sparse file is
-// enough), find the configuration's inode (its size field is where the old
-// release's sizeField pointed, or `ls -i` on a mounted copy), and run:
+// By hand, for a look at an image: unpack it (`bzip2 -dc … > nano.img` for
+// OPNsense's own, `zstd -d` for a release's; a sparse file is enough), find
+// the configuration's inode (its size field is where the old release's
+// sizeField pointed, or `ls -i` on a mounted copy), and run:
 //
 //   node scripts/opnsense-room.mjs nano.img <inode>
 //

@@ -1090,8 +1090,10 @@ guest utilities. The two come together because nobody can log in to the edge
 and the build writes only its configuration: a plugin named in
 `system.firmware.plugins` is installed by that update when it is missing, and
 OPNsense 26.7 has no other unattended way to install one (plugin install has
-no cron action). So the edge has the guest agent from its first update on, and
-Xen Orchestra shows its addresses from then.
+no cron action). That is how the agent reached an edge before the image
+carried it; now the image is built with it (`edge-image.yml`), so a new edge
+has the agent from its first boot, Xen Orchestra shows its addresses once it
+reports, and the update keeps the plugin current.
 
 **What it costs, chosen on purpose:** the update takes OPNsense's stable
 updates within 26.7, and restarts the edge when the kernel or base system
@@ -1103,8 +1105,10 @@ configuration is fixed when it is built; the phone says so before it starts.
 Machines behind it keep their way out while the new one is built, and have
 none while it starts. A new edge is tagged
 `fleetwright-edge-updates`, which is how the next policy tells the two apart.
-**Not yet run** on a real pool: that the first update installs `os-xen` on the
-nano image, and that Xen Orchestra then reads the WAN address as interface 0's.
+**Not yet run** on a real pool: that the agent the image carries reports to
+Xen Orchestra under Xen (the image is built and checked under QEMU, where the
+agent has no Xen to talk to), and that Xen Orchestra then reads the WAN
+address as interface 0's.
 
 ### Two of them
 
@@ -1443,12 +1447,18 @@ admin sign-in for as long as it runs:
   OPNsense's configuration importer waits for a key press at the console, so
   attached media is not read unattended. What first boot does read is
   `/usr/local/etc/config.xml`: with no `/conf/config.xml` yet, the importer
-  times out and copies that file into place. In the 26.7 nano image it is
-  5,234 contiguous bytes at a fixed offset of a plain UFS2 file system. So the
-  machine downloads the image once, checks it against OPNsense's published
-  SHA-256, unpacks it with `bzip2`, and streams it to Xen Orchestra's disk
-  import with exactly those bytes replaced by the edge's configuration,
-  padded to the same length (inode, size and blocks untouched). The bytes it
+  times out and copies that file into place. In the nano image it is
+  5,234 contiguous bytes at a fixed offset of a plain UFS2 file system. The
+  image is this repository's own: OPNsense's nano image booted once in CI,
+  updated to its release's current patch level, given the Xen guest agent
+  and published as a GitHub release with those offsets measured and written
+  in a manifest beside it (`edge-image.yml`,
+  [`scripts/edge-image/README.md`](../scripts/edge-image/README.md)). So the
+  machine downloads that image once, checks it against the SHA-256 pinned
+  with the release, unpacks it as it reads it (zstd, which Node has of its
+  own) and streams it to Xen Orchestra's disk import with exactly those
+  bytes replaced by the edge's configuration, padded to the same length
+  (inode, size and blocks untouched). The bytes it
   replaces are checked first against their own pinned SHA-256, so a wrong
   offset fails rather than corrupting the disk. **Booted in QEMU** from the
   published image patched this way: no key press, the console banner showed
@@ -2020,8 +2030,8 @@ network the edge OPNsense VM puts its WAN on, recorded as the
 `fleetwright-egress` tag on that network. With *Build the edge router on it*
 on, Apply builds the router there (["The uplink"](#the-uplink)); the phone
 shows the machine's progress under "Applying what you chose", from the
-download to the disk. The machine running the job needs `bzip2`, and says
-which package to install when it has none.
+download to the disk. The machine running the job needs nothing installed
+for it: the image is unpacked with Node's own zstd.
 
 ### Through the phone
 
