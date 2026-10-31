@@ -865,14 +865,42 @@ test('a model that is not confident enough changes nothing, and the pane is not 
   void stub;
 });
 
-test('a hook newer than the pane is never second-guessed by the model', async (t) => {
-  for (const phase of ['ready', 'awaiting']) {
-    const rec = sessionRecord('job', { status: 'running', activity: { phase, event: 'Stop', detail: null, at: Date.now() + 60_000 } });
-    const { watcher, asks, settle } = await decidingWatcherFor(t, { sessions: [rec], panes: { job: UNKNOWN_DIALOG } }, 0.99);
-    await watcher.tick({ quiet: true });
-    frozenFor(watcher, 'job', 30 * 60_000);
-    await watcher.tick();
-    await settle();
-    assert.equal(asks.length, 0, `asked the model over a ${phase} hook`);
-  }
+test('a Stop hook that fired before the watcher noticed the pane is not second-guessed', async (t) => {
+  // The hook is stamped when Claude finishes. The watcher stamps the pane
+  // when it next reads it, one tick later. A finished session must not be
+  // sent to the model after 90s of that stillness.
+  const rec = sessionRecord('job', { status: 'running', activity: { phase: 'ready', event: 'Stop', detail: null, at: 1 } });
+  const { stub, watcher, asks, settle } = await decidingWatcherFor(t, { sessions: [rec], panes: { job: UNKNOWN_DIALOG } }, 0.99);
+  await watcher.tick({ quiet: true });
+  const noticed = Date.now() - 95_000;
+  stub.sessions[0].activity.at = noticed - 5_000;
+  watcher.idle.get('job').since = noticed;
+  await watcher.tick();
+  await settle();
+  assert.equal(asks.length, 0, 'a finished session was sent to the model after its Stop hook');
+});
+
+test('a dialog that appears well after the last ready hook is still asked about', async (t) => {
+  const rec = sessionRecord('job', { status: 'running', activity: { phase: 'ready', event: 'Stop', detail: null, at: 1 } });
+  const { stub, watcher, asks, settle } = await decidingWatcherFor(t, { sessions: [rec], panes: { job: UNKNOWN_DIALOG } }, 0.99);
+  await watcher.tick({ quiet: true });
+  const noticed = Date.now() - 95_000;
+  stub.sessions[0].activity.at = noticed - 60_000;
+  watcher.idle.get('job').since = noticed;
+  await watcher.tick();
+  await settle();
+  assert.equal(asks.length, 1, 'a dialog painted long after the last hook was left unasked');
+});
+
+test('two sessions showing the same pane are each asked once', async (t) => {
+  const { watcher, asks, settle } = await decidingWatcherFor(t, {
+    sessions: [sessionRecord('one', { status: 'running' }), sessionRecord('two', { status: 'running' })],
+    panes: { one: UNKNOWN_DIALOG, two: UNKNOWN_DIALOG },
+  }, 0.97);
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'one', 2 * 60_000);
+  frozenFor(watcher, 'two', 2 * 60_000);
+  await watcher.tick();
+  await settle();
+  assert.deepEqual(asks.map((a) => a.name).sort(), ['one', 'two']);
 });

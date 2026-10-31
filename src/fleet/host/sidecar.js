@@ -1868,10 +1868,13 @@ export class Sidecar {
    * ask is `null`, which the watcher reads as cannot tell, so a coordinator
    * that predates this frame, or has it off, changes nothing here.
    *
-   * @param {{ name: string, hash: string, state: string }} ask
+   * THE FINGERPRINT STAYS HERE. It is of the unmasked pane, and the only text
+   * that leaves the box is the masked state (docs/decide.md).
+   *
+   * @param {{ name: string, state: string }} ask
    * @returns {Promise<any>}
    */
-  async #askDecide({ name, hash, state }) {
+  async #askDecide({ name, state }) {
     const id = `decide-${crypto.randomUUID()}`;
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -1882,7 +1885,7 @@ export class Sidecar {
       this.mintWaiters.set(id, { resolve, timer });
       let sent;
       try {
-        sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'decide', hostId: this.hostId, id, name, hash, state });
+        sent = this.transport.send({ v: PROTOCOL_VERSION, kind: 'decide', hostId: this.hostId, id, name, state });
       } catch {
         sent = false;
       }

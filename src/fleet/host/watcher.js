@@ -488,7 +488,7 @@ export class SessionWatcher {
    * WHAT IT MAY DO IS ONE THING: make `awaiting` true for this exact pane, as
    * if AWAITING_RE had matched with no question read. It never sets ready,
    * never clears a waiting a regex or hook set, never writes a prompt, and a
-   * hook newer than the pane's last change always wins over it.
+   * hook that says ready or awaiting about this pane always wins over it.
    *
    * THE ASK IS NOT AWAITED. It takes up to ten seconds, the tick does not wait
    * for it, and its answer is read on a later tick, which is when the
@@ -503,15 +503,23 @@ export class SessionWatcher {
     if (!entry) return false;
     const claim = this.modelAwaiting.get(name);
     if (claim && claim.hash !== entry.hash) this.modelAwaiting.delete(name);
-    // HOOKS WIN. A ready or awaiting from a hook that came after the pane last
-    // moved is the CLI's own word about this pane.
-    const hookSaid = Boolean(activity && (activity.phase === 'awaiting' || activity.phase === 'ready') && Number(activity.at) >= entry.since);
-    if (hookSaid) return false;
+    // HOOKS WIN. entry.since is when this tick first saw the bytes, which is
+    // after the Stop hook that produced them, so a hook stamped up to one
+    // watcher interval before that is still about this pane. An older ready
+    // or awaiting is about a pane that has since changed. A later working
+    // hook replaces the phase, and that pane may be asked about.
+    const hookAt = Number(activity?.at);
+    const hookAboutThisPane = (activity?.phase === 'awaiting' || activity?.phase === 'ready')
+      && Number.isFinite(hookAt) && hookAt >= entry.since - this.intervalMs;
+    if (hookAboutThisPane) return false;
     if (this.modelAwaiting.get(name)?.hash === entry.hash) return true;
-    if (!this.decide || Date.now() - entry.since < this.decideAfterMs || this.askedHashes.has(entry.hash)) return false;
-
     const hash = entry.hash;
-    this.askedHashes.add(hash);
+    // PER SESSION. The fingerprint is of the unmasked pane, and two sessions
+    // can show the same one. Keying the fleet's memory by the fingerprint
+    // alone meant the second was never asked.
+    const askedKey = `${name}\n${hash}`;
+    if (!this.decide || Date.now() - entry.since < this.decideAfterMs || this.askedHashes.has(askedKey)) return false;
+    this.askedHashes.add(askedKey);
     while (this.askedHashes.size > DECIDE_HASHES_KEPT) this.askedHashes.delete(/** @type {string} */ (this.askedHashes.values().next().value));
     // MASKED HERE AND ONLY HERE: this is the one line where pane text leaves
     // the box, and it leaves as src/core/mask-pane.js allows.

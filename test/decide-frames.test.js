@@ -34,7 +34,8 @@ test('a host with the decision model on asks over the socket and gets the coordi
   const state = maskPane(' Before we start: is this folder yours?\n ❯ 1. Yes\n   2. No');
   const answer = await /** @type {any} */ (sidecar.watcher).decide({ name: 'work', hash: '123', state });
   assert.equal(sent.length, 1);
-  assert.deepEqual(Object.keys(sent[0]).sort(), ['hash', 'hostId', 'id', 'kind', 'name', 'state', 'v']);
+  assert.deepEqual(Object.keys(sent[0]).sort(), ['hostId', 'id', 'kind', 'name', 'state', 'v']);
+  assert.equal('hash' in sent[0], false, 'the unmasked pane fingerprint left the box');
   assert.equal(sent[0].kind, 'decide');
   assert.deepEqual([answer.kind, answer.id, answer.ok, answer.asked, answer.p], ['decided', sent[0].id, true, true, 0.96]);
 });
