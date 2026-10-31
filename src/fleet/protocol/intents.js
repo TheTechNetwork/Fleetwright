@@ -78,7 +78,7 @@ export const XOSETUP_JOB_RE = /^[0-9a-f]{12}$/;
  * end of the install log, because that is the one thing nobody can read
  * anywhere else (the VM has no password to log in with).
  */
-export const IMAGE_REPORT_STEPS = Object.freeze(['started', 'packages', 'installer', 'image', 'cleaning', 'done', 'failed']);
+export const IMAGE_REPORT_STEPS = Object.freeze(['started', 'dns', 'packages', 'installer', 'image', 'cleaning', 'done', 'failed']);
 /**
  * `image` alone carries numbers: `got`, the bytes the build VM has received
  * since the session image's pull began, and `of`, that image's size as its

@@ -2717,9 +2717,7 @@ export class CoordinatorCore {
     // and its ownership check runs before its first await, so before the
     // hosts are revoked below.
     const person = { email: address, admin: false };
-    for (const name of extra) {
-      void this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: address, requester: person }).catch(() => {});
-    }
+    const stops = extra.map((name) => this.dispatch({ verb: 'vmctl', params: { name, action: 'stop' }, actor: address, requester: person }).catch(() => {}));
     /** @type {string[]} */
     const hosts = [];
     for (const h of this.hostIds.list()) {
@@ -2742,8 +2740,18 @@ export class CoordinatorCore {
       }
     }
     // What they signed for the fleet to do in their name: it is not theirs to
-    // ask any more, so it is not carried.
-    if (this.delegations.forget(address)) changed = true;
+    // ask any more, so it is not carried. ONCE THE STOPS ABOVE HAVE SETTLED,
+    // when there are any: `send` covers an intent with a delegation as it
+    // goes out, and a stop that moves on from a box answering "not on these
+    // pools" is sent to the next box then. Forgotten in the same breath the
+    // stops were sent, only the first box was sent what the person signed to
+    // let the fleet end their machines, and a box that takes only signed
+    // requests refused the rest, leaving their machines running.
+    if (stops.length) {
+      void Promise.allSettled(stops).then(() => {
+        if (this.delegations.forget(address)) this.onStateChanged?.();
+      });
+    } else if (this.delegations.forget(address)) changed = true;
     for (const [code, p] of this.enrollment.pending) {
       if (emailOf(p.actor) === address) {
         this.enrollment.pending.delete(code);
@@ -6665,11 +6673,13 @@ export class CoordinatorCore {
     this.record({ event: 'vm.control', actor: spec.actor ?? null, text: `${owner} asked to ${params.action} ${name}` });
     /** @type {string[]} */
     const skipped = [];
+    let askedAny = false;
     for (const { host } of holders) {
       if (this.#cannotCarry(host, spec)) {
         skipped.push(`${host.hostId} (needs updating)`);
         continue;
       }
+      askedAny = true;
       let answer;
       try {
         answer = explainUnknownVerb(await this.send(host, { ...spec, params }), host);
@@ -6684,6 +6694,16 @@ export class CoordinatorCore {
         continue;
       }
       return { ...answer, hostId: host.hostId };
+    }
+    // NOT ASKED IS NOT "COULD NOT FIND". When every holder was too old to be
+    // sent this, no box looked, and saying none could find the machine told
+    // the person to look for it (C-5). What is known is what each needs.
+    if (!askedAny) {
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text: `None of the boxes holding your pools is new enough to work ${name}, so none was asked: ${skipped.join(', ')}. Update one and ask again.`,
+      };
     }
     return { ok: false, error: { code: 'not_found' }, text: `No box holding your pools could find ${name}: ${skipped.join(', ')}.` };
   }
@@ -6726,11 +6746,13 @@ export class CoordinatorCore {
     if (spec.verb === 'xoact') this.record({ event: 'xo.act', actor: spec.actor ?? null, text: `${owner} asked for ${params.method} on ${address}` });
     /** @type {string[]} */
     const skipped = [];
+    let askedAny = false;
     for (const { host } of holders) {
       if (this.#cannotCarry(host, spec)) {
         skipped.push(`${host.hostId} (needs updating)`);
         continue;
       }
+      askedAny = true;
       let answer;
       try {
         // AS THE OWNER CHECKED ABOVE: the box picks the token by the actor,
@@ -6748,6 +6770,16 @@ export class CoordinatorCore {
         continue;
       }
       return { ...answer, hostId: host.hostId };
+    }
+    // NOT ASKED IS NOT "COULD NOT REACH": with every holder too old for the
+    // verb, none tried, and "could not reach" sent the person to check the
+    // pool's network (C-5). What is known is that the boxes need updating.
+    if (!askedAny) {
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text: `None of the machines holding your token for ${address} is new enough to show its page from away, so none was asked: ${skipped.join('; ')}. Update one and ask again.`,
+      };
     }
     return { ok: false, error: { code: 'unreachable' }, text: `None of the machines holding your token could reach ${address}: ${skipped.join('; ')}.` };
   }
@@ -6961,16 +6993,21 @@ export class CoordinatorCore {
    * each said its pools have — narrowed to one image when `template` is
    * given. In hostId order, so the same request goes to the same box.
    *
-   * @param {string} email @param {string|null} template
+   * A box whose last look at the pool failed (`reachable: false`) is left
+   * out, since nothing can be asked of it; with `unreached` it is the only
+   * kind listed, for the refusal that says a box holds the pool and could
+   * not reach it rather than that nobody holds it.
+   *
+   * @param {string} email @param {string|null} template @param {{ unreached?: boolean }} [opts]
    * @returns {Array<{ host: any, entries: Array<{ address: string, networks: Array<{ id: string, name: string, pool: string|null, group: boolean, lab: 'open'|'closed'|null, taken: boolean|null, perPerson: number|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
    */
-  #vmHolders(email, template) {
+  #vmHolders(email, template, { unreached = false } = {}) {
     /** @type {Array<{ host: any, entries: any[] }>} */
     const out = [];
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
       const entries = xoFor(host, email)
-        .filter((/** @type {any} */ e) => e?.reachable !== false)
+        .filter((/** @type {any} */ e) => (unreached ? e?.reachable === false : e?.reachable !== false))
         .map((/** @type {any} */ e) => ({
           address: String(e.address || ''),
           networks: (Array.isArray(e.networks) ? e.networks : [])
@@ -7037,6 +7074,9 @@ export class CoordinatorCore {
     const lab = params.platform === 'lab';
     /** The Xen Orchestra the lab is on, which its hold is counted against. */
     let labAt = '';
+    /** The hold on the lab, from before the first await (below) until the box has seen the machine there. */
+    /** @type {{ owner: string, vm: string, at: number, address: string }|null} */
+    let hold = null;
     if (lab) {
       const network = typeof params.network === 'string' ? params.network : '';
       if (!network) return { ok: false, error: { code: 'bad_params' }, text: 'Say which lab: `network`, one of the labs status lists under that image.' };
@@ -7054,7 +7094,21 @@ export class CoordinatorCore {
           text: `This pool’s policy lets one person hold ${limit === 1 ? 'one lab' : `${limit} labs`} at once, and you hold ${held}. End one and ask again.`,
         };
       }
+      // THE LAB IS HELD FROM HERE, before the first await, and counted against
+      // the limit just read. It was held only once the box had answered, and
+      // requests to this object interleave at the awaits between (the ticket,
+      // the box), so two asks at once for two free labs each counted the
+      // other's as not held and both were sent: a limit of one became two.
+      // The same move noteMade made for a machine kept ready. The machine's
+      // name is filled in once there is a ticket, and the hold is let go on
+      // every refusal after this line.
+      hold = { owner, vm: '', at: this.now(), address: labAt };
+      this.labAsks.set(network, hold);
     }
+    /** Let the lab go if it is still ours to let go: a refusal after the hold was taken. */
+    const unhold = () => {
+      if (hold && this.labAsks.get(String(params.network)) === hold) this.labAsks.delete(String(params.network));
+    };
     // A MACHINE KEPT READY, when this person keeps one from that image on
     // that network: the session starts on it now, and another is made behind
     // it. A machine is taken only with the time asked for still left on it.
@@ -7070,6 +7124,24 @@ export class CoordinatorCore {
     // box's pool's, and the box checks it again against its own look.
     const holders = this.#vmHolders(owner, template).filter((h) => !lab || h.entries.some((e) => e.networks.some((n) => n.id === params.network && n.lab)));
     if (!holders.length) {
+      unhold();
+      // A BOX THAT HOLDS IT AND COULD NOT REACH IT is a different fact from
+      // nobody holding it, and was told as the second: "approve a box that
+      // can reach it" to somebody whose box is approved and whose Xen
+      // Orchestra is down or unreachable from it (C-5). #vmHolders leaves
+      // out a box whose last look at the pool failed; here they are asked
+      // for by name.
+      const blind = this.#vmHolders(owner, template, { unreached: true }).map((h) => h.host.hostId);
+      if (blind.length) {
+        return {
+          ok: false,
+          error: { code: 'unreachable' },
+          text:
+            `${blind.length === 1 ? 'The box' : 'The boxes'} holding your token for the pool with that machine image (${blind.join(', ')}) could not reach ` +
+            `Xen Orchestra the last time ${blind.length === 1 ? 'it' : 'they'} looked, so no machine can be asked for from ${blind.length === 1 ? 'it' : 'them'} now. ` +
+            'Check that Xen Orchestra is up and reachable from that network, then ask again; or approve a box that can reach it.',
+        };
+      }
       return {
         ok: false,
         error: { code: 'no_hosts' },
@@ -7087,13 +7159,22 @@ export class CoordinatorCore {
         if (spec.startAfter[k] !== undefined && spec.startAfter[k] !== null) wanted[k] = spec.startAfter[k];
       }
       const checked = checkParams('start', wanted);
-      if (checked.ok === false) return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+      if (checked.ok === false) {
+        unhold();
+        return { ok: false, error: { code: 'bad_params' }, text: checked.error };
+      }
       start = /** @type {any} */ (checked.params);
     }
     const image = holders[0].entries[0].images[0];
     const ticket = await this.runnerTickets.mint({ owner, platform: `vm:${template}`, repository: null, start, ttlMs: VM_TICKET_TTL_MS });
-    if (!ticket) return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
+    if (!ticket) {
+      unhold();
+      return { ok: false, error: { code: 'tickets_full' }, text: TICKETS_FULL };
+    }
     const vmHost = `vm-${ticket.id}`;
+    // The hold now names the machine, so the box reporting it in the lab is
+    // what lets the hold go (#labsAskedFor).
+    if (hold) hold.vm = vmHost;
     // A MACHINE KEPT READY IS BEING MADE FROM HERE, not from the box's answer.
     // Counted only once the box said yes, a top-up set off by a health frame
     // in between saw none being made and asked for a second: two machines
@@ -7140,8 +7221,9 @@ export class CoordinatorCore {
         this.vmStandby.forget(vmHost);
         this.onStateChanged?.();
       }
-      // THE LAB IS HELD for this machine until the box reports it there.
-      if (lab && answer?.ok !== false) this.labAsks.set(String(params.network), { owner, vm: vmHost, at: this.now(), address: labAt });
+      // THE LAB STAYS HELD for this machine until the box reports it there,
+      // unless the box would not make it.
+      if (answer?.ok === false) unhold();
       // AND ONE MADE FOR A SESSION is replaced in the ready set, if this
       // person keeps some, the next time the pool is looked at.
       return { ...answer, hostId: host.hostId, vm: answer?.ok === false ? null : vmHost };
@@ -7150,6 +7232,7 @@ export class CoordinatorCore {
       this.vmStandby.forget(vmHost);
       this.onStateChanged?.();
     }
+    unhold();
     return {
       ok: false,
       error: { code: 'unreachable' },
@@ -7162,6 +7245,11 @@ export class CoordinatorCore {
    * under its owner and not revoked, connected and healthy, and with that
    * long still to run by its pool's last look (a machine whose end was not
    * reported is taken; the box sweeps it at its end either way).
+   *
+   * THIS DECIDES WHO IS CLAIMED, NOT WHO IS COUNTED. It was also what
+   * `tally` forgot a machine by, and a kept machine is not healthy for a
+   * while after it enrols (vm-standby.js says what that cost); what forgets
+   * one is #standbyGone.
    *
    * @param {string} owner @param {number} [minutes]
    * @returns {(hostId: string) => boolean}
@@ -7176,6 +7264,33 @@ export class CoordinatorCore {
       const until = ends.get(hostId);
       return typeof until !== 'number' || until - this.now() >= minutes * 60_000;
     };
+  }
+
+  /**
+   * Whether an enrolled kept machine is no longer in the fleet, which is the
+   * only thing that forgets one: its enrolment revoked or gone (a box's
+   * goodbye and retireStranded both revoke a temporary host, the latter ten
+   * minutes after it was last connected, so a machine that dropped and may
+   * dial back is still counted), no longer this person's, or past its end
+   * by its pool's last look. Not connected, not healthy: still counted, as
+   * starting.
+   *
+   * @param {string} owner
+   * @returns {(hostId: string) => boolean}
+   */
+  #standbyGone(owner) {
+    const ends = new Map(this.vmMachinesFor({ email: owner }).map((m) => [m.name, m.until]));
+    return (hostId) => {
+      const enrolled = this.hostIds.get(hostId);
+      if (!enrolled || enrolled.revokedAt || String(enrolled.owner || '').toLowerCase() !== owner) return true;
+      const until = ends.get(hostId);
+      return typeof until === 'number' && until <= this.now();
+    };
+  }
+
+  /** Both questions `tally` asks about a kept machine, for one owner. @param {string} owner */
+  #standbyBy(owner) {
+    return { gone: this.#standbyGone(owner), ready: this.#standbyReady(owner) };
   }
 
   /**
@@ -7227,10 +7342,11 @@ export class CoordinatorCore {
     const owner = String(requester?.email || '').toLowerCase();
     const wish = owner ? this.vmStandby.wishFor(owner) : null;
     if (!wish) return null;
-    const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
+    const by = this.#standbyBy(owner);
+    const { ready, starting } = this.vmStandby.tally(owner, by);
     // WHEN THE ONE BEING MADE WAS ASKED FOR, and why the last did not come:
     // "0 being made" said nothing about a machine that had just failed.
-    const since = this.vmStandby.makingSince(owner);
+    const since = this.vmStandby.makingSince(owner, by.ready);
     const failed = this.vmStandby.failureFor(owner);
     return { template: wish.template, count: wish.count, network: wish.network, ready, starting, ...(since === null ? {} : { since }), ...(failed ? { failed } : {}) };
   }
@@ -7345,7 +7461,7 @@ export class CoordinatorCore {
       // Keep button and a health frame, on a real pool) both found none
       // being made and asked for one each.
       if (this.#toppingUp.has(owner)) continue;
-      const { ready, starting } = this.vmStandby.tally(owner, this.#standbyReady(owner));
+      const { ready, starting } = this.vmStandby.tally(owner, this.#standbyBy(owner));
       if (ready + starting >= wish.count) continue;
       this.#toppingUp.add(owner);
       try {

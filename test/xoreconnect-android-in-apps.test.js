@@ -66,7 +66,7 @@ test('Android: a reconnect sign-in goes only to a machine that says it can, aske
   const begin = fn(sheet, 'fun begin(');
   const refuse = begin.indexOf('reconnect && XoReconnect.PURPOSE !in setup.can ->');
   assert.ok(refuse > 0, 'begin checks `can` for a reconnect');
-  for (const later of ['XoSetup.verifyKeySig(', 'approved -> run(pending)', 'else -> unvouched = pending']) {
+  for (const later of ['XoSetup.verifyKeySig(', 'approval == PhoneVault.Approval.APPROVED -> run(pending)', 'else -> unvouched = pending']) {
     assert.ok(begin.indexOf(later) > refuse, `the can check comes before ${later}`);
   }
   // Refused, its job is let go rather than left holding a slot.
@@ -78,7 +78,7 @@ test('Android: a reconnect sign-in goes only to a machine that says it can, aske
   // seal under a name it does not know.
   const tooOld = begin.indexOf('reconnect && XoReconnect.SIGNIN !in setup.can ->');
   assert.ok(tooOld > refuse, 'begin checks `can` for the reconnect sign-in after `reconnect`');
-  for (const later of ['XoSetup.verifyKeySig(', 'approved -> run(pending)', 'else -> unvouched = pending']) {
+  for (const later of ['XoSetup.verifyKeySig(', 'approval == PhoneVault.Approval.APPROVED -> run(pending)', 'else -> unvouched = pending']) {
     assert.ok(begin.indexOf(later) > tooOld, `the reconnect-signin check comes before ${later}`);
   }
   assert.match(begin.slice(tooOld), /refusal = olderThanReconnectSignin\(hostId\)\s*runCatching \{ fleet\.xosetup\("cancel", job = setup\.job\) \}/);
