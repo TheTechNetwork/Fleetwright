@@ -321,6 +321,56 @@ const RUN_USER = 'fleetwright';
 export const JOIN_RUNCMD = `  - [sh, -c, 'j=/usr/local/sbin/fleetwright-vm-join; [ -x "$j" ] || j=/opt/fleetwright/current/install/fleetwright-vm-join; exec "$j" "$0"', /run/fleetwright/join.json]`;
 
 /**
+ * How a pool's own machine takes the newest build of its suite before it
+ * joins, as root, on its first boot, ahead of JOIN_RUNCMD (xo-holder.js).
+ *
+ * AN IMAGE IS A SNAPSHOT OF ITS SUITE: the newest build of main, or the
+ * newest release, on the day it was built and not after, and a machine cloned
+ * from it weeks later starts on code weeks old. It is meant to catch up on
+ * its own (IMAGE_CHANNELS), and the pool's own machine made from an image
+ * built before the unit that refreshes its package lists existed never
+ * could: it sat on the image's build, saying every quarter hour that it could
+ * not refresh them. Asked for: "Use main releases instead of published
+ * doesn't work on hypervisor". The image said built from main, Make it again
+ * made a machine from it, and that machine ran what main had been.
+ *
+ * ONLY WHERE ITS OWNER LETS IT UPDATE ITSELF, the same answer as for upgrades
+ * from chat (src/core/grants.js): a machine whose owner said no takes nothing
+ * on its first boot either. Only on a box apt owns, which every image is
+ * (buildCloudConfig, the apt line); a layout without the line gets nothing
+ * here. BOUNDED, so a slow mirror cannot outlive the ten minutes the pin
+ * lasts: after five it joins on the image's build and says so in its
+ * journal, with the log that says why. The package's postinst on a box that
+ * has not joined lays the new build out and leaves the services stopped
+ * (install/deb/postinst, "installing"), so the join script that follows
+ * starts them once, with the name, as it always did; and it is the new
+ * build's join script that runs (JOIN_RUNCMD, root's copy).
+ *
+ * NOT ON A SESSION'S MACHINE (xo-pools.js): one is made for one session, and
+ * every minute of its boot is a person waiting. It catches up after joining
+ * where it may, as docs/hypervisors.md says of a rolling image, and an image
+ * whose package cannot is rebuilt once.
+ */
+export const UPGRADE_RUNCMD = [
+  '  - |',
+  '    if [ -f /etc/apt/sources.list.d/fleetwright.list ]; then',
+  "      if timeout 300 sh -c 'apt-get -qq update && DEBIAN_FRONTEND=noninteractive apt-get -qq -y --only-upgrade install fleetwright' >/var/log/fleetwright-first-boot.log 2>&1; then",
+  `        echo "fleetwright: took the newest build of its suite before joining: $(dpkg-query -W -f='\${Version}' fleetwright)"`,
+  '      else',
+  `        echo "fleetwright: could not take the newest build before joining; joining on the image's $(dpkg-query -W -f='\${Version}' fleetwright). /var/log/fleetwright-first-boot.log says why" >&2`,
+  '      fi',
+  '    fi',
+].join('\n');
+
+/**
+ * The first-boot lines for a machine, by what its owner chose it may do:
+ * UPGRADE_RUNCMD unless they said it may not update itself.
+ *
+ * @param {{ upgrades?: boolean }|null} grants  as machineGrantsOf gives them
+ */
+export const firstBootRuncmd = (grants) => (grants?.upgrades === false ? [] : [UPGRADE_RUNCMD]);
+
+/**
  * The cloud-init the build VM boots with. One script, so that "everything
  * worked" and "something did not" are the two ways it can end: powered off,
  * or rebooted (see the top of this file).

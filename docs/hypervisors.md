@@ -310,6 +310,15 @@ machine stays up.
 1. It reuses the one on the pool if there is one, and starts it if it is off.
 2. Otherwise it clones one from the pool's machine image (Debian's, where
    there is one) with the admin sign-in.
+   **The clone takes the newest build of its suite before it joins**, five
+   minutes at most, unless its owner chose that machines may not update
+   themselves (Machines made here). An image is a snapshot of released
+   versions or of main on the day it was built, and this machine stays up for
+   months: one made from a months-old image joined on months-old code, and one
+   whose package was too old to refresh its package lists through the fleet
+   never caught up. Asked for: "Use main releases instead of published doesn't
+   work on hypervisor". When it cannot reach a build it joins on the image's
+   and says so in its journal, with `/var/log/fleetwright-first-boot.log`.
 3. The clone goes on the way out, because it has to reach Xen Orchestra and
    the coordinator, and the uplink behind the router reaches neither by
    design.
@@ -493,7 +502,11 @@ it. The same on both phones (`setImageChannel`, `withImageChannel`).
 
 **A rolling image is still a snapshot.** It is main at the moment it was
 built. A machine made from it then updates on its own; the image itself does
-not, so rebuild it to start new machines from a newer main.
+not, so rebuild it to start new machines from a newer main. The pool's own
+machine is the exception: it takes the newest build of its suite before it
+joins ("A machine of its own"), so Make it again is enough for that one, and
+"It was built from main." under the image says what the image is, not what
+the machine made from it today runs.
 
 **For a test pool, not the default.** Every merge reaches a rolling machine
 before anybody released it. Released versions is what a new image is built

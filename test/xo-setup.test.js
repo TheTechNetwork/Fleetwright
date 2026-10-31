@@ -704,7 +704,7 @@ test('the pool’s own machine is made last, from its image, with a pin asked fo
   assert.equal(took.ok, true, took.text);
   const end = await finished(setups, job, actor);
   assert.equal(end.state, 'done', end.text);
-  assert.match(end.text, /holder-0a1b2c is starting on dmz\. Once it is up it asks to join/);
+  assert.match(end.text, /holder-0a1b2c is starting on dmz\. Before it joins it takes the newest build of its suite, if it can reach one\. Once it is up it asks to join/);
   assert.deepEqual(pinsFor, [[job, xo.address]], 'one pin, for this job, naming the pool its name is held for');
   const made = xo.calls.find((/** @type {any} */ c) => c.method === 'vm.create');
   assert.ok(made.params.cloudConfig.includes(`"secret":"${secret}"`), 'it boots with the secret to ask with');
