@@ -383,6 +383,17 @@ environment secret of `github-app-key` only to choose the key yourself:
 edit Workers Routes on the zone; without that the deploy warns and carries on,
 and phones on the fleet ask for the pin.
 
+**The minter's copies and kept keys** need two repository variables and no
+secret. `FLEETWRIGHT_MINTER_BACKUP_BUCKET` names the R2 bucket the deploy makes
+and binds for the minter's sealed copies (`fleetwright-minter-backup` when
+unset). `FLEETWRIGHT_MINTER_SECRETS_STORE` is the id of the account's Secrets
+Store, whose `fleetwright-minter-deposit-key` and
+`fleetwright-minter-signing-key` the deploy binds when they are there. Putting
+the keys there is the one step done by hand (`docs/vault.md`, "Kept a second
+time, outside the minter"). The deploy's `CLOUDFLARE_API_TOKEN` needs R2 edit
+for the bucket, and Secrets Store read to see which names are there. Without
+either, the deploy warns and carries on without that copy.
+
 **`FLEETWRIGHT_CLOUDFLARE_CLIENT_SECRET` travels the same way**, so each
 person's vault can keep and renew their Cloudflare sign-in
 ([vault.md](./vault.md)); the client id is read from the coordinator's config at

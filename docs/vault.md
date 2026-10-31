@@ -489,6 +489,64 @@ What this trusts is the Cloudflare account that serves both Workers, which is
 already the minter's bound (below): code deployed there could read every vault
 whatever key a phone held.
 
+### Kept a second time, outside the minter
+
+The deposit key, the signing key and every vault sit in one Durable Object.
+Lose that object and every vault is gone, along with the one key that could
+open a copy of it. So two things can be kept elsewhere. Each is optional, and
+each is off until the deploy binds it (`src/fleet/minter/backup.js`):
+
+- **The rows, in R2.** The deploy makes a private bucket,
+  `fleetwright-minter-backup` unless the repository variable
+  `FLEETWRIGHT_MINTER_BACKUP_BUCKET` names another, and binds it as `BACKUP`.
+  Five minutes after anything is written, the minter writes every row but its
+  keys to `latest.json`, and to that day's file, sealed to the deposit key.
+  Dated copies are kept thirty days. Copies are filed under the deposit key's
+  fingerprint, so a minter that lost its key and made a new one writes beside
+  the old copies and never over them.
+- **The keys, in Secrets Store.** When the object holds no key, it reads
+  `fleetwright-minter-deposit-key` and `fleetwright-minter-signing-key` from
+  the account's Secrets Store and keeps them again. When the object holds a
+  key and Secrets Store holds a different one, the object's key is used and
+  the log says so: every vault here is sealed to the object's key. A
+  secret that is bound but cannot be read stops the object answering. It does
+  not make a new key, because a new key would lose every vault sealed to the
+  unread one.
+
+**An empty object is filled from its copy** before it answers anything, and
+only when the deposit key comes from outside it (Secrets Store, or
+`FLEETWRIGHT_MINTER_DEPOSIT_KEY`), because a copy opens with that key alone. A
+copy that is there and does not open stops the object with `restore_failed`.
+It does not start empty, because the first row written would mean the copy
+was never read again. Unbind `BACKUP` to start empty anyway.
+A restore cut off part way is finished at the next ask. The rows go back one
+at a time with a `restore:pending` marker, which is removed only once the last
+row is in, so an object holding some of the rows still knows to go on.
+
+A copy is asked for only after something was written. Reads ask for none. Each
+copy's row count and size go to the log, and the log warns past 16 MiB. The
+deploy warns while `FLEETWRIGHT_MINTER_EXPORT_TO` is still set.
+
+**Getting the keys into Secrets Store** is done once, by hand, because a
+Worker cannot write there and nobody can read a value back out:
+
+```sh
+node scripts/minter-key-export.mjs new ./minter-keys        # your key; prints the next command
+echo '<printed key>' | npx wrangler secret put FLEETWRIGHT_MINTER_EXPORT_TO --config wrangler.minter.toml
+node scripts/minter-key-export.mjs open https://<the fleet> ./minter-keys
+npx wrangler secrets-store secret create <store-id> --name fleetwright-minter-deposit-key --scopes workers --remote
+npx wrangler secrets-store secret create <store-id> --name fleetwright-minter-signing-key --scopes workers --remote
+npx wrangler secret delete FLEETWRIGHT_MINTER_EXPORT_TO --config wrangler.minter.toml
+```
+
+Then set the repository variable `FLEETWRIGHT_MINTER_SECRETS_STORE` to the
+store's id. The deploy binds each of the two names it finds there, and warns
+about each one it does not find. The `open` step asks the public address with
+the header `x-fleetwright-export: keys`. The minter answers that only while
+`FLEETWRIGHT_MINTER_EXPORT_TO` is set, and only with the keys sealed to it, so
+anyone else who asks gets something they cannot open. Delete the files in
+`./minter-keys` once the secrets are in the store.
+
 ## For whoever runs the fleet
 
 The deposit key needs nothing from you. The vault needs the OAuth clients it
