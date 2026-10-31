@@ -298,7 +298,7 @@ export class EdgeWatch {
       // things, said as such (C-5).
       const asked = this.fromXo.get(k)?.routers;
       const problem = asked
-        ? `Xen Orchestra does not know its address yet: its guest agent arrives with its first update, after ${EDGE_UPDATES.hours}:00 UTC. It has not sent this machine its logs either.`
+        ? `Xen Orchestra does not know its address yet: its guest agent has not reported it (one built before the image carried the agent gets it with its first update, after ${EDGE_UPDATES.hours}:00 UTC). It has not sent this machine its logs either.`
         : 'Xen Orchestra did not know its address when the policy last ran, and it has not sent this machine its logs.';
       return { ...base, reached: null, role: null, dns: null, gateway: null, leases: null, problem };
     }

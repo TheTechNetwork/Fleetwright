@@ -80,12 +80,19 @@ the top of it are where a release that moves a prompt is fixed.
 guest, which is the way to check a change to the order of things without a
 VM; `test/edge-image-console.test.js` covers the sentinel reading.
 
-## What is deliberately not here yet
+## How the host uses it
 
-The host still downloads from OPNsense's mirror (`OPNSENSE_IMAGE.url` in
-`src/fleet/host/edge-router.js`). Pointing it at these releases is a
-separate change, once a release exists to point at: the pin becomes a
-release tag that Renovate moves with the `github-releases` datasource over
-`edge-image/*` tags, the address a release asset's, the digest the
-manifest's, and `unpack` learns zstd beside bzip2. Nothing in
-`renovate.json` names this workflow until then.
+`EDGE_IMAGE` in `src/fleet/host/edge-router.js` pins one release by its
+build (the part of the tag after `edge-image/`), and the host downloads
+that release's image, checks it against the pinned SHA-256, unpacks it with
+Node's own zstd and builds the router from it, with the configuration's
+offset and the room plan copied from the release's manifest. Renovate moves
+the build from this repository's releases (`renovate.json`, the
+`github-releases` rule: the day and the run order the builds, so a rebuild
+of the same OPNsense version on a later day is newer), and
+`scripts/pin-edge-image.mjs`, run on its pull request by the Renovate pin
+workflow, copies the rest from the manifest after checking it against the
+release's `SHA256SUMS`. It refuses a release built from another OPNsense
+release than `OPNSENSE_IMAGE` names, so the upstream pin moves first and the
+image is built for it by hand (`workflow_dispatch`); `test/pin-images.test.js`
+holds the block to what the script writes.

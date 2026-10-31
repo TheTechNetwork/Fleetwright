@@ -29,10 +29,14 @@ name: Edge router image
 # scripts/opnsense-room.mjs — in a manifest beside it, so nobody works them
 # out by hand again.
 #
-# WHAT IT DOES NOT DO YET. The host keeps downloading from OPNsense's mirror
-# (OPNSENSE_IMAGE.url); pointing it at these releases is the next pull
-# request, once a build exists to point at. scripts/edge-image/README.md says
-# what that pin will look like.
+# WHAT THE HOST DOES WITH IT. EDGE_IMAGE in src/fleet/host/edge-router.js
+# pins one of these releases by its build, and the host downloads that asset,
+# checks it against the pinned digest and builds the router from it, with the
+# offsets and room plan copied from its manifest. Renovate moves the pin to
+# each new release once it has soaked, and scripts/pin-edge-image.mjs copies
+# the rest (renovate.json, the github-releases rule). A push to main that
+# touches this workflow or scripts/edge-image/ publishes a new release, and so
+# proposes a new router to every pool; a change here is not a small one.
 #
 # EVERY STEP PRINTS WHAT IT DID. There is no QEMU where this was written, so
 # CI is the test bed, and a step that fails silently here costs an hour to

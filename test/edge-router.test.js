@@ -15,13 +15,14 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
+import zlib from 'node:zlib';
 
-import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_HA, EDGE_UPDATES, LAB, NOT_FROM_LABS, OPNSENSE_IMAGE, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf, writeIntoDisk } from '../src/fleet/host/edge-router.js';
+import { ConfigPatch, DNSMASQ_PORT, EDGE, EDGE_FILTER, EDGE_HA, EDGE_UPDATES, LAB, EDGE_IMAGE, NOT_FROM_LABS, edgeConfig, ensureEdge, ensureGroups, ensureLabs, ensureUplink, fetchImage, fleetHosts, imagePatches, isDefaultConfig, labsEachOf, unpack, writeIntoDisk } from '../src/fleet/host/edge-router.js';
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
 import { XOBUILD_DOING } from '../src/fleet/protocol/intents.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
@@ -46,10 +47,10 @@ function balanced(/** @type {string} */ xml) {
 }
 
 test('the edge configuration fills the block the build gives it, and says what the edge is', () => {
-  // The block (OPNSENSE_IMAGE.grow), not the 5,234 bytes the default fills:
+  // The block (EDGE_IMAGE.grow), not the 5,234 bytes the default fills:
   // the file is moved to a whole block of its own, and padded to it.
   const config = edgeConfig();
-  assert.equal(config.length, OPNSENSE_IMAGE.grow.room, 'not the block the build gives the file');
+  assert.equal(config.length, EDGE_IMAGE.grow.room, 'not the block the build gives the file');
   const xml = config.toString('utf8');
   // The padding is trailing whitespace only, which XML allows after the root.
   assert.match(xml, /<\/opnsense>\n *$/);
@@ -112,7 +113,7 @@ test('a configuration that does not fit is refused rather than truncated', () =>
 });
 
 test('the default configuration pinned for the image is the one the image has', () => {
-  assert.equal(DEFAULT.length, OPNSENSE_IMAGE.config.length);
+  assert.equal(DEFAULT.length, EDGE_IMAGE.config.length);
   assert.equal(isDefaultConfig(DEFAULT), true);
   const changed = Buffer.from(DEFAULT);
   changed[100] ^= 1;
@@ -144,7 +145,7 @@ async function patch(/** @type {Buffer} */ buf, /** @type {number} */ size, /** 
 test('the patch replaces exactly the configuration, however the image arrives in pieces', async () => {
   const offset = 300_001;
   const total = 400_000;
-  const replacement = edgeConfig({ length: OPNSENSE_IMAGE.config.length });
+  const replacement = edgeConfig({ length: EDGE_IMAGE.config.length });
   const want = image(offset, total);
   replacement.copy(want, offset);
   for (const size of [1, 7, 4096, 5234, 65536, total]) {
@@ -156,7 +157,7 @@ test('the patch replaces exactly the configuration, however the image arrives in
 
 test('an image without the default configuration at the offset, or of the wrong size, is not written', async () => {
   const offset = 4096;
-  const replacement = edgeConfig({ length: OPNSENSE_IMAGE.config.length });
+  const replacement = edgeConfig({ length: EDGE_IMAGE.config.length });
   const wrong = Buffer.from(DEFAULT);
   wrong[0] = 0x20;
   const moved = await patch(image(offset, 20_000, wrong), 1000, { offset, replacement, total: 20_000 });
@@ -174,6 +175,30 @@ test('a download that is not the published image is never used, and nothing is l
   assert.deepEqual(readdirSync(dir), []);
   const refused = /** @type {any} */ (async () => new Response('gone', { status: 404 }));
   await assert.rejects(fetchImage({ dir, fetchImpl: refused }), /answered 404/);
+});
+
+test('the download is unpacked as it is read, and a file that is not the image is an error rather than a disk', async () => {
+  // Node's own zstd, so a host installs nothing. What is ours is the wiring:
+  // an error on the file or in the stream reaches whoever reads it (a missing
+  // download would otherwise hang the build, never ending), and the signal
+  // stops the read, which is how patchedBlocks stops once it has its blocks.
+  const dir = mkdtempSync(path.join(tmpdir(), 'fw-edge-'));
+  const raw = Buffer.alloc(300_000, 5);
+  const file = path.join(dir, 'edge.img.zst');
+  writeFileSync(file, zlib.zstdCompressSync(raw));
+  const drain = async (/** @type {import('node:stream').Readable} */ r) => {
+    const chunks = [];
+    for await (const c of r) chunks.push(c);
+    return Buffer.concat(chunks);
+  };
+  assert.ok((await drain(unpack(file))).equals(raw));
+  const stop = new AbortController();
+  const stopped = unpack(file, { signal: stop.signal });
+  stop.abort();
+  await assert.rejects(drain(stopped), /abort/i);
+  await assert.rejects(drain(unpack(path.join(dir, 'missing.img.zst'))), /ENOENT/);
+  writeFileSync(file, Buffer.from('not the image'));
+  await assert.rejects(drain(unpack(file)), (/** @type {any} */ e) => e instanceof Error && !/ENOENT/.test(e.message));
 });
 
 /**
@@ -253,12 +278,12 @@ function edgeArgs(/** @type {any} */ admin, /** @type {any} */ extra = {}) {
         said.push(t);
         if (part) parts.push(part);
       },
-      getImage: async () => '/nowhere/image.bz2',
+      getImage: async () => '/nowhere/image.img.zst',
       unpackImpl: () => new PassThrough(),
       // The clock a rebuilt router is watched by (settled): one that does not wait.
       sleep: async () => {},
       upload: async (/** @type {any} */ u) => {
-        assert.equal(u.size, OPNSENSE_IMAGE.rawSize);
+        assert.equal(u.size, EDGE_IMAGE.rawSize);
         assert.equal(u.sendTo, '/import/abc');
         assert.ok(u.body instanceof ConfigPatch, 'the disk is not written through the patch');
         return 'vdi-1';
@@ -273,7 +298,7 @@ test('an edge that blocks hands what leaves to Suricata and drops what the four 
   // way out never reached Suricata or no policy turned an alert into a drop.
   const block = edgeConfig({ block: true }).toString('utf8');
   const watch = edgeConfig().toString('utf8');
-  assert.equal(block.length, OPNSENSE_IMAGE.grow.room, 'blocking no longer fits the room');
+  assert.equal(block.length, EDGE_IMAGE.grow.room, 'blocking no longer fits the room');
   assert.ok(balanced(block.trimEnd()));
   // Only the rule that lets labs out is diverted: DNS and private space are
   // decided before Suricata would see them.
@@ -342,7 +367,7 @@ test('two edges share each gateway address by CARP, each with its own beside it,
   assert.ok(!edgeConfig().toString('utf8').includes('<virtualip>'));
   // The most a pair holds fits.
   const long = `https://${'f'.repeat(63)}.${'e'.repeat(20)}.workers.dev`;
-  assert.equal(edgeConfig({ block: true, labs: [false, false, false, false], fleet: fleetHosts(long), ha: { node: 1, password: 'f'.repeat(64) } }).length, OPNSENSE_IMAGE.grow.room);
+  assert.equal(edgeConfig({ block: true, labs: [false, false, false, false], fleet: fleetHosts(long), ha: { node: 1, password: 'f'.repeat(64) } }).length, EDGE_IMAGE.grow.room);
   for (const ha of [{ node: 2, password }, { node: 0, password: 'short' }, { node: 0, password: "x'<y" }]) {
     assert.throws(() => edgeConfig({ ha: /** @type {any} */ (ha) }), /which one this is and their shared password/);
   }
@@ -365,7 +390,7 @@ const rulesOf = (xml) =>
 
 test('each lab is an interface of its own on the edge, with its address, its DHCP and Suricata watching it', () => {
   const xml = edgeConfig({ labs: [true, false], fleet: fleetHosts('https://fleet.example.network/x') }).toString('utf8');
-  assert.equal(Buffer.byteLength(xml), OPNSENSE_IMAGE.grow.room, 'not the block the build gives the file');
+  assert.equal(Buffer.byteLength(xml), EDGE_IMAGE.grow.room, 'not the block the build gives the file');
   assert.ok(balanced(xml.trimEnd()));
   assert.ok(xml.includes('<opt1><enable>1</enable><if>xn2</if><descr>LAB1</descr><ipaddr>10.250.1.1</ipaddr><subnet>24</subnet></opt1>'));
   assert.ok(xml.includes('<opt2><enable>1</enable><if>xn3</if><descr>LAB2</descr><ipaddr>10.250.2.1</ipaddr><subnet>24</subnet></opt2>'));
@@ -378,7 +403,7 @@ test('each lab is an interface of its own on the edge, with its address, its DHC
   // for a closed lab, in the alias and as a name it may resolve.
   const long = `https://${'f'.repeat(63)}.${'e'.repeat(20)}.workers.dev`;
   for (const block of [false, true]) for (const kinds of [[true, true, true, true], [false, false, false, false], [true, false, true, false]]) {
-    for (const url of ['https://fleet.example.network', long]) assert.equal(edgeConfig({ block, labs: kinds, fleet: fleetHosts(url) }).length, OPNSENSE_IMAGE.grow.room, url);
+    for (const url of ['https://fleet.example.network', long]) assert.equal(edgeConfig({ block, labs: kinds, fleet: fleetHosts(url) }).length, EDGE_IMAGE.grow.room, url);
   }
   assert.throws(() => edgeConfig({ labs: [true, true, true, true, true] }), /room for 4 labs/);
   assert.throws(() => edgeConfig({ labs: [false] }), /closed lab needs the fleet/);
@@ -443,36 +468,49 @@ test('a closed lab resolves only the fleet’s own hosts and the names under the
 });
 
 test('the configuration moves to a free block, and every byte of the file system that records it is checked before it is replaced', async () => {
-  // OPNSENSE_IMAGE.grow, planned from the real image by
-  // scripts/opnsense-room.mjs (src/fleet/host/ufs-room.js checks the plan as
-  // fsck would). Here: that the build replaces exactly those bytes, in order,
+  // EDGE_IMAGE.grow, planned from the released image by
+  // scripts/opnsense-room.mjs in CI (src/fleet/host/ufs-room.js checks the
+  // plan as fsck would) and copied from its manifest. Here: that the build replaces exactly those bytes, in order,
   // and refuses an image where any of them is not what the plan says.
-  const { grow } = OPNSENSE_IMAGE;
+  const { grow } = EDGE_IMAGE;
   const replacement = edgeConfig({ labs: [true] });
   const patches = imagePatches(replacement);
-  assert.deepEqual(patches.map((p) => p.offset), [...grow.edits.map((e) => e.offset), grow.data.offset]);
+  const ROOM = 'the free block the configuration moves to';
+  assert.deepEqual(patches.map((p) => p.offset), [...grow.edits.map((e) => e.offset), grow.data.offset].sort((a, b) => a - b));
   assert.ok(patches.every((p, i) => i === 0 || p.offset > patches[i - 1].offset), 'out of the order the image streams in');
-  // The same regions in a small image, each where the next is, scaled down.
-  const at = patches.map((_, i) => 1_000 + i * 100);
-  at[at.length - 1] = 4_000;
-  const total = at.at(-1) + grow.room + 500;
+  assert.equal(patches.filter((p) => p.what === ROOM).length, 1);
+  const editOf = (/** @type {{ offset: number }} */ p) => /** @type {any} */ (grow.edits.find((e) => e.offset === p.offset));
+  // The same regions in a small image, in the same order, each a little
+  // after the one before, scaled down.
+  let next = 1_000;
+  const at = patches.map((p) => {
+    const here = next;
+    next += p.replacement.length + 100;
+    return here;
+  });
+  const total = next + 500;
   const regions = patches.map((p, i) => ({ ...p, offset: at[i] }));
   const img = (/** @type {number} */ wrong = -1, dirty = false) => {
     const buf = Buffer.alloc(total, 7);
-    grow.edits.forEach((e, i) => {
-      const was = Buffer.from(e.was, 'hex');
+    patches.forEach((p, i) => {
+      if (p.what === ROOM) return buf.fill(dirty ? 1 : 0, at[i], at[i] + grow.room);
+      const was = Buffer.from(editOf(p).was, 'hex');
       if (i === wrong) was[0] ^= 1;
       was.copy(buf, at[i]);
     });
-    buf.fill(dirty ? 1 : 0, at.at(-1), at.at(-1) + grow.room);
     return buf;
   };
   const out = await patch(img(), 333, { regions, total });
   assert.ok(Buffer.isBuffer(out), String(out));
-  grow.edits.forEach((e, i) => assert.equal(out.subarray(at[i], at[i] + e.becomes.length / 2).toString('hex'), e.becomes, e.what));
-  assert.ok(out.subarray(at.at(-1), at.at(-1) + grow.room).equals(replacement));
+  patches.forEach((p, i) => {
+    if (p.what === ROOM) return assert.ok(out.subarray(at[i], at[i] + grow.room).equals(replacement));
+    const e = editOf(p);
+    assert.equal(out.subarray(at[i], at[i] + e.becomes.length / 2).toString('hex'), e.becomes, e.what);
+  });
   assert.equal(out[at[0] - 1], 7, 'a byte outside the regions changed');
-  assert.match(String(await patch(img(3), 333, { regions, total })), /inode 6523: first block/);
+  const firstBlock = patches.findIndex((p) => p.what.endsWith('first block'));
+  assert.ok(firstBlock >= 0, 'no edit moves the inode\'s first block');
+  assert.match(String(await patch(img(firstBlock), 333, { regions, total })), /: first block where it should/);
   assert.match(String(await patch(img(-1, true), 333, { regions, total })), /the free block the configuration moves to/);
   assert.throws(() => imagePatches(Buffer.alloc(6000)), /is 32768 bytes, not 6000/);
   // The plan moves the inode's first block to where the configuration goes.
@@ -490,7 +528,7 @@ test('an edge is built with an interface on each lab, in order, and tagged with 
   const made = Object.fromEntries(fresh.calls)['vm.create'];
   assert.deepEqual(made.VIFs.map((/** @type {any} */ v) => v.network), ['net-wan', 'net-up', 'net-lab-1', 'net-lab-2']);
   assert.deepEqual(made.tags, [EDGE.tag, EDGE.updatesTag, `${LAB.edgeTag}oc`]);
-  assert.equal(body.regions.length, OPNSENSE_IMAGE.grow.edits.length + 1, 'the file was not given its block');
+  assert.equal(body.regions.length, EDGE_IMAGE.grow.edits.length + 1, 'the file was not given its block');
   assert.match(done, /It has one open lab and one closed lab of their own/);
 
   // There with the same labs: nothing done. Asked nothing of labs: nothing done.
@@ -587,8 +625,8 @@ test('the edge router is made in the order that boots: disk in, WAN first, check
     { id: 'vif-b', txChecksumming: false },
   ]);
   assert.deepEqual(params['vm.start'], { id: 'vm-1' });
-  assert.match(done, /The edge router is up: OPNsense 26\.7, its WAN on eth0\.10 and its LAN on fleetwright-uplink at 10\.254\.0\.1\/24/);
-  assert.ok(said.some((t) => t.startsWith('Downloading OPNsense')), 'the person is not told about the download');
+  assert.ok(done.startsWith(`The edge router is up: OPNsense ${EDGE_IMAGE.version}, its WAN on eth0.10 and its LAN on fleetwright-uplink at 10.254.0.1/24`), done);
+  assert.ok(said.some((t) => t.startsWith('Downloading the edge router image')), 'the person is not told about the download');
 });
 
 test('the disk goes where the person chose, and the build says where and how far, stage by stage', async () => {
@@ -604,11 +642,11 @@ test('the disk goes where the person chose, and the build says where and how far
     fleetSrs: ['sr-big'],
     sr: 'sr-local',
     getImage: async (/** @type {any} */ g) => {
-      g.onProgress(OPNSENSE_IMAGE.compressedSize / 2, OPNSENSE_IMAGE.compressedSize);
-      return '/nowhere/image.bz2';
+      g.onProgress(EDGE_IMAGE.compressedSize / 2, EDGE_IMAGE.compressedSize);
+      return '/nowhere/image.img.zst';
     },
     upload: async (/** @type {any} */ u) => {
-      u.onProgress(OPNSENSE_IMAGE.rawSize / 2, OPNSENSE_IMAGE.rawSize);
+      u.onProgress(EDGE_IMAGE.rawSize / 2, EDGE_IMAGE.rawSize);
       return 'vdi-1';
     },
   });
@@ -685,10 +723,10 @@ test('an edge from before it updated itself is rebuilt once to get that and the 
   const done = await ensureEdge(edgeArgs(admin, { say: (/** @type {string} */ t) => said.push(t) }).args);
   assert.ok(said.includes('Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. Machines behind it keep their way out while the new one is built, and have none while it starts.'));
   assert.deepEqual(Object.fromEntries(admin.calls)['vm.create'].tags, [EDGE.tag, EDGE.updatesTag], 'logging, as it was');
-  assert.match(done, /updates itself every day after 10:00 UTC, restarting when OPNsense needs it to, and gets the Xen guest agent with its first update\./);
+  assert.match(done, /updates itself every day after 10:00 UTC, restarting when OPNsense needs it to, and carries the Xen guest agent, so Xen Orchestra shows its addresses once it reports\./);
   // Current, and Xen Orchestra knows no address: cannot tell, not "none".
   const quiet = xo({ VM: [{ ...old, tags: [EDGE.tag, EDGE.updatesTag] }], VIF: [] });
-  assert.match(await ensureEdge(edgeArgs(quiet).args), /already there, on eth0\.10, logging[\s\S]*Xen Orchestra does not know its WAN address: it has none, or its guest agent has not arrived yet/);
+  assert.match(await ensureEdge(edgeArgs(quiet).args), /already there, on eth0\.10, logging[\s\S]*Xen Orchestra does not know its WAN address: it has none, or its guest agent has not reported it \(one built before the image carried the agent gets it with its first update, after 10:00 UTC\)/);
 });
 
 // THE WAY OUT IS GONE FOR ONE BOOT, not for the build: the download and the
@@ -841,9 +879,9 @@ test('a rebuild of one of the pair that fails starts the old one again, and the 
   assert.ok(!admin.calls.some((/** @type {any} */ c) => c[0] === 'vm.stop' || c[0] === 'vm.delete'), 'a router was stopped for a build that never got as far as needing it');
 });
 
-// WHAT XEN ORCHESTRA CAN TELL OF A ROUTER JUST STARTED, which is little: a
-// new router has no guest agent until its first update, so it shows running
-// and nothing more. The watch (settled) catches the one thing it can, a
+// WHAT XEN ORCHESTRA CAN TELL OF A ROUTER JUST STARTED, which is little: its
+// guest agent reports later than the watch lasts, so it shows running and
+// nothing more. The watch (settled) catches the one thing it can, a
 // router that stops again, and says the rest as not known.
 test('a new router that stops again while it is watched is removed and the old one started again; one that only runs is not claimed to answer', async () => {
   const old = { id: 'vm-old', $pool: 'p1', tags: [EDGE.tag, EDGE.updatesTag], power_state: 'Running' };
@@ -877,8 +915,8 @@ test('a new router that stops again while it is watched is removed and the old o
   const done = await ensureEdge(args);
   assert.equal(runs.calls.filter(([m, p]) => m === 'xo.getAllObjects' && p.filter?.id === 'vm-new').length, 3, 'asked at 0, 10 and 20 seconds');
   assert.deepEqual(runs.calls.filter(([m]) => m === 'vm.delete').map(([, p]) => p), [{ id: 'vm-old', deleteDisks: true }]);
-  assert.ok(said.includes('fleetwright-edge is started. Xen Orchestra is watched for 20 seconds for it stopping again; whether it answers cannot be told from here until its guest agent arrives with its first update.'), said.join('\n'));
-  assert.match(done, /It replaced the one that was there, which was removed\. Xen Orchestra reported fleetwright-edge running for the 20 seconds it was watched; whether it answers cannot be told from here until its guest agent arrives with its first update, after 10:00 UTC\.$/);
+  assert.ok(said.includes('fleetwright-edge is started. Xen Orchestra is watched for 20 seconds for it stopping again; whether it answers cannot be told from here until its guest agent reports to Xen Orchestra.'), said.join('\n'));
+  assert.match(done, /It replaced the one that was there, which was removed\. Xen Orchestra reported fleetwright-edge running for the 20 seconds it was watched; whether it answers cannot be told from here until its guest agent, which the image carries, reports to Xen Orchestra\.$/);
   assert.ok(!/answers:/.test(done), 'a router with no agent was said to answer');
 });
 
@@ -1207,7 +1245,7 @@ test('a watched router has the key’s user beside root, its certificate at the 
   assert.match(xml, /<source_net>fleetwright_private<\/source_net><destination_net>wanip<\/destination_net>/);
   // The biggest router there can be still fits the block, watched.
   const long = `https://${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(57)}`;
-  assert.equal(edgeConfig({ block: true, labs: [false, false, false, false], fleet: fleetHosts(long), ha: { node: 1, password: 'f'.repeat(64) }, watch: w, syslog: ['10.0.0.1', '10.0.0.2'] }).length, OPNSENSE_IMAGE.grow.room);
+  assert.equal(edgeConfig({ block: true, labs: [false, false, false, false], fleet: fleetHosts(long), ha: { node: 1, password: 'f'.repeat(64) }, watch: w, syslog: ['10.0.0.1', '10.0.0.2'] }).length, EDGE_IMAGE.grow.room);
 });
 
 test('a router without the key the job brings is rebuilt once, keeping its WAN MAC; one with it is left as it is', async () => {
@@ -1263,7 +1301,7 @@ test('the edge router is made from XCP-ng’s own template, never one that only 
   ])) {
     const admin = xo({ VM: [], 'VM-template': templates, VIF: [] });
     let downloaded = false;
-    await assert.rejects(ensureEdge(edgeArgs(admin, { getImage: async () => ((downloaded = true), '/nowhere/image.bz2') }).args), said);
+    await assert.rejects(ensureEdge(edgeArgs(admin, { getImage: async () => ((downloaded = true), '/nowhere/image.img.zst') }).args), said);
     assert.equal(downloaded, false, 'downloaded before it knew there was nothing to make the router from');
     assert.deepEqual(called(admin, 'vm.create'), []);
   }
@@ -1272,19 +1310,19 @@ test('the edge router is made from XCP-ng’s own template, never one that only 
 // THE KEPT DISK (edge-router.js, buildEdge): the image as published kept on
 // the pool, and a rebuild that copies it and writes only the blocks the
 // configuration changes. The image here is made up, block by block, with the
-// bytes the plan (OPNSENSE_IMAGE.grow) must find where it must find them.
+// bytes the plan (EDGE_IMAGE.grow) must find where it must find them.
 
 const BLOCK = 2 * 1024 * 1024;
 const MiB = 1024 ** 2;
 /** The blocks the plan changes: its edits and the block the configuration moves to. */
-const TOUCHED = [...new Set([...OPNSENSE_IMAGE.grow.edits.map((e) => e.offset), OPNSENSE_IMAGE.grow.data.offset].map((o) => Math.floor(o / BLOCK)))].sort((a, b) => a - b);
+const TOUCHED = [...new Set([...EDGE_IMAGE.grow.edits.map((e) => e.offset), EDGE_IMAGE.grow.data.offset].map((o) => Math.floor(o / BLOCK)))].sort((a, b) => a - b);
 const FILLER = Buffer.alloc(BLOCK, 0x11);
 
 /** Block `i` of the published image, as far as the plan can tell: its own bytes, with what the plan expects where it expects it. */
 function pristine(/** @type {number} */ i) {
   const b = Buffer.alloc(BLOCK, (i * 37) & 0xff);
-  for (const e of OPNSENSE_IMAGE.grow.edits) if (Math.floor(e.offset / BLOCK) === i) Buffer.from(e.was, 'hex').copy(b, e.offset - i * BLOCK);
-  const { data } = OPNSENSE_IMAGE.grow;
+  for (const e of EDGE_IMAGE.grow.edits) if (Math.floor(e.offset / BLOCK) === i) Buffer.from(e.was, 'hex').copy(b, e.offset - i * BLOCK);
+  const { data } = EDGE_IMAGE.grow;
   if (Math.floor(data.offset / BLOCK) === i) b.fill(0, data.offset - i * BLOCK, data.offset - i * BLOCK + data.length);
   return b;
 }
@@ -1292,8 +1330,8 @@ function pristine(/** @type {number} */ i) {
 /** The same block once the edge's configuration is written: each edit's bytes, and the configuration in its block. */
 function configured(/** @type {number} */ i, /** @type {Buffer} */ config) {
   const b = pristine(i);
-  for (const e of OPNSENSE_IMAGE.grow.edits) if (Math.floor(e.offset / BLOCK) === i) Buffer.from(e.becomes, 'hex').copy(b, e.offset - i * BLOCK);
-  const { data } = OPNSENSE_IMAGE.grow;
+  for (const e of EDGE_IMAGE.grow.edits) if (Math.floor(e.offset / BLOCK) === i) Buffer.from(e.becomes, 'hex').copy(b, e.offset - i * BLOCK);
+  const { data } = EDGE_IMAGE.grow;
   if (Math.floor(data.offset / BLOCK) === i) config.copy(b, data.offset - i * BLOCK);
   return b;
 }
@@ -1301,20 +1339,20 @@ function configured(/** @type {number} */ i, /** @type {Buffer} */ config) {
 /** The unpacked image, a block at a time; `wrong` spoils one byte the plan checks. */
 function madeUpImage(wrong = false) {
   return Readable.from((function* () {
-    for (let i = 0; i < OPNSENSE_IMAGE.rawSize / BLOCK; i++) {
+    for (let i = 0; i < EDGE_IMAGE.rawSize / BLOCK; i++) {
       if (!TOUCHED.includes(i)) {
         yield FILLER;
         continue;
       }
       const b = pristine(i);
-      if (wrong && i === TOUCHED.at(-1)) b[OPNSENSE_IMAGE.grow.data.offset - i * BLOCK] = 1;
+      if (wrong && i === Math.floor(EDGE_IMAGE.grow.data.offset / BLOCK)) b[EDGE_IMAGE.grow.data.offset - i * BLOCK] = 1;
       yield b;
     }
   })());
 }
 
-const BASE_TAG = `${EDGE.baseTag}:${EDGE.baseKey}:${OPNSENSE_IMAGE.release}`;
-const BASE_NAME = `OPNsense ${OPNSENSE_IMAGE.release} (as published)`;
+const BASE_TAG = `${EDGE.baseTag}:${EDGE.baseKey}:${EDGE_IMAGE.build}`;
+const BASE_NAME = `Edge router image ${EDGE_IMAGE.build} (as published)`;
 
 /**
  * A stand-in Xen Orchestra that keeps what it is asked to make, as the real
@@ -1333,7 +1371,7 @@ function keptXo({ kept = false, answers = /** @type {Record<string, (p: any) => 
   const next = (/** @type {string} */ p) => `${p}-${++n}`;
   const attach = (/** @type {string} */ vm, /** @type {string} */ vdi) => objects.VBD.push({ id: next('vbd'), VM: vm, VDI: vdi, is_cd_drive: false });
   if (kept) {
-    objects['VM-template'].push({ id: 'tpl-kept', $pool: 'p1', name_label: `Fleetwright base: OPNsense ${OPNSENSE_IMAGE.release}`, tags: [EDGE.baseTag, BASE_TAG] });
+    objects['VM-template'].push({ id: 'tpl-kept', $pool: 'p1', name_label: `Fleetwright base: edge image ${EDGE_IMAGE.build}`, tags: [EDGE.baseTag, BASE_TAG] });
     objects.VDI.push({ id: 'vdi-kept', $SR: 'sr-big', name_label: BASE_NAME, $VBDs: ['vbd-kept'] });
     attach('tpl-kept', 'vdi-kept');
   }
@@ -1434,19 +1472,19 @@ test('with the disk kept on the pool, the router is a copy of it with only the b
   // FIVE BLOCKS, each the published bytes with the change made, and nothing
   // else in the table: what is not listed is left as the copy has it.
   const sent = readVhd(k.writes[0].body);
-  assert.equal(sent.size, OPNSENSE_IMAGE.rawSize);
+  assert.equal(sent.size, EDGE_IMAGE.rawSize);
   assert.deepEqual([...sent.blocks.keys()], TOUCHED);
   const config = edgeConfig();
   for (const i of TOUCHED) assert.ok(sent.blocks.get(i)?.equals(configured(i, config)), `block ${i} is not the published one with the configuration written`);
   assert.ok(k.writes[0].body.length < 11 * MiB, `${k.writes[0].body.length} bytes sent`);
   // Named as an uploaded disk is, so the phone can say where it is; never
   // attached again, since it came with the VM.
-  assert.deepEqual(called(k.admin, 'vdi.set'), [{ id: copy, name_label: EDGE.vm, name_description: `OPNsense ${OPNSENSE_IMAGE.release}, configured by Fleetwright as the edge router` }]);
+  assert.deepEqual(called(k.admin, 'vdi.set'), [{ id: copy, name_label: EDGE.vm, name_description: `OPNsense ${EDGE_IMAGE.version}, edge router image ${EDGE_IMAGE.build}, configured by Fleetwright as the edge router` }]);
   assert.deepEqual(called(k.admin, 'vm.attachDisk'), []);
   assert.deepEqual(called(k.admin, 'vm.start'), [{ id: 'vm-2' }]);
-  assert.match(done, /The edge router is up: OPNsense 26\.7, its WAN on eth0\.10[\s\S]*its disk on sr-big\./);
+  assert.ok(done.startsWith(`The edge router is up: OPNsense ${EDGE_IMAGE.version}, its WAN on eth0.10`) && done.includes('its disk on sr-big.'), done);
   assert.ok(said.some((t) => /already on sr-big, kept from an earlier build/.test(t)), said.join('\n'));
-  assert.ok(said.includes('Copying the disk kept on sr-big and writing the configuration: 10 MB.'), said.join('\n'));
+  assert.ok(said.includes(`Copying the disk kept on sr-big and writing the configuration: ${TOUCHED.length * 2} MB.`), said.join('\n'));
   assert.deepEqual([...new Set(parts.map((p) => p.stage))], [1, 2, 3]);
   for (let i = 1; i < parts.length; i++) assert.ok(parts[i].fill >= parts[i - 1].fill, `the bar went back at ${i}`);
 });

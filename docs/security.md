@@ -439,9 +439,14 @@ machine of the fleet, through the coordinator.
   categories are (`docs/push.md`): on a sealed push it says that a pool went
   missing, never which.
 - **The edge router is built from a pinned image, with nobody's login.**
-  The machine downloads OPNsense's published nano image, refuses it unless
-  its SHA-256 is the one pinned in the source, and replaces only the default
+  The machine downloads this repository's own edge router image, built in CI
+  from OPNsense's published nano image and published as a GitHub release with
+  a provenance attestation (`edge-image.yml`), refuses it unless its SHA-256
+  is the one pinned in the source, and replaces only the default
   configuration's bytes, after checking those against their own pinned hash.
+  The offsets it writes at are copied from the release's manifest by a script
+  that checks the manifest against the release's checksums; nothing is
+  measured by hand or at run time.
   The disk goes to Xen Orchestra over the job's pinned connection. The image
   as published is kept on the pool as a template so a rebuild can copy it
   and write only the configuration's blocks into the copy, checked the same

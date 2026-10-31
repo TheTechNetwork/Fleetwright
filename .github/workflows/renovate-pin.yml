@@ -3,11 +3,12 @@ name: Renovate pin
 # The half of a pin Renovate cannot write, written on Renovate's own pull
 # request instead of by a person.
 #
-# Renovate moves a NAME: a cloud image's build, the guest agent's release, the
-# installer's commit (renovate.json, customManagers). The address, the digest
-# and the sizes follow from the name and no datasource gives them, so three
-# scripts in scripts/ fetch them from the vendor's own checksum file or release
-# and write them beside it. Until one has run the name and the rest disagree
+# Renovate moves a NAME: a cloud image's build, the edge router image's, the
+# guest agent's release, the installer's commit (renovate.json,
+# customManagers). The address, the digest and the sizes follow from the name
+# and no datasource gives them, so four scripts in scripts/ fetch them from
+# the vendor's own checksum file, manifest or release and write them beside
+# it. Until one has run the name and the rest disagree
 # and a test is red, which is the point: a moved name with an old digest would
 # download the old image, or refuse the new one, and nobody would be told why.
 #
@@ -118,7 +119,7 @@ jobs:
       # neighbours in src/; the same install CI's test job does.
       - run: npm install --no-audit --no-fund
 
-      # ALL THREE, EVERY TIME. One pull request moves one name, and the two
+      # ALL FOUR, EVERY TIME. One pull request moves one name, and the
       # scripts whose name has not moved say "already pinned" and touch
       # nothing, so there is nothing to decide here about which to run. Each
       # runs to its own end: a refusal (a build inside its soak, a guest agent
@@ -133,7 +134,7 @@ jobs:
         run: |
           set -u
           failed=0
-          for script in pin-images pin-guest-agent pin-xo-installer; do
+          for script in pin-images pin-edge-image pin-guest-agent pin-xo-installer; do
             echo "::group::node scripts/$script.mjs"
             node "scripts/$script.mjs" || failed=1
             echo "::endgroup::"

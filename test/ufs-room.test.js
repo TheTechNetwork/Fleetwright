@@ -2,8 +2,8 @@
 // rules (src/fleet/host/ufs-room.js), against a UFS2 image small enough to
 // build here and laid out the way makefs leaves OPNsense's: the file's group
 // packed full, free whole blocks only further on. The real image's plan is
-// pinned in OPNSENSE_IMAGE.grow; scripts/opnsense-room.mjs made it, and
-// test/edge-router.test.js holds the build to it.
+// pinned in EDGE_IMAGE.grow; scripts/opnsense-room.mjs made it in CI, from
+// the image as published, and test/edge-router.test.js holds the build to it.
 //
 //   node --test test/ufs-room.test.js
 //
