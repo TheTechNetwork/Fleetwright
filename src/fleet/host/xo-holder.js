@@ -23,7 +23,7 @@
 // a box that is up when the laptop is asleep, and asked first once approved
 // (`holder` in its health, core.js #vmHolders).
 
-import { JOIN_RUNCMD, VM_IMAGE, imageKeyOf, isFleetImage } from './vm-image.js';
+import { JOIN_RUNCMD, VM_IMAGE, firstBootRuncmd, imageKeyOf, isFleetImage } from './vm-image.js';
 import { outsideSets, recordMade, setsOf } from './xo-made.js';
 import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { machineGrantsOf } from '../../core/grants.js';
@@ -91,7 +91,10 @@ export function isHolder(v, address, sets) {
  * (src/fleet/host/vm-join.js). The same join script as a session's machine
  * reads it (install/fleetwright-vm-join), and does not power this one off.
  * `grants` is what it may do from chat, as its owner chose on the pool's
- * policy, which the join script applies before anything starts.
+ * policy, which the join script applies before anything starts. Before the
+ * join it takes the newest build of its suite (vm-image.js, UPGRADE_RUNCMD),
+ * unless its owner said it may not update itself: the image is a snapshot,
+ * and this machine stays up for months.
  *
  * @param {{ hostId: string, pin: string, coordinatorUrl: string, address: string, secret?: string|null, grants?: { upgrades?: boolean, reboot?: boolean }|null }} spec
  */
@@ -111,6 +114,7 @@ export function holderCloudConfig({ hostId, pin, coordinatorUrl, address, secret
     '    content: |',
     `      ${join}`,
     'runcmd:',
+    ...firstBootRuncmd(allowed),
     JOIN_RUNCMD,
     '',
   ].join('\n');
@@ -197,7 +201,10 @@ export async function ensureHolder({ admin, pool, egress, address, coordinatorUr
   // the new VM's id; anything else is a machine that would never be found.
   if (typeof made !== 'string' || !made) throw new Error(`Xen Orchestra made ${given.hostId} without saying its id, so it cannot be listed as the pool’s own machine.`);
   await recordMade(admin, made);
+  // Said, because the image it came from may be weeks old and the person
+  // chose what it is built from expecting the newest of that (C-5).
+  const fresh = firstBootRuncmd(machineGrantsOf(grants)).length ? ' Before it joins it takes the newest build of its suite, if it can reach one.' : '';
   return secret
-    ? `${given.hostId} is starting on ${egress.name}. Once it is up it asks to join, and your phone asks you to let it in and hold this pool.`
-    : `${given.hostId} is starting on ${egress.name}. Approve it under Machines once it joins, and it holds this pool from then on.`;
+    ? `${given.hostId} is starting on ${egress.name}.${fresh} Once it is up it asks to join, and your phone asks you to let it in and hold this pool.`
+    : `${given.hostId} is starting on ${egress.name}.${fresh} Approve it under Machines once it joins, and it holds this pool from then on.`;
 }

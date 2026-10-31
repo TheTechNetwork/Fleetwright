@@ -10,6 +10,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,7 +18,7 @@ import { join } from 'node:path';
 import { HOLDER, ensureHolder, holderCloudConfig } from '../src/fleet/host/xo-holder.js';
 import { checkPolicy } from '../src/fleet/host/xo-setup.js';
 import { XoPools } from '../src/fleet/host/xo-pools.js';
-import { VM_IMAGE } from '../src/fleet/host/vm-image.js';
+import { UPGRADE_RUNCMD, VM_IMAGE } from '../src/fleet/host/vm-image.js';
 import { enrolVmOnce, waitToBeLetIn } from '../src/fleet/host/vm-join.js';
 import { keyHashOf, proofOf } from '../src/fleet/protocol/holder-join.js';
 import { readAssignedName } from '../src/fleet/host/identity.js';
@@ -143,6 +144,19 @@ test('its cloud-init is its name and one join file with the pin, the name and th
   const join = JSON.parse(/** @type {string} */ (/content: \|\n {6}(\{.*\})/.exec(config)?.[1]));
   assert.deepEqual(join, { v: 1, coordinator: 'https://fleet.test', pin: PIN, hostId: NAME, holder: 'xo.lan' });
   assert.match(config, /^ {2}- \[sh, -c, 'j=\/usr\/local\/sbin\/fleetwright-vm-join;.*', \/run\/fleetwright\/join\.json\]$/m, 'root’s copy of the join script (vm-image.js, JOIN_RUNCMD)');
+  // THE NEWEST BUILD OF ITS SUITE FIRST, then the join (vm-image.js,
+  // UPGRADE_RUNCMD): a machine made from a months-old image joined on
+  // months-old code, and one too old to refresh its package lists never
+  // caught up. Unless its owner said it may not update itself.
+  const upgrade = config.indexOf('apt-get -qq -y --only-upgrade install fleetwright');
+  assert.ok(upgrade > 0 && upgrade < config.indexOf('fleetwright-vm-join'), 'the newest build is not taken before the join');
+  assert.ok(config.includes('[ -f /etc/apt/sources.list.d/fleetwright.list ]'), 'a layout apt does not own would be asked to apt-get');
+  assert.ok(config.includes('timeout 300 '), 'unbounded, a slow mirror outlives the pin');
+  const script = UPGRADE_RUNCMD.split('\n').slice(1).map((l) => l.slice(4)).join('\n');
+  const sh = spawnSync('sh', ['-n'], { input: script, encoding: 'utf8' });
+  assert.equal(sh.status, 0, `the first-boot script does not parse: ${sh.stderr}`);
+  assert.ok(!holderCloudConfig({ hostId: NAME, pin: PIN, coordinatorUrl: 'https://fleet.test', address: 'xo.lan', grants: { upgrades: false } }).includes('apt-get'), 'a machine its owner said may not update itself took a build on its first boot');
+  assert.ok(holderCloudConfig({ hostId: NAME, pin: PIN, coordinatorUrl: 'https://fleet.test', address: 'xo.lan', grants: { upgrades: true, reboot: false } }).includes('apt-get'));
   assert.throws(() => holderCloudConfig({ hostId: 'build-server', pin: PIN, coordinatorUrl: 'https://fleet.test', address: 'xo.lan' }), /not a name/);
   assert.throws(() => holderCloudConfig({ hostId: NAME, pin: 'abc', coordinatorUrl: 'https://fleet.test', address: 'xo.lan' }), /not an enrolment pin/);
   const withSecret = JSON.parse(/** @type {string} */ (/content: \|\n {6}(\{.*\})/.exec(holderCloudConfig({ hostId: NAME, pin: PIN, coordinatorUrl: 'https://fleet.test', address: 'xo.lan', secret: SECRET }))?.[1]));
