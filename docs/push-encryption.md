@@ -113,14 +113,33 @@ and FCM `ttl` — stops a late one being delivered at all, and the collapse id i
 the session name, so a newer word about a session replaces the older one rather
 than stacking under it.
 
+## The category is sealed too, and the sealed one decides
+
+The category names which two buttons a notification gets, and it has to be in
+the clear: iOS picks the buttons from `aps.category` before the extension has
+opened anything, and a phone from before encryption reads nothing else. A clear
+field is one Apple, Google or a relay could change, and the words on the
+buttons come from the category while the digits they type are sealed — so a
+swapped category is a button labelled for one answer typing another.
+
+So `envelopeFor` seals a second copy, empty when there is nothing to answer. A
+phone that opens the envelope takes the sealed one, and when a clear one is
+there and disagrees, it draws no buttons at all; the notification still opens
+the app. A sealed copy that is absent means a coordinator from before this,
+and then the clear one is all there is, as it always was.
+
 ## The key belongs to the install, not the phone
 
 `registerDevice` keeps `pushKey` **only when it is supplied on that
-registration**, never inherited from the previous row. A reinstall loses the
-private key — Keychain and Keystore both go with the app — so carrying the
+registration**, never inherited from the previous row. A reinstall on Android
+loses the private key — the Keystore goes with the app — so carrying the
 public key forward would encrypt every future notification to a key nobody
 holds. Delivery would succeed, decryption would fail, and the person would see
-the fallback forever with nothing reporting an error.
+the fallback forever with nothing reporting an error. An iOS Keychain item
+outlives the app, so a reinstalled iPhone usually finds its old key and sends
+it again; the coordinator learns that by being sent it, not by assuming it,
+and an iPhone whose item is gone (restored onto a new phone, which a
+`ThisDeviceOnly` item does not follow) sends the new one it makes.
 
 The key is validated at **registration**, not at send time. A key that cannot be
 imported is a registration that fails on every notification forever, and the
@@ -158,12 +177,154 @@ the check is an allowlist of `1`, `true`, `yes`, `on`.
 | Scheme, envelope, key validation | **done**, `src/fleet/push-crypto.js` |
 | Encrypting in both senders, with the plaintext fallback | **done**, `src/fleet/push.js` |
 | `pushKey` accepted and validated at registration | **done**, both coordinators |
-| Exercised end to end against the bytes a phone receives | **done**, `test/push-encryption.test.js` |
-| iOS Notification Service Extension | **not built** |
-| Android data-message decryption | **not built** |
-| Key generation and storage in either app | **not built** |
+| Exercised end to end against the bytes a phone receives | **done**, `test/push-encryption.test.js` and `test/fixtures/parity/push-envelope.json` |
+| Key generation and storage | **done**. iOS Keychain, `AfterFirstUnlockThisDeviceOnly`, account `push-key`. Android Keystore, alias `fleetwright.push`, `PURPOSE_AGREE_KEY`, no user authentication, agreed with through the `AndroidKeyStore` provider by name |
+| Both phones register `pushKey` | **done**, after a self-test: a probe sealed to the key in software has to open with it. A phone that cannot use its key sends the last one it sent, and registers without one only when it has none on record (never sent one, or an iPhone reinstall). You says so while the phone does not know it can open what is sealed to it |
+| The category sealed beside the words | **done**. The coordinator writes it inside the envelope, empty when there is nothing to answer, and still in the clear for iOS and older phones. A phone that opens the envelope takes the sealed one, and draws no buttons when the clear one disagrees |
+| iOS Notification Service Extension | **done**, `network.thetech.fleetwright.Push`. It rewrites the alert and copies the sealed fields into `userInfo`. A seal it cannot open leaves the fallback sentence and clears the category, so a button is not offered for a question that was not read |
+| Android data-message decryption | **done**, Android 12 and later. `onMessageReceived` opens `e` before it reads `kind`, and posts the notification itself when the tray was not given one |
 
-Until the last three land, no phone registers a `pushKey`, so every notification
-takes the fallback path and behaves exactly as it does today. That is the point
-of the fallback being a first-class path rather than an error case: the
-coordinator half can ship, and be tested, before either app moves.
+A phone installed before this, which registers no key, still gets the plaintext
+path. That is the point of the fallback being a first-class path rather than an
+error case.
+
+### Which key a registration sends
+
+The coordinator keeps a key only when the registration sends one, so a phone
+that registers without one is put back on plaintext. **A phone with a key sent
+on record never goes back to plaintext**: each phone remembers the public key
+it last sent (it is the half the coordinator already holds, so it is kept with
+the app's settings, not in the Keychain or the Keystore), saved as the
+registration is posted rather than after its answer. Every registration goes,
+whatever the key does, so a new APNs token or FCM address is always sent. What
+it carries:
+
+- **The key**, once it has passed the self-test.
+- **The last key sent**, when the key cannot be used this time: the Keychain
+  or the Keystore did not answer (locked before the first unlock, busy, a
+  daemon that timed out), or a key from an earlier launch failed the
+  self-test. The coordinator keeps sealing to it, and anything the phone
+  cannot open shows the fallback sentence, which still wakes the person.
+  Android's keystore reports a daemon that did not answer the same way it
+  reports a key it will not agree with, which is why a key that was sent is
+  never dropped for failing the self-test once. iOS makes a new key only when
+  the Keychain says there is none, never because a read failed.
+- **The last key sent, though the phone may no longer hold it**, when there is
+  no key to read and none can be made, and when a replacement (below) fails.
+  A replacement deletes the old key before it makes the new one, so after a
+  failed one the key sent is usually gone; so is it on Android when the
+  Keystore entry is missing (settings carried to a phone without it) and no
+  key can be made, and on an iPhone restored onto a new phone, whose settings
+  travel and whose `ThisDeviceOnly` item does not, when the new key cannot be
+  written. Sealed and unreadable is chosen over plaintext. It counts as a
+  failure, and the count is kept rather than cleared, so the phone keeps
+  trying for a key it holds; a fresh one that registers is what heals it.
+- **No key**, only on a phone with no key sent on record: Android 11, where
+  `PURPOSE_AGREE_KEY` does not exist yet; a keystore that will not make an
+  agreement key; a key made in that same registration that fails the
+  self-test, which Android then deletes so the next launch starts fresh; or a
+  Keychain or Keystore error. A phone that never sent one has nothing sealed
+  to it, so it registers without a key at once and loses nothing. **An iPhone
+  reinstall is the exception**: the record goes with the app and the Keychain
+  item outlives it, so a reinstall whose first registration meets a Keychain
+  error goes keyless while the coordinator still holds the old key. The
+  coordinator drops it and records `device.plaintext`, and the next
+  registration that can read the item sends it again. Skipping that one
+  registration was weighed instead and not done: a reinstall often comes with
+  a new APNs token, that registration is the only one carrying it, and the
+  next is the next launch. Android cannot hit this, because the Keystore
+  entry and the record go together (`allowBackup` is off).
+- **A new key** when the key keeps failing, since sending the last key sent
+  for good would leave every notification on the fallback sentence. So each
+  phone counts the registrations its key failed, with the time of the first
+  (Android counts two in the same minute once, because two parts of the app
+  register on start), and after three in a row spread over at least a day it
+  deletes the key and makes another, which goes through the self-test like
+  any new one. When that fails too, the registration sends the last key sent,
+  as above, and keeps the count, so the next registration tries again. Only a
+  registration that sends a key the phone holds clears the count, or one on a
+  phone with no key sent on record that finds no key stored and cannot make
+  one, which sends none: nothing is sealed to that phone, so there is no key
+  to keep trying for. A Keychain or Keystore error on such a phone still
+  counts, because the key it could not read may be there.
+
+The rule is `PushKeyRule.choose` on both phones, tested without the Keychain
+or the Keystore in `PushCryptoTests.swift` and `PushCryptoTest.kt`.
+
+### What the phone says when it cannot open them
+
+Nothing else would say it. A key sent that the phone cannot use, or a seal it
+cannot open, reports success everywhere: the coordinator seals to the key it
+was sent, Apple or Google delivers, and every notification is the fallback
+sentence with no buttons. So each phone keeps what it knows
+(`PushKeyRule.Evidence`) and You's notifications section shows one line while
+it does not know it can open what is sealed to it, a sentence for each reason.
+
+After a registration that sent a key the phone could not use:
+
+> Notifications sent to this phone may arrive without their words: it could
+> not use its key the last time it tried. It tries again each time
+> Fleetwright starts.
+
+"May", because the phone knows the last attempt failed, not that the next will,
+and each launch registers again, which is what clears it.
+
+After a sealed notification that did not open:
+
+> The last notification sealed for this phone arrived without its words. This
+> goes once one arrives with them.
+
+That is all the phone knows. The iOS extension may have run out of time, or the
+notification was sealed to a key the phone has since replaced, and a launch
+does not clear it, so the sentence gives no cause and no remedy.
+
+The line goes when a sealed notification opens, when a registration sends a
+new key the phone holds, when a registration sends no key (nothing is then
+sealed to the phone), and, for doubt about the key alone, when a registration
+reads the same key and it passes the self-test. A notification older than what
+the phone already knows changes nothing: Android dates one by when FCM says it
+was sent, so one sealed to a key just replaced that arrives late is older than
+the registration that replaced it; iOS has only the delivery date. Android learns of each seal in `onMessageReceived`. The iOS extension
+runs in a process of its own, so the app learns what it did from the
+notifications it is shown: on screen while the app is open, tapped, or still in
+Notification Center when You opens. One the extension could not open still
+carries `e`, and `mutable-content` marks one that was sealed. Both phones say
+the same sentences (`test/push-in-apps.test.js`).
+
+### Android 12 and later, and what data-only costs there
+
+**Android 11 stays on plaintext.** The app runs from Android 11, and the
+Keystore's agreement purpose arrived in Android 12, so an Android 11 phone
+registers no key and gets the notifications it always has.
+
+**On Android 12 and later every notification is data-only once the phone has
+registered its key**, because a `notification` block would be drawn by the
+tray as ciphertext. So the cost written above applies to all of them, not
+only to the ones with buttons: a phone where the app has been force-stopped
+gets nothing until the app is opened again, and Doze may delay one.
+`priority: HIGH` is set, which is what buys the wake. That is the trade for
+Google not reading what a session is asking, and it was taken knowingly.
+
+**What is still true, and worth not overstating.** A Live Activity is not
+sealed: ActivityKit is handed `content-state` with nothing of ours run first
+(`docs/push.md`). The key is unavailable before the first unlock after a
+reboot, and the fallback shows. An encrypted notification does not collapse on
+the session name, because the name is inside the envelope; Android replaces by
+that name once it has opened one, and iOS may stack them. An iOS extension that
+runs out of time leaves the fallback sentence and no buttons, as a seal it
+cannot open does. The clear category would still draw them, but the prompt id
+and the digits were never opened, and an answer button does not bring the app
+forward, so a press on one would do nothing at all.
+
+**The extension can read more of the Keychain than it uses.** It reads the
+app's default keychain group, and a group is the smallest thing iOS grants, so
+it could read every item the app keeps there, the coordinator credential among
+them; its code reads the push key and nothing else. Narrowing it would mean
+the app writing the key into a group of its own, which needs a
+`keychain-access-groups` entitlement on the app, and the app's profile is the
+hand-made secret the release installs, which nothing in this repository can
+inspect. An archive that failed on that would stop every release until the
+profile was remade by hand, so the grant stays, to our own extension, and is
+written down here and in `apps/ios/project.yml`. The app's entitlements are
+unchanged, so the existing distribution profile still signs it, and the
+release job refuses an extension profile that does not allow that group.

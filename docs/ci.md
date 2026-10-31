@@ -1218,6 +1218,16 @@ Manager with access to Certificates, Identifiers & Profiles. A Developer-role
 key gets a 403 here, before the archive, and the step says so; that is the one
 thing about it only the account owner can change.
 
+The notification service extension (`network.thetech.fleetwright.Push`,
+`docs/push-encryption.md`) is a third bundle and gets a profile the same way,
+under the name `Fleetwright Push Profile`. After it is written the job reads
+`keychain-access-groups` out of it and refuses one that does not allow the
+app's own id. The extension opens notifications with a key the app stored in
+that group, and the app's entitlements are left as they are so the secret
+profile still signs the app. A profile that listed only the extension's id
+would archive cleanly and then show the fallback sentence on every
+notification, which is the failure the check is there to have first.
+
 ### If the account is already full
 
 Revoke the surplus in the portal under Certificates. The ones CI created are
