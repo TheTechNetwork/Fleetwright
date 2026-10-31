@@ -160,6 +160,15 @@ export const INSIDE = Object.freeze({
     'rm -f /etc/hostid /entropy /boot/entropy /var/db/entropy/*',
     'rm -rf /var/crash/* /var/tmp/*',
     'umount /var/log 2>/dev/null; rm -rf /var/log/*; true',
+    // FREE SPACE ZEROED, last. The host's room planner (ufs-room.js) moves
+    // the configuration into a free block and the host refuses a plan whose
+    // block is not zeros; the upstream image has never been written to, so
+    // every free block of it is, and the sixth CI build's was not: the
+    // update had rewritten hundreds of files, and a block freed by `rm`
+    // keeps what it held. A file of zeros written until the disk is full
+    // and removed leaves every free block zero, and the compressed image
+    // smaller. dd ends with ENOSPC by design; sync's status is the line's.
+    'dd if=/dev/zero of=/.zeros bs=1m >/dev/null 2>&1; rm -f /.zeros; sync',
   ],
   /**
    * THE LAST THING BEFORE POWER-OFF, and the one that makes the image an
@@ -260,7 +269,10 @@ export function qemuArgs(o) {
     '-display', 'none',
     '-monitor', 'none',
     '-serial', 'stdio',
-    '-drive', `file=${o.image},format=raw,if=virtio,cache=writeback`,
+    // discard and detect-zeroes: the zeros the guest writes to fill its free
+    // space (INSIDE.cleanup) become holes in the runner's file rather than
+    // 2.5 GiB of real zeros on its disk.
+    '-drive', `file=${o.image},format=raw,if=virtio,cache=writeback,discard=unmap,detect-zeroes=unmap`,
     '-netdev', 'user,id=lan,restrict=on',
     '-device', 'virtio-net-pci,netdev=lan',
     '-netdev', 'user,id=wan',
