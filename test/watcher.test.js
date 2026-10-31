@@ -700,6 +700,43 @@ test('the resume dialog still comes off the pane, because it fires before any ho
   assert.equal(events.filter((e) => e.event === 'session.awaiting-input').length, 1);
 });
 
+test('/cd asking to move the session is noticed, and is not asked as a trust question', async (t) => {
+  // Drawn from the strings of Claude Code 2.1.310's /cd dialog, laid out the
+  // way test/fixtures/claude-2.1.234-trust.txt shows that CLI drawing a
+  // titled dialog; not a capture. Its question borrows the trust dialog's
+  // sentence with "directory" for "project", and a matcher widened to take
+  // both had the phone ask "Do you trust the files in this folder?" about a
+  // move. Unwidened, nothing noticed it at all, and the session sat there.
+  const CD_DIALOG = [
+    '─'.repeat(80),
+    ' Moving to a new directory:',
+    '',
+    ' /work/elsewhere',
+    '',
+    " This session hasn't worked here before. Is this a directory you created or one you trust?",
+    '',
+    " Claude Code'll be able to read, edit, and execute files here.",
+    '',
+    ' Security guide',
+    '',
+    ' ❯ No, stay put',
+    '   Yes, move here',
+    '',
+    ' Enter to confirm · Esc to cancel',
+  ].join('\n');
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [sessionRecord('job', { status: 'running' })],
+    panes: { job: 'busy' },
+  });
+  await watcher.tick({ quiet: true });
+  stub.panes.job = CD_DIALOG;
+  await watcher.tick();
+  const waiting = events.filter((e) => e.event === 'session.awaiting-input');
+  assert.equal(waiting.length, 1, 'a session held by /cd needs a person');
+  assert.equal(waiting[0].prompt, undefined, 'and the fleet has no question of its own to put to them');
+  assert.notEqual(waiting[0].text, 'Do you trust the files in this folder?');
+});
+
 // --- since when it has needed a person ----------------------------------------
 
 test('since when it has waited: the hook\'s moment when it said one, the first tick that saw it otherwise', async (t) => {

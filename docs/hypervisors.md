@@ -2329,10 +2329,19 @@ server Xen Orchestra is registered with, and:
 
 It leaves alone what Xen Orchestra and Reconnect leave alone: a server a
 person turned off stays off, and a server whose master refuses the password
-Xen Orchestra keeps for it, or whose pool is already connected through
-another server, is named once in xo-server's log and left for a person,
-because trying again cannot help and the first hammers the host with a wrong
-password. The push above still comes when a pool stays gone for five
+Xen Orchestra keeps for it is named once in xo-server's log and left for a
+person, because trying again cannot help and hammers the host with a wrong
+password. A server Xen Orchestra turned away because another server already
+holds its pool is different, and was asked for by someone whose pool master
+answers on two addresses by turns, so they listed it twice: Xen Orchestra
+never retries that server (the refusal ends its loop), so when the host
+moved and the first server dropped, nothing tried the second and the pool
+stayed gone until Reconnect. The watchdog now lets such a server stand by
+while the one holding its pool is connected, said once in the log, and
+connects it after the usual grace once that one is not. Which server holds
+the pool is read from the refusal itself, which names it; a refusal that
+names nothing is left alone as before, since guessing would set two servers
+against each other. The push above still comes when a pool stays gone for five
 minutes; with the watchdog that mostly means one of those, or a master that
 is down.
 
