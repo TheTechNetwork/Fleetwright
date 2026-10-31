@@ -79,7 +79,7 @@ test('the guest going away rejects the wait instead of leaving it to the timeout
 test('one conversation: a second wait while one is pending is refused rather than racing it', async () => {
   const c = new Console({ send: () => {} });
   const first = c.waitFor(/a/, { timeout: 1000, label: 'a' });
-  await assert.rejects(c.waitFor(/b/, { timeout: 1000 }), /already waiting for a/);
+  await assert.rejects(c.waitFor(/b/, { timeout: 1000, label: 'b' }), /already waiting for a/);
   c.feed('a');
   await first;
 });

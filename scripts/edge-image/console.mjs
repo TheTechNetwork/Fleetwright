@@ -120,10 +120,15 @@ export class Console {
    * and consume through it. Answers the match and the text before it. One
    * waiter at a time: the console is one conversation.
    *
-   * @param {RegExp} pattern @param {{ timeout: number, label?: string }} how  timeout in ms
+   * `label` is what the wait is called in an error, and every wait names
+   * one: the pattern itself is never put into a message. A regex is not a
+   * sentence a person reads, and one of them matches the password prompt,
+   * which a scanner reads as the password on its way to a log.
+   *
+   * @param {RegExp} pattern @param {{ timeout: number, label: string }} how  timeout in ms
    * @returns {Promise<{ match: RegExpMatchArray, before: string }>}
    */
-  waitFor(pattern, { timeout, label = String(pattern) }) {
+  waitFor(pattern, { timeout, label }) {
     if (this.waiter) return Promise.reject(new Error(`already waiting for ${this.waiter.label}`));
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
