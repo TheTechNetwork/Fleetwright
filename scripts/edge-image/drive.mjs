@@ -213,6 +213,13 @@ export const FACTS = Object.freeze({
   'config-sha256': 'sha256 -q /usr/local/etc/config.xml',
   'config-owner': 'pkg which -q /usr/local/etc/config.xml 2>/dev/null || echo none',
   'conf-dir': 'ls -la /conf | tr "\\n" ";"',
+  // THE ROOT FILE SYSTEM AS THE KERNEL LEFT IT: the host plans room in it
+  // with ufs-room.js, which refuses a superblock with any flag or check-hash
+  // set, and the fourth CI build's image had one where the upstream image
+  // has none. dumpfs names them (flags, check hashes) and mount says what
+  // the root was mounted from and how.
+  mounts: 'mount -p | tr "\\n" ";"',
+  'root-dumpfs': 'dumpfs "$(mount -p | awk \'$2 == "/" { print $1 }\')" | head -40',
 });
 
 /** @param {string[]} argv */
