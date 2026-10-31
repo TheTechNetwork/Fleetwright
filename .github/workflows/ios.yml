@@ -23,6 +23,14 @@ on:
       # test/parity-fixtures.test.js fails if this line goes away.
       - 'test/fixtures/parity/**'
       - '.github/workflows/ios.yml'
+      # THE SCRIPTS THE JOBS RUN. A change to the Duo pictures step (#1485)
+      # opened as a green pull request whose iOS jobs never ran, because the
+      # script lives under scripts/ and nothing here named it; the first run
+      # of the change would have been on main. test/ios-screenshots.test.js
+      # holds every scripts/*.sh a run: line names to these two lists.
+      - 'scripts/select-xcode.sh'
+      - 'scripts/ios-duo-look.sh'
+      - 'scripts/ios-screenshots.sh'
       - '!apps/ios/**/*.md'
   pull_request:
     paths:
@@ -37,6 +45,14 @@ on:
       # test/parity-fixtures.test.js fails if this line goes away.
       - 'test/fixtures/parity/**'
       - '.github/workflows/ios.yml'
+      # THE SCRIPTS THE JOBS RUN. A change to the Duo pictures step (#1485)
+      # opened as a green pull request whose iOS jobs never ran, because the
+      # script lives under scripts/ and nothing here named it; the first run
+      # of the change would have been on main. test/ios-screenshots.test.js
+      # holds every scripts/*.sh a run: line names to these two lists.
+      - 'scripts/select-xcode.sh'
+      - 'scripts/ios-duo-look.sh'
+      - 'scripts/ios-screenshots.sh'
       - '!apps/ios/**/*.md'
   workflow_dispatch:
   release:

@@ -127,3 +127,23 @@ test('nothing here uploads — that is a separate decision on a full release', (
   // a display type that has none.
   assert.doesNotMatch(SH, /appstoreconnect\.apple\.com|ASC_KEY/);
 });
+
+test('the iOS workflow runs on a change to any script its jobs run, on a push and on a pull request alike', () => {
+  // #1485 changed scripts/ios-duo-look.sh and came up green with no iOS job
+  // run at all: the paths named apps/ios and the workflow file, not the
+  // scripts outside apps/ the jobs call, so the change's first run would have
+  // been on main. Every scripts/*.sh a run: line names has to be in both path
+  // lists, or the filter skips exactly the run that would prove the change.
+  const yml = readFileSync(new URL('../.github/workflows/ios.yml', import.meta.url), 'utf8');
+  const on = yml.slice(0, yml.indexOf('\njobs:'));
+  const lists = ['push:', 'pull_request:'].map((k) => {
+    const from = on.indexOf(`  ${k}`);
+    const next = on.slice(from + 1).search(/\n  [a-z_]+:/);
+    return on.slice(from, next < 0 ? undefined : from + 1 + next);
+  });
+  const scripts = [...new Set([...yml.matchAll(/^\s+run: (?:\.\.\/\.\.\/|\.\/)?(scripts\/[a-z0-9-]+\.sh)\b/gm)].map((m) => m[1]))];
+  assert.ok(scripts.includes('scripts/ios-duo-look.sh') && scripts.includes('scripts/select-xcode.sh'), `the run: lines name ${scripts.join(', ')}`);
+  for (const [i, list] of lists.entries()) {
+    for (const script of scripts) assert.ok(list.includes(`'${script}'`), `${['push', 'pull_request'][i]} paths lack ${script}`);
+  }
+});
