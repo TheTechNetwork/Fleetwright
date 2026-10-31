@@ -737,7 +737,7 @@ test('the guest agent goes in the cloud-init drive and starts before anything th
  *   a command that fails; and, offline, a VM that cannot look up a name, so
  *   curl gets nowhere by name and only by an address it is given
  */
-function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offline = false, pull = false } = {}) {
+function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offline = false, pull = false, beat = 60, slow = false, deaf = false } = {}) {
   const config = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token, addresses });
   const lines = config.split('\n');
   const script = lines.slice(lines.indexOf('    content: |') + 1, lines.indexOf('runcmd:')).map((l) => l.slice(6)).join('\n');
@@ -762,7 +762,7 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
     const counter = (/** @type {string} */ nic, /** @type {number} */ n) =>
       `echo ${n} >'${dir}/net/${nic}/statistics/rx_bytes.next' && mv -f '${dir}/net/${nic}/statistics/rx_bytes.next' '${dir}/net/${nic}/statistics/rx_bytes'`;
     const holdPull = [
-      'if [ "$*" = "install -y fleetwright" ]; then',
+      'if [ "$*" = "install -y --no-install-recommends fleetwright" ]; then',
       `  mkdir -p '${dir}/proc/4242'; printf 'podman\\0pull\\0ghcr.io/x/y:latest\\0' >'${dir}/proc/4242/cmdline'`,
       `  ${until('image:0/262144000')}`,
       `  ${counter('eth0', 5000)}; ${counter('lo', 9000000)}`,
@@ -772,8 +772,10 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
       'fi',
     ].join('\n');
     const stubs = ['apt-get', 'curl', 'sh', 'systemctl', 'cloud-init', 'truncate', 'rm', 'test', 'ip', 'getent', 'sleep', 'resolvectl', 'dpkg', 'debconf-set-selections'].map((c) => {
-      const fails = c === fail ? 'return 1' : offline && c === 'getent' ? 'return 2' : offline && c === 'curl' ? '[[ "$*" == *--resolve* ]] || return 6' : '';
-      const held = pull && c === 'apt-get' ? `${holdPull}\n` : '';
+      // `deaf`: the fleet cannot be reached for reports, and nothing else fails.
+      const fails = c === fail ? 'return 1' : offline && c === 'getent' ? 'return 2' : offline && c === 'curl' ? '[[ "$*" == *--resolve* ]] || return 6' : deaf && c === 'curl' ? '[[ "$*" != */api/xosetup/report ]] || return 6' : '';
+      // `slow` holds apt-get update long enough for the heartbeat to beat.
+      const held = `${pull && c === 'apt-get' ? `${holdPull}\n` : ''}${slow && c === 'apt-get' ? 'if [ "$*" = update ]; then command sleep 0.4; fi\n' : ''}`;
       return `${c}() { echo "${c} $*" >>"$CALLS"; ${held}${fails}${fails ? '; ' : ''}return 0; }`;
     });
     // python3 builds a report's body, whose fourth argument is the step and
@@ -784,6 +786,8 @@ function runImageScript({ fail = '', token = REPORT_TOKEN, addresses = [], offli
     stubs.push('python3() { if [ "${1-}" = - ]; then cat >/dev/null; echo 262144000; else echo "${4-}${6:+:$6}${7:+/$7}"; fi; }');
     const body = script
       .replace('log=/var/log/fleetwright-image.log', `log='${dir}/image.log'`)
+      .replace('stepfile=/run/fleetwright-image.step', `stepfile='${dir}/step'`)
+      .replace('beat=60', `beat=${beat}`)
       .replace('procs=/proc', `procs='${dir}/proc'`)
       .replace('nets=/sys/class/net', `nets='${dir}/net'`)
       .replace('every=15', 'every=0')
@@ -809,7 +813,7 @@ const REPORT_TOKEN = `fwi_a1b2c3d4e5f6_${'ab'.repeat(24)}`;
 
 test('the install script reports each step to the fleet and powers off when every step worked', () => {
   const calls = runImageScript();
-  assert.deepEqual(calls.filter((c) => c.startsWith('report ')), ['report started', 'report packages', 'report installer', 'report cleaning', 'report done']);
+  assert.deepEqual(calls.filter((c) => c.startsWith('report ')), ['report started', 'report dns', 'report packages', 'report installer', 'report cleaning', 'report done']);
   assert.equal(calls.at(-1), 'systemctl poweroff');
   assert.ok(calls.includes('rm -f /root/fleetwright-image.sh'), 'the script, with its token in it, is not left in the image');
   // A VM that never reports in is most often one with no network, so the
@@ -820,8 +824,15 @@ test('the install script reports each step to the fleet and powers off when ever
   // needs: the distributions' own is older, and the installer refuses it.
   const key = calls.indexOf('curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg');
   const user = calls.indexOf('debconf-set-selections ');
-  const install = calls.indexOf('apt-get install -y fleetwright');
+  const install = calls.indexOf('apt-get install -y --no-install-recommends fleetwright');
   assert.ok(key > 0 && key < install && user > 0 && user < install, 'installed before its key or its run user');
+  // NO CONTAINER ON THE IMAGE: the VM is the sandbox, FLEETWRIGHT_SANDBOX is
+  // never turned on in a clone, and podman with the 293 MB session image were
+  // most of a build for nothing. Recommends off, and the installer told.
+  const script = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token: REPORT_TOKEN });
+  assert.match(script, /export DEBIAN_FRONTEND=noninteractive FLEETWRIGHT_NO_SANDBOX=1 FLEETWRIGHT_BUILD_IMAGE=0/);
+  const sh = readFileSync(new URL('../install/install.sh', import.meta.url), 'utf8');
+  assert.match(sh, /FLEETWRIGHT_NO_SANDBOX:-0}" = "1" \]; then\n\s+ok "sandboxing off/, 'the installer honours the knob by not installing podman');
   assert.equal(calls.filter((c) => c === 'apt-get update').length, 2, 'apt is not told about the repository it was just given');
   assert.ok(!calls.some((c) => c.includes('fleet.test/install') || c.includes('/prereq')), 'the installer is still fetched by hand');
 });
@@ -867,6 +878,15 @@ test('a VM that cannot look up a name stops within half a minute, says which ser
   const calls = runImageScript({ offline: true, addresses: ['203.0.113.7', '203.0.113.7', '198.51.100.2'] });
   assert.equal(calls.filter((c) => c === 'getent hosts deb.debian.org').length, 15, 'fifteen looks, two seconds apart');
   assert.ok(calls.includes('sleep 2'));
+  // SAID, AND BOUNDED. A build sat at "started" for twelve minutes on a phone
+  // while fifteen looks at a server that dropped queries each waited the
+  // resolver's default (five seconds, twice, per server): the wait is a step
+  // of its own now, each look waits two seconds for one answer, and the whole
+  // wait is held to a minute.
+  assert.ok(calls.indexOf('report dns') > calls.indexOf('report started') && calls.indexOf('report dns') < calls.indexOf('getent hosts deb.debian.org'));
+  const script = buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token: REPORT_TOKEN });
+  assert.match(script, /RES_OPTIONS='timeout:2 attempts:1' getent hosts deb\.debian\.org/);
+  assert.match(script, /\[ \$\(\(SECONDS - t0\)\) -lt 60 \] \|\| break/);
   assert.ok(calls.includes('resolvectl dns'), 'and the servers DHCP gave it, on its screen and in the log it sends');
   // And who answers when asked straight, and whose MAC the gateway is: a
   // build behind two edge routers was told 10.254.0.1 and heard nothing,
@@ -1170,14 +1190,15 @@ test('a build VM’s reports are what the phone is told, and a failure it report
   // after a real build sat at "18 min so far, usually about 8".
   const p = buildPool({ then: 'Running' });
   const MB = 1024 ** 2;
+  const at = Date.now();
   const reports = [
     null,
-    { step: 'packages', detail: null, at: 0 },
-    { step: 'installer', detail: null, at: 0 },
-    { step: 'image', detail: null, got: 0, of: 262 * MB, at: 0 },
-    { step: 'image', detail: null, got: 131 * MB, of: 262 * MB, at: 0 },
-    { step: 'image', detail: null, got: 268 * MB, of: 262 * MB, at: 0 },
-    { step: 'failed', detail: 'Get:1 deb.debian.org\nE: Unable to fetch some archives', at: 0 },
+    { step: 'packages', detail: null, at },
+    { step: 'installer', detail: null, at },
+    { step: 'image', detail: null, got: 0, of: 262 * MB, at },
+    { step: 'image', detail: null, got: 131 * MB, of: 262 * MB, at },
+    { step: 'image', detail: null, got: 268 * MB, of: 262 * MB, at },
+    { step: 'failed', detail: 'Get:1 deb.debian.org\nE: Unable to fetch some archives', at },
   ];
   let looks = 0;
   /** @type {Array<{ text: string, fill: number }>} */
@@ -1222,10 +1243,97 @@ test('a build VM that never reports in is named as the likely problem, and one t
     say: (text) => shown.push(text),
   }).catch((e) => e);
   assert.ok(shown.some((s) => /min so far, usually about 8\./.test(s)), 'quiet at first: it may still be booting');
-  assert.ok(shown.some((s) => /6 min so far, and its VM has not reported in\. It may have no network, or its start-up script did not run\./.test(s)));
+  assert.ok(shown.some((s) => /4 min so far, and its VM has not reported in\. It may have no network, or its start-up script did not run\./.test(s)));
   assert.match(String(err), /did not finish within 25 minutes, and its VM never reported in.*kept, stopped, as "fleetwright-image-build \(install timed out\)"/);
   assert.ok(p.calls.some((c) => c.method === 'vm.stop' && c.params.id === 'build-vm'));
   assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), 'kept, where a timeout used to delete it');
+});
+
+test('a build VM that halts without saying it finished is kept, named for it, and never made the template', async () => {
+  // THE BUG: the install powers the VM off when every step worked, and the
+  // build took any halt for that. A host rebooted for maintenance, a VM
+  // stopped from Xen Orchestra, an install cut off mid-step: each became the
+  // image every session was cloned from. Found by a review that ran it.
+  const p = buildPool({ then: 'Halted' });
+  let at = 0;
+  const err = await ensureImage({
+    ...buildArgs(p),
+    reporter: async () => REPORT_TOKEN,
+    now: () => at,
+    sleep: async () => { at += 10_000; },
+  }).catch((e) => e);
+  assert.match(String(err), /build VM stopped before it said the install was done \(it never reported in\), so it was not made the template\. Its build VM was kept, stopped, as "fleetwright-image-build \(stopped before done\)"/);
+  assert.ok(!p.calls.some((c) => c.method === 'vm.convertToTemplate' && c.params.id === 'build-vm'), 'a half-built VM became the template');
+  assert.ok(!p.calls.some((c) => c.method === 'vm.delete'), 'kept, to be looked at');
+  assert.ok(at >= 30_000, 'given half a minute for a late done first');
+
+  // Cut off after a step it had reported: that step is named.
+  const q = buildPool({ then: 'Halted' });
+  at = 0;
+  const cut = await ensureImage({
+    ...buildArgs(q), reporter: async () => REPORT_TOKEN, now: () => at, sleep: async () => { at += 10_000; },
+    vmReport: () => ({ step: 'installer', detail: null, at: 10_000 }),
+  }).catch((e) => e);
+  assert.match(String(cut), /stopped before it said the install was done \(the last it said was that installing Fleetwright\)/);
+  assert.ok(!q.calls.some((c) => c.method === 'vm.convertToTemplate' && c.params.id === 'build-vm'));
+});
+
+test('a build VM whose done report lands after Xen Orchestra already said Halted is still the template', async () => {
+  // The VM reports done just before it powers off; the report can arrive
+  // after the halt. It is waited for, a little.
+  const p = buildPool({ then: 'Halted' });
+  let at = 0;
+  const text = await ensureImage({
+    ...buildArgs(p),
+    reporter: async () => REPORT_TOKEN,
+    now: () => at,
+    sleep: async () => { at += 10_000; },
+    vmReport: () => (at >= 40_000 ? { step: 'done', detail: null, at } : { step: 'cleaning', detail: null, at: 10_000 }),
+  });
+  assert.match(text, /machine image is ready on rack/);
+  assert.ok(p.calls.some((c) => c.method === 'vm.convertToTemplate' && c.params.id === 'build-vm'));
+  assert.ok(!p.calls.some((c) => c.method === 'vm.set' && /stopped before/.test(c.params.name_label)));
+});
+
+test('a build VM that said a step and then nothing for three minutes is said to have gone quiet, with what it last said and when', async () => {
+  // THE FROZEN BAR: "started, 12 min so far" on a phone, with no warning,
+  // because the box only warned of a VM that had never reported. The VM now
+  // says its step again every minute (heartbeat), so silence is news.
+  const p = buildPool({ then: 'Running' });
+  let at = 0;
+  /** @type {string[]} */
+  const shown = [];
+  await ensureImage({
+    ...buildArgs(p),
+    reporter: async () => REPORT_TOKEN,
+    now: () => at,
+    sleep: async () => { at += 60_000; },
+    vmReport: () => (at >= 60_000 ? { step: 'packages', detail: null, at: 60_000 } : null),
+    say: (text) => shown.push(text),
+  }).catch(() => {});
+  assert.ok(shown.some((s) => /: installing Debian’s packages, 1 min so far\./.test(s)), 'the step, while it is fresh');
+  assert.ok(shown.some((s) => /: installing Debian’s packages, 3 min so far\./.test(s)), 'three minutes is still within what a slow step takes');
+  assert.ok(shown.some((s) => /: its VM last said that installing Debian’s packages, 4 min ago, and nothing since\. 5 min so far\./.test(s)), `nothing said that it had gone quiet: ${shown.join('\n')}`);
+});
+
+test('the install script says its step again every minute, so a box can tell silence from a slow step, and says nothing more once it is done', () => {
+  const calls = runImageScript({ beat: 0.05, slow: true });
+  const sent = calls.filter((c) => c.startsWith('report '));
+  assert.ok(sent.filter((c) => c === 'report packages').length >= 2, `packages said again while apt-get ran: ${sent.join(', ')}`);
+  assert.ok(sent.slice(sent.lastIndexOf('report done') + 1).length === 0 && sent.at(-1) === 'report done', 'the heartbeat outlived the build');
+  assert.equal(calls.at(-1), 'systemctl poweroff');
+});
+
+test('the done report is tried again until it is heard, and a VM with no token powers off at once', () => {
+  // A VM that halts without a heard `done` is not made the template, so the
+  // one report that decides the build is worth a minute of trying.
+  const deaf = runImageScript({ deaf: true });
+  assert.equal(deaf.filter((c) => c === 'report done').length, 6, 'six tries');
+  assert.equal(deaf.filter((c) => c === 'sleep 10').length, 6);
+  assert.equal(deaf.at(-1), 'systemctl poweroff', 'and it still powers off, kept for the box to look at');
+  const heard = runImageScript();
+  assert.equal(heard.filter((c) => c === 'report done').length, 1);
+  assert.equal(runImageScript({ token: null }).filter((c) => c === 'sleep 10').length, 0);
 });
 
 // --- rebuilt and removed ----------------------------------------------------
