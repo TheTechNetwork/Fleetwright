@@ -136,6 +136,54 @@ test('a wrong stored password is never retried, and is said once', async () => {
   assert.equal(said.filter((m) => /not reconnecting tn-pool: wrong password/.test(m)).length, 1);
 });
 
+test('a second server for a pool another holds stands by, and is connected once that one drops', async () => {
+  // A pool master that answers on two addresses by turns, listed twice:
+  // `a` holds the pool, `b` was turned away for it. Xen Orchestra never
+  // retries `b` (the error ends its loop), and before this neither did the
+  // watchdog, so when the host moved and `a` dropped, the pool stayed gone.
+  const turnedAway = { name: 'PoolAlreadyConnected', message: 'this pool is already connected', poolId: 'p1', connectedServerId: 'a', connectingServerId: 'b' };
+  const xo = fakeXo(
+    [
+      { id: 'a', label: 'pool at .11', enabled: true, status: 'connected', poolId: 'p1' },
+      { id: 'b', label: 'pool at .12', enabled: true, status: 'disconnected', error: turnedAway },
+    ],
+    { connectFails: (id) => (id === 'a' ? new Error('connect ECONNREFUSED') : null) },
+  );
+  const { w, at, said } = watch(xo);
+  for (const t of [0, 10 * MIN, 60 * MIN]) {
+    at(t);
+    await w.check();
+  }
+  assert.deepEqual(xo.calls, [], 'left alone while a holds the pool');
+  assert.equal(said.filter((m) => /pool at \.12 stands by: its pool is connected through pool at \.11/.test(m)).length, 1);
+  // The host moves: a drops and will not come back on its address.
+  Object.assign(xo.byId.get('a'), { status: 'disconnected', error: { message: 'connect ECONNREFUSED' } });
+  delete xo.byId.get('a').poolId;
+  const t0 = 61 * MIN;
+  at(t0);
+  await w.check();
+  at(t0 + DISCONNECTED_GRACE_MS - 1);
+  await w.check();
+  assert.ok(!xo.calls.some((c) => c[1] === 'b'), 'the usual grace first');
+  at(t0 + DISCONNECTED_GRACE_MS);
+  await w.check();
+  assert.ok(xo.calls.some((c) => c[0] === 'connect' && c[1] === 'b'), `b is connected: ${JSON.stringify(xo.calls)}`);
+  assert.equal(xo.byId.get('b').status, 'connected');
+});
+
+test('a server turned away by an error that names no holder is left alone, as before', async () => {
+  const xo = fakeXo([
+    { id: 'a', enabled: true, status: 'disconnected', error: { message: 'connect ECONNREFUSED' } },
+    { id: 'b', enabled: true, status: 'disconnected', error: { message: 'this pool is already connected' } },
+  ]);
+  const { w, at } = watch(xo);
+  for (const t of [0, 10 * MIN, 60 * MIN]) {
+    at(t);
+    await w.check();
+  }
+  assert.ok(!xo.calls.some((c) => c[1] === 'b'), `nothing guessed for b: ${JSON.stringify(xo.calls)}`);
+});
+
 test('it waits longer after each try that does not take, up to half an hour', async () => {
   const xo = fakeXo([{ id: 's1', enabled: true, status: 'disconnected' }], { connectFails: () => new Error('host unreachable') });
   const { w, at } = watch(xo);

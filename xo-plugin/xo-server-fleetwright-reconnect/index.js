@@ -20,9 +20,22 @@
 // WHAT IT LEAVES ALONE, as Xen Orchestra and the app both do:
 //   - a server a person turned off (`enabled: false`), which stays off;
 //   - a server whose pool master refuses the password Xen Orchestra keeps
-//     for it, or whose pool is already connected through another server:
-//     trying again cannot help, and the first hammers the host with a wrong
+//     for it: trying again cannot help, and hammers the host with a wrong
 //     password. It says so in xo-server's log once, and waits for a person.
+//
+// A SECOND SERVER FOR A POOL ANOTHER HOLDS stands by. Asked for, by someone
+// whose pool master answers on two addresses by turns, so they listed it
+// twice: Xen Orchestra turns the second away with "this pool is already
+// connected", never retries it (the error ends its loop, xen-servers.mjs),
+// and so did this, as a permanent error. Then the host moved to the other
+// address, the first server dropped, and nothing ever tried the second: the
+// pool was gone until a person pressed Reconnect. Now a server turned away
+// that way is left alone only while the server that holds its pool is still
+// connected; the moment that one is not, it is a disconnected server like any
+// other, and is connected after the usual grace. Which server holds the pool
+// is read from the error itself (xo-server puts `connectedServerId` and
+// `poolId` on it); an error that names neither is taken as still held, the
+// old behaviour, since guessing wrong would mean two servers fighting.
 //
 // IT RUNS INSIDE XEN ORCHESTRA, as the installer's update plugin does, so it
 // holds no token and no password: it calls the same methods `server.enable`
@@ -44,22 +57,51 @@ const MAX_BACKOFF_MS = 30 * 60e3
 
 /**
  * Whether a server's last error is one trying again cannot fix: the pool
- * master refusing Xen Orchestra's user name and password, or the pool already
- * connected through another server. Xen Orchestra's own loop stops on the
- * same two (xen-servers.mjs, `_connectXenServer`).
+ * master refusing Xen Orchestra's user name and password. Xen Orchestra's
+ * own loop stops on it too (xen-servers.mjs, `_connectXenServer`).
  *
  * @param {any} error
  */
 function permanent(error) {
   if (!error || typeof error !== 'object') return false
-  const code = String(error.code ?? error.data?.code ?? '')
-  const text = `${error.name ?? ''} ${error.message ?? ''}`
-  return code === 'SESSION_AUTHENTICATION_FAILED' || /PoolAlreadyConnected|pool is already connected/i.test(text)
+  return String(error.code ?? error.data?.code ?? '') === 'SESSION_AUTHENTICATION_FAILED'
 }
 
 /**
- * @typedef {{ state: 'disconnected'|'connecting'|'permanent', since: number, attempts: number, due: number }} Seen
- * @typedef {{ id: string, enabled?: boolean, status?: string, error?: any, label?: string, host?: string }} Server
+ * Whether a server's last error is Xen Orchestra turning it away because
+ * another server already holds its pool (`PoolAlreadyConnected`, thrown in
+ * xen-servers.mjs once the connection is up and the pool is known).
+ *
+ * @param {any} error
+ */
+function turnedAway(error) {
+  if (!error || typeof error !== 'object') return false
+  return /PoolAlreadyConnected|pool is already connected/i.test(`${error.name ?? ''} ${error.message ?? ''}`)
+}
+
+/**
+ * The server that holds the pool a turned-away server was refused for, if it
+ * still does: the one the error names, or one connected to the pool the error
+ * names, counted as holding while its status is `connected` whatever its
+ * error, since xo-server keeps the pool for it until it is disconnected. An
+ * error that names neither is answered with the turned-away server itself:
+ * taken as still held, so that nothing is guessed.
+ *
+ * @param {Server} server the one turned away
+ * @param {Server[]} servers every server, as this look saw them
+ * @returns {Server|undefined}
+ */
+function holderOf(server, servers) {
+  const e = server.error ?? {}
+  const holder = e.connectedServerId ?? e.data?.connectedServerId
+  const pool = e.poolId ?? e.data?.poolId
+  if (holder === undefined && pool === undefined) return server
+  return servers.find(s => s.id !== server.id && s.status === 'connected' && (s.id === holder || (pool !== undefined && s.poolId === pool)))
+}
+
+/**
+ * @typedef {{ state: 'disconnected'|'connecting'|'permanent'|'standby', since: number, attempts: number, due: number }} Seen
+ * @typedef {{ id: string, enabled?: boolean, status?: string, error?: any, label?: string, host?: string, poolId?: string }} Server
  */
 
 /**
@@ -68,15 +110,30 @@ function permanent(error) {
  * @param {Server} server
  * @param {Seen|undefined} prev what was remembered last time
  * @param {number} now
- * @returns {{ action: 'none'|'connect'|'cycle'|'give-up', next: Seen|undefined }}
+ * @param {Server[]} [servers] every server this look saw, for a pool held through another
+ * @returns {{ action: 'none'|'connect'|'cycle'|'give-up'|'stand-by', next: Seen|undefined, holder?: Server }}
  */
-function decide(server, prev, now) {
+function decide(server, prev, now, servers = []) {
   if (!server.enabled) return { action: 'none', next: undefined }
   if (server.status === 'connected' && !server.error) return { action: 'none', next: undefined }
   if (permanent(server.error)) {
     // SAID ONCE, then left for a person.
     if (prev?.state === 'permanent') return { action: 'none', next: prev }
     return { action: 'give-up', next: { state: 'permanent', since: now, attempts: 0, due: Infinity } }
+  }
+  if (turnedAway(server.error)) {
+    const holder = holderOf(server, servers)
+    if (holder !== undefined) {
+      // STANDING BY, said once, for as long as the pool is held elsewhere.
+      if (prev?.state === 'standby') return { action: 'none', next: prev }
+      return { action: 'stand-by', next: { state: 'standby', since: now, attempts: 0, due: Infinity }, holder }
+    }
+    // THE POOL IS FREE: from here it is a disconnected server like any
+    // other, its grace counted from the look that found the pool free and
+    // its tries from nought. The refusal stays its last error until Xen
+    // Orchestra tries it again, so only the step out of standing by resets
+    // it; every later look carries the count on.
+    if (prev?.state === 'standby') prev = undefined
   }
   /** @type {'disconnected'|'connecting'|null} */
   const state =
@@ -87,7 +144,7 @@ function decide(server, prev, now) {
   // THE TRIES CARRY ACROSS A CHANGE OF STATE: a try that fails moves the
   // server from connecting back to disconnected, and starting the count again
   // there would mean the wait never grew. Only a healthy server clears it.
-  const attempts = prev && prev.state !== 'permanent' ? prev.attempts : 0
+  const attempts = prev && prev.state !== 'permanent' && prev.state !== 'standby' ? prev.attempts : 0
   const backoff = Math.min(wait * 2 ** attempts, MAX_BACKOFF_MS)
   if (prev?.state !== state) return { action: 'none', next: { state, since: now, attempts, due: now + backoff } }
   if (now < prev.due) return { action: 'none', next: prev }
@@ -143,10 +200,10 @@ class Watchdog {
       const ids = new Set(servers.map(s => s.id))
       for (const id of this._seen.keys()) if (!ids.has(id)) this._seen.delete(id)
       for (const server of servers) {
-        const { action, next } = decide(server, this._seen.get(server.id), this._now())
+        const { action, next, holder } = decide(server, this._seen.get(server.id), this._now(), servers)
         if (next === undefined) this._seen.delete(server.id)
         else this._seen.set(server.id, next)
-        await this._act(action, server, next)
+        await this._act(action, server, next, holder)
       }
     } finally {
       this._running = false
@@ -154,12 +211,18 @@ class Watchdog {
   }
 
   /**
-   * @param {'none'|'connect'|'cycle'|'give-up'} action
+   * @param {'none'|'connect'|'cycle'|'give-up'|'stand-by'} action
    * @param {Server} server
    * @param {Seen|undefined} seen
+   * @param {Server} [holder] for `stand-by`: the server that holds this one's pool
    */
-  async _act(action, server, seen) {
+  async _act(action, server, seen, holder) {
     const name = named(server)
+    if (action === 'stand-by') {
+      const by = holder === undefined || holder.id === server.id ? 'another server' : named(holder)
+      this._log.info(`[fleetwright-reconnect] ${name} stands by: its pool is connected through ${by}, and it is connected if that one drops.`)
+      return
+    }
     if (action === 'give-up') {
       this._log.warn(
         `[fleetwright-reconnect] not reconnecting ${name}: ${server.error?.message || server.error?.code || 'its last error'} will not change by trying again. Fix it in Settings → Servers.`
@@ -207,6 +270,7 @@ module.exports = ({ xo }) => new Watchdog(xo)
 module.exports.Watchdog = Watchdog
 module.exports.decide = decide
 module.exports.permanent = permanent
+module.exports.turnedAway = turnedAway
 module.exports.CHECK_MS = CHECK_MS
 module.exports.DISCONNECTED_GRACE_MS = DISCONNECTED_GRACE_MS
 module.exports.CONNECTING_STUCK_MS = CONNECTING_STUCK_MS
