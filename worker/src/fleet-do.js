@@ -18,7 +18,7 @@
 // cache with provenance, never the authority" happen to be the same rule, which
 // is a good sign the rule was right.
 
-import { CoordinatorCore, deviceStatus, deviceText, hostReported } from '../../src/fleet/coordinator/core.js';
+import { CoordinatorCore, CLAUDE_CHECK_MS, deviceStatus, deviceText, hostReported } from '../../src/fleet/coordinator/core.js';
 import { pusherFromEnv } from '../../src/fleet/push.js';
 import { relayFromEnv as relayEnv } from '../../src/fleet/relay/client.js';
 import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification, isWithdrawal, isAllowed } from '../../src/fleet/coordinator/oidc.js';
@@ -1668,16 +1668,31 @@ export class Fleet {
 
   /**
    * Hosts push their own health, so this is a backstop rather than the
-   * mechanism: it re-arms while any socket is open, and asks anything that has
-   * gone quiet. A DO alarm is far too coarse to poll on.
+   * mechanism: every thirty seconds while any socket is open it asks anything
+   * that has gone quiet, and every fifteen minutes with none open it still
+   * retires stranded machines and asks after the kept Claude sign-ins. A DO
+   * alarm is far too coarse to poll on.
    */
   async alarm() {
     // Temporary machines a deploy or an eviction dropped without a close
-    // (core.js retireStranded): first, so a fleet with no sockets left still
-    // gets the one pass this alarm makes before it stops re-arming.
+    // (core.js retireStranded): first, and on every pass. Its clock of when
+    // each went missing lives in memory, so in a fleet with no socket left an
+    // object evicted between the slow passes starts it again, and a runner
+    // stranded there is retired once some host connects, as before.
     this.core.retireStranded();
     const sockets = this.state.getWebSockets();
-    if (!sockets.length) return;
+    if (!sockets.length) {
+      // NO HOST IS NOT NOTHING TO CHECK. Returning here stopped the alarm, so
+      // a fleet whose last box had gone quiet never asked after its kept
+      // Claude sign-ins again (core.js, checkClaudeSignIns), and a person
+      // whose sign-in Anthropic ended was not told until a box connected.
+      // The health pings need a socket; the check does not, and keeps its
+      // own slower clock, which is what arms the next pass. A connecting box
+      // arms the fast one again.
+      await this.state.storage.setAlarm(Date.now() + CLAUDE_CHECK_MS);
+      await this.#checkClaude();
+      return;
+    }
     for (const host of this.core.registry.schedulable()) {
       // Only the ones we have not heard from recently; a healthy host is
       // already telling us.
@@ -1689,7 +1704,16 @@ export class Fleet {
     // Anthropic has ended it (core.js, checkClaudeSignIns): every fifteen
     // minutes of these thirty-second passes, after the next is armed so a slow
     // minter cannot stop the health pings.
-    await this.core.checkClaudeSignIns().catch(() => {});
+    await this.#checkClaude();
+  }
+
+  /** The Claude check, said in the log when it throws rather than swallowed. */
+  async #checkClaude() {
+    try {
+      await this.core.checkClaudeSignIns();
+    } catch (e) {
+      console.warn(`fleet: could not ask after the Claude sign-ins: ${/** @type {Error} */ (e).message || e}`);
+    }
   }
 
   async #saveHosts() {

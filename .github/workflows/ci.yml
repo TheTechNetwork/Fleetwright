@@ -281,6 +281,23 @@ jobs:
       # do less than the checked-in script does. Two implementations of one
       # check is how the weaker one becomes the one that passes.
 
+      # THE PINNED CLAUDE CODE'S DIALOGS, against the matchers that watch for
+      # them. Once, here, not on the Node matrix: the binary does not change
+      # with the runtime. The release is the one mac-host.yml, ephemeral-mac.yml
+      # and sandbox/Containerfile pin, read with Renovate's own patterns, so a
+      # Renovate bump of Claude Code is checked on its own pull request. It
+      # fails when a trust, permission, resume or /cd dialog that release draws
+      # is one the fleet would miss or misread, or one it claims to answer and
+      # cannot. No credential and no session: the source is text in the binary.
+      #
+      # ABOUT 130 MB, ON EVERY RUN. `npm pack --ignore-scripts` fetches only the
+      # linux-x64 package and runs no postinstall, and that package IS the
+      # binary, so there is nothing smaller to fetch. Not cached: a cache would
+      # move the same bytes from a different server, and miss on every
+      # Claude Code release, which is when this check matters.
+      - name: Pinned Claude Code dialogs
+        run: node scripts/claude-dialog-check.mjs
+
   # THE TESTS ONLY ROOT CAN RUN, as root.
   #
   # Twenty-four tests skip unless they run as root: root's doctor reaching

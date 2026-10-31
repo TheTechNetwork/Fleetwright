@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '24.22.1'
+          node-version: '24.22.2'
       - run: npm ci --omit=dev --no-audit --no-fund
 
       - name: The things a session needs
@@ -101,7 +101,7 @@ jobs:
           brew untap aws/tap >/dev/null 2>&1 || true
           brew install tmux
           # renovate: datasource=npm depName=@anthropic-ai/claude-code
-          npm install -g @anthropic-ai/claude-code@2.1.310
+          npm install -g @anthropic-ai/claude-code@2.1.312
           tmux -V && claude --version
 
       - name: Run as a host until the clock runs out

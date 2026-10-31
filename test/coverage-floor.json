@@ -87,6 +87,7 @@
   "src/fleet/coordinator/spent-tokens.js": 100,
   "src/fleet/crypto.js": 98,
   "src/fleet/host/auto-labels.js": 100,
+  "src/fleet/host/claude-dialogs.js": 99,
   "src/fleet/host/config.js": 65,
   "src/fleet/host/enrol-next.js": 100,
   "src/fleet/host/evidence.js": 100,
