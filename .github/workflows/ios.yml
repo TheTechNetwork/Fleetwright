@@ -219,42 +219,6 @@ jobs:
           fi
           grep -E 'Executed [0-9]+ test' /tmp/xcodebuild-test.log | tail -3
 
-      # WHAT IT LOOKS LIKE ON THE DUO, as pictures attached to the run. Not a
-      # test: scripts/ios-duo-look.sh says why, and skips without a Duo.
-      # THE HINGE, so the pictures can open the Duo: simctl cannot. MIT, a
-      # bash script and an Objective-C helper it compiles with this Xcode and
-      # runs inside the simulator; read before it was adopted, and again at
-      # 0.3.0 (the helper unchanged, the script still without network). At a
-      # commit, not a tag or `brew install`, because a tag can move and this
-      # runs code inside the simulator. Only the pictures use it.
-      #
-      # RENOVATE MOVES BOTH LINES TOGETHER: the tag is what a person reads, the
-      # commit is what is fetched, and renovate.json's manager for them reads
-      # the pair, so one is never bumped without the other.
-      - name: Fetch hinge
-        env:
-          # renovate: datasource=github-tags depName=artemnovichkov/hinge
-          HINGE_VERSION: v0.3.0
-          HINGE_COMMIT: afb8f0bd277cb12187f0844a79542cbac35e7385
-        run: |
-          set -euo pipefail
-          dir="$RUNNER_TEMP/hinge"
-          git init -q "$dir"
-          git -C "$dir" fetch -q --depth 1 https://github.com/artemnovichkov/hinge.git "$HINGE_COMMIT"
-          git -C "$dir" checkout -q FETCH_HEAD
-          echo "HINGE=$dir/bin/hinge" >> "$GITHUB_ENV"
-
-      - name: iPhone Duo pictures
-        working-directory: apps/ios
-        run: ../../scripts/ios-duo-look.sh
-
-      - uses: actions/upload-artifact@v7.0.2
-        with:
-          name: iphone-duo-xcode-${{ matrix.xcode }}
-          path: apps/ios/build/duo-look/
-          if-no-files-found: ignore
-          retention-days: 14
-
   # TestFlight. Runs on a published release, and skips itself rather than
   # failing when the App Store Connect credentials are not set up yet.
   testflight:
@@ -923,6 +887,81 @@ jobs:
           name: ios-screenshots
           path: ${{ runner.temp }}/screenshots
           if-no-files-found: error
+
+  # THE IPHONE DUO PICTURES, at a full release and nowhere else. Apple's
+  # screenshot specification lists the Duo's four sizes, says screenshots for
+  # it are required from April 2027 for any app on the iOS 27.1 SDK or later,
+  # and puts a badge on the product page once they are there; the App Store
+  # Connect API's ScreenshotDisplayType had no Duo type on 31 October 2026, so
+  # there is nothing to upload them under yet. Until there is, each release
+  # takes them beside the store screenshots and attaches them, so the pictures
+  # the store will want exist for every version and can be looked at; when the
+  # type appears they become a display type in scripts/ios-screenshots.sh and
+  # an upload, and this job goes. They were taken on every pull request push
+  # before this: ten minutes of each build job, half of it, for pictures nobody
+  # looked at per push, and the person who would look has the device
+  # (scripts/ios-duo-look.sh). Not in the submission's `needs`: the submit job
+  # does not wait on pictures it cannot send.
+  duo-pictures:
+    name: iPhone Duo pictures
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    runs-on: xcode-27
+    # The same wall as the store screenshots: a simulator that never finishes
+    # booting is a job that never ends.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Select Xcode
+        # The SDK decides how iPhone Duo draws the app; scripts/select-xcode.sh.
+        run: ./scripts/select-xcode.sh
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+        run: |
+          brew untap aws/tap >/dev/null 2>&1 || true
+          brew install xcodegen
+      - name: Generate the Xcode project
+        working-directory: apps/ios
+        run: xcodegen generate
+
+
+      # THE HINGE, so the pictures can open the Duo: simctl cannot. MIT, a
+      # bash script and an Objective-C helper it compiles with this Xcode and
+      # runs inside the simulator; read before it was adopted, and again at
+      # 0.3.0 (the helper unchanged, the script still without network). At a
+      # commit, not a tag or `brew install`, because a tag can move and this
+      # runs code inside the simulator. Only the pictures use it.
+      #
+      # RENOVATE MOVES BOTH LINES TOGETHER: the tag is what a person reads, the
+      # commit is what is fetched, and renovate.json's manager for them reads
+      # the pair, so one is never bumped without the other.
+      - name: Fetch hinge
+        env:
+          # renovate: datasource=github-tags depName=artemnovichkov/hinge
+          HINGE_VERSION: v0.3.0
+          HINGE_COMMIT: afb8f0bd277cb12187f0844a79542cbac35e7385
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/hinge"
+          git init -q "$dir"
+          git -C "$dir" fetch -q --depth 1 https://github.com/artemnovichkov/hinge.git "$HINGE_COMMIT"
+          git -C "$dir" checkout -q FETCH_HEAD
+          echo "HINGE=$dir/bin/hinge" >> "$GITHUB_ENV"
+
+      - name: iPhone Duo pictures
+        working-directory: apps/ios
+        run: ../../scripts/ios-duo-look.sh
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: iphone-duo
+          path: apps/ios/build/duo-look/
+          # Empty without a Duo on the image, which the script says loudly and
+          # is the image's news, not this release's failure.
+          if-no-files-found: ignore
 
   release-app-store:
     name: submit to the App Store

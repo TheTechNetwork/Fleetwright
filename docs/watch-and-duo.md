@@ -51,8 +51,11 @@ is meant literally.
   and these are for custom layouts.
 - **Apple Pencil (USB-C) works on both displays** from iOS 27.2.
 - **App Store Connect has four Duo screenshot sizes**, folded and unfolded in
-  each orientation. They are optional until April 2027, and uploads were not yet
-  accepted when the device shipped.
+  each orientation (1398×2034 and 2007×2853, either way round). Apple's
+  specification requires them from April 2027 for any app on the iOS 27.1 SDK
+  or later, and shows a badge on the product page once they are there. The
+  App Store Connect API's `ScreenshotDisplayType` still named no Duo type on
+  31 October 2026, so the release job cannot upload them yet.
 
 ### What is built
 
@@ -68,7 +71,9 @@ is meant literally.
    (27A9275), the oldest SDK that draws the Duo edge to edge, was built beside
    27.2 until 27.2 shipped. Unit tests run on the image's iPhone Duo
    simulator, and `scripts/ios-duo-look.sh` attaches a picture of each tab on it
-   to every run. The deployment target stays iOS 26 for the reason
+   in each pose to every full release (the `duo-pictures` job): the store's own
+   four sizes, ready for the upload the API does not take yet. They were on
+   every pull request push until the person who looks had the device. The deployment target stays iOS 26 for the reason
    `project.yml` gives.
 2. **Sessions and Machines are list beside page.** `ListBesideDetail` wraps each
    in a `NavigationSplitView`: unfolded, the list stays on screen beside the
@@ -112,9 +117,10 @@ is meant literally.
 ### Still to do
 
 1. **Look at it in every pose.** CI builds on 27.2, and on the next beta once
-   the image has it, and runs the unit tests on the iPhone Duo simulator, and each run attaches the three tabs on
-   both displays; `simctl` cannot fold or rotate, so the other poses and a
-   device are still a person's job. Fold, unfold, rotate, and open a session
+   the image has it, and runs the unit tests on the iPhone Duo simulator, and
+   each full release attaches the three tabs on both displays in each pose
+   (`hinge` folds and rotates the simulator); a device is still a person's
+   job. Fold, unfold, rotate, and open a session
    from a notification in each pose. **Look first at unfolded portrait**: the tab
    sidebar, the 300-point list and the page are three columns on 669 points, and
    the tab sidebar is meant to be the one that collapses. If it does not, the
@@ -124,8 +130,10 @@ is meant literally.
 3. **Two windows.** `UIApplicationSupportsMultipleScenes` would let two sessions
    sit side by side on the inner display. It needs every notification and
    handoff path checked against more than one scene first.
-4. **Screenshots for the Duo classes**, in `ios-screenshots.sh`, once App Store
-   Connect accepts them and `simctl` can set the fold.
+4. **Screenshots for the Duo classes**, in `ios-screenshots.sh`, once the App
+   Store Connect API names a display type for them: the pictures and the poses
+   exist (`ios-duo-look.sh`, with `hinge` for the fold), so it is the type's
+   name and the upload. Required from April 2027.
 
 ### Android foldables are out of scope, and why
 

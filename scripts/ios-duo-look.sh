@@ -4,16 +4,22 @@
 #   ./scripts/ios-duo-look.sh            # into apps/ios/build/duo-look
 #   HINGE=/path/to/hinge ./scripts/ios-duo-look.sh
 #
-# WHY IT EXISTS. CI compiling the Duo layout says the Swift is valid, not that
-# the split view, the tab sidebar and the vertical bars land where
-# docs/watch-and-duo.md says they do. This is the cheapest evidence that they
-# do: the demo fleet, launched on the Duo, each tab in each pose. It is not a
-# test and asserts nothing about the pictures; it fails only when there is no
-# picture to look at.
+# WHY IT EXISTS. The pictures the store will want: Apple's screenshot
+# specification lists the Duo's four sizes, which are the ones taken here, and
+# requires Duo screenshots from April 2027 for any app on the iOS 27.1 SDK or
+# later. The App Store Connect API had no display type for them on 31 October
+# 2026, so ios.yml takes them at each full release and attaches them (the
+# `duo-pictures` job), and they become an upload, a display type in
+# ios-screenshots.sh, when the type exists. Until then they are the demo
+# fleet, launched on the Duo, each tab in each pose, for a person to look at;
+# this is not a test and asserts nothing about the pictures, failing only when
+# there is no picture to look at. They were taken on every pull request push
+# before, half of each build job's time, and the person who looks has the
+# device, so they are not any more.
 #
-# NOT THE STORE SCREENSHOTS. ios-screenshots.sh makes those, and App Store
-# Connect did not accept the Duo's display types when the device shipped, so a
-# Duo directory there would be an upload that fails.
+# NOT THE STORE SCREENSHOTS, YET. ios-screenshots.sh makes those, keyed on the
+# API's display types, and a Duo directory there would be an upload that fails
+# until the API names one.
 #
 # THE POSES NEED `hinge`. The simulator boots closed and simctl has no verb to
 # open it, so the first run of this script photographed a black inner display.
