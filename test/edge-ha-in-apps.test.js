@@ -28,8 +28,20 @@ const SHARED = [
   'On: they share the way out, so one carries the machines while the other restarts for an update.',
   'Off: one router, and when it restarts for an update, machines behind it have no way out for those minutes.',
   ' Apply makes the second and hands over to it: machines behind it have no way out while it starts.',
-  ' Apply removes the second and rebuilds the first: machines behind it have no way out until it is up.',
 ];
+
+/**
+ * What going back to one costs, as the box says it now that the first is
+ * rebuilt beside the second while the second still carries the machines
+ * (ONE_BOOT in src/fleet/host/edge-router.js): the way out is gone for one
+ * boot, not for the whole build. iOS says so; Android still says the old
+ * sentence and is the next layer up (CONTRIBUTING.md), where this goes back
+ * into SHARED.
+ */
+const BACK_TO_ONE = {
+  ios: ' Apply removes the second and rebuilds the first: machines behind it keep their way out while the new one is built, and have none while it starts.',
+  android: ' Apply removes the second and rebuilds the first: machines behind it have no way out until it is up.',
+};
 
 test('offered only by a machine whose `can` says so, and only with the router asked for', () => {
   assert.ok(HOST.includes("'edge-ha'"), 'the machine does not say it can');
@@ -57,4 +69,7 @@ test('both phones say it in the same words', () => {
     assert.ok(I_FORM.includes(words), `iOS: ${words}`);
     assert.ok(A_FORM.includes(words), `Android: ${words}`);
   }
+  assert.ok(I_FORM.includes(BACK_TO_ONE.ios), 'iOS: going back to one still says the way out is gone for the whole build');
+  assert.ok(!I_FORM.includes('no way out until it is up'), 'iOS: the old sentence is still there');
+  assert.ok(A_FORM.includes(BACK_TO_ONE.android), 'Android: going back to one');
 });

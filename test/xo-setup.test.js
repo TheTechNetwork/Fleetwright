@@ -232,6 +232,22 @@ test('automatic updates switched off by a person stay off', { skip }, async (t) 
   assert.match(end.text, /reconnect watchdog is not on it/);
 });
 
+test('updates that cannot be turned on are a warning in the summary, and the token still reaches the phone', { skip }, async (t) => {
+  // A failure in the updates step, after the token was made, failed the
+  // whole job and threw the token away unhanded.
+  const xo = await standIn(t, { refuse: { 'plugin.get': 'not enough permissions' } });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  const { sealed, reply } = await phone(begun, xo.address, xo.pin);
+  await setups.run({ job: begun.xosetup.job, sealed, actor });
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.equal((await collect(end, reply, xo.address)).token, 'tok-limited-123');
+  assert.match(end.text, /Updates were not turned on: not enough permissions\. The token was made all the same; whether Xen Orchestra updates itself, and whether the reconnect watchdog is loaded, is for its Settings, Plugins to say\./);
+  assert.doesNotMatch(end.text, /updates itself once a day|reconnects a pool it loses by itself/);
+});
+
 test('the reconnect watchdog a build carries is loaded and kept loading', { skip }, async (t) => {
   const xo = await standIn(t, { watchdog: { id: 'fleetwright-reconnect', loaded: false, autoload: false } });
   const { setups } = await machine();
@@ -304,6 +320,63 @@ test('a server that caps tokens lower still gets one, at its own default length'
   const kept = await collect(end, reply, xo.address);
   assert.equal(kept.tokenExpires, null, 'the length is the server’s, which it does not say');
   assert.deepEqual({ trusted: kept.certificate.trusted, accepted: kept.certificate.accepted }, { trusted: false, accepted: true });
+});
+
+test('a setup run again removes the tokens before it, and says when Xen Orchestra would not', { skip }, async (t) => {
+  // Every run minted a token and left the earlier ones valid for their 180
+  // days, so a setup run again for a lost phone left that phone's token
+  // opening the pool. The limited user removes its own, all but the new one.
+  const actor = 'eli@example.com';
+  const onboard = async (/** @type {any} */ xo, /** @type {XoSetups} */ setups) => {
+    const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+    const { sealed, reply } = await phone(begun, xo.address, xo.pin);
+    assert.equal((await setups.run({ job: begun.xosetup.job, sealed, actor })).ok, true);
+    const end = await finished(setups, begun.xosetup.job, actor);
+    assert.equal(end.state, 'done', end.text);
+    return { end, kept: await collect(end, reply, xo.address) };
+  };
+  const xo = await standIn(t);
+  const { setups } = await machine();
+  const first = await onboard(xo, setups);
+  assert.equal(first.kept.token, 'tok-limited-123');
+  const second = await onboard(xo, setups);
+  assert.equal(second.kept.token, 'tok-limited-124', 'a new token each run');
+  assert.deepEqual(xo.tokens.get(FLEET_USER), ['tok-limited-124'], 'the first is gone and the new one kept');
+  assert.deepEqual(
+    xo.calls.filter((c) => c.method === 'token.deleteAll').map((c) => [c.as, c.params.except]),
+    [[FLEET_USER, 'tok-limited-123'], [FLEET_USER, 'tok-limited-124']],
+    'asked as the limited user, for all but the one just made',
+  );
+  assert.match(second.end.text, /Any token the fleetwright user had from before was removed, so only this one opens the pool\./);
+
+  // A Xen Orchestra without the method, and one that refuses it: the token
+  // is made all the same, and the summary says the old ones stayed (C-5).
+  for (const [opts, said] of /** @type {const} */ ([
+    [{ drop: ['token.deleteAll'] }, /This Xen Orchestra does not offer token\.deleteAll, so any token the fleetwright user had from before still opens the pool until it expires\./],
+    [{ refuse: { 'token.deleteAll': 'not enough permissions' } }, /This Xen Orchestra refused to remove the fleetwright user’s earlier tokens \(not enough permissions\), so any token the fleetwright user had from before still opens the pool until it expires\./],
+  ])) {
+    const other = await standIn(t, opts);
+    const { end, kept } = await onboard(other, (await machine()).setups);
+    assert.equal(kept.token, 'tok-limited-123');
+    assert.match(end.text, said);
+    assert.doesNotMatch(end.text, /was removed/);
+  }
+});
+
+test('two runs of one job arriving together start it once', { skip }, async (t) => {
+  // Both passed "already been given its sign-in" while the first was still
+  // opening its seal, and both ran the steps: two admin sign-ins, two tokens.
+  const xo = await standIn(t);
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  const { sealed } = await phone(begun, xo.address, xo.pin);
+  const twice = await Promise.all([setups.run({ job: begun.xosetup.job, sealed, actor }), setups.run({ job: begun.xosetup.job, sealed, actor })]);
+  assert.deepEqual(twice.map((r) => (r.ok ? 'started' : r.text)).sort(), ['That setup has already been given its sign-in.', 'started']);
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.equal(xo.calls.filter((c) => c.method === 'session.signIn' && c.params.email === 'admin@admin.net').length, 1, 'the steps ran once');
+  assert.equal(xo.calls.filter((c) => c.method === 'token.create').length, 1, 'one token');
 });
 
 test('a setup begun with nobody’s name on it is refused', async () => {
@@ -757,6 +830,96 @@ test('a policy job cancelled, or left, while it waits changes nothing', { skip }
   assert.ok(!xo.calls.some((c) => c.method === 'resourceSet.set' || c.method.startsWith('tag.')));
 });
 
+test('a cancel during the uplink, or between two images, ends the job cancelled and starts nothing further', { skip }, async (t) => {
+  // cancel() aborted whatever build was running, and each build made its own
+  // signal: a cancel during the uplink, the labs or between two images
+  // aborted nothing, the next build ran in full on a fresh signal, and the
+  // job ended `done`. One signal per job now, looked at between each thing.
+  const actor = 'eli@example.com';
+  const edge = { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' };
+  const more = ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'vif.set'];
+  const limits = { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 };
+  await t.test('during the uplink, with an image asked for behind the edge already there', async () => {
+    const box = /** @type {{ cancel?: () => void }} */ ({});
+    const xo = await standIn(t, { sets: [chosenBefore()], more, vms: { edge }, on: { 'network.create': () => box.cancel?.() } });
+    /** @type {any[]} */
+    const asked = [];
+    const { setups } = await machine({ coordinatorUrl: 'https://fleet.test', buildImage: async (/** @type {any} */ o) => (asked.push(o), 'The machine image is ready on Home.') });
+    const { begun } = await choosing(xo, setups, actor);
+    const job = begun.xosetup.job;
+    box.cancel = () => setups.cancel({ job, actor });
+    const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', image: true, limits };
+    assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'cancelled', end.text);
+    assert.equal(asked.length, 0, 'no build began after the cancel');
+    assert.ok(xo.calls.some((c) => c.method === 'resourceSet.set'), 'the policy itself was applied before it');
+    assert.equal(end.text, 'Cancelled before it built anything. What the fleet may use was changed; the fleet’s own networks it had made by then are kept, and nothing was built.');
+  });
+  await t.test('between two images: the first finishes, the second is never begun, and the words keep moving', async () => {
+    // The first build takes the cancel and finishes all the same, as a build
+    // between two of its own checks does. The words keep moving while it
+    // winds down; the bar of bytes being thrown away does not.
+    const box = /** @type {{ cancel?: () => void, text?: () => string }} */ ({});
+    const xo = await standIn(t, { sets: [chosenBefore()], more, vms: { edge } });
+    /** @type {any[]} */
+    const asked = [];
+    /** @type {string[]} */
+    const texts = [];
+    const { setups } = await machine({
+      coordinatorUrl: 'https://fleet.test',
+      buildImage: async (/** @type {any} */ o) => {
+        asked.push(o);
+        box.cancel?.();
+        texts.push(box.text?.() ?? '');
+        assert.equal(o.signal.aborted, true, 'the cancel aborted this build’s signal');
+        o.say('Removing what was made of the machine image.');
+        texts.push(box.text?.() ?? '');
+        o.say('Writing Debian 13’s disk to Home: 700 of 2048 MB.', { stage: 2, stages: 4, fill: 300 });
+        texts.push(box.text?.() ?? '');
+        return 'The machine image is ready on Home.';
+      },
+    });
+    const { begun } = await choosing(xo, setups, actor);
+    const job = begun.xosetup.job;
+    box.cancel = () => setups.cancel({ job, actor });
+    box.text = () => setups.status({ job, actor }).text;
+    const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab'], egress: 'net-dmz', images: ['debian-13', 'ubuntu-24.04'], limits };
+    assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'cancelled', end.text);
+    assert.deepEqual(asked.map((o) => o.image), ['debian-13'], 'the second image was never begun');
+    assert.deepEqual(texts, [
+      'Stopping the machine image’s build and removing what it made.',
+      'Removing what was made of the machine image.',
+      'Removing what was made of the machine image.',
+    ]);
+    assert.equal(end.text, 'Cancelled between the things you asked for. What the fleet may use was changed, and nothing more was started. Before it was cancelled: The machine image is ready on Home.');
+  });
+  await t.test('during the uplink, with the edge to be rebuilt: the rebuild never begins', async () => {
+    // Its key in the clear has it rebuilt (G14); the rebuild used to begin on
+    // a signal of its own and stop the router.
+    const box = /** @type {{ cancel?: () => void }} */ ({});
+    const vms = { edge: { ...edge, name_label: 'fleetwright-edge', tags: [...edge.tags, 'fleetwright-edge-watch'], xenStoreData: xenStoreAsXo({ 'fleetwright-watch': JSON.stringify(WATCH) }) } };
+    const xo = await standIn(t, {
+      sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab'] }],
+      more,
+      vms,
+      vifs: { w: { id: 'w', type: 'VIF', $VM: 'edge', device: '0', $network: 'net-dmz' } },
+      on: { 'network.create': () => box.cancel?.() },
+    });
+    const { setups } = await machine({ coordinatorUrl: 'https://fleet.test' });
+    const { begun } = await choosing(xo, setups, actor);
+    const job = begun.xosetup.job;
+    box.cancel = () => setups.cancel({ job, actor });
+    const limitsOnly = { v: 1, srs: ['sr2'], networks: ['net-lab'], egress: 'net-dmz', limits };
+    assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, limitsOnly), actor })).ok, true);
+    const end = await finished(setups, job, actor);
+    assert.equal(end.state, 'cancelled', end.text);
+    assert.ok(!xo.calls.some((c) => c.method === 'vm.stop'), 'the router was not stopped for a rebuild that never began');
+  });
+});
+
 test('a choice is held to what the pool has, and the way out to a network it listed', () => {
   const choices = {
     srs: new Map([['a', 100 * 1024 ** 3], ['b', 50 * 1024 ** 3]]),
@@ -924,12 +1087,13 @@ test('a router that carries its key in the clear has it taken off by the next po
   // WHAT EVERY SIGNED-IN USER READS no longer holds any of it.
   const seen = JSON.stringify(vms);
   for (const value of [WATCH.key, WATCH.secret, WATCH.prv.split('\n')[1]]) assert.ok(!seen.includes(value), 'the key was left where everybody signed in reads it');
-  // AND THE ROUTER IS BUILT AGAIN with a key nobody saw: stopped to be
-  // replaced, which here goes no further than this stand-in has a template
-  // for, and started again as it was.
+  // AND THE ROUTER IS BUILT AGAIN with a key nobody saw: the new one first,
+  // while the old one runs, which here goes no further than this stand-in
+  // has a template for; the old one was never stopped for it, and the
+  // sentence says so rather than that it was started again.
   const order = xo.calls.filter((c) => (c.method === 'vm.stop' || c.method === 'vm.start') && c.params.id === 'edge').map((c) => c.method);
-  assert.deepEqual(order, ['vm.stop', 'vm.start'], end.text);
-  assert.match(end.text, /no built-in "Other install media" template/);
+  assert.deepEqual(order, [], end.text);
+  assert.match(end.text, /no built-in "Other install media" template[\s\S]*The edge router it was replacing was left running, as it was/);
 });
 
 test('labs are 0 to 4 in all, on the edge, and a phone that says nothing leaves them as they are', () => {

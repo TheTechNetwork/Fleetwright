@@ -15,7 +15,9 @@ import assert from 'node:assert/strict';
 
 import { CoordinatorCore, MAX_NET_POINTS } from '../src/fleet/coordinator/core.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
-import { generateKeyPair } from '../src/fleet/crypto.js';
+import { generateKeyPair, sign } from '../src/fleet/crypto.js';
+import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
+import { delegationSigningInput, keyId } from '../src/fleet/protocol/intent-signature.js';
 
 const ELI = 'eli@example.com';
 const SAM = 'sam@example.com';
@@ -123,6 +125,20 @@ test('nobody holding the pool, an unsigned caller or no image is a refusal that 
   const noImage = await core.dispatch({ ...ask(sam), params: { platform: 'vm' } });
   assert.equal(noImage.error.code, 'bad_params');
   assert.equal(asked.length, 0);
+});
+
+test('a box that holds the pool and could not reach it is said to be that, not that nobody holds it', async () => {
+  // The refusal said "No connected box holds a token for a pool with that
+  // machine image ... approve a box that can reach it" to a person whose
+  // approved box held it and had found Xen Orchestra down (C-5).
+  const { core, asked } = fleet({ deb14: { xo: holding(ELI).map((e) => ({ ...e, reachable: false })) }, rpi: { xo: holding(SAM) } });
+  const r = await core.dispatch(ask(eli));
+  assert.equal(r.error.code, 'unreachable');
+  assert.match(r.text, /^The box holding your token for the pool with that machine image \(deb14\) could not reach Xen Orchestra the last time it looked/);
+  assert.doesNotMatch(r.text, /No connected box holds/);
+  assert.equal(asked.length, 0, 'a box that could not reach the pool was asked');
+  // Nobody holding it at all still says so.
+  assert.equal((await core.dispatch(ask(sam, { template: OTHER }))).error.code, 'no_hosts');
 });
 
 test('a box that cannot reach the pool hands on to the next, and one too old is not asked', async () => {
@@ -356,6 +372,16 @@ test('a machine is worked by its owner, through the box that last saw it first',
   assert.deepEqual(moved.asked.map((x) => x.hostId), ['a', 'b']);
 });
 
+test('a machine whose boxes are all too old to work it is told that, not that none could find it', async () => {
+  // Every holder skipped as "needs updating" fell through to "No box holding
+  // your pools could find vm-…", when no box had looked (C-5).
+  const { core, asked } = fleet({ old: { xo: withMachine(ELI), protocol: 8 } });
+  const r = await core.dispatch({ verb: 'vmctl', params: { name: 'vm-aaaaaaaaaaaa', action: 'stop' }, requester: eli });
+  assert.equal(r.error.code, 'host_outdated');
+  assert.equal(r.text, 'None of the boxes holding your pools is new enough to work vm-aaaaaaaaaaaa, so none was asked: old (needs updating). Update one and ask again.');
+  assert.equal(asked.length, 0);
+});
+
 test('somebody else’s machine, an unsigned caller, or an action without its numbers is refused before any box is asked', async () => {
   const { core, asked } = fleet({ b: { xo: withMachine(ELI), protocol: 9 } });
   const key = await generateKeyPair();
@@ -536,6 +562,45 @@ test('removing a person stops the fleet making machines in their name and takes 
   assert.equal(asked.filter((x) => x.spec.verb === 'provision').length, 0, 'a machine was asked for in the name of somebody with no credential');
 });
 
+test('removing a person ends their kept machines with the delegation they signed for it, on every box the stop reaches', async () => {
+  // #forgetPerson sent the stops and forgot the delegation in the same
+  // breath. `send` covers an intent as it goes out, so the first box was sent
+  // it; a box answering "not on these pools" moved the stop to the next,
+  // which was sent it bare, and a box that takes only signed requests
+  // refused it, leaving the machine running. Over the sockets themselves,
+  // because that is where the delegation is attached.
+  const core = new CoordinatorCore({ intentTimeoutMs: 2_000, logger: { info() {}, warn() {}, error() {}, debug() {} } });
+  /** @type {Record<string, any[]>} */
+  const frames = { aaa: [], bbb: [] };
+  for (const id of Object.keys(frames)) {
+    core.hostConnected(id, (/** @type {any} */ msg) => {
+      frames[id].push(msg);
+      if (msg.kind !== 'intent') return;
+      const answer = msg.verb === 'vmctl' && id === 'aaa' ? { ok: false, notHere: true, text: 'not on these pools' } : { ok: true, text: 'done' };
+      queueMicrotask(() => void core.onHostMessage(id, { v: PROTOCOL_VERSION, kind: 'reply', id: msg.id, ...answer }));
+    });
+    await core.onHostMessage(id, { v: PROTOCOL_VERSION, kind: 'health', hostId: id, health: { hostId: id, protocol: 9, labels: [], maxSessions: 5, running: 0, free: 5, sessions: [], loadavg: [0, 0, 0], claudeAccounts: 1, hub: { reachable: true }, xo: holding(SAM) } });
+  }
+  const signedIn = /** @type {any} */ (await core.issueClient({ email: SAM }, 'sam phone'));
+  const { publicJwk, privateJwk } = await generateKeyPair();
+  const kid = await keyId({ kty: 'EC', crv: 'P-256', x: String(publicJwk.x), y: String(publicJwk.y) });
+  const now = Date.now();
+  // What the phone signs when it keeps machines ready (Fleet.swift): the fleet may end them.
+  const grant = { v: 1, id: 'end-kept-machines-0001', actor: SAM, verbs: ['vmctl'], hosts: ['*'], match: { action: 'stop' }, issuedAt: now, expires: now + 3_600_000 };
+  const delegation = { grant, sig: await sign(privateJwk, delegationSigningInput(grant)), kid };
+  const set = await core.setVmStandby(sam, { template: DEBIAN, count: 1, delegations: [delegation] });
+  assert.equal(set.ok, true, set.text);
+  const intents = (/** @type {string} */ verb) => [...frames.aaa, ...frames.bbb].filter((m) => m.kind === 'intent' && m.verb === verb);
+  await until(() => core.vmStandby.machines.size > 0 && intents('provision').length === 1, 'a kept machine to be asked for');
+
+  core.revokeClient(signedIn.client.id);
+  await until(() => frames.bbb.some((m) => m.kind === 'intent' && m.verb === 'vmctl'), 'the stop to move on to the second box');
+  const stops = intents('vmctl');
+  assert.deepEqual(stops.map((m) => m.params.action), ['stop', 'stop']);
+  assert.ok(stops.every((m) => m.delegation?.grant?.id === grant.id), 'a box after the first was sent the stop without the delegation');
+  await until(() => core.delegationsFor({ email: SAM }).length === 0, 'the delegation to be forgotten once the stops had settled');
+});
+
 test('what is kept ready survives a restart, and a machine that never joined is forgotten in time', async () => {
   const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
   await core.setVmStandby(eli, { template: DEBIAN, count: 2 });
@@ -545,7 +610,7 @@ test('what is kept ready survives a restart, and a machine that never joined is 
   again.restoreStandby(saved);
   assert.deepEqual(again.vmStandby.wishFor(ELI), { template: DEBIAN, count: 2, network: null });
   assert.equal(again.vmStandby.machines.size, asked.length);
-  assert.deepEqual(again.vmStandby.tally(ELI, () => true), { ready: 0, starting: 0 }, 'asked for sixteen minutes ago and never enrolled');
+  assert.deepEqual(again.vmStandby.tally(ELI, { gone: () => false, ready: () => true }), { ready: 0, starting: 0 }, 'asked for sixteen minutes ago and never enrolled');
   // AND SAYS SO, where "0 being made" used to be the whole of it.
   const shown = again.vmStandbyFor(eli);
   assert.equal(shown.since, undefined, 'none is being made now');
@@ -558,6 +623,106 @@ test('what is kept ready survives a restart, and a machine that never joined is 
   third.vmStandby.noteMade('vm-0000000000aa', { owner: ELI, template: DEBIAN, network: null });
   third.vmStandby.noteEnrolled('vm-0000000000aa');
   assert.equal(third.vmStandby.failureFor(ELI), null);
+});
+
+/** A kept machine's health frame, as a new temporary host sends it: `runnerAuth` is what decides its state (registry.js). */
+const vmHealth = (/** @type {string|null} */ runnerAuth) => ({ hub: { reachable: true }, protocol: 9, maxSessions: 1, running: 0, free: 1, claudeAccounts: 0, runnerAuth, labels: [] });
+/** How many a person is shown ready and starting. @param {any} core */
+const counts = (core) => {
+  const { ready, starting } = core.snapshot(eli).vmStandby;
+  return { ready, starting };
+};
+
+test('a kept machine is counted from its enrolment, so a look at it before its first healthy report does not make another', async () => {
+  // THE LEAK, reproduced on a real pool as 2, 3, 4 machines for one kept
+  // ready: `tally` forgot an enrolled machine the moment it was not
+  // "connected and healthy", and it ran on every phone poll. A machine
+  // enrols at its HTTP POST before its socket is up, then reports unknown
+  // for its first frames, so it fell out of the count while it ran on for
+  // its whole life, and the next top-up made another. joinReady above does
+  // all three at once, which is why no test here walked through the window.
+  const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
+  await core.setVmStandby(eli, { template: DEBIAN, count: 1 });
+  await madeOne(core, asked);
+  const ticket = asked[0].spec.params.ticket;
+  const kept = `vm-${ticket.split('_')[1]}`;
+  assert.equal((await core.enrolVm({ ticket, publicJwk: (await generateKeyPair()).publicJwk })).status, 200);
+
+  // Enrolled and not yet connected: a phone looks, and a top-up runs (as
+  // the person, who has no credential in this fixture; the background one
+  // asks that first).
+  assert.deepEqual(counts(core), { ready: 0, starting: 1 });
+  assert.ok(core.vmStandby.isKept(kept), 'forgotten before its socket was up');
+  await core.topUpStandby(ELI);
+  assert.equal(asked.filter((x) => x.spec.verb === 'provision').length, 1, 'a second was asked for while the first was coming up');
+
+  // Connected, its first report unknown: still the one being made.
+  core.registry.connect(kept, () => {}, { ephemeral: true, owner: ELI, actsFor: ELI });
+  core.registry.recordHealth(kept, vmHealth(null));
+  assert.equal(core.registry.get(kept).state, 'unknown');
+  assert.deepEqual(counts(core), { ready: 0, starting: 1 });
+  assert.ok(core.snapshot(eli).vmStandby.since, 'still being made, so the phone has a time to measure from');
+  await core.topUpStandby(ELI);
+  assert.equal(asked.filter((x) => x.spec.verb === 'provision').length, 1);
+
+  // Healthy: ready, and the same machine, which a session now gets.
+  core.registry.recordHealth(kept, vmHealth('owner'));
+  assert.deepEqual(counts(core), { ready: 1, starting: 0 });
+  assert.equal(core.snapshot(eli).vmStandby.since, undefined);
+  assert.equal((await core.dispatch(ask(eli))).vm, kept);
+});
+
+test('a kept machine that stays degraded is still the one kept: rounds of top-ups make no more, and keeping none ends it', async () => {
+  // The same window held open: with no Claude login for it the machine
+  // reports degraded for as long as it lives. It is still a machine on the
+  // person's pool, costing what one costs, and the only honest count is one
+  // starting; making another each round was how the pool filled up.
+  const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
+  await core.setVmStandby(eli, { template: DEBIAN, count: 1 });
+  await madeOne(core, asked);
+  const ticket = asked[0].spec.params.ticket;
+  const kept = `vm-${ticket.split('_')[1]}`;
+  assert.equal((await core.enrolVm({ ticket, publicJwk: (await generateKeyPair()).publicJwk })).status, 200);
+  core.registry.connect(kept, () => {}, { ephemeral: true, owner: ELI, actsFor: ELI });
+  for (let round = 0; round < 4; round++) {
+    core.registry.recordHealth(kept, vmHealth(null));
+    assert.deepEqual(counts(core), { ready: 0, starting: 1 }, `round ${round}`);
+    await core.topUpStandby(ELI);
+  }
+  assert.equal(asked.filter((x) => x.spec.verb === 'provision').length, 1, 'a machine was asked for each round');
+  assert.deepEqual([...core.vmStandby.machines.keys()], [kept]);
+
+  // AND KEEP NONE ENDS IT, which it could not while the machine was forgotten.
+  asked.length = 0;
+  await core.setVmStandby(eli, { count: 0 });
+  await until(() => asked.some((x) => x.spec.verb === 'vmctl'), 'the degraded machine to be ended');
+  assert.deepEqual(asked.find((x) => x.spec.verb === 'vmctl').spec.params, { name: kept, action: 'stop' });
+});
+
+test('a kept machine is forgotten only once it is gone: past its end by the pool’s last look, or revoked', async () => {
+  const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
+  await core.setVmStandby(eli, { template: DEBIAN, count: 1 });
+  await madeOne(core, asked);
+  const first = `vm-${asked[0].spec.params.ticket.split('_')[1]}`;
+  await joinReady(core, first, asked[0].spec.params.ticket);
+  assert.deepEqual(counts(core), { ready: 1, starting: 0 });
+
+  // The pool says it ended: no longer counted, and another is made.
+  core.registry.recordHealth('deb14', { hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [], xo: [{ ...holding(ELI)[0], machines: [{ name: first, until: Date.now() - 1_000, state: 'Halted' }] }] });
+  assert.deepEqual(counts(core), { ready: 0, starting: 0 });
+  assert.equal(core.vmStandby.isKept(first), false);
+  await core.topUpStandby(ELI);
+  await until(() => asked.filter((x) => x.spec.verb === 'provision').length === 2, 'another to be made in its place');
+  const second = `vm-${asked[1].spec.params.ticket.split('_')[1]}`;
+  assert.equal((await core.enrolVm({ ticket: asked[1].spec.params.ticket, publicJwk: (await generateKeyPair()).publicJwk })).status, 200);
+  assert.deepEqual(counts(core), { ready: 0, starting: 1 });
+
+  // Revoked (a goodbye, or retireStranded ten minutes after it dropped):
+  // gone, with no failure to report, since it did join.
+  assert.equal(core.revokeHost(second), true);
+  assert.deepEqual(counts(core), { ready: 0, starting: 0 });
+  assert.equal(core.vmStandby.isKept(second), false);
+  assert.equal(core.snapshot(eli).vmStandby.failed, undefined);
 });
 
 // --- machines that work together (protocol 10) --------------------------------
@@ -693,6 +858,28 @@ test('labs per person: no limit unless the policy sets one, and past one that is
   assert.equal(third.error.code, 'too_many_labs');
   assert.match(third.text, /lets one person hold 2 labs at once, and you hold 2\./);
   assert.equal(capped.asked.length, 1);
+});
+
+test('labs per person holds against two asks at once, and a lab the box would not fill is let go', async () => {
+  // The hold on a lab was written once the box had answered, and two asks
+  // run through the same awaits (the ticket, the box): with a limit of one
+  // and two free labs, each counted none held and both were sent.
+  const limitOne = [{ ...withLabs(ELI)[0], networks: withLabs(ELI)[0].networks.map((n) => ({ ...n, perPerson: 1 })) }];
+  const { core, asked } = fleet({ deb14: { xo: limitOne, protocol: 10 } });
+  const both = await Promise.all([core.dispatch(inLab(eli, { network: LAB1 })), core.dispatch(inLab(eli, { network: LAB2 }))]);
+  assert.deepEqual(both.map((r) => r.ok).sort(), [false, true], JSON.stringify(both.map((r) => r.text)));
+  assert.equal(both.find((r) => !r.ok).error.code, 'too_many_labs');
+  assert.equal(asked.length, 1, 'both were sent');
+
+  // AND A REFUSAL HOLDS NOTHING: the hold is taken before the box is asked
+  // now, so the box saying no has to let it go, or the lab stays taken and
+  // the person stays at their limit for a machine that was never made.
+  const refused = fleet({ deb14: { xo: limitOne, protocol: 10 } }, () => ({ ok: false, text: 'The pool’s limits have no room for another machine.' }));
+  assert.equal((await refused.core.dispatch(inLab(eli, { network: LAB1 }))).ok, false);
+  assert.equal(refused.core.snapshot(eli).vmImages[0].labs.find((/** @type {any} */ l) => l.id === LAB1).free, true, 'the lab stayed held');
+  const again = await refused.core.dispatch(inLab(eli, { network: LAB2 }));
+  assert.notEqual(again.error?.code, 'too_many_labs', 'a machine the box would not make still counted against the limit');
+  assert.equal(refused.asked.length, 2);
 });
 
 test('a machine says which lab it is in and whether it is open, and anything else is no lab', () => {
