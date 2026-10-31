@@ -44,7 +44,7 @@ const CST = { nbfree: 8, nffree: 24 };
 
 /** @typedef {(offset: number, length: number) => Buffer} Read */
 /** @typedef {{ offset: number, was: string, becomes: string, what: string }} Edit */
-/** @typedef {{ room: number, data: { offset: number, length: number }, edits: Edit[] }} Plan */
+/** @typedef {{ room: number, from: { offset: number, length: number }, data: { offset: number, length: number }, edits: Edit[] }} Plan */
 
 /** @param {Read} read */
 function geometry(read) {
@@ -264,7 +264,11 @@ export function planRoom(read, { inode, room }) {
   }
   edits.push(...csEdits, ...cgEdits);
   edits.sort((a, b) => a.offset - b.offset);
-  return { room, data: { offset: toFrag * fs.fsize, length: fs.bsize }, edits };
+  // `from` is where the file is now, by the inode: what a build checks the
+  // default configuration against before it writes (OPNSENSE_IMAGE.config),
+  // and what the image workflow publishes beside each image so nobody finds
+  // it by hand again.
+  return { room, from: { offset: fromFrag * fs.fsize, length: size }, data: { offset: toFrag * fs.fsize, length: fs.bsize }, edits };
 }
 
 /**
