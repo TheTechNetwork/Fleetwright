@@ -44,13 +44,22 @@ export function sentinel(id) {
  * @param {string} window @param {string} echoed
  */
 export function sliceOutput(window, echoed) {
-  let text = window;
+  // Carriage returns go first, so an echo a line editor redrew with one in
+  // the middle is still found; the driver turns the echo off after the first
+  // command, so this is for that one and for a guest that ignored it.
+  let text = window.replace(/\r/g, '');
   const at = text.indexOf(echoed);
   if (at >= 0) {
     const nl = text.indexOf('\n', at + echoed.length);
     text = nl >= 0 ? text.slice(nl + 1) : '';
+  } else {
+    // With the echo off, the window opens on the prompt the shell printed
+    // after the last marker, `# ` on its own, and then the output. The
+    // prompt goes; a command whose own first line began with "# " would
+    // lose those two characters, and none asked here prints one.
+    text = text.replace(/^\n*# /, '');
   }
-  return text.replace(/\r/g, '').replace(/\n$/, '');
+  return text.replace(/\n$/, '');
 }
 
 /** @param {string} s */
@@ -129,6 +138,19 @@ export class Console {
   /** Type a line, carriage return and all, as a terminal would. @param {string} text */
   type(text) {
     this.log(`\n>>> ${text}\n`);
+    this.send(`${text}\r`);
+  }
+
+  /**
+   * Type a line the log must not carry, the login password: what is sent is
+   * the same, and the log says only that it was. The console log is uploaded
+   * from every run, and a password in it is a password published, default or
+   * not.
+   *
+   * @param {string} text @param {string} label  what the log says instead
+   */
+  typeSecret(text, label) {
+    this.log(`\n>>> [${label}]\n`);
     this.send(`${text}\r`);
   }
 
