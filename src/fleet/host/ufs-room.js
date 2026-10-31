@@ -1,7 +1,7 @@
 // Room for a file in a UFS2 image, made by the file system's own rules: one
 // whole free block taken for it, the fragments it had given back, and every
 // count that records either brought along. For the edge router's
-// configuration (edge-router.js, OPNSENSE_IMAGE.grow), whose 8 KiB were not
+// configuration (edge-router.js, EDGE_IMAGE.grow), whose 8 KiB were not
 // room enough for two routers' worth of rules.
 //
 // WHY NOT GROW IT IN PLACE, as the 8 KiB was: `makefs` packed the cylinder
@@ -292,7 +292,7 @@ export function planRoom(read, { inode, room }) {
   edits.push(...csEdits, ...cgEdits);
   edits.sort((a, b) => a.offset - b.offset);
   // `from` is where the file is now, by the inode: what a build checks the
-  // default configuration against before it writes (OPNSENSE_IMAGE.config),
+  // default configuration against before it writes (EDGE_IMAGE.config),
   // and what the image workflow publishes beside each image so nobody finds
   // it by hand again.
   return { room, from: { offset: fromFrag * fs.fsize, length: size }, data: { offset: toFrag * fs.fsize, length: fs.bsize }, edits };
