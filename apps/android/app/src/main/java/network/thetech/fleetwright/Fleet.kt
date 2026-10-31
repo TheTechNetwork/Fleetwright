@@ -2879,9 +2879,18 @@ class Fleet(
      * this is the single line that connects it once Firebase exists.
      */
     suspend fun registerDevice(token: String): Boolean = withContext(Dispatchers.IO) {
+        // THE KEY THIS INSTALL OPENS WITH, so its notifications are sealed to
+        // it (docs/push-encryption.md). A keystore that did not answer does
+        // not stop the registration: it goes with the last key this phone
+        // sent, because the coordinator keeps a key only when one is sent and
+        // this phone must never go back to plaintext, nor stop sending a new
+        // FCM address. Null only on a phone that has never sent a key and
+        // cannot use one now (PushKey.forRegistration).
+        val pushKey = PushKey.forRegistration(settings)
         val body = JSONObject()
             .put("platform", "android")
             .put("token", token)
+        pushKey?.let { body.put("pushKey", it) }
         runCatching { post("/api/devices", body).optBoolean("ok", false) }.getOrDefault(false)
     }
 
@@ -3718,6 +3727,57 @@ class Settings(context: Context) {
     var xoVia: String
         get() = prefs.getString("xoVia", "") ?: ""
         set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoVia") else putString("xoVia", value) }.apply()
+
+    /**
+     * The public key the last registration with one sent
+     * (PushKey.forRegistration). Not a secret: it is the half the
+     * coordinator already holds. It goes with the app, as the Keystore entry
+     * does.
+     */
+    internal var pushKeySent: String?
+        get() = prefs.getString("pushKeySent", null)
+        set(value) = prefs.edit().apply { if (value == null) remove("pushKeySent") else putString("pushKeySent", value) }.apply()
+
+    /**
+     * Registrations in a row the push key failed, and when the first was
+     * (PushKey.forRegistration, PushKeyRule). Null once one gets as far as
+     * the key. Not a secret: two numbers.
+     */
+    internal var pushKeyFailures: PushKeyRule.Failures?
+        get() = prefs.getInt("pushKeyFailures", 0).takeIf { it > 0 }
+            ?.let { PushKeyRule.Failures(it, prefs.getLong("pushKeyFirstFailure", 0L)) }
+        set(value) = prefs.edit().apply {
+            if (value == null) {
+                remove("pushKeyFailures")
+                remove("pushKeyFirstFailure")
+            } else {
+                putInt("pushKeyFailures", value.count)
+                putLong("pushKeyFirstFailure", value.firstAt)
+            }
+        }.apply()
+
+    /**
+     * What this phone knows about opening what is sealed to it
+     * (PushKeyRule.Evidence): written by PushKey after each registration and
+     * each sealed notification, read by You. Null until it has learnt
+     * anything. Not a secret: a word and a time.
+     */
+    internal var pushKeyEvidence: PushKeyRule.Evidence?
+        get() {
+            if (!prefs.contains("pushKeyEvidenceAt")) return null
+            val doubt = prefs.getString("pushKeyDoubt", null)
+                ?.let { name -> PushKeyRule.Doubt.entries.firstOrNull { it.name == name } }
+            return PushKeyRule.Evidence(doubt, prefs.getLong("pushKeyEvidenceAt", 0L))
+        }
+        set(value) = prefs.edit().apply {
+            if (value == null) {
+                remove("pushKeyEvidenceAt")
+                remove("pushKeyDoubt")
+            } else {
+                putLong("pushKeyEvidenceAt", value.at)
+                if (value.doubt == null) remove("pushKeyDoubt") else putString("pushKeyDoubt", value.doubt.name)
+            }
+        }.apply()
 
     /**
      * When this phone last looked at each pool it manages directly, as Manage
