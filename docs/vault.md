@@ -101,25 +101,41 @@ sign-in itself (`checkClaude` in `src/fleet/minter/claude-login.js`):
 
 - a renewal already refused, by a box, a runner or a test, is the answer;
 - otherwise its access token is tried at the usage address, which costs
-  nothing, and a token refused there is renewed at once instead of when due;
+  nothing. A 401 there is renewed for at once instead of when due, and the
+  token the renewal gave is tried in the same check: refused too, renewing
+  will not mend it, so it is not renewed for again until it is due, and its
+  person is told once. A 403 is never renewed for: it says the sign-in may
+  not do this, not that the token ran out, and each renewal ends the token
+  every box holds. Its person is told once for the sign-in. Both are listed
+  in the check's answer as `refused`, with the status, apart from `ended`,
+  because renewing still works;
 - a sign-in that is due is renewed, as a box asking would renew it;
-- a sign-in kept ten minutes ago and never renewed, or not renewed for an
-  hour, is renewed anyway.
+- nothing else is renewed.
 
-**Why renew before it is due.** Two sign-ins in a row were refused at their
-first renewal, about 7.7 hours after keeping. Nothing in the fleet had used
-them, and nobody had signed in anywhere else. Waiting for the access token to
-run out tested the refresh token only at the end of eight hours. Renewing ten
-minutes after keeping says whether a sign-in arrived broken. Renewing hourly
-after that says within the hour when one stopped working.
+**Why nothing is renewed before it is due.** For a while the check renewed a
+sign-in ten minutes after keeping and hourly after that, to find a broken
+refresh token in minutes rather than at the end of eight hours: two sign-ins
+in a row had been refused at their first renewal, about 7.7 hours after
+keeping. But a renewal ends the access token every box already holds
+("Renewing revokes the token every holder has", below), and the boxes change
+over together only because they all ask inside the same half hour before
+expiry. A renewal at any other time cut every box off at once, hourly. So a
+refresh token is tested when it is needed, and the access token is tried every
+check, which costs nothing and ends nothing.
 
 **A refresh token's own lifetime is kept.** Claude Code writes it beside the
 sign-in as `refreshTokenExpiresAt`, and a renewal's answer may give it as
 `refresh_token_expires_in`. The minter used to drop it. Now a sign-in is due
 when either its access token or its refresh token is within thirty minutes of
-running out. The Test's sentence says how long the refresh token is good for.
-A refusal that comes after the refresh token ran out by its own lifetime is
-called this fleet being late (`expired`), not something outside it.
+running out. A renewal whose answer does not give it keeps it for a refresh
+token that came back unchanged, and leaves it unknown for a new one. Claude
+Code carries the old expiry over either way, but never renews because of it.
+The minter does, and timing a new refresh token by the one it replaced renewed
+again on every check and every box's ask. A refresh token a renewal gave back
+unchanged, or new but ending as soon, is not renewed again for its own
+expiry, since another renewal will not move it either. The Test's sentence says how long the refresh token is good for. A refusal
+that comes after the refresh token ran out by its own lifetime is called this
+fleet being late (`expired`), not something outside it.
 
 Only Anthropic refusing the refresh token counts as ended. An access token can
 be refused for reasons the refresh token survives, and the refresh token is
