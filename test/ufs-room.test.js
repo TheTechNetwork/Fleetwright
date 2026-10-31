@@ -87,6 +87,7 @@ test('the file moves to the first whole free block, gives its fragments back, an
   const buf = image();
   const plan = planRoom(reader(buf), { inode: INODE, room: 4096 });
   assert.equal(plan.data.offset, (G.fpg + 10 * G.frag) * G.fsize, 'block 10 of group 1');
+  assert.deepEqual(plan.from, { offset: FILE_FRAG * G.fsize, length: 700 }, 'where the file is now, which the image workflow publishes as the configuration’s offset');
   assert.ok(checkRoom(reader(buf), plan));
   const out = apply(buf, plan);
   const di = G.iblkno * G.fsize + INODE * 256;

@@ -1,0 +1,316 @@
+name: Edge router image
+
+# The edge router's disk, built once, here, and pulled by every host — as the
+# sandbox container already is (sandbox.yml), and for the same reason: an
+# image built in one place and fetched by name is the only version of "the
+# router" that is actually one thing.
+#
+# WHY THERE IS AN IMAGE TO BUILD AT ALL. The edge router is OPNsense's nano
+# image with Fleetwright's configuration written into its file system
+# (src/fleet/host/edge-router.js). Nobody can log in to it — root's password
+# is `*` by design — so the only way a package gets onto it is OPNsense's own
+# plugin sync, which refuses while the core is behind the repository
+# ("Installation out of date", scripts/firmware/sync.subr.sh), and the only
+# thing that updates the core is the daily "Automatic firmware update" cron
+# at 04:00 local (EDGE_UPDATES). So a fresh router has no Xen guest agent
+# (`os-xen`) until its first daily update, up to a day away, and until then
+# Xen Orchestra cannot show its address. The person wants the agent from
+# first boot, and wants the image built transparently, versioned immutably
+# and hosted on GitHub.
+#
+# THIS WORKFLOW IS THAT. The pinned upstream image is downloaded and checked
+# against the digest pinned in edge-router.js and the one OPNsense publishes;
+# booted under QEMU in CI; updated to the current patch level of its release
+# the way OPNsense's own update does it; given the agent the way OPNsense
+# installs a plugin; cleaned of everything that identifies that boot; and
+# published as a GitHub release with a digest, a build provenance
+# attestation, and the per-image numbers the host needs — the stock
+# configuration file's offset, length and digest, and the room plan from
+# scripts/opnsense-room.mjs — in a manifest beside it, so nobody works them
+# out by hand again.
+#
+# WHAT IT DOES NOT DO YET. The host keeps downloading from OPNsense's mirror
+# (OPNSENSE_IMAGE.url); pointing it at these releases is the next pull
+# request, once a build exists to point at. scripts/edge-image/README.md says
+# what that pin will look like.
+#
+# EVERY STEP PRINTS WHAT IT DID. There is no QEMU where this was written, so
+# CI is the test bed, and a step that fails silently here costs an hour to
+# learn nothing from.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/edge-image/**'
+      - 'scripts/opnsense-room.mjs'
+      - '.github/workflows/edge-image.yml'
+  pull_request:
+    paths:
+      - 'scripts/edge-image/**'
+      - 'scripts/opnsense-room.mjs'
+      - '.github/workflows/edge-image.yml'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'OPNsense release to build from, e.g. 26.7. Empty builds the one pinned in src/fleet/host/edge-router.js'
+        type: string
+        default: ''
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-26.04
+    # A KVM run is about twenty minutes; the rest is headroom for the mirror
+    # and for a run that fell back to software emulation, which is slow enough
+    # that this limit is likely where it ends — and that is the answer wanted
+    # then, not a six-hour job.
+    timeout-minutes: 90
+    # `contents: write` publishes the release; `id-token` and `attestations`
+    # sign the provenance. Both are job-level and both are gated below on not
+    # being a pull request, which only uploads an artifact.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      # PINNED BY COMMIT, with the version beside it for Renovate and for a
+      # reader: this job holds a token that writes releases and signs
+      # provenance for a disk image every router boots, and a tag is a name
+      # somebody can move. The rest of the repository pins by tag; this file
+      # is the one where that would be the weak link.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.1'
+
+      # ACCELERATION, PROVED RATHER THAN ASSUMED. GitHub's Linux runners have
+      # /dev/kvm (github.blog/changelog/2024-04-02-github-actions-hardware-
+      # accelerated-android-virtualization-now-available) behind a udev rule
+      # that makes it writable — the three lines are theirs. Without it QEMU
+      # still runs, under TCG, and the boot that takes two minutes takes
+      # twenty; the step says which it got, and the manifest records it.
+      - id: accel
+        name: Is there KVM
+        run: |
+          set -eu
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+          fi
+          ls -l /dev/kvm 2>&1 || true
+          echo "cpu flags: $(grep -o -E -m1 '\b(vmx|svm)\b' /proc/cpuinfo | head -1 || echo 'neither vmx nor svm')"
+          echo "cpus: $(nproc), memory: $(free -m | awk '/^Mem:/ {print $2}') MiB"
+          if [ -w /dev/kvm ]; then
+            echo "accel=kvm" >> "$GITHUB_OUTPUT"
+            echo "--- /dev/kvm is usable: QEMU runs with -accel kvm ---"
+          else
+            echo "accel=tcg" >> "$GITHUB_OUTPUT"
+            echo "::warning::no usable /dev/kvm on this runner; QEMU runs with -accel tcg, which is many times slower and may not finish inside the job's 90 minutes"
+          fi
+
+      - name: Install QEMU and the compressors
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils bzip2 zstd
+          qemu-system-x86_64 --version | head -1
+          zstd --version
+          bzip2 --help 2>&1 | head -1
+
+      # THE PIN HAS ONE HOME. The address and digest are read out of
+      # edge-router.js by importing it — the module has no dependencies and
+      # no side effects at import, which test/pin-images.test.js relies on
+      # too — so this file cannot hold a second copy that drifts.
+      #
+      # A dispatched build of another release substitutes the release in the
+      # address and takes its digest from OPNsense's published checksum file
+      # instead; for the pinned release the published file must agree with
+      # the pin, so a pin that was typed wrong is found here and not at a
+      # host. The checksum file is fetched over TLS from the same host as the
+      # image, which is what it is worth; its detached signature is not
+      # verified here.
+      - id: pin
+        name: The upstream image, by its pin
+        env:
+          REQUESTED: ${{ inputs.release }}
+        run: |
+          set -eu
+          eval "$(node --input-type=module -e "
+            import { OPNSENSE_IMAGE as p } from './src/fleet/host/edge-router.js';
+            console.log(['pinned_release=' + p.release, 'pinned_url=' + p.url, 'pinned_sha256=' + p.sha256, 'pinned_compressed_size=' + p.compressedSize, 'pinned_raw_size=' + p.rawSize].join('\n'));
+          ")"
+          release="${REQUESTED:-$pinned_release}"
+          url="$(printf '%s' "$pinned_url" | sed "s/OPNsense-${pinned_release}-/OPNsense-${release}-/")"
+          sums_url="$(dirname "$url")/OPNsense-${release}-checksums-amd64.sha256"
+          echo "release: $release (pinned: $pinned_release)"
+          echo "image:   $url"
+          echo "sums:    $sums_url"
+          curl -fsSL --retry 3 -o checksums.sha256 "$sums_url"
+          published="$(sed -n "s/^SHA256 ($(basename "$url")) = \([0-9a-f]\{64\}\)$/\1/p" checksums.sha256)"
+          [ -n "$published" ] || { echo "::error::$sums_url has no SHA256 line for $(basename "$url")"; cat checksums.sha256; exit 1; }
+          echo "published SHA-256: $published"
+          if [ "$release" = "$pinned_release" ]; then
+            [ "$published" = "$pinned_sha256" ] || { echo "::error::OPNsense publishes $published for $(basename "$url") and edge-router.js pins $pinned_sha256"; exit 1; }
+            echo "--- the pin and the published digest agree ---"
+          else
+            echo "::notice::building release $release, not the pinned $pinned_release: the digest is OPNsense's published one, and the host-side pin is unaffected"
+          fi
+          {
+            echo "release=$release"
+            echo "url=$url"
+            echo "sha256=$published"
+            echo "pinned=$([ "$release" = "$pinned_release" ] && echo true || echo false)"
+            echo "pinned_raw_size=$pinned_raw_size"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download and unpack it
+        env:
+          URL: ${{ steps.pin.outputs.url }}
+          SHA256: ${{ steps.pin.outputs.sha256 }}
+        run: |
+          set -eu
+          mkdir -p build
+          curl -fL --retry 3 --retry-delay 10 -o build/upstream.img.bz2 "$URL"
+          echo "$SHA256  build/upstream.img.bz2" | sha256sum -c -
+          # `dd conv=sparse` keeps the unwritten 2.5 GiB of the 3 GiB disk off
+          # the runner's disk; QEMU reads holes as zeros like anything else.
+          bzip2 -dc build/upstream.img.bz2 | dd of=build/edge.img bs=1M conv=sparse status=none
+          ls -ls build/
+          file build/edge.img
+
+      # THE BUILD, as a conversation on the serial console: scripts/edge-image/
+      # drive.mjs has every command and every assumption, in order. Its log is
+      # kept whatever happens, because a failed boot is only diagnosable from
+      # what the guest printed.
+      - name: Boot it, update it, install the agent, clean it
+        run: node scripts/edge-image/drive.mjs --image build/edge.img --accel '${{ steps.accel.outputs.accel }}' --log build/console.log --facts build/facts
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: edge-image-console
+          path: |
+            build/console.log
+            build/facts/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # A LOOK INSIDE, from the host side. Linux reads UFS2, so the image is
+      # mounted read-only and the two things the build promised are checked
+      # from outside the guest that promised them: there is no /conf/config.xml
+      # (so the host's configuration will be copied in on first boot), and
+      # /usr/local/etc/config.xml is the file the guest said it was. Skipped
+      # with a notice when the runner's kernel has no ufs module; the digest
+      # check in the next step still holds either way.
+      - name: Look inside the image
+        run: |
+          set -eu
+          if ! sudo modprobe ufs 2>/dev/null; then
+            echo "::notice::this kernel has no ufs module, so the image is not mounted here; measure.mjs checks the configuration's bytes by digest instead"
+            exit 0
+          fi
+          sudo mkdir -p /mnt/edge
+          sudo mount -t ufs -o ro,ufstype=ufs2,loop build/edge.img /mnt/edge
+          echo "--- /conf ---"; sudo ls -la /mnt/edge/conf
+          if sudo test -e /mnt/edge/conf/config.xml; then
+            echo "::error::/conf/config.xml exists in the image, so a router would boot the build VM's configuration and ignore the host's"
+            exit 1
+          fi
+          want="$(cat build/facts/config-sha256.txt)"
+          have="$(sudo sha256sum /mnt/edge/usr/local/etc/config.xml | cut -d' ' -f1)"
+          echo "/usr/local/etc/config.xml: $have (the guest said $want)"
+          [ "$have" = "$want" ] || { echo "::error::the stock configuration in the image is not the one the guest reported"; exit 1; }
+          echo "--- what the agent put down ---"; sudo ls -la /mnt/edge/usr/local/etc/rc.d | grep -i xen || echo "(no rc script with xen in its name; see facts/agent-files.txt)"
+          echo "--- leftovers that should not be ---"; sudo ls -la /mnt/edge/usr/local/etc/ssh/ 2>/dev/null | grep ssh_host || echo "no SSH host keys"; sudo ls /mnt/edge/var/cache/pkg 2>/dev/null || echo "no pkg cache"
+          sudo umount /mnt/edge
+          echo "--- the image has no /conf/config.xml and the stock file the guest reported ---"
+
+      # THE NAME CARRIES BOTH VERSIONS: the release the image came from and the
+      # patch level the update brought it to, which is what a person reading
+      # a host's log wants to know and what the release tag repeats.
+      - id: pack
+        name: Compress and measure
+        env:
+          RELEASE: ${{ steps.pin.outputs.release }}
+          URL: ${{ steps.pin.outputs.url }}
+          SHA256: ${{ steps.pin.outputs.sha256 }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          version="$(cat build/facts/opnsense-version.txt)"
+          [ -n "$version" ] || { echo "::error::the guest reported no version"; exit 1; }
+          name="fleetwright-edge-${RELEASE}-${version}-amd64.img.zst"
+          zstd -19 -T0 -q build/edge.img -o "build/$name"
+          ls -l "build/$name"
+          node scripts/edge-image/measure.mjs \
+            --image build/edge.img --facts build/facts --compressed "build/$name" \
+            --release "$RELEASE" --upstream-url "$URL" --upstream-sha256 "$SHA256" \
+            --commit "$GITHUB_SHA" --workflow-run "$RUN_URL" \
+            --manifest build/manifest.json --notes build/notes.md
+          (cd build && sha256sum "$name" manifest.json > SHA256SUMS && cat SHA256SUMS)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          cat build/notes.md >> "$GITHUB_STEP_SUMMARY"
+
+      # A pull request builds and keeps the result three days: long enough to
+      # look at, not long enough to be mistaken for a release.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name == 'pull_request'
+        with:
+          name: edge-image
+          path: |
+            build/${{ steps.pack.outputs.name }}
+            build/SHA256SUMS
+            build/manifest.json
+          retention-days: 3
+          if-no-files-found: error
+
+      # THE RELEASE. A tag that is never reused: the patch level, the day and
+      # the run number, so two builds of the same version on the same day are
+      # two releases and a host that pinned one can always find it.
+      #
+      # `--latest=false` because "the latest release" of this repository is
+      # the host's, and `apt-repo.yml` walks the release list looking for host
+      # manifests: this release carries a manifest.json of its own, which that
+      # loop skips for want of debs, but it should not also be what GitHub's
+      # "Latest" badge points at. Not a prerelease, so a `github-releases`
+      # datasource counts it as stable when the host's pin moves here.
+      #
+      # Created with the automatic token, so publishing it fires no other
+      # workflow: GitHub does not run workflows on events the token caused,
+      # which is what keeps android.yml's and ios.yml's `release: published`
+      # jobs from shipping an app over a router image.
+      - name: Publish the release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NAME: ${{ steps.pack.outputs.name }}
+          VERSION: ${{ steps.pack.outputs.version }}
+        run: |
+          set -eu
+          tag="edge-image/${VERSION}-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --title "Edge router image ${VERSION}" \
+            --notes-file build/notes.md \
+            --latest=false \
+            "build/$NAME" build/SHA256SUMS build/manifest.json
+          echo "::notice::published ${GITHUB_SERVER_URL}/${GH_REPO}/releases/tag/${tag}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # Provenance for the image itself: who built it, from which commit, in
+      # which run, signed with the job's OIDC identity. `gh attestation verify
+      # <file> --repo <owner/repo>` checks it, which is what a host could do
+      # before writing a disk from it.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: github.event_name != 'pull_request'
+        with:
+          subject-path: build/${{ steps.pack.outputs.name }}
