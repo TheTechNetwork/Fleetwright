@@ -14,6 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Fleet } from '../worker/src/fleet-do.js';
+import { CLAUDE_CHECK_MS } from '../src/fleet/coordinator/core.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../src/fleet/protocol/heartbeat.js';
 import { loadOrCreateKey, keyFingerprint } from '../src/fleet/host/identity.js';
 import { sign, signingInput, generateKeyPair } from '../src/fleet/crypto.js';
@@ -1024,4 +1025,33 @@ test('the MCP sign-in page cannot be framed, and a box’s session text is kept 
   });
   const kept = f.core.events.find((/** @type {any} */ e) => e.hostId === 'member-box');
   assert.doesNotMatch(kept.text, /[\n\r]/, 'a box’s event text kept a line of its own');
+});
+
+test('an alarm with no box connected still asks after the kept Claude sign-ins, and keeps asking', async () => {
+  // It returned before the check, and armed nothing, so a fleet whose last
+  // box had gone quiet never asked again and nobody was told a sign-in ended.
+  // The pass this arms also retires stranded machines (retention-defects.test.js
+  // holds what retireStranded does; this holds that it keeps being called).
+  const { fleet: f, state } = fleet();
+  /** @type {number[]} */
+  const armed = [];
+  /** @type {any} */ (state.storage).setAlarm = async (/** @type {number} */ at) => { armed.push(at); };
+  let asked = 0;
+  f.core.checkClaudeSignIns = async () => { asked += 1; if (asked === 2) throw new Error('the minter is down'); return 0; };
+  const before = Date.now();
+  await f.alarm();
+  assert.equal(asked, 1, 'the sign-ins were asked after with no socket open');
+  /** @type {string[]} */
+  const warns = [];
+  const warn = console.warn;
+  console.warn = (/** @type {any[]} */ ...a) => { warns.push(a.join(' ')); };
+  try {
+    await f.alarm();
+  } finally {
+    console.warn = warn;
+  }
+  assert.ok(warns.some((w) => /could not ask after the Claude sign-ins: the minter is down/.test(w)), 'a check that throws is said, not swallowed');
+  const next = armed.at(-1);
+  assert.ok(typeof next === 'number' && next >= before + CLAUDE_CHECK_MS && next <= Date.now() + CLAUDE_CHECK_MS,
+    'the next pass is armed on the check’s own clock');
 });
