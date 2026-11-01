@@ -902,8 +902,36 @@ test('how a pool’s edge routers are reaches its owner from the freshest box wa
   // trouble shoot this?", during a two-router DNS failure nothing on the
   // phone could explain. docs/hypervisors.md, "Watching the edge routers".
   const routers = (/** @type {any} */ extra = {}) => [
-    { name: 'fleetwright-edge', address: '192.168.1.40', reached: true, role: 'master', dns: true, gateway: true, leases: 3, heardAt: 1_700_000_100_000, problem: null, ...extra },
-    { name: 'fleetwright-edge-b', address: 'not an address', reached: false, role: 'leader', dns: 'yes', gateway: null, leases: -1, problem: 'connect ECONNREFUSED\u0007', ssh: 'nope' },
+    {
+      name: 'fleetwright-edge',
+      address: '192.168.1.40',
+      reached: true,
+      role: 'master',
+      dns: true,
+      gateway: true,
+      leases: 3,
+      // MEASURED: the way out's numbers and Unbound's count; a name that is
+      // not one, a count that is not one, and a sixth name are left out.
+      delay: 0.4,
+      loss: 0,
+      answered: 412,
+      blocked: 3,
+      since: 1_699_999_000_000,
+      topBlocked: [
+        { name: 'evil.example', count: 2 },
+        { name: 'not a name', count: 2 },
+        { name: 'bad.example', count: 'many' },
+        { name: 'b.example', count: 1 },
+        { name: 'c.example', count: 1 },
+        { name: 'd.example', count: 1 },
+        { name: 'e.example', count: 1 },
+        { name: 'f.example', count: 1 },
+      ],
+      heardAt: 1_700_000_100_000,
+      problem: null,
+      ...extra,
+    },
+    { name: 'fleetwright-edge-b', address: 'not an address', reached: false, role: 'leader', dns: 'yes', gateway: null, leases: -1, delay: '~', loss: 101, answered: -1, blocked: 2.5, since: 0, topBlocked: 'none', problem: 'connect ECONNREFUSED\u0007', ssh: 'nope' },
     { name: 'somebody-else', reached: true },
   ];
   const events = [
@@ -911,7 +939,7 @@ test('how a pool’s edge routers are reaches its owner from the freshest box wa
     { at: 1_700_000_060_000, router: 'fleetwright-edge', kind: 'shell', text: 'rm -rf' },
     { at: 1_700_000_070_000, router: 'fleetwright-edge', kind: 'dns', text: 'x'.repeat(500) },
   ];
-  const watched = (/** @type {number} */ at, /** @type {any} */ extra = {}) => [{ ...holding(ELI)[0], edges: { at, routers: routers(extra), events } }];
+  const watched = (/** @type {number} */ at, /** @type {any} */ extra = {}) => [{ ...holding(ELI)[0], edges: { at, listening: true, routers: routers(extra), events } }];
   const { core } = fleet({
     older: { xo: watched(1_700_000_000_000, { role: 'backup' }) },
     newer: { xo: watched(1_700_000_200_000) },
@@ -922,11 +950,35 @@ test('how a pool’s edge routers are reaches its owner from the freshest box wa
   assert.equal(edges.length, 1, 'one entry a pool, and only the person’s own');
   const [e] = edges;
   assert.equal(e.hostId, 'newer', 'the freshest report wins');
+  assert.equal(e.listening, true, 'whether the box holds the syslog port travels');
   assert.deepEqual(e.routers, [
-    { name: 'fleetwright-edge', address: '192.168.1.40', reached: true, role: 'master', dns: true, gateway: true, leases: 3, heardAt: 1_700_000_100_000, problem: null },
+    {
+      name: 'fleetwright-edge',
+      address: '192.168.1.40',
+      reached: true,
+      role: 'master',
+      dns: true,
+      gateway: true,
+      leases: 3,
+      delay: 0.4,
+      loss: 0,
+      answered: 412,
+      blocked: 3,
+      since: 1_699_999_000_000,
+      topBlocked: [
+        { name: 'evil.example', count: 2 },
+        { name: 'b.example', count: 1 },
+        { name: 'c.example', count: 1 },
+        { name: 'd.example', count: 1 },
+        { name: 'e.example', count: 1 },
+      ],
+      heardAt: 1_700_000_100_000,
+      problem: null,
+    },
     // What could not be read comes through as cannot tell, never as a value.
-    { name: 'fleetwright-edge-b', address: null, reached: false, role: null, dns: null, gateway: null, leases: null, heardAt: null, problem: 'connect ECONNREFUSED' },
+    { name: 'fleetwright-edge-b', address: null, reached: false, role: null, dns: null, gateway: null, leases: null, delay: null, loss: null, answered: null, blocked: null, since: null, topBlocked: null, heardAt: null, problem: 'connect ECONNREFUSED' },
   ]);
+  assert.equal(fleet({ old: { xo: [{ ...holding(ELI)[0], edges: { at: 1, routers: routers(), events } }] } }).core.snapshot(eli).vmEdges[0].listening, null, 'a box from before it said is cannot tell');
   assert.deepEqual(e.events.map((/** @type {any} */ v) => [v.kind, v.text.length]), [['carp', 29], ['dns', 240]], 'a kind not on the list is dropped, and a line is bounded');
   assert.deepEqual(core.snapshot(sam).vmEdges.map((/** @type {any} */ v) => v.address), ['other.lan']);
   assert.deepEqual(core.snapshot(null).vmEdges, []);

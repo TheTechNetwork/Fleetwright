@@ -260,6 +260,9 @@ export const EDGE_REPORT = Object.freeze({
   kinds: Object.freeze(['carp', 'dns', 'dhcp', 'gateway', 'firmware', 'ids', 'system']),
   events: 40,
   text: 240,
+  /** The names a router's lists refused most, at most, each a name as DNS allows. */
+  topBlocked: 5,
+  hostname: /^[a-z0-9](?:[a-z0-9_-]{0,62}\.?)*[a-z0-9]$|^[a-z0-9]$/i,
 });
 
 /**
@@ -7072,8 +7075,16 @@ export class CoordinatorCore {
    * through as down. A pool no box watches is absent, which the phones say
    * as "nothing is watching", never as "fine".
    *
+   * MEASURED (edge-router.js, MEASURED): a router built to measure itself
+   * also reports its way out's latency and loss, how many names Unbound
+   * answered and the lists refused since it started counting, and the names
+   * refused most. Each is a number in range or null; the names are names as
+   * DNS allows, at most EDGE_REPORT.topBlocked. The box says whether it
+   * holds the syslog port (`listening`), so the phone can tell "no log
+   * lines" from "could not listen".
+   *
    * @param {{ email?: string|null, admin?: boolean }|null} requester
-   * @returns {Array<{ address: string, hostId: string, at: number, routers: Array<Record<string, any>>, events: Array<Record<string, any>> }>}
+   * @returns {Array<{ address: string, hostId: string, at: number, listening: boolean|null, routers: Array<Record<string, any>>, events: Array<Record<string, any>> }>}
    */
   vmEdgesFor(requester) {
     const email = String(requester?.email || '').toLowerCase();
@@ -7081,7 +7092,9 @@ export class CoordinatorCore {
     const flag = (/** @type {unknown} */ v) => (typeof v === 'boolean' ? v : null);
     const when = (/** @type {unknown} */ v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : null);
     const text = (/** @type {unknown} */ v, /** @type {number} */ max) => (typeof v === 'string' && v.trim() ? v.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max) : null);
-    /** @type {Map<string, { address: string, hostId: string, at: number, routers: Array<Record<string, any>>, events: Array<Record<string, any>>, seen: number }>} */
+    const num = (/** @type {unknown} */ v, /** @type {number} */ max) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= max ? v : null);
+    const count = (/** @type {unknown} */ v) => (Number.isInteger(v) && /** @type {number} */ (v) >= 0 && /** @type {number} */ (v) < 1_000_000_000 ? /** @type {number} */ (v) : null);
+    /** @type {Map<string, { address: string, hostId: string, at: number, listening: boolean|null, routers: Array<Record<string, any>>, events: Array<Record<string, any>>, seen: number }>} */
     const found = new Map();
     for (const host of this.registry.reachable()) {
       if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
@@ -7101,6 +7114,18 @@ export class CoordinatorCore {
             dns: flag(r.dns),
             gateway: flag(r.gateway),
             leases: Number.isInteger(r.leases) && r.leases >= 0 && r.leases < 100_000 ? r.leases : null,
+            // A minute's latency and all of it lost are the most dpinger can say.
+            delay: num(r.delay, 60_000),
+            loss: num(r.loss, 100),
+            answered: count(r.answered),
+            blocked: count(r.blocked),
+            since: when(r.since),
+            topBlocked: Array.isArray(r.topBlocked)
+              ? r.topBlocked
+                  .filter((/** @type {any} */ t) => typeof t?.name === 'string' && t.name.length <= 253 && EDGE_REPORT.hostname.test(t.name) && count(t.count) !== null)
+                  .slice(0, EDGE_REPORT.topBlocked)
+                  .map((/** @type {any} */ t) => ({ name: String(t.name), count: /** @type {number} */ (count(t.count)) }))
+              : null,
             heardAt: when(r.heardAt),
             problem: text(r.problem, 200),
           }));
@@ -7111,7 +7136,7 @@ export class CoordinatorCore {
         const seen = routers.filter((r) => r.reached !== null || r.heardAt !== null).length;
         const have = found.get(address);
         if (have && (have.seen > seen || (have.seen === seen && have.at >= at))) continue;
-        found.set(address, { address, hostId: host.hostId, at, routers, events, seen });
+        found.set(address, { address, hostId: host.hostId, at, listening: flag(e.edges.listening), routers, events, seen });
       }
     }
     return [...found.values()].map(({ seen: _, ...e }) => e).sort((a, b) => a.address.localeCompare(b.address));

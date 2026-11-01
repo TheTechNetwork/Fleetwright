@@ -1036,6 +1036,13 @@
                             "type": "number",
                             "description": "when it was read, ms since the epoch"
                           },
+                          "listening": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ],
+                            "description": "whether the box holds the port the routers' syslog comes to: false is somebody else has it, so no log lines could arrive; null is a box from before it said"
+                          },
                           "routers": {
                             "type": "array",
                             "items": {
@@ -1095,6 +1102,63 @@
                                     "null"
                                   ],
                                   "description": "how many DHCP leases it holds"
+                                },
+                                "delay": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ],
+                                  "description": "latency to its way out's router, ms, as its gateway monitor measures it; null is not measured (a router built before it monitored, or no answer yet)"
+                                },
+                                "loss": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ],
+                                  "description": "packet loss to its way out's router, percent, 0 to 100; null is not measured"
+                                },
+                                "answered": {
+                                  "type": [
+                                    "integer",
+                                    "null"
+                                  ],
+                                  "description": "names its resolver answered since it started counting (`since`); null is not counting: a router built before it did, or its count not there yet. Never zero for not counting"
+                                },
+                                "blocked": {
+                                  "type": [
+                                    "integer",
+                                    "null"
+                                  ],
+                                  "description": "names its threat lists refused since it started counting; null is not counting"
+                                },
+                                "since": {
+                                  "type": [
+                                    "number",
+                                    "null"
+                                  ],
+                                  "description": "when it started counting, ms since the epoch: the first question it kept, which a restart resets"
+                                },
+                                "topBlocked": {
+                                  "type": [
+                                    "array",
+                                    "null"
+                                  ],
+                                  "description": "the names its lists refused most, most first, at most five; null is not counting, and empty is nothing refused",
+                                  "items": {
+                                    "type": "object",
+                                    "required": [
+                                      "name",
+                                      "count"
+                                    ],
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "count": {
+                                        "type": "integer"
+                                      }
+                                    }
+                                  }
                                 },
                                 "heardAt": {
                                   "type": [
