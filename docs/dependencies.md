@@ -90,16 +90,16 @@ mint a fleet credential and could not reach a session.
 and `connect` builds its catalogue synchronously. The *verifier* is the
 library's, so the length and alphabet are RFC 7636's by construction.
 
-## @modelcontextprotocol/sdk — development only, the conformance oracle
+## @modelcontextprotocol/client — development only, the conformance oracle
 
 Used in exactly one file, `test/mcp-conformance.test.js`, and never at
-runtime: the SDK's *client* is driven against our hand-written authorization
+runtime: the MCP SDK's *client* is driven against our hand-written authorization
 server and Streamable HTTP transport in `src/mcp/`.
 
 | | |
 |---|---|
 | version | exact |
-| dependencies | many — express, zod, ajv and friends, which is why it stays a devDependency |
+| dependencies | zod, jose, eventsource, pkce-challenge and the SDK's own `core`; lighter than v1's express and ajv, still not something the coordinator needs |
 | runtime | none; it is not in the coordinator bundle or the release |
 
 **Why a dependency, and why only in tests.** `src/mcp/oauth.js` and
@@ -121,6 +121,16 @@ registration, the S256 challenge, the code exchange at `/oauth/token`,
 `workers-oauth-provider` is **not taken**, because the ~600 lines it would
 replace conform, and replacing them would cost the property that an MCP
 client's token *is* a device credential revocable from the People screen.
+
+**Why v2, the client package alone.** v1 was one package,
+`@modelcontextprotocol/sdk`, with the server and its express stack inside it.
+v2 ships the client and the server as separate packages, and this project
+needs only the client. Renovate could not offer the move, because to it a new
+package name is a new dependency, not a major version. v2 adds a check v1 did
+not have: the authorization code and the PKCE verifier are bound to the
+authorization server that issued them (SEP-2352), and that binding is checked
+when the code comes back. The test's provider keeps `discoveryState` for that
+reason, and asserts that the issuer it bound to is ours.
 
 ## androidx.browser — Android app
 
