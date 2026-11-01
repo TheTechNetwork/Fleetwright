@@ -372,6 +372,11 @@ fun FleetScreen(
     var sessions by remember { mutableStateOf(listOf<Fleet.Session>()) }
     // Hosts, for the bin — which is fleet-wide and therefore needs them all.
     var binHosts by remember { mutableStateOf(listOf<Fleet.FleetHost>()) }
+    // Whether the fleet has answered for binHosts at all: false until the
+    // first answer, and what the reassurance line says instead of "no
+    // machines are reporting" of a list that is only empty because nothing
+    // has filled it yet (Reassurance.heard).
+    var hostsHeard by remember { mutableStateOf(false) }
     var showBin by rememberSaveable { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
@@ -406,7 +411,11 @@ fun FleetScreen(
         status = if (!reply.ok) reply.text.said() else if (keepStatus) status else ""
         // THE BIN'S CONTENTS, which `list` does not carry. Falls back to what
         // we already had: a fleet call that fails must not blank the list.
-        binHosts = runCatching { fleet.fleetHosts() }.getOrDefault(binHosts)
+        // HEARD is what the reassurance line reads: a failed ask with nothing
+        // held leaves it unheard, and said.
+        runCatching { fleet.fleetHosts() }
+            .onSuccess { binHosts = it; hostsHeard = true }
+            .onFailure { if (!hostsHeard && status.isBlank()) status = "The fleet did not say which machines report: ${it.message ?: "no answer"}" }
         pending = outbox.held.size
         busy = false
     }
@@ -575,6 +584,7 @@ fun FleetScreen(
         if (!signedIn) {
             sessions = emptyList()
             binHosts = emptyList()
+            hostsHeard = false
             return@LaunchedEffect
         }
         reload()
@@ -763,7 +773,7 @@ fun FleetScreen(
                             //
                             // AND IT GOES WHERE IT POINTS: one unwell machine
                             // opens its page; several open the list.
-                            val summary = Reassurance.of(sessions, binHosts)
+                            val summary = Reassurance.of(sessions, binHosts, hostsHeard)
                             val unwell = binHosts.filter { it.state != "healthy" }.map { it.hostId }
                             if (unwell.isEmpty()) {
                                 ReassuranceBanner(summary)

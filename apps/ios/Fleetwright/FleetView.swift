@@ -141,6 +141,11 @@ struct FleetView: View {
     @State private var sessions: [Fleet.Session] = []
     /// Hosts, for the bin — which is fleet-wide and therefore needs them all.
     @State private var fleetHosts: [Fleet.FleetHost] = []
+    /// Whether the fleet has answered for `fleetHosts` at all: false until the
+    /// first answer, and what the reassurance line says instead of "no
+    /// machines are reporting" of a list that is only empty because nothing
+    /// has filled it yet (Reassurance.heard).
+    @State private var hostsHeard = false
     private var binCount: Int { fleetHosts.reduce(0) { $0 + ($1.health?.bin?.count ?? 0) } }
 
     /// Nowhere to run anything yet.
@@ -210,7 +215,7 @@ struct FleetView: View {
                     .fleetCard(radius: Design.Radius.row, padding: Design.Space.inside, fill: Design.Palette.inner)
                     .fleetRow()
                 }
-                let summary = Reassurance(sessions: sessions, hosts: fleetHosts)
+                let summary = Reassurance(sessions: sessions, hosts: fleetHosts, heard: hostsHeard)
                 if summary.unwell.isEmpty {
                     ReassuranceBanner(summary: summary)
                         .fleetRow()
@@ -626,12 +631,19 @@ struct FleetView: View {
             status = error.localizedDescription
         }
         // THE BIN'S CONTENTS, which `list` does not carry: a bin entry is not
-        // a session, it is a session that stopped being one. `try?` and a
-        // separate statement on purpose — a fleet call that fails must not
-        // blank the session list that already arrived, and an empty bin and an
+        // a session, it is a session that stopped being one. A separate
+        // statement on purpose — a fleet call that fails must not blank the
+        // session list that already arrived, and an empty bin and an
         // unreachable coordinator are allowed to look the same HERE because
-        // the sessions above have already said which it was.
-        if let got = try? await reporting { fleetHosts = got }
+        // the sessions above have already said which it was. HEARD is what the
+        // reassurance line reads: a failed ask with nothing held leaves it
+        // unheard, and said, rather than a list that is empty for no reason.
+        do {
+            fleetHosts = try await reporting
+            hostsHeard = true
+        } catch {
+            if !hostsHeard && status.isEmpty { status = "The fleet did not say which machines report: \(error.localizedDescription)" }
+        }
 
     }
 

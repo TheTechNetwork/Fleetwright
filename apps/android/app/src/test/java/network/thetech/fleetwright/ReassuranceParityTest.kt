@@ -52,6 +52,7 @@ class ReassuranceParityTest {
             unwell = (0 until unwellArray.length()).map { unwellArray.getString(it) },
             blind = input.getBoolean("blind"),
             healthy = input.getInt("healthy"),
+            heard = input.getBoolean("heard"),
         )
     }
 

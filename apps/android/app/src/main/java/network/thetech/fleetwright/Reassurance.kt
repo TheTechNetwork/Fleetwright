@@ -47,9 +47,20 @@ data class Reassurance(
     val unwell: List<String>,
     val blind: Boolean,
     val healthy: Int,
+    /**
+     * Whether the fleet has answered which machines report at all. An empty
+     * list before the first answer, or after an ask that failed, is "we have
+     * not heard yet", and that is not evidence of anything: the Sessions
+     * screen opened red on the line below about no machine reporting, from
+     * its own empty list, while the New session sheet beside it listed two
+     * machines it had asked for itself. [blind] says what the fleet said; this
+     * says whether it has said.
+     */
+    val heard: Boolean = true,
 ) {
     companion object {
-        fun of(sessions: List<Fleet.Session>, hosts: List<Fleet.FleetHost>): Reassurance {
+        /** [heard] is whether the fleet has answered which machines report; [hosts] is that answer, or what was held before one. */
+        fun of(sessions: List<Fleet.Session>, hosts: List<Fleet.FleetHost>, heard: Boolean = true): Reassurance {
             val unwell = hosts.filter { it.state != "healthy" }.map { it.hostId }
             return Reassurance(
                 waiting = sessions.count { it.prompt != null },
@@ -61,6 +72,7 @@ data class Reassurance(
                 unwell = unwell,
                 blind = hosts.isEmpty(),
                 healthy = hosts.size - unwell.size,
+                heard = heard,
             )
         }
     }
@@ -71,6 +83,7 @@ data class Reassurance(
         waiting > 1 -> "$waiting sessions are waiting for you"
         unwell.size == 1 -> "One machine needs a look"
         unwell.size > 1 -> "${unwell.size} machines need a look"
+        !heard -> "Asking which machines report"
         blind -> "No machines are reporting"
         running == 0 -> "Nothing is running"
         else -> "Nothing needs you"
@@ -82,6 +95,13 @@ data class Reassurance(
      * whole argument for this line is that they should not have to.
      */
     val basis: String get() {
+        // NOT HEARD IS NOT HEARD: before the first answer, or after an ask that
+        // failed with nothing held, the fleet has said nothing about its
+        // machines, and "the coordinator has no health from any machine" is a
+        // claim about what it said.
+        if (!heard) {
+            return "The fleet has not yet said which machines report, so this cannot say whether anything is running."
+        }
         if (blind) {
             return "The coordinator has no health from any machine, so this cannot say whether anything is running."
         }
@@ -98,7 +118,7 @@ data class Reassurance(
      * card is. Calm is LOW CONTRAST on purpose: claims that hold recede, claims
      * that fail come forward. Matches `Reassurance.settled` in Swift.
      */
-    val settled: Boolean get() = waiting == 0 && !blind && unwell.isEmpty()
+    val settled: Boolean get() = waiting == 0 && heard && !blind && unwell.isEmpty()
 }
 
 /**
@@ -114,7 +134,11 @@ fun ReassuranceBanner(summary: Reassurance, modifier: Modifier = Modifier) {
     // console and on the iPhone.
     val tint: Color = when {
         summary.waiting > 0 -> Design.Palette.attention.now
-        summary.blind || summary.unwell.isNotEmpty() -> Design.Palette.bad.now
+        summary.unwell.isNotEmpty() -> Design.Palette.bad.now
+        // Not heard yet is not trouble: nothing is known to be wrong, and red
+        // on an unanswered question teaches the red to be ignored.
+        !summary.heard -> Design.Palette.inkDim.now
+        summary.blind -> Design.Palette.bad.now
         else -> Design.Palette.inkDim.now
     }
     // THE LINE THAT SAYS WHETHER ANYTHING NEEDS YOU says it changed: the ring

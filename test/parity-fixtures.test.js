@@ -40,6 +40,7 @@ test('every case is complete, so a half-written one cannot pass by being ignored
     }
     assert.ok(Array.isArray(c.in.unwell), `case ${i}.in.unwell is not a list`);
     assert.equal(typeof c.in.blind, 'boolean', `case ${i}.in.blind is not a boolean`);
+    assert.equal(typeof c.in.heard, 'boolean', `case ${i}.in.heard is not a boolean`);
   }
 });
 
@@ -49,14 +50,15 @@ test('every headline the rule can produce is exercised', () => {
   // clause, both apps implement it, and the table never mentions it — so the
   // one thing the fixture exists to catch is the one thing it now cannot.
   //
-  // The list is the five outcomes docs/psychology.md argues for, in the order
-  // of urgency that IS the design. Adding a sixth means adding a case.
+  // The list is the six outcomes docs/psychology.md argues for, in the order
+  // of urgency that IS the design. Adding a seventh means adding a case.
   const seen = new Set(reassurance.cases.map((c) => c.headline));
   const shapes = [
     /^One session is waiting for you$/,
     /^\d+ sessions are waiting for you$/,
     /^One machine needs a look$/,
     /^\d+ machines need a look$/,
+    /^Asking which machines report$/,
     /^No machines are reporting$/,
     /^Nothing is running$/,
     /^Nothing needs you$/,
@@ -82,7 +84,15 @@ test('the ordering of urgency is pinned, because the order is the design', () =>
   assert.ok(unwellAndBlind.length, 'no case has an unwell machine while blind');
   for (const c of unwellAndBlind) assert.match(c.headline, /needs a look/, c.why);
 
-  const blindAndIdle = both((c) => c.in.waiting === 0 && !c.in.unwell.length && c.in.blind);
+  // NOT HEARD BEFORE BLIND: an empty list the fleet has not answered for is
+  // not an answer of none, and it says so; blind is the answer of none.
+  const unheardAndIdle = both((c) => c.in.waiting === 0 && !c.in.unwell.length && !c.in.heard);
+  assert.ok(unheardAndIdle.length, 'no case is unanswered with nothing waiting');
+  for (const c of unheardAndIdle) {
+    assert.equal(c.headline, 'Asking which machines report', `${c.why}: not heard must outrank blind and "Nothing is running"`);
+  }
+
+  const blindAndIdle = both((c) => c.in.waiting === 0 && !c.in.unwell.length && c.in.blind && c.in.heard);
   assert.ok(blindAndIdle.length, 'no case is blind with nothing running');
   for (const c of blindAndIdle) {
     assert.equal(c.headline, 'No machines are reporting', `${c.why}: blind must outrank "Nothing is running"`);
@@ -93,9 +103,15 @@ test('blind replaces the basis rather than joining it', () => {
   // The half that does the work. A count computed from no health at all would
   // be a reassurance taken on faith, which is the thing this line exists not to
   // ask for.
-  for (const c of reassurance.cases.filter((x) => x.in.blind)) {
+  for (const c of reassurance.cases.filter((x) => x.in.blind && x.in.heard)) {
     assert.match(c.basis, /^The coordinator has no health/, c.why);
     assert.equal(c.basis.includes('·'), false, `${c.why}: blind must not carry counted clauses`);
+  }
+  // And so does not heard, in its own words: the fleet has not said, which is
+  // not the same as having said none.
+  for (const c of reassurance.cases.filter((x) => !x.in.heard)) {
+    assert.match(c.basis, /^The fleet has not yet said which machines report/, c.why);
+    assert.equal(c.basis.includes('·'), false, `${c.why}: not heard must not carry counted clauses`);
   }
 });
 

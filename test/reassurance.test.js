@@ -29,13 +29,14 @@ const code = (/** @type {string} */ src) =>
 const ios = read('apps/ios/Fleetwright/Reassurance.swift');
 const android = read('apps/android/app/src/main/java/network/thetech/fleetwright/Reassurance.kt');
 
-test('both phones say the same five things, in the same order of urgency', () => {
+test('both phones say the same six things, in the same order of urgency', () => {
   // The ORDER is the design. One clause, and the most urgent true one — a
   // banner that leads with "3 machines healthy" while a session is waiting has
   // buried the only sentence worth reading.
   const clauses = [
     'waiting for you',
     'needs a look',
+    'Asking which machines report',
     'No machines are reporting',
     'Nothing is running',
     'Nothing needs you',
@@ -62,6 +63,32 @@ test('a fleet nobody can hear from is not a fleet with nothing running', () => {
     assert.match(src, /blind/, `${name} cannot tell an empty fleet from an unreachable one`);
     assert.match(src, /no health from any machine/, `${name} does not say why it cannot tell`);
   }
+});
+
+test('an empty list the fleet has not filled yet is not a fleet with no machines reporting', () => {
+  // The Sessions screen opened red on "No machines are reporting", from a
+  // list that was empty only because /api/hosts had not answered yet, while
+  // the New session sheet beside it listed two machines it had asked for
+  // itself. "The coordinator has no health from any machine" is a claim about
+  // what the fleet said; before it has said anything the line says that, and
+  // calmly: nothing is known to be wrong.
+  for (const [name, src] of [['iOS', ios], ['Android', android]]) {
+    assert.match(src, /heard/, `${name} cannot tell not-yet-answered from answered-with-none`);
+    assert.match(src, /The fleet has not yet said which machines report, so this cannot say whether anything is running\./, `${name} does not say the ask is unanswered`);
+    // Not heard comes before blind, and never red.
+    const heardAt = src.indexOf('Asking which machines report');
+    const blindAt = src.indexOf('No machines are reporting');
+    assert.ok(heardAt > 0 && heardAt < blindAt, `${name} answers "no machines" before it has heard`);
+  }
+  assert.match(ios, /if !heard \{ return Design\.Palette\.inkDim \}\s*if blind \{ return Design\.Palette\.bad \}/, 'iOS paints an unanswered ask red');
+  assert.match(android, /!summary\.heard -> Design\.Palette\.inkDim\.now\s*summary\.blind -> Design\.Palette\.bad\.now/, 'Android paints an unanswered ask red');
+  // And the screens feed it: the list is unheard until the fleet answers.
+  assert.match(read('apps/ios/Fleetwright/FleetView.swift'), /Reassurance\(sessions: sessions, hosts: fleetHosts, heard: hostsHeard\)/);
+  assert.match(read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt'), /Reassurance\.of\(sessions, binHosts, hostsHeard\)/);
+  // The parity table carries the new field on every case, and the unanswered case.
+  const table = JSON.parse(read('test/fixtures/parity/reassurance.json'));
+  assert.ok(table.cases.every((/** @type {any} */ c) => typeof c.in.heard === 'boolean'), 'a case without heard');
+  assert.ok(table.cases.some((/** @type {any} */ c) => c.in.heard === false && c.headline === 'Asking which machines report'), 'the unanswered case');
 });
 
 test('the headline never stands alone', () => {
