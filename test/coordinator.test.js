@@ -101,6 +101,38 @@ test('a box with no Claude account of its own is NOT degraded for it', () => {
   assert.equal(reg.get('box')?.state, 'healthy');
 });
 
+test('a machine from a pool handed no Claude login says what the boxes answered, not the runner’s remedy', () => {
+  // vm-72ee54698806's page: "this runner has no Claude login for whoever
+  // started it and its repository has no ANTHROPIC_API_KEY ... add
+  // ANTHROPIC_API_KEY to the runner repository’s Actions secrets", on a
+  // machine from a pool, which has neither, to a person whose vault held
+  // the login. What was wrong was which box had been asked for it.
+  const reg = new HostRegistry();
+  const vm = 'vm-0123456789ab';
+  reg.connect(vm, () => {}, { ephemeral: true, owner: 'eli@example.com', madeOnPool: true });
+  const entry = /** @type {any} */ (reg.hosts.get(vm));
+  entry.vmLogin = { at: 1, why: 'no box holding the pool handed it one: holder-5a5829 (This box made vm-0123456789ab but holds no Claude login of eli@example.com’s to hand it)' };
+  reg.recordHealth(vm, health({ claudeAccounts: 0, runnerAuth: 'none' }));
+  assert.equal(reg.get(vm)?.state, 'degraded');
+  const said = reg.get(vm)?.reason || '';
+  assert.match(said, /^this machine asked for its owner’s Claude login when it joined and was handed none: no box holding the pool handed it one: holder-5a5829/);
+  assert.match(said, /It asks once\./);
+  assert.ok(!/ANTHROPIC_API_KEY|repository|runner/.test(said), said);
+  // Kept across a reconnect: the line is read long after the one ask.
+  reg.connect(vm, () => {}, { ephemeral: true, owner: 'eli@example.com' });
+  assert.equal(reg.get(vm)?.madeOnPool, true);
+  assert.deepEqual(reg.get(vm)?.vmLogin, entry.vmLogin);
+  // Nothing remembered (a coordinator that restarted): still not a runner's words.
+  const fresh = new HostRegistry();
+  fresh.connect(vm, () => {}, { ephemeral: true, owner: 'eli@example.com', madeOnPool: true });
+  fresh.recordHealth(vm, health({ claudeAccounts: 0, runnerAuth: 'none' }));
+  assert.match(fresh.get(vm)?.reason || '', /^this machine was handed no Claude login of its owner’s when it joined/);
+  // A GitHub runner keeps its own.
+  fresh.connect('gha-1', () => {}, { ephemeral: true, owner: 'eli@example.com' });
+  fresh.recordHealth('gha-1', health({ claudeAccounts: 0, runnerAuth: 'none' }));
+  assert.match(fresh.get('gha-1')?.reason || '', /ANTHROPIC_API_KEY/);
+});
+
 test('a box no vault gives a Claude login is degraded, because nothing can start', () => {
   // The question that replaced it. Zero is a real fault with a real remedy;
   // WHOSE account is missing is a per-session question, answered by name at the
@@ -509,7 +541,10 @@ test('GET /api/hosts describes the host and never the socket carrying it', async
     // catch the OTHER kind of addition: a socket, a server, a process handle.
     // `takesSessions` is the same: whether a start would reach it; and
     // `administers`, whether its settings, update and reboot would.
-    ['administers', 'connected', 'connectedAt', 'ephemeral', 'health', 'healthAt', 'hostId', 'owner', 'reason', 'state', 'takesSessions'],
+    // `madeOnPool` and `vmLogin` describe a machine from a pool: that it is
+    // one, and what the boxes answered when it asked for its login
+    // (registry.js poolMachineReason), which is text they chose, not a handle.
+    ['administers', 'connected', 'connectedAt', 'ephemeral', 'health', 'healthAt', 'hostId', 'madeOnPool', 'owner', 'reason', 'state', 'takesSessions', 'vmLogin'],
     'the entry is a description of the host, not a window onto the process serving it',
   );
 

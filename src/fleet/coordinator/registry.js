@@ -42,6 +42,26 @@ export function runsNoSessions(hostId) {
 }
 
 /**
+ * The degraded line of a machine from a pool that was handed no Claude login
+ * (HostEntry.madeOnPool, vmLogin). It asked once, when it joined, and the
+ * boxes' answer is kept on the entry; said here, cut to a line as every word
+ * a box chose is (text.js oneLine), with the one remedy that is true of it:
+ * a new machine asks again. The runner's sentence named a repository and
+ * Actions secrets this machine does not have.
+ *
+ * @param {HostEntry} host
+ */
+export function poolMachineReason(host) {
+  const why = host.vmLogin?.why ? oneLine(host.vmLogin.why, 240) : '';
+  return (
+    (why
+      ? `this machine asked for its owner’s Claude login when it joined and was handed none: ${why}. `
+      : 'this machine was handed no Claude login of its owner’s when it joined, so no session started here can do anything. ') +
+    'It asks once. Keep your Claude login under You › Credentials in the app, with a machine of yours that holds this pool approved for it, and start a new machine'
+  );
+}
+
+/**
  * @typedef {object} HostHealth
  * @property {string} hostId
  * @property {number} protocol
@@ -113,6 +133,13 @@ export function runsNoSessions(hostId) {
  * @property {string|null} [owner]   whose runner this is, for an ephemeral host
  * @property {string|null} [actsFor] the one person this host may act for, or
  *   null for an operator's box, which may act for anyone (hosts.js actsFor)
+ * @property {boolean} [madeOnPool]  a temporary machine from its owner's own
+ *   hypervisor (core.js enrolVm), which is not a GitHub runner: no repository,
+ *   no Actions secrets, and its Claude login comes from a box of theirs
+ * @property {{ at: number, box?: string, why?: string }|null} [vmLogin]  what
+ *   the boxes answered when such a machine asked for its owner's login (core.js
+ *   #vmClaude): who handed it, or why none did. It asks once, so this is what
+ *   the degraded line says of it
  */
 
 /**
@@ -226,9 +253,9 @@ export class HostRegistry {
    * A host has dialled in.
    * @param {string} hostId
    * @param {(msg: object) => void} send
-   * @param {{ ephemeral?: boolean, owner?: string|null, actsFor?: string|null }} [opts]
+   * @param {{ ephemeral?: boolean, owner?: string|null, actsFor?: string|null, madeOnPool?: boolean }} [opts]
    */
-  connect(hostId, send, { ephemeral = false, owner = null, actsFor = undefined } = {}) {
+  connect(hostId, send, { ephemeral = false, owner = null, actsFor = undefined, madeOnPool = false } = {}) {
     // A temporary host dialling back after a drop picks up what it had: its
     // health and its last session list, so a resume lands where it did.
     const existing = this.hosts.get(hostId) ?? this.dropped.get(hostId)?.host;
@@ -259,6 +286,11 @@ export class HostRegistry {
       ephemeral: ephemeral || existing?.ephemeral || false,
       // Whose runner this is. Only an ephemeral host has one — see hosts.js.
       owner: owner ?? existing?.owner ?? null,
+      // From its owner's pool, sticky the same way: the enrolment said so.
+      madeOnPool: madeOnPool || existing?.madeOnPool || false,
+      // What its login ask was answered, kept across a reconnect: it asked
+      // once, and the degraded line below is read long after.
+      vmLogin: existing?.vmLogin ?? null,
       // Who it may act for, from the enrolment on every connect. Null is an
       // answer here (an operator's box), so only an absent value keeps the
       // last one.
@@ -532,10 +564,19 @@ export class HostRegistry {
       // says which (runnerAuth). Counting only linked accounts marked every
       // runner degraded, refused the session it was started for, and told the
       // person to log in on a box they cannot reach.
+      //
+      // AND A MACHINE FROM A POOL A THIRD. It joins as a temporary host the
+      // way a runner does, so it was given the runner's sentence: a
+      // repository it does not have, Actions secrets it cannot be given, and
+      // "keep your Claude login" to a person whose vault held one. Its login
+      // comes from a box of its owner's once it joins (core.js #vmClaude),
+      // and what those boxes answered is what is wrong with it.
       host.reason = health.runnerAuth === 'none'
-        ? 'this runner has no Claude login for whoever started it and its repository has no ANTHROPIC_API_KEY, ' +
-          'so no session started here can do anything. Keep your Claude login for your runners under You › ' +
-          'Credentials in the app, or add ANTHROPIC_API_KEY to the runner repository’s Actions secrets'
+        ? host.madeOnPool
+          ? poolMachineReason(host)
+          : 'this runner has no Claude login for whoever started it and its repository has no ANTHROPIC_API_KEY, ' +
+            'so no session started here can do anything. Keep your Claude login for your runners under You › ' +
+            'Credentials in the app, or add ANTHROPIC_API_KEY to the runner repository’s Actions secrets'
         : 'nobody’s vault gives this host a Claude login, so no session started here can do anything. ' +
         // TELEGRAM WAS ARCHIVED AND THIS SENTENCE DID NOT NOTICE, and then
         // neither did linking: a person's login is kept in their vault and a
