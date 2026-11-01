@@ -334,7 +334,11 @@ test('the page sends the code back with who issued it', async () => {
     clientId: 'mcp_1', redirectUri: 'http://127.0.0.1:51000/callback', challenge: 'c', state: 's1',
     origin: 'https://fleet.example', signIn: {},
   });
-  const script = /** @type {string} */ (page.match(/<script>([\s\S]*?)<\/script>/)?.[1]);
+  // Cut at the page's own literal tags rather than parse HTML: this reads back
+  // the script the template wrote, it does not filter anything.
+  const open = page.indexOf('<script>') + '<script>'.length;
+  const script = page.slice(open, page.indexOf('</script>', open));
+  assert.ok(script.includes('function finish'), 'found the page script');
   const location = { href: '' };
   const context = vm.createContext({
     URL,
