@@ -37,6 +37,19 @@ if (role === 'hold') {
   log({ argv });
   const host = argv.at(-1);
   if (config.unreachable) process.exit(1);
+  // A pool master that turns the connection away, `keyscan.times` times and
+  // then answers: ssh-keyscan says why on stderr, in its own words, and
+  // writes no key. The count lives beside the log, since each scan is a
+  // process of its own.
+  if (config.keyscan) {
+    const counter = `${config.log}.keyscan`;
+    const turned = existsSync(counter) ? Number(readFileSync(counter, 'utf8')) : 0;
+    if (turned < config.keyscan.times) {
+      writeFileSync(counter, String(turned + 1));
+      process.stderr.write(`# ${host}:22 SSH-2.0-OpenSSH_9.9\n${config.keyscan.say}\n`);
+      process.exit(1);
+    }
+  }
   for (const k of config.keys) process.stdout.write(`${host} ${k.type} ${k.blob}\n`);
 } else if (role === 'xe') {
   log({ argv });

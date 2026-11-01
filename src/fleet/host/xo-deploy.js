@@ -246,16 +246,64 @@ export async function missingTools() {
 /**
  * The host keys at an address, from `ssh-keyscan`.
  *
+ * NO KEY IS TWO DIFFERENT THINGS, and `said` tells them apart: a pool master
+ * that is off or out of reach gives ssh-keyscan nothing to say and it goes
+ * quiet until its timeout, where one that is up and turned this machine
+ * away says so at once ("Connection refused", "Connection closed by remote
+ * host", in its own words). A watchdog job once reported "nothing answered
+ * SSH" of a pool master that had answered the same machine's probe thirty
+ * seconds before and had just hung up on it, which is not nothing, and is
+ * the difference between a master to look at and one to ask again in a
+ * minute. `said` is ssh-keyscan's last line that is a reason: its `#` lines
+ * are the server's banner, not one.
+ *
  * @param {string} address @param {{ timeoutMs?: number, signal?: AbortSignal }} [opts]
- * @returns {Promise<{ ok: true, keys: ReturnType<typeof parseKeyscan> } | { ok: false, missing: boolean, error: string }>}
+ * @returns {Promise<{ ok: true, keys: ReturnType<typeof parseKeyscan> } | { ok: false, missing: boolean, said: string, error: string }>}
  */
 export async function scanHostKeys(address, { timeoutMs = 5_000, signal } = {}) {
   const { host, port } = sshTarget(address);
-  const r = await run('ssh-keyscan', ['-T', String(Math.ceil(timeoutMs / 1000)), '-p', String(port), '-t', 'ed25519,ecdsa,rsa', host], { timeoutMs: timeoutMs + 3_000, signal });
-  if (r.code === null && r.error === 'ENOENT') return { ok: false, missing: true, error: 'this machine has no ssh-keyscan' };
+  const seconds = Math.ceil(timeoutMs / 1000);
+  const r = await run('ssh-keyscan', ['-T', String(seconds), '-p', String(port), '-t', 'ed25519,ecdsa,rsa', host], { timeoutMs: timeoutMs + 3_000, signal });
+  if (r.code === null && r.error === 'ENOENT') return { ok: false, missing: true, said: '', error: 'this machine has no ssh-keyscan' };
   const keys = parseKeyscan(r.stdout);
-  if (!keys.length) return { ok: false, missing: false, error: 'no SSH server answered' };
+  if (!keys.length) {
+    const said = lastLine(r.stderr.split('\n').filter((l) => l.trim() && !l.trimStart().startsWith('#')).join('\n'));
+    return { ok: false, missing: false, said, error: said ? `ssh-keyscan said “${said}”` : `ssh-keyscan heard nothing in ${seconds} seconds` };
+  }
   return { ok: true, keys };
+}
+
+/**
+ * The scan for a job, which has a root password typed on a phone behind it
+ * and a probe that found the pool master moments before: asked again, up to
+ * three times two seconds apart and inside a dozen seconds in all, when the
+ * first look gets no key. One refused connection — a master restarting
+ * sshd, or limiting how often one address may knock, which three
+ * connections from the probe and three more from the job come close to — is
+ * not a reason to throw the password away and send the person back to the
+ * start. Three the same is an answer. Stopped by the job's own cancel.
+ *
+ * @param {string} address @param {{ signal?: AbortSignal, pauseMs?: number, budgetMs?: number }} [opts]
+ * @returns {Promise<{ scan: Awaited<ReturnType<typeof scanHostKeys>>, tries: number, seconds: number }>}
+ */
+async function scanForJob(address, { signal, pauseMs = 2_000, budgetMs = 12_000 } = {}) {
+  const began = Date.now();
+  let tries = 0;
+  for (;;) {
+    tries += 1;
+    const scan = await scanHostKeys(address, { signal });
+    const seconds = Math.max(1, Math.round((Date.now() - began) / 1000));
+    if (scan.ok || scan.missing || tries >= 3 || signal?.aborted || Date.now() - began + pauseMs > budgetMs) return { scan, tries, seconds };
+    await new Promise((resolve) => {
+      const t = setTimeout(done, pauseMs);
+      signal?.addEventListener('abort', done, { once: true });
+      function done() {
+        clearTimeout(t);
+        signal?.removeEventListener('abort', done);
+        resolve(undefined);
+      }
+    });
+  }
 }
 
 /**
@@ -274,7 +322,9 @@ export async function sshProbe(address, { signal } = {}) {
   const text = !scan.ok
     ? scan.missing
       ? `This machine cannot look for SSH at ${address}: it has no ssh-keyscan. Install openssh-client on it.`
-      : `Nothing answered SSH at ${address} from here.`
+      : scan.said
+        ? `SSH at ${address} would not talk to this machine: ${scan.error}.`
+        : `Nothing answered SSH at ${address} from here.`
     : deploy
       ? `The SSH server at ${address} answered with ${keys.length === 1 ? 'one host key' : `${keys.length} host keys`}.`
       : `The SSH server at ${address} answered, and this machine cannot install Xen Orchestra: it has no ${missing.join(', ')}.`;
@@ -473,15 +523,27 @@ export async function fetchInstaller({ dir, installer = INSTALLER, fetch = globa
  *
  * `hostKey` is the SHA-256 of the key the person accepted, in hex.
  *
- * @param {{ address: string, hostKey: string, secret: { password?: string }, dir: string, signal?: AbortSignal, timeoutMs?: number }} opts
+ * `pauseMs` is the wait between looks for the host key (scanForJob); the
+ * suite shortens it.
+ *
+ * @param {{ address: string, hostKey: string, secret: { password?: string }, dir: string, signal?: AbortSignal, timeoutMs?: number, pauseMs?: number }} opts
  * @returns {Promise<PoolLink>}
  */
-export async function openPool({ address, hostKey, secret, dir, signal, timeoutMs = 30_000 }) {
+export async function openPool({ address, hostKey, secret, dir, signal, timeoutMs = 30_000, pauseMs = 2_000 }) {
   try {
     const { host, port } = sshTarget(address);
     if (/\s/.test(dir)) throw new Error(`this machine's temporary directory has a space in its path (${dir}), which the installer cannot pass to ssh.`);
-    const scan = await scanHostKeys(address);
-    if (!scan.ok) throw new Error(scan.missing ? 'this machine has no ssh-keyscan. Install openssh-client on it.' : `nothing answered SSH at ${address} from here.`);
+    const { scan, tries, seconds } = await scanForJob(address, { signal, pauseMs });
+    if (!scan.ok) {
+      if (scan.missing) throw new Error('this machine has no ssh-keyscan. Install openssh-client on it.');
+      // WHAT WAS HEARD, which the person reads under a probe that said this
+      // machine reached the pool master: a master that turned the machine
+      // away is said as that, in ssh-keyscan's words, and not as silence.
+      const times = tries === 1 ? 'once' : tries === 2 ? 'twice' : `${tries} times`;
+      throw new Error(scan.said
+        ? `SSH at ${address} would not talk to this machine, ${times} over ${seconds} second${seconds === 1 ? '' : 's'}: ${scan.error}. Nothing was sent to it; try again in a minute.`
+        : `nothing answered SSH at ${address} from here: ${scan.error}, ${times}.`);
+    }
     const key = scan.keys.find((k) => k.sha256 === hostKey);
     if (!key) {
       throw new Error(`the pool master answered with a different SSH host key than the one you accepted (${scan.keys.map((k) => k.fingerprint).join(', ')}), so nothing was sent to it.`);

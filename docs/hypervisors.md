@@ -1925,7 +1925,19 @@ new password for Xen Orchestra's admin. In order:
 5. **Reaching the pool master** (`reach`). The machine scans the host key again
    and writes only a key with the accepted fingerprint to a `known_hosts` file
    of the job's own, with `StrictHostKeyChecking=yes`; a server answering with
-   any other key is refused before the password is offered. It opens one
+   any other key is refused before the password is offered. A scan that gets
+   no key is made again, up to three times two seconds apart and inside a
+   dozen seconds in all, because a pool master that answered the probe a
+   moment before and turns one connection away (an sshd restarting, or one
+   limiting how often an address may knock) is not a reason to throw the
+   typed password away; and what stops the job then says what ssh-keyscan
+   heard, in its words: "SSH at 192.168.1.128 would not talk to this machine,
+   3 times over 5 seconds: ssh-keyscan said “connect to host 192.168.1.128
+   port 22: Connection refused”" is a master that is up and said no, where
+   "nothing answered SSH at 192.168.1.128 from here: ssh-keyscan heard
+   nothing in 5 seconds, twice" is one that is off or out of reach. The first
+   had been said as the second, under a sheet that still showed the probe's
+   "Reached its SSH server", and read as a contradiction. It opens one
    OpenSSH master connection as root, answering the password prompt through
    `SSH_ASKPASS` from a unix socket in the job's 0700 directory, and wipes the
    password as soon as the master is up. The password is never in an argument,
@@ -2522,7 +2534,9 @@ and Xen Orchestra's address sealed under their own name
 (`xowatchdogAad`), so a root password sealed for this can never be opened
 as an install's, which would also make a VM. Then:
 
-1. **reach** the pool master, held to that key, the password used once;
+1. **reach** the pool master, held to that key, the password used once; the
+   scan for the key is made again as an install's is (step 5 above), and a
+   master that turned the connection away is said in ssh-keyscan's words;
 2. **find** Xen Orchestra's VM by the address it answers on, as its guest
    agent reports it, or by the name an install gives it when it is stopped
    and exactly one VM has it; its system disk; and that the pool master can
