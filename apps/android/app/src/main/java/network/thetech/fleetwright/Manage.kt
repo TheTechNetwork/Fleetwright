@@ -795,7 +795,8 @@ internal object Manage {
             else -> null
         }
         fun edgeDns(answering: Boolean?) = when (answering) {
-            true -> "Answering names"
+            // Running, uncounted: a router built before it counted, or one whose count has nothing in it yet (edge-watch.js, statusOf). Said as uncounted, true of both, not as counting none.
+            true -> "Answering names; none counted so far"
             false -> "Not answering names"
             null -> "Cannot tell whether it answers names"
         }
@@ -804,16 +805,24 @@ internal object Manage {
             false -> "Its way out is down"
             null -> "Cannot tell whether its way out is up"
         }
-        fun edgeLeases(n: Int) = if (n == 1) "1 DHCP lease" else "$n DHCP leases"
+        /** What dnsmasq has out. Null is the count not read, and is said (C-5): a quiet pool has none out, which is a different thing. */
+        fun edgeLeases(n: Int?) = when (n) {
+            null -> "Cannot tell how many DHCP leases it has out"
+            0 -> "No DHCP leases out"
+            1 -> "1 DHCP lease out"
+            else -> "$n DHCP leases out"
+        }
         fun edgeUnreached(why: String) = "Could not read it: $why"
-        fun edgeHeard(time: String?) = time?.let { "Last log line $it" } ?: "No log lines from it yet"
+        /** Its last log line, as the machine reading it heard it. None is said as none having reached that machine: whether the router logged nothing or sends its log elsewhere is not known from here. */
+        fun edgeHeard(time: String?) = time?.let { "Last log line $it" } ?: "No log line has reached this machine"
         /** The way out with dpinger's numbers, once a router measures it (edge-router.js, MEASURED); a router built before that has none, and the flag alone is said. */
         fun edgeWayOut(up: Boolean?, ms: Double?, loss: Double?): String {
             if (up != true || ms == null) return edgeGateway(up)
             val latency = if (ms < 1) "under 1 ms" else "${Math.round(ms)} ms"
             val l = loss ?: 0.0
+            // No loss is said, not left out: a measured way out with nothing lost is the good case, and silence read as the number missing.
             val lost = when {
-                l <= 0 -> ""
+                l <= 0 -> ", no pings lost"
                 Math.round(l) >= 1 -> ", losing ${Math.round(l)}% of pings"
                 else -> ", losing under 1% of pings"
             }

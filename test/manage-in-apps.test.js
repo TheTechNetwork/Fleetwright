@@ -386,3 +386,40 @@ test('both phones keep the routers’ key a policy job seals back, beside the po
   assert.match(bare(IOS_SCREEN), /if e\.listening == false \{\s*Text\(Manage\.Words\.edgeNotListening\)[\s\S]*?Design\.Palette\.attention/, 'iOS: not listening is said in the attention tone');
   assert.match(bare(KT_SCREEN), /if \(e\.listening == false\) Text\(Manage\.Words\.edgeNotListening, style = Design\.Style\.label, color = Design\.Palette\.attention\.now\)/);
 });
+
+test('a quiet router is said as quiet, and a count not read as not read, in the same words on both phones', () => {
+  // ASKED FOR, from a screenshot of a pool with no machines behind its
+  // routers: "Answering names", "0 DHCP leases", "No log lines from it yet"
+  // read as a card that was broken or unfinished, when every one was the
+  // truth of a router nothing had asked anything. The words now say the
+  // quiet case as quiet, say what is not known as not known (a lease count
+  // that was not read used to vanish, which is "nothing" by C-5's rule),
+  // and put the way out first, since it is what the machines behind the
+  // router have or have not.
+  const ios = bare(IOS_MODEL);
+  const kt = bare(read('apps/android/app/src/main/java/network/thetech/fleetwright/Manage.kt'));
+  for (const words of [
+    'Answering names; none counted so far',
+    'Cannot tell how many DHCP leases it has out',
+    'No DHCP leases out',
+    '1 DHCP lease out',
+    'No log line has reached this machine',
+    ', no pings lost',
+    'Its way out is up, ',
+  ]) {
+    assert.ok(ios.includes(words), `iOS: ${words}`);
+    assert.ok(kt.includes(words), `Android: ${words}`);
+  }
+  // The count not read is drawn, not skipped: no phone guards the line on the count being there.
+  const iosRows = bare(IOS_SCREEN);
+  const ktRows = bare(KT_SCREEN);
+  assert.ok(/Text\(Manage\.Words\.edgeLeases\(r\.leases\)\)/.test(iosRows), 'iOS draws the lease line whatever the count');
+  assert.ok(/Text\(Manage\.Words\.edgeLeases\(r\.leases\),/.test(ktRows), 'Android draws the lease line whatever the count');
+  assert.ok(!/if let n = r\.leases/.test(iosRows) && !/r\.leases\?\.let/.test(ktRows), 'neither phone hides a count it does not have');
+  // The way out before the names, on both.
+  for (const [rows, who] of [[iosRows, 'iOS'], [ktRows, 'Android']]) {
+    const wayOut = rows.indexOf('Manage.Words.edgeWayOut(');
+    const names = rows.indexOf('Manage.Words.edgeNames(');
+    assert.ok(wayOut > 0 && names > wayOut, `${who}: the way out is drawn before the names`);
+  }
+});

@@ -1050,12 +1050,15 @@ the box on the network is the one shown as soon as it has read them.
 status, refreshed every 30 seconds while it is open:
 
 - which machine read them, and when;
-- for each router: whether it holds the gateway address or stands by; how
-  many names it answered and refused since it started counting and the five
-  it refused most, or only whether it answers names on a router built before
-  it counted; whether its way out is up, with its latency and loss once it
-  is monitored; its leases; and its last log line, or why it could not be
-  read;
+- for each router, in this order: whether it holds the gateway address or
+  stands by; whether its way out is up, with its latency and loss once it is
+  monitored, no loss said as no loss; how many names it answered and refused
+  since it started counting and the five it refused most, or that it answers
+  names and none have been counted (a router built before it counted, or one
+  nothing has asked yet, which the read cannot tell apart); its leases, none
+  out said as none and a count not read said as not read; and its last log
+  line, or that none has reached the machine reading it, which is all that
+  machine knows; or why it could not be read;
 - that the machine reading them cannot listen for their log lines, when
   another program has the port;
 - the last eight lines they logged, newest first.
