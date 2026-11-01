@@ -27,6 +27,12 @@
  *   setup progress, which Android keeps as one ongoing notification with a
  *   progress bar. FCM then sends it data-only, as it does an answerable one,
  *   so the tray never draws a notification per step over the app's own.
+ * @property {boolean} [wake]  the app has something to do with this before
+ *   anybody reads it, and iOS is asked to run it in the background for a few
+ *   seconds (`content-available`): a pool's own machine asking to join, which
+ *   the phone that made it lets in by itself. Alongside the alert, never
+ *   instead of it, so a phone iOS does not wake still shows the ask. Android
+ *   needs nothing: a data-only message already runs the app.
  */
 
 import { sealTo } from './push-crypto.js';
@@ -224,6 +230,9 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
         try {
           const wire = device.wire ?? (await envelopeFor(device, message, { now }));
           const category = message.category ? { category: message.category } : {};
+          // WAKE THE APP, on iOS, for a notification it has work behind
+          // (PushMessage.wake); the alert still shows.
+          const wake = message.wake ? { 'content-available': 1 } : {};
           // THE WORDS HAVE TO TRAVEL SOMEHOW. Dropping the `notification` block
           // below is what lets the app draw the buttons, and it is also what
           // takes the title and body away from it — the tray was the only thing
@@ -295,8 +304,8 @@ export function fcmPusher(serviceAccount, { logger, fetchImpl, now = () => Date.
                 // through the bridge is no less answerable than one that came
                 // straight from Apple.
                 payload: wire.encrypted
-                  ? { aps: { alert: { title: wire.title, body: wire.body }, sound: 'default', 'mutable-content': 1, ...category } }
-                  : { aps: { sound: 'default', ...category } },
+                  ? { aps: { alert: { title: wire.title, body: wire.body }, sound: 'default', 'mutable-content': 1, ...category, ...wake } }
+                  : { aps: { sound: 'default', ...category, ...wake } },
               },
             },
           };
@@ -423,6 +432,8 @@ export function apnsPusher(config, { deliver, logger, now = () => Date.now() } =
               // Only when there is something to answer: a category with no
               // answers behind it is two buttons that would do nothing.
               ...(message.category ? { category: message.category } : {}),
+              // WAKE THE APP for a notification it has work behind (PushMessage.wake).
+              ...(message.wake ? { 'content-available': 1 } : {}),
             },
             ...wire.data,
           });
@@ -662,6 +673,7 @@ export function relayPusher(relay, { logger, fetchImpl, now = () => Date.now() }
         items,
         ...(message.category ? { category: message.category } : {}),
         ...(message.drawnByApp ? { drawnByApp: true } : {}),
+        ...(message.wake ? { wake: true } : {}),
       });
     },
     async activity(tokens, update) {

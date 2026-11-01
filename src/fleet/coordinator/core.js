@@ -6695,7 +6695,17 @@ export class CoordinatorCore {
     return true;
   }
 
-  /** @param {import('./holder-joins.js').Reservation} rec */
+  /**
+   * The owner's phones are told the machine asks. THE PHONE THAT MADE IT
+   * LETS IT IN BY ITSELF, from this push: the secret it kept at Apply proves
+   * the request, so iOS is asked to wake the app (`wake`), Android gets it
+   * as data (`drawnByApp`), and the phone replaces the ask with the word
+   * that it joined. The category puts Let it in on the notification for a
+   * phone that could not settle it by itself. Asked for: "If I authorize the
+   * creation of a holder why do I need to let it in?"
+   *
+   * @param {import('./holder-joins.js').Reservation} rec
+   */
   async #pushHolderAsk(rec) {
     if (!this.push) return;
     const devices = this.#devicesOf(rec.owner);
@@ -6703,8 +6713,11 @@ export class CoordinatorCore {
     try {
       await this.push.send(devices, {
         title: `${rec.hostId} asks to join`,
-        body: `The pool\u2019s own machine for ${rec.address}. Open Fleetwright to check it is the one you made and let it in.`,
+        body: `The pool\u2019s own machine for ${rec.address}. The phone that made it lets it in by itself; if this is not that phone, or it has not, open Fleetwright.`,
         data: { kind: 'holder-join', name: `holder-join-${rec.hostId}`, hostId: rec.hostId, address: rec.address },
+        category: HOLDER_JOIN_CATEGORY,
+        drawnByApp: true,
+        wake: true,
       });
     } catch (e) {
       this.log.warn(`coordinator: push failed: ${/** @type {Error} */ (e).message}`);
@@ -8631,6 +8644,8 @@ const POOLS_LOST_EACH = 8;
  * admin sign-in behind Face ID or the fingerprint. Both apps register it.
  */
 const POOL_RECONNECT_CATEGORY = 'fleet.pool.reconnect';
+/** A pool's own machine asking to join: the one button, Let it in, which opens Machines. */
+const HOLDER_JOIN_CATEGORY = 'fleet.holder.join';
 
 /**
  * How many removals are kept for boxes that have not yet confirmed them

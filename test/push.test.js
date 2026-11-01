@@ -1115,3 +1115,40 @@ test('setup progress reaches an Android app data-only, so the tray never draws a
   assert.equal(progress.data.kind, 'xosetup');
   assert.ok(ordinary.notification, 'everything else keeps the tray’s own delivery');
 });
+
+test('a notification the app has work behind wakes it on iOS, alongside the alert, and on Android arrives as data', async () => {
+  // A pool's own machine asking to join: the phone that made it lets it in
+  // by itself from the push (core.js #pushHolderAsk). iOS runs the app for it
+  // only when asked with content-available, and still shows the alert for a
+  // phone it did not wake; Android runs the app for any data-only message.
+  /** @type {any[]} */
+  const bodies = [];
+  const pusher = fcmPusher(await realServiceAccount(), {
+    logger: { info() {}, warn() {} },
+    fetchImpl: async (/** @type {any} */ url, /** @type {any} */ init) => {
+      if (String(url).includes('oauth2')) return new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }), { status: 200 });
+      bodies.push(JSON.parse(init.body));
+      return new Response('{}', { status: 200 });
+    },
+  });
+  const ask = { title: 'holder-0a1b2c asks to join', body: 'The pool’s own machine for xo.lan.', category: 'fleet.holder.join', drawnByApp: true, wake: true, data: { kind: 'holder-join', hostId: 'holder-0a1b2c' } };
+  await pusher.send([{ token: 'ios-1', platform: 'ios' }, { token: 'android-1', platform: 'android' }], ask);
+  await pusher.send([{ token: 'ios-1', platform: 'ios' }], { title: 'Session waiting', body: 'is waiting for you' });
+  const [ios, android, plain] = bodies.map((b) => b.message);
+  assert.equal(ios.apns.payload.aps['content-available'], 1, 'iOS is asked to wake the app');
+  assert.equal(ios.apns.payload.aps.category, 'fleet.holder.join', 'with Let it in on the alert');
+  assert.equal('notification' in android, false, 'Android gets it as data, which runs the app');
+  assert.equal(android.data.kind, 'holder-join');
+  assert.equal(plain.apns.payload.aps['content-available'], undefined, 'nothing else wakes the app');
+
+  /** @type {any[]} */
+  const calls = [];
+  const direct = apnsPusher(
+    { keyId: 'K1', teamId: 'T1', bundleId: 'network.thetech.fleetwright', privateKey: (await apnsKey()).pem },
+    { logger: { info() {}, warn() {} }, deliver: async (/** @type {string} */ token, /** @type {string} */ payload) => { calls.push(JSON.parse(payload)); return { status: 200, body: '' }; } },
+  );
+  await direct.send([{ token: 'ios-2', platform: 'ios' }], ask);
+  assert.equal(calls[0].aps['content-available'], 1, 'and straight to APNs the same');
+  assert.equal(calls[0].aps.category, 'fleet.holder.join');
+  assert.ok(calls[0].aps.alert, 'alongside the alert, never instead of it');
+});

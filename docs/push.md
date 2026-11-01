@@ -77,6 +77,16 @@ an answerable notification is sent data-only and the app builds it, paying what
 the encrypted path already pays: nothing for a force-stopped app, and Doze may
 delay it. Everything with nothing to answer keeps the tray.
 
+**A notification the app has work behind wakes it.** A pool's own machine
+asking to join is let in by the phone that made it, from the push
+(`docs/hypervisors.md`, "It asks to join"). The coordinator sends it with
+`wake`, which on iOS becomes `content-available: 1` alongside the alert, never
+instead of it, so a phone iOS does not wake still shows the ask; and
+`drawnByApp`, so Android gets it as data, which runs the app. Both carry the
+category `fleet.holder.join`, whose one button, Let it in, opens Machines for a
+phone that could not settle it by itself. The relay forwards `wake` as it does
+the other two.
+
 **The category is the one field in the clear.** iOS reads it to decide which
 buttons to draw, which happens before anything could be decrypted. It names the
 *kind* of question and never the question, and `apns-collapse-id` has carried the

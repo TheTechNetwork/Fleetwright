@@ -294,6 +294,7 @@ async function push(fleet, body, deps) {
     body: '',
     ...(typeof body.category === 'string' && body.category ? { category: body.category } : {}),
     ...(body.drawnByApp === true ? { drawnByApp: true } : {}),
+    ...(body.wake === true ? { wake: true } : {}),
   };
   const devices = items.map((/** @type {any} */ i) => ({ token: i.token, platform: i.platform, wire: i.wire }));
   const { sent, dead } = await pusherFor(deps).send(devices, message);
