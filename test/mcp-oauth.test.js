@@ -324,6 +324,40 @@ test('the page never asks for a password', async () => {
   assert.match(page, /claude\.ai/);
 });
 
+test('the page sends the code back with who issued it', async () => {
+  // RFC 9207. The page's own script runs here, not a copy of it: the redirect
+  // it builds is the one a client receives, and `iss` on it is what lets that
+  // client refuse a code an attacker's server tricked it into accepting.
+  const vm = await import('node:vm');
+  const { authorizePage } = await import('../src/mcp/authorize-page.js');
+  const page = authorizePage.render({
+    clientId: 'mcp_1', redirectUri: 'http://127.0.0.1:51000/callback', challenge: 'c', state: 's1',
+    origin: 'https://fleet.example', signIn: {},
+  });
+  // Cut at the page's own literal tags rather than parse HTML: this reads back
+  // the script the template wrote, it does not filter anything.
+  const open = page.indexOf('<script>') + '<script>'.length;
+  const script = page.slice(open, page.indexOf('</script>', open));
+  assert.ok(script.includes('function finish'), 'found the page script');
+  const location = { href: '' };
+  const context = vm.createContext({
+    URL,
+    location,
+    document: { getElementById: () => ({ textContent: '', className: '' }) },
+    fetch: async () => ({ ok: true, json: async () => ({ code: 'the-code' }) }),
+  });
+  vm.runInContext(script, context);
+  await context.finish('an-id-token');
+  const back = new URL(location.href);
+  assert.equal(back.searchParams.get('code'), 'the-code');
+  assert.equal(back.searchParams.get('state'), 's1');
+  assert.equal(back.searchParams.get('iss'), 'https://fleet.example');
+  // The same string the metadata names as the issuer, and says it sends.
+  const meta = authorizationServerMetadata('https://fleet.example');
+  assert.equal(back.searchParams.get('iss'), meta.issuer);
+  assert.equal(meta.authorization_response_iss_parameter_supported, true);
+});
+
 test('a fleet with no sign-in configured says so instead of showing nothing', async () => {
   const { authorizePage } = await import('../src/mcp/authorize-page.js');
   const page = authorizePage.render({

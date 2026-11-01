@@ -118,6 +118,11 @@ async function finish(idToken) {
   }
   const back = new URL(ctx.redirectUri);
   back.searchParams.set('code', body.code);
+  // RFC 9207: say who issued the code. Without it a client talking to two
+  // authorization servers cannot tell a code from us from one an attacker's
+  // server got it to send here (the mix-up attack), and an SDK that checks
+  // has nothing to check. The issuer is the origin, as the metadata says.
+  back.searchParams.set('iss', ctx.origin);
   if (ctx.state) back.searchParams.set('state', ctx.state);
   location.href = back.toString();
 }
