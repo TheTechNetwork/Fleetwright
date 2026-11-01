@@ -79,7 +79,9 @@ What happens, from the phone to a session on a VM:
    way: yours, placed only by name, retired with its key on disconnect.
 7. **The session starts on it**, from the first health frame that says it
    can take one; a frame from before its login has arrived holds the start
-   for the next.
+   for the next. A machine handed no login says so on its page, with what
+   your boxes answered when it asked (it asks once), and not the runner's
+   remedy, which names a repository and Actions secrets it does not have.
 8. **It ends on time.** The box holding the pool looks every two minutes,
    and removes, disks and all, every machine tagged `fleetwright-session`
    that has stopped past the end in its tag, and any still running a minute

@@ -160,6 +160,33 @@ test('a refusal from the pool itself is the answer, not a reason to try another 
   assert.deepEqual(asked.map((x) => x.hostId), ['a']);
 });
 
+test('what the boxes answer a machine’s login ask is kept on it, and is its degraded line when none handed one', async () => {
+  const { newSealKey } = await import('../src/fleet/seal.js');
+  const { core, asked } = fleet({ deb14: { xo: holding(ELI) } }, (hostId, spec) =>
+    spec.verb === 'vmlogin'
+      ? { ok: false, notHere: true, text: `This box made ${spec.params.name} but holds no Claude login of ${ELI}’s to hand it, being the pool’s own machine, which holds the pool and nothing else of theirs; another of their machines may.` }
+      : { ok: true, text: 'Cloning Debian 13 on rack.' });
+  const r = await core.dispatch(ask(eli));
+  const key = await generateKeyPair();
+  assert.equal((await core.enrolVm({ ticket: asked[0].spec.params.ticket, publicJwk: key.publicJwk })).status, 200);
+  /** @type {any[]} */
+  const answered = [];
+  // Connected as the coordinator connects it, from the enrolment: a machine from a pool.
+  core.hostConnected(r.vm, (/** @type {any} */ frame) => answered.push(frame));
+  assert.equal(core.registry.get(r.vm)?.madeOnPool, true);
+  const seal = await newSealKey();
+  await core.onHostMessage(r.vm, { kind: 'claude-login', id: 'login-000001', key: seal.publicKey });
+  const minted = answered.find((f) => f.kind === 'minted');
+  assert.equal(minted?.ok, false, JSON.stringify(minted));
+  assert.match(minted.text, /^no box holding the pool handed it one: deb14 \(This box made vm-/);
+  assert.match(core.registry.get(r.vm)?.vmLogin?.why || '', /^no box holding the pool handed it one/);
+  await core.onHostMessage(r.vm, { kind: 'health', health: { hub: { reachable: true }, protocol: 8, maxSessions: 1, running: 0, free: 1, claudeAccounts: 0, runnerAuth: 'none', labels: [] } });
+  const entry = core.registry.get(r.vm);
+  assert.equal(entry?.state, 'degraded');
+  assert.match(entry?.reason || '', /^this machine asked for its owner’s Claude login when it joined and was handed none: no box holding the pool handed it one: deb14/);
+  assert.ok(!/ANTHROPIC_API_KEY/.test(entry?.reason || ''), entry?.reason);
+});
+
 test('the machine enrols with its ticket once, as its owner’s temporary host, and is started the session asked for', async () => {
   const { core, asked } = fleet({ deb14: { xo: holding(ELI) } });
   const r = await core.dispatch(ask(eli, {}, { title: 'Try the build', task: 'Run the tests' }));

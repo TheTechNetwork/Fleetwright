@@ -688,6 +688,10 @@ export class CoordinatorCore {
       ephemeral: Boolean(enrolled?.ephemeral),
       owner: enrolled?.owner ?? null,
       actsFor: person,
+      // From its owner's pool (enrolVm), so the registry can tell it from a
+      // GitHub runner when it says what is wrong with it (registry.js,
+      // poolMachineReason).
+      madeOnPool: String(enrolled?.enrolledBy || '').startsWith('vm:'),
     });
     // A box that refused a forgetting as a verb it did not know is asked
     // again from its first report on this connection (#askForget).
@@ -6162,18 +6166,26 @@ export class CoordinatorCore {
       }
       this.vmLoginsGiven.add(hostId);
     }
-    const why = reply ? String(reply.text || 'no reason given') : holders.length ? `no box holding the pool made it: ${skipped.join(', ')}` : 'no connected box holds a pool of theirs';
+    const why = reply ? String(reply.text || 'no reason given') : holders.length ? `no box holding the pool handed it one: ${skipped.join(', ')}` : 'no connected box holds a pool of theirs';
+    // KEPT ON THE MACHINE'S ENTRY, because it asks once: its degraded line is
+    // read long after, and said "keep your Claude login" to a person whose
+    // vault held one when the fault was in which box was asked (registry.js,
+    // poolMachineReason).
+    const entry = this.registry.hosts.get(hostId);
+    if (entry) entry.vmLogin = sealed ? { at: now, box: String(reply.box) } : { at: now, why };
+    // BY WHICHEVER BOX HELD THE LOGIN: the one that made it, or another of
+    // the owner's that found it on the pool (xo-pools.js handLogin).
     this.record({
       hostId,
       event: sealed ? 'vm.claude' : 'vm.claude-refused',
       actor: owner,
       text: sealed
-        ? `${owner}\u2019s machine ${hostId} was handed their Claude login by ${reply.box}, which made it`
+        ? `${owner}\u2019s machine ${hostId} was handed their Claude login by ${reply.box}`
         : `${owner}\u2019s machine ${hostId} has no Claude login: ${why}`,
     });
     answer(
       sealed
-        ? { ok: true, sealed, owner, text: `handed by ${reply.box}, which made this machine` }
+        ? { ok: true, sealed, owner, text: `handed by ${reply.box}` }
         : { ok: false, owner, error: reply?.error || { code: 'refused' }, text: why },
     );
   }
