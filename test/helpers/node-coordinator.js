@@ -511,7 +511,7 @@ export class Coordinator {
    * fan-out and correlation are decisions, and a decision implemented twice is
    * a decision that will eventually be made two different ways.
    *
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, device?: string|null }} spec
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, device?: string|null, fromApp?: boolean }} spec
    * @returns {Promise<any>}
    */
   async dispatch(spec) {
@@ -1500,6 +1500,9 @@ export class Coordinator {
         // as the Worker's, because a session record that means one thing on one
         // coordinator and another thing on the other means nothing.
         actor: client?.email || (typeof body.actor === 'string' ? body.actor : undefined),
+        // Where it came from, as the Worker reads it: the phones' `app:` actor
+        // (worker/src/fleet-do.js), for what a signature refusal says to do.
+        fromApp: typeof body.actor === 'string' && body.actor.startsWith('app:'),
         // An idempotency key supplied by the caller is honoured, so a phone that
         // retries a `start` gets the original outcome rather than a second
         // session. One we mint is unique per call, which is right for a first

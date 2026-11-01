@@ -1472,6 +1472,15 @@ export class Fleet {
           // The client's own identity wins over anything the request claims:
           // an actor a caller can choose is a label, not an attribution.
           actor: client?.email || (typeof body.actor === 'string' ? body.actor : undefined),
+          // WHERE IT CAME FROM, for one sentence only: the phones send
+          // `actor: "app:ios"` or `"app:android"`, which the line above
+          // rightly discards as an attribution, and an MCP client and the
+          // browser page send no actor. A refusal for want of a signature
+          // tells a phone how a phone comes to sign, and an MCP client where
+          // to allow a delegation, or where to do the one thing no delegation
+          // covers (core.js remedyFor). Claiming it gains nothing: it changes
+          // a sentence, never what is sent or refused.
+          fromApp: typeof body.actor === 'string' && body.actor.startsWith('app:'),
           // A caller-supplied idempotency key is honoured, so a phone that
           // retries a `start` gets the original outcome rather than a second
           // session.

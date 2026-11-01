@@ -21,7 +21,7 @@ import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { oneLine } from '../../core/text.js';
 import { RC_URL_RE } from '../../core/pane.js';
 import { place } from './scheduler.js';
-import { actorEmail, intentSigningInput, needsSignature } from '../protocol/intent-signature.js';
+import { actorEmail, intentSigningInput, needsSignature, MCP_UNDELEGATED_VERBS } from '../protocol/intent-signature.js';
 import { Delegations } from './delegations.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage, PIN_SENTENCES } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
@@ -3499,7 +3499,10 @@ export class CoordinatorCore {
   /**
    * @param {any} host
    * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null,
-   *   sig?: string, kid?: string, issuedAt?: number, signedOver?: { id?: string, actor: string, host: string, params: Record<string, unknown> } }} spec
+   *   sig?: string, kid?: string, issuedAt?: number, signedOver?: { id?: string, actor: string, host: string, params: Record<string, unknown> }, fromApp?: boolean }} spec
+   *   `fromApp`, when the request came from one of the phones (the Worker reads
+   *   it off the `app:` actor the apps send and nothing else claims): it
+   *   chooses what a signature refusal says to do (remedyFor), nothing more
    * @param {number} [timeoutMs]
    */
   send(host, spec, timeoutMs = this.intentTimeoutMs) {
@@ -3566,7 +3569,7 @@ export class CoordinatorCore {
     const enforcing = host?.health?.signatures?.enforcing;
     const bare = !intent.sig && !intent.delegation && needsSignature(intent.verb);
     if ((enforcing === true || (enforcing === 'signers' && !actorEmail(intent.actor))) && bare) {
-      return Promise.resolve(signatureRequired(String(host.hostId), Boolean(signed), intent));
+      return Promise.resolve(signatureRequired(String(host.hostId), Boolean(signed), intent, spec.fromApp === true));
     }
 
     // A waiter already holds this id: refuse loudly rather than clobber it.
@@ -3598,14 +3601,15 @@ export class CoordinatorCore {
     // is sent an unsigned request with a person named, because only the box
     // knows its list; its refusal says the request was not signed and nothing
     // about what to do, which from an MCP client reads as a dead end. This
-    // side knows the answer: nothing that person signed covered it.
-    return bare ? answer.then((r) => withDelegationRemedy(r)) : answer;
+    // side knows the answer: what would have carried it, from where it came
+    // and what it asked (remedyFor).
+    return bare ? answer.then((r) => withRemedy(r, intent.verb, spec.fromApp === true)) : answer;
   }
 
   /**
    * Route one intent and return the reply.
    * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, internal?: boolean, setupRouted?: boolean, device?: string|null,
-   *   sig?: string, kid?: string, issuedAt?: number, signedOver?: { id?: string, actor: string, host: string, params: Record<string, unknown> }, delegation?: unknown }} spec
+   *   sig?: string, kid?: string, issuedAt?: number, signedOver?: { id?: string, actor: string, host: string, params: Record<string, unknown> }, delegation?: unknown, fromApp?: boolean }} spec
    *   `delegation`, what the asking person signed for a request that will reach
    *   a box unsigned (a placed one, or a start held for a runner): kept, and
    *   carried by `send` with whatever it covers
@@ -8963,11 +8967,12 @@ export function deviceText(r) {
  * a person signed it and something here changed it on the way, which signing
  * again from the same place will not fix; or nothing signed it, which is the
  * app before its key is listed, the MCP tools, the browser page, or the
- * fleet's own work.
+ * fleet's own work, each with its own way out (remedyFor).
  *
  * @param {string} hostId @param {boolean} wasSigned @param {{ actor?: string, verb?: string }} [intent]
+ * @param {boolean} [fromApp]  the request came from one of the phones
  */
-function signatureRequired(hostId, wasSigned, intent) {
+function signatureRequired(hostId, wasSigned, intent, fromApp = false) {
   return {
     ok: false,
     error: { code: 'signature_required' },
@@ -8975,7 +8980,7 @@ function signatureRequired(hostId, wasSigned, intent) {
       ? `${hostId} takes only requests a person signed, and this one was changed on its way through the fleet ` +
         '(a value was tidied, or a setting this box is too old for was left out), so your signature no longer holds. Nothing was sent.'
       : `${hostId} takes only requests a person signed, and nothing ${intent?.actor || 'anybody'} signed covers this ${intent?.verb ?? 'request'}. ` +
-        `${DELEGATION_REMEDY} Nothing was sent.`,
+        `${remedyFor(intent?.verb ?? '', fromApp)} Nothing was sent.`,
   };
 }
 
@@ -8989,13 +8994,46 @@ const DELEGATION_REMEDY =
   'Then ask again. A request you make in the app is signed as you send it; this lets the fleet send one for you.';
 
 /**
+ * The same, for a request that came from one of the phones, which no
+ * delegation would have helped: the phone signs once its key is listed, and
+ * lists it itself once it has a GitHub sign-in to do that with (the phones'
+ * DeviceSigning). The fact in the phone's own words for it, so the two agree.
+ */
+const APP_REMEDY =
+  'Your phone signs what it sends once its key is listed with the minter, which happens after you sign in to GitHub under Runners. ' +
+  'Sign in there if you have not, then ask again.';
+
+/**
+ * What to do about a refusal, by where the request came from and what it
+ * asked. A holder's journal had an Apply update from the iPhone refused a
+ * quarter of a second before the phone's key was listed, and the refusal sent
+ * its person to delegate to an MCP client: neither where the request came
+ * from nor a thing that covers `update`, which the phones leave out of that
+ * delegation on purpose, with `exchange` (MCP_UNDELEGATED_VERBS). So a
+ * phone's request says how a phone comes to sign; an MCP client's request for
+ * one of those two says where to do it instead; everything else says where
+ * to allow the delegation.
+ *
+ * @param {string} verb @param {boolean} fromApp
+ */
+function remedyFor(verb, fromApp) {
+  if (fromApp) return APP_REMEDY;
+  if (verb === 'update') {
+    return 'An MCP client is never delegated update, which restarts a machine somebody may be working on. ' +
+      'Apply it from the Fleetwright app, on the machine\u2019s page, or run fleetwright-sidecar update on the box.';
+  }
+  if (MCP_UNDELEGATED_VERBS.includes(verb)) return `An MCP client is never delegated ${verb}. Do it from the Fleetwright app.`;
+  return DELEGATION_REMEDY;
+}
+
+/**
  * A box's refusal of a request that reached it with neither a signature nor a
  * delegation, with what would have carried it (CoordinatorCore#send). Any other
  * reply, as it came.
  *
- * @param {any} reply
+ * @param {any} reply @param {string} verb @param {boolean} fromApp
  */
-function withDelegationRemedy(reply) {
+function withRemedy(reply, verb, fromApp) {
   if (reply?.ok !== false || reply.error?.code !== 'signature_required' || typeof reply.text !== 'string') return reply;
-  return { ...reply, text: `${reply.text} ${DELEGATION_REMEDY}` };
+  return { ...reply, text: `${reply.text} ${remedyFor(verb, fromApp)}` };
 }

@@ -354,9 +354,19 @@ person signed it and the fleet changed it on the way.
 A named person's request to a `signers` box is sent, because only the box knows
 whether it has seen that person's key. When the box refuses it for having
 neither a signature nor a delegation, the coordinator adds to the box's words
-what to do about it, as steps: open the app, go to You → Delegations, and under
-An MCP client tap Allow for a day or Allow for a week. The coordinator's own
-refusal ends the same way.
+what to do about it, by where the request came from and what it asked
+(`remedyFor` in core.js): a phone's request says how a phone comes to sign (its
+key listed with the minter, which happens after a GitHub sign-in under Runners);
+an MCP client's request for `update`, which the phones leave out of the MCP
+delegation on purpose (`MCP_UNDELEGATED_VERBS`), says to apply it from the app
+or on the box; any other says, as steps, open the app, go to You → Delegations,
+and under An MCP client tap Allow for a day or Allow for a week. The
+coordinator's own refusal ends the same way. The Worker tells the coordinator a
+request came from a phone by the `app:` actor the apps send and it otherwise
+discards; claiming it changes a sentence and nothing else. A holder's journal
+had an Apply update from a phone, refused a quarter of a second before the
+phone's key was listed, send its person to delegate to an MCP client, which
+could not have carried it.
 
 ## Pinned admins
 
