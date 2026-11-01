@@ -306,7 +306,7 @@ class ManageParityTest {
         val leases = words.getJSONArray("edgeLeases")
         for (i in 0 until leases.length()) {
             val c = leases.getJSONArray(i)
-            assertEquals(c.getString(1), Manage.Words.edgeLeases(c.getInt(0)))
+            assertEquals(c.getString(1), Manage.Words.edgeLeases(if (c.isNull(0)) null else c.getInt(0)))
         }
         val heard = words.getJSONObject("edgeHeard")
         for (key in heard.keys()) assertEquals(key, heard.getString(key), Manage.Words.edgeHeard(if (key == "null") null else key))

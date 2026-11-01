@@ -286,7 +286,7 @@ final class ManageParityTests: XCTestCase {
             XCTAssertEqual(Manage.Words.edgeGateway(value), (words["edgeGateway"] as? [String: String])?[key], key)
         }
         for c in one("edgeLeases").compactMap({ $0 as? [Any] }) {
-            XCTAssertEqual(Manage.Words.edgeLeases((c[0] as? NSNumber)?.intValue ?? 0), c[1] as? String)
+            XCTAssertEqual(Manage.Words.edgeLeases((c[0] as? NSNumber)?.intValue), c[1] as? String)
         }
         for (key, want) in words["edgeHeard"] as? [String: String] ?? [:] {
             XCTAssertEqual(Manage.Words.edgeHeard(key == "null" ? nil : key), want, key)
