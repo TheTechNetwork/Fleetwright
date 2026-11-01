@@ -378,4 +378,11 @@ test('both phones keep the routers’ key a policy job seals back, beside the po
   // The card, under the status, on both; only once the fleet was asked, and not from a coordinator too old to say.
   assert.match(bare(IOS_SCREEN), /statusCard\s*\.fleetRow\(\)\s*if edgesAsked && edgesKnown \{\s*edgeCard/);
   assert.match(bare(KT_SCREEN), /StatusCard\(watch, masters\)\s*if \(edgesAsked && edgesKnown\) EdgeCard\(edges, edgesFailed\)/);
+  // MEASURED (edge-router.js): the way out with its numbers, names by count
+  // and what was refused most, and a machine that cannot listen, on both.
+  for (const [screen, who] of [[bare(IOS_SCREEN), 'iOS'], [bare(KT_SCREEN), 'Android']]) {
+    for (const word of ['edgeWayOut', 'edgeNames', 'edgeRefused', 'edgeNotListening']) assert.ok(screen.includes(`Manage.Words.${word}`), `${who} does not draw ${word}`);
+  }
+  assert.match(bare(IOS_SCREEN), /if e\.listening == false \{\s*Text\(Manage\.Words\.edgeNotListening\)[\s\S]*?Design\.Palette\.attention/, 'iOS: not listening is said in the attention tone');
+  assert.match(bare(KT_SCREEN), /if \(e\.listening == false\) Text\(Manage\.Words\.edgeNotListening, style = Design\.Style\.label, color = Design\.Palette\.attention\.now\)/);
 });

@@ -2294,7 +2294,7 @@ class Fleet(
      * (src/fleet/host/edge-watch.js). Every flag is true, false or null, and
      * null is cannot tell.
      */
-    data class VmEdges(val address: String, val hostId: String, val at: Long, val routers: List<Router>, val events: List<Event>) {
+    data class VmEdges(val address: String, val hostId: String, val at: Long, val listening: Boolean?, val routers: List<Router>, val events: List<Event>) {
         data class Router(
             val name: String,
             val address: String?,
@@ -2304,6 +2304,13 @@ class Fleet(
             val dns: Boolean?,
             val gateway: Boolean?,
             val leases: Int?,
+            /** Measured by a router built to (edge-router.js, MEASURED): its way out's latency (ms) and loss (percent), the names answered and refused since `since`, and the names refused most. Null before that, and null is cannot tell. */
+            val delay: Double?,
+            val loss: Double?,
+            val answered: Int?,
+            val blocked: Int?,
+            val since: Long?,
+            val topBlocked: List<Pair<String, Int>>?,
             val heardAt: Long?,
             val problem: String?,
         )
@@ -2334,6 +2341,18 @@ class Fleet(
                             dns = r.flag("dns"),
                             gateway = r.flag("gateway"),
                             leases = r.num("leases")?.toInt(),
+                            delay = r.num("delay"),
+                            loss = r.num("loss"),
+                            answered = r.num("answered")?.toInt(),
+                            blocked = r.num("blocked")?.toInt(),
+                            since = r.num("since")?.toLong(),
+                            topBlocked = r.optJSONArray("topBlocked")?.let { t ->
+                                (0 until t.length()).mapNotNull { k ->
+                                    val n = t.optJSONObject(k) ?: return@mapNotNull null
+                                    val name = n.str("name") ?: return@mapNotNull null
+                                    name to (n.num("count")?.toInt() ?: return@mapNotNull null)
+                                }
+                            },
                             heardAt = r.num("heardAt")?.toLong(),
                             problem = r.str("problem"),
                         )
@@ -2345,7 +2364,7 @@ class Fleet(
                         VmEdges.Event(e.num("at")?.toLong() ?: return@mapNotNull null, e.str("router") ?: return@mapNotNull null, e.str("kind") ?: "system", e.str("text") ?: return@mapNotNull null)
                     }
                 } ?: emptyList()
-                VmEdges(o.str("address") ?: return@mapNotNull null, o.str("hostId") ?: "", o.num("at")?.toLong() ?: return@mapNotNull null, routers, events)
+                VmEdges(o.str("address") ?: return@mapNotNull null, o.str("hostId") ?: "", o.num("at")?.toLong() ?: return@mapNotNull null, o.flag("listening"), routers, events)
             }
         }
     }

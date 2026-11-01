@@ -244,6 +244,7 @@ private fun EdgeCard(e: Fleet.VmEdges?, failed: Boolean) {
 private fun EdgeReport(e: Fleet.VmEdges) {
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         Text(Manage.Words.edgeRead(e.hostId, relative(e.at).toString()), style = Design.Style.label, color = Design.Palette.inkDim.now)
+        if (e.listening == false) Text(Manage.Words.edgeNotListening, style = Design.Style.label, color = Design.Palette.attention.now)
         e.routers.forEach { r -> RouterRows(r) }
         if (e.events.isNotEmpty()) {
             Text(Manage.Words.edgeEvents, style = Design.Style.label, color = Design.Palette.inkDim.now)
@@ -272,8 +273,15 @@ private fun RouterRows(r: Fleet.VmEdges.Router) {
             r.reached == null && problem != null -> Text(problem, style = Design.Style.label, color = Design.Palette.inkDim.now)
             else -> {
                 Manage.Words.edgeRole(r.role)?.let { Text(it, style = Design.Style.label, color = Design.Palette.ink.now) }
-                Text(Manage.Words.edgeDns(r.dns), style = Design.Style.label, color = if (r.dns == false) Design.Palette.attention.now else Design.Palette.ink.now)
-                Text(Manage.Words.edgeGateway(r.gateway), style = Design.Style.label, color = if (r.gateway == false) Design.Palette.attention.now else Design.Palette.ink.now)
+                // Names by count where the router keeps one (edge-router.js, MEASURED): what it answered and what the lists refused; the flag alone before that, and not answering is still the news.
+                val answered = r.answered
+                if (r.dns != false && answered != null) {
+                    Text(Manage.Words.edgeNames(answered, r.blocked ?: 0, r.since?.let { relative(it).toString() }), style = Design.Style.label, color = Design.Palette.ink.now)
+                } else {
+                    Text(Manage.Words.edgeDns(r.dns), style = Design.Style.label, color = if (r.dns == false) Design.Palette.attention.now else Design.Palette.ink.now)
+                }
+                r.topBlocked?.takeIf { it.isNotEmpty() }?.let { Text(Manage.Words.edgeRefused(it), style = Design.Style.micro, color = Design.Palette.inkDim.now) }
+                Text(Manage.Words.edgeWayOut(r.gateway, r.delay, r.loss), style = Design.Style.label, color = if (r.gateway == false) Design.Palette.attention.now else Design.Palette.ink.now)
                 r.leases?.let { Text(Manage.Words.edgeLeases(it), style = Design.Style.label, color = Design.Palette.inkDim.now) }
             }
         }

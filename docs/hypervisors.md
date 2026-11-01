@@ -1019,9 +1019,14 @@ the box on the network is the one shown as soon as it has read them.
 status, refreshed every 30 seconds while it is open:
 
 - which machine read them, and when;
-- for each router: whether it holds the gateway address or stands by, answers
-  names, has its way out, its leases, and its last log line, or why it could
-  not be read;
+- for each router: whether it holds the gateway address or stands by; how
+  many names it answered and refused since it started counting and the five
+  it refused most, or only whether it answers names on a router built before
+  it counted; whether its way out is up, with its latency and loss once it
+  is monitored; its leases; and its last log line, or why it could not be
+  read;
+- that the machine reading them cannot listen for their log lines, when
+  another program has the port;
 - the last eight lines they logged, newest first.
 
 Cannot tell is said as cannot tell, and what is wrong is the one line in the
