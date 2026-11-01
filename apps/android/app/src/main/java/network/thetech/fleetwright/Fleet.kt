@@ -2952,15 +2952,32 @@ class Fleet(
                 body.put("host", host)
                 // SIGNED BY THIS PHONE, for the box it names, over exactly what
                 // is sent (DeviceSigning.kt). Signed at sending, so a held
-                // command sent again later carries a fresh time. Until this
-                // phone's key is listed with the minter it goes unsigned, and
-                // listing is started.
+                // command sent again later carries a fresh time.
+                //
+                // LISTED FIRST, WHEN IT IS NOT YET. This started the listing in
+                // the background and sent the tap unsigned, so the first Apply
+                // update after a GitHub sign-in reached a box that enforces a
+                // quarter of a second before the minter listed the key, and was
+                // refused as not signed, with the refusal's steps pointing at a
+                // delegation that could not have carried it. Now a verb a box
+                // would want signed waits for the listing, at most once in ten
+                // minutes (listIfNeeded), and is signed if it landed. One that
+                // goes unsigned anyway (list, status) still only starts it, so
+                // the key is listed before the first tap that needs it. The
+                // same as iOS (Fleet.swift).
                 val signing = DeviceSigning(settings)
-                val signed = signing.signature(verb, buildMap<String, Any> { putAll(params); putAll(numeric) }, id, host)
+                val over = buildMap<String, Any> { putAll(params); putAll(numeric) }
+                var signed = signing.signature(verb, over, id, host)
+                if (signed == null) {
+                    if (verb in IntentSigning.unsignedVerbs) {
+                        CoroutineScope(Dispatchers.IO).launch { signing.listIfNeeded(this@Fleet) }
+                    } else {
+                        signing.listIfNeeded(this@Fleet)
+                        signed = signing.signature(verb, over, id, host)
+                    }
+                }
                 if (signed != null) {
                     body.put("sig", signed.sig).put("kid", signed.kid).put("issuedAt", signed.issuedAt)
-                } else {
-                    CoroutineScope(Dispatchers.IO).launch { signing.listIfNeeded(this@Fleet) }
                 }
             } else if (verb !in IntentSigning.unsignedVerbs) {
                 // PLACED BY THE FLEET, so no box to sign for: a delegation
