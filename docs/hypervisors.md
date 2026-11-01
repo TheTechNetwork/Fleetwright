@@ -89,7 +89,11 @@ What happens, from the phone to a session on a VM:
 8. **It ends on time.** The box holding the pool looks every two minutes,
    and removes, disks and all, every machine tagged `fleetwright-session`
    that has stopped past the end in its tag, and any still running a minute
-   past it. One stopped before its end was not done: a host reboot or an
+   past it. One still running is stopped cleanly where it has the guest
+   agent, so the sidecar inside is told and says goodbye to the coordinator,
+   which retires the machine on the spot; a hard stop cut the socket
+   instead, and the machine sat under Machines as "not reporting" for the
+   ten minutes a runner gets to dial back. One stopped before its end was not done: a host reboot or an
    evacuation stopped it, and the box starts it again, once; stopped again
    after that, it waits for its end. One made less than five minutes ago is
    left to boot. The end is the box's to keep because a person can move it
