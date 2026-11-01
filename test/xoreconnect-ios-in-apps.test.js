@@ -121,7 +121,10 @@ test('iOS: the machine is asked whether it can open a reconnect’s sign-in befo
 });
 
 test('iOS: a reconnect starts where it was asked from: the address named, the machine that noticed, the sign-in Face ID opens', () => {
-  assert.match(SCREEN, /init\(settings: Settings, policyFor address: String\? = nil, reconnectFor pool: String\? = nil, via machine: String\? = nil\)/);
+  // The one way in for a reconnect, beside the policy change's; what comes
+  // after `via` is the policy change's own (Make it again from a holder's
+  // page, test/holder-sessions-in-apps.test.js) and a reconnect never sets it.
+  assert.match(SCREEN, /init\(settings: Settings, policyFor address: String\? = nil, reconnectFor pool: String\? = nil, via machine: String\? = nil(, [a-zA-Z]+: Bool = false)?\)/);
   assert.match(SCREEN, /guard isPolicy \|\| isReconnect, probes == nil, !probing else \{ return \}[\s\S]*?await openRemembered\(\)\s*\}/);
   // Never offered through this phone, and never an install: it is for a Xen
   // Orchestra the fleet already reaches.

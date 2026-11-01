@@ -2693,6 +2693,11 @@ struct Fleet {
         var takesSessions: Bool?
         /// A pool's own machine: it holds the pool and runs no sessions.
         var holder: Bool?
+        /// The pool it holds, for the person whose pool it is (core.js
+        /// holdsFor): the address its page offers Make it again for. Nil for
+        /// anybody else, for one that has not said, and from a coordinator
+        /// too old to say, each of which offers nothing (C-2, C-5).
+        var holds: String?
         /// Whether this person may change its releases, image or labels,
         /// update or upgrade it, or reboot it, by the rule placement refuses
         /// those verbs with (hosts.js administers): every machine for the

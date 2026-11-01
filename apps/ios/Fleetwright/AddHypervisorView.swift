@@ -96,13 +96,18 @@ struct AddHypervisorView: View {
     /// pool had gone, or read its page. Nil starts from the one that got
     /// through last time, as a policy change does.
     let preferred: String?
+    /// Opened from the pool's own machine's page to make it again (HostView):
+    /// the switch is on when the choice appears, where the machine makes the
+    /// new one ask and the pool has one. Apply is still what does it.
+    let makeHolderAgain: Bool
     @Environment(\.dismiss) private var dismiss
 
-    init(settings: Settings, policyFor address: String? = nil, reconnectFor pool: String? = nil, via machine: String? = nil) {
+    init(settings: Settings, policyFor address: String? = nil, reconnectFor pool: String? = nil, via machine: String? = nil, makeHolderAgain: Bool = false) {
         self.settings = settings
         self.policyFor = address
         self.reconnectFor = address == nil ? pool : nil
         self.preferred = machine.flatMap { $0.isEmpty ? nil : $0 }
+        self.makeHolderAgain = address != nil && makeHolderAgain
         _address = State(initialValue: address ?? pool ?? "")
     }
 
@@ -2276,6 +2281,11 @@ struct AddHypervisorView: View {
                         choice.machineUpdates = kept.upgrades
                         choice.machineReboot = kept.reboot
                     }
+                    // OPENED TO MAKE THE POOL'S OWN MACHINE AGAIN, from its
+                    // page under Machines: on from the start, exactly where
+                    // the switch is drawn, so a pool with none, or a machine
+                    // that cannot make one ask, opens as any policy change.
+                    if makeHolderAgain, choice.holderAskChoice, opened.holder(on: choice.egress) != nil { choice.holderAgain = true }
                 }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not

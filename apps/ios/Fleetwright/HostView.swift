@@ -43,6 +43,12 @@ struct HostView: View {
     let enrolled: Fleet.Host?
     /// A pool's own machine, as the list last said (Fleet.FleetHost.holder).
     var initialHolder: Bool = false
+    /// The pool it holds, as the list last said (Fleet.FleetHost.holds), and
+    /// whether this phone holds that pool's token: Make it again is offered
+    /// only with both, since the policy screen it opens starts from that
+    /// record (C-2).
+    var initialHolds: String? = nil
+    var holdsHere: Bool = false
     /// ONLY WHERE THEY WOULD DO SOMETHING (C-2). The coordinator refuses a
     /// member's channel, image, labels, update, upgrade and reboot on a
     /// machine that runs anybody's work but theirs, because each reaches that
@@ -67,6 +73,7 @@ struct HostView: View {
     @State private var state: String?
     @State private var reason: String?
     @State private var holder = false
+    @State private var holds: String?
     @State private var busy = false
     @State private var result = ""
     @State private var channel: String?
@@ -125,6 +132,34 @@ struct HostView: View {
                 summary
             }
             .listRowBackground(Design.Palette.card)
+
+            // THE POOL IT HOLDS, and the one thing done to a pool's own
+            // machine from the pool's side: Make it again, which removes it,
+            // disk and all, and makes a new one from the newest build, which
+            // asks to join. It lived on the policy screen alone, a page away
+            // from the machine it replaces. Asked for: "Holder should also
+            // allow to rebuild from that page". Offered only where it does
+            // something (C-2): the fleet said which pool this machine holds,
+            // this phone holds that pool's token, and this person is the
+            // admin a policy change takes (ManageView, the same rule). It
+            // opens that screen with the switch on; Apply there is still the
+            // word that does it, after the same sign-in as any policy change.
+            if holder, let holds, holdsHere, settings.showsAdmin {
+                Section {
+                    NavigationLink {
+                        AddHypervisorView(settings: settings, policyFor: holds, makeHolderAgain: true)
+                    } label: {
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            Text(holderAgainTitle).fleetType(.body)
+                            Text(holderAgainLine).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        }
+                        .frame(minHeight: 44)
+                    }
+                } header: {
+                    sectionHead(holds)
+                }
+                .listRowBackground(Design.Palette.card)
+            }
 
             Section {
                 Button("Check for updates") { run { try await fleet.updates(host: hostId) } }
@@ -231,6 +266,7 @@ struct HostView: View {
             state = initialState
             reason = initialReason
             holder = initialHolder
+            holds = initialHolds
             channel = initialHealth?.channel
             channelPinned = initialHealth?.channelPinned ?? false
             sandbox = initialHealth?.sandbox

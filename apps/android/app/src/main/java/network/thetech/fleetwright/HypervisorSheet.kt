@@ -151,6 +151,10 @@ import kotlinx.coroutines.withContext
  *   for it. Fixed, as [policyFor] is.
  * @param via the machine to try first for a reconnect: the one the push
  *   named, which saw the pools go. Null tries the one that got through last.
+ * @param makeHolderAgain opened from the pool's own machine's page to make it
+ *   again (MachinesScreen): the switch is on when the choice appears, where
+ *   the machine makes the new one ask and the pool has one. Apply is still
+ *   what does it. Read only with [policyFor].
  */
 @Composable
 internal fun HypervisorSheet(
@@ -159,6 +163,7 @@ internal fun HypervisorSheet(
     policyFor: String? = null,
     reconnectFor: String? = null,
     via: String? = null,
+    makeHolderAgain: Boolean = false,
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -1019,6 +1024,12 @@ internal fun HypervisorSheet(
                         ).let { c ->
                             // Where they were left: the answers this phone kept for the pool, or the image's own.
                             XoHandoff.machineGrants(settings, address.trim())?.let { (upgrades, reboot) -> c.copy(machineUpdates = upgrades, machineReboot = reboot) } ?: c
+                        }.let { c ->
+                            // OPENED TO MAKE THE POOL'S OWN MACHINE AGAIN, from its page under
+                            // Machines: on from the start, exactly where the switch is drawn, so
+                            // a pool with none, or a machine that cannot make one ask, opens as
+                            // any policy change. The same as iOS (AddHypervisorView).
+                            if (policy && makeHolderAgain && c.holderAskChoice && XoPolicy.holderOn(opened, c.egress) != null) c.copy(holderAgain = true) else c
                         }
                     } else {
                         unopened = true

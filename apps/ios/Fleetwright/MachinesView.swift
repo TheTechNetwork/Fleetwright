@@ -313,6 +313,8 @@ struct MachinesView: View {
                 : "Not connected to the fleet. Reinstalled? Replace key mints the pin its new key needs."),
             enrolled: member,
             initialHolder: reporting?.holder == true,
+            initialHolds: reporting?.holds,
+            holdsHere: reporting?.holds.map { a in hypervisors.contains { $0.address == a } } ?? false,
             mayAdminister: reporting?.mayAdminister ?? true,
             onChange: { await loadHosts() },
         )

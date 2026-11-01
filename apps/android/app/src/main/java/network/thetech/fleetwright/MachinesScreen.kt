@@ -105,6 +105,9 @@ fun MachinesScreen(
     // A pool whose policy is being changed, by address. Saveable for the same
     // reason; the job itself starts over after a rotation (HypervisorSheet).
     var policyFor by rememberSaveable { mutableStateOf<String?>(null) }
+    // The pool whose own machine is to be made again, from that machine's
+    // page: the policy sheet for it, opened with the switch on.
+    var againFor by rememberSaveable { mutableStateOf<String?>(null) }
     // A pool whose page is open, by address (PoolPage, docs/manage.md).
     // Saveable for the same reason; its connection opens again after a turn.
     var managing by rememberSaveable { mutableStateOf<String?>(null) }
@@ -183,9 +186,16 @@ fun MachinesScreen(
             reporting = fleetHosts.firstOrNull { it.hostId == id },
             member = hosts.firstOrNull { it.hostId == id },
             admin = admin,
+            holdsHere = fleetHosts.firstOrNull { it.hostId == id }?.holds?.let { a -> held.any { it.address == a } } == true,
+            onMakeAgain = { againFor = it },
             onDismiss = { showing = null },
             onChanged = { scope.launch { loadHosts() } },
         )
+    }
+    againFor?.let { pool ->
+        key("again/$pool") {
+            HypervisorSheet(settings, policyFor = pool, makeHolderAgain = true, onDismiss = { againFor = null })
+        }
     }
     showingPoolMachine?.let { name ->
         VmMachinePage(settings, name, onDismiss = { showingPoolMachine = null; scope.launch { loadHosts() } })
@@ -535,6 +545,14 @@ private fun MachinePage(
     reporting: Fleet.FleetHost?,
     member: Fleet.Host?,
     admin: Boolean?,
+    /**
+     * Whether this phone holds the token of the pool this machine holds
+     * ([Fleet.FleetHost.holds]): Make it again is offered only then, since
+     * the policy sheet it opens starts from that record (C-2).
+     */
+    holdsHere: Boolean = false,
+    /** Opens the pool's policy with Make it again on, for the pool named. */
+    onMakeAgain: (String) -> Unit = {},
     onDismiss: () -> Unit,
     onChanged: () -> Unit,
 ) {
@@ -669,6 +687,23 @@ private fun MachinePage(
                     color = Design.Palette.attention.now,
                 )
             }
+        }
+
+        // THE POOL IT HOLDS, and the one thing done to a pool's own machine
+        // from the pool's side: Make it again, which removes it, disk and
+        // all, and makes a new one from the newest build, which asks to join.
+        // It lived on the policy sheet alone, a page away from the machine it
+        // replaces. Asked for: "Holder should also allow to rebuild from that
+        // page". Offered only where it does something (C-2): the fleet said
+        // which pool this machine holds, this phone holds that pool's token,
+        // and this person is the admin a policy change takes (PoolPage, the
+        // same rule). It opens that sheet with the switch on; Apply there is
+        // still the word that does it. The same as iOS (HostView).
+        val holds = h?.holds
+        if (h?.holder == true && holds != null && holdsHere && admin == true) {
+            SectionHead(holds)
+            OpenRow(HOLDER_AGAIN_TITLE) { onMakeAgain(holds) }
+            Hint(HOLDER_AGAIN_LINE)
         }
 
         // WHETHER THIS PERSON MAY CHANGE THE MACHINE AT ALL (C-2, C-5): its
