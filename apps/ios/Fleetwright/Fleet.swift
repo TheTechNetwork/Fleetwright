@@ -1854,6 +1854,8 @@ struct Fleet {
         let hostId: String
         /// When, ms since the epoch.
         let at: Double
+        /// Whether the machine holds the port the routers' log lines come to; nil from a machine before it said.
+        let listening: Bool?
         let routers: [Router]
         /// What they logged lately, oldest first.
         let events: [Event]
@@ -1867,8 +1869,20 @@ struct Fleet {
             let dns: Bool?
             let gateway: Bool?
             let leases: Int?
+            /// Measured by a router built to (edge-router.js, MEASURED): its way out's latency (ms) and loss (percent), the names answered and refused since `since`, and the names refused most. Nil before that, and nil is cannot tell.
+            let delay: Double?
+            let loss: Double?
+            let answered: Int?
+            let blocked: Int?
+            let since: Double?
+            let topBlocked: [Refused]?
             let heardAt: Double?
             let problem: String?
+        }
+
+        struct Refused: Codable, Hashable {
+            let name: String
+            let count: Int
         }
 
         struct Event: Codable, Hashable {

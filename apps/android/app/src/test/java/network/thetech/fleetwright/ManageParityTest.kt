@@ -271,7 +271,7 @@ class ManageParityTest {
             "console" to Manage.Words.console, "consoleAway" to Manage.Words.consoleAway, "consoleShut" to Manage.Words.consoleShut,
             "consoleEnded" to Manage.Words.consoleEnded, "openAgain" to Manage.Words.openAgain, "keyboard" to Manage.Words.keyboard, "ctrlAltDel" to Manage.Words.ctrlAltDel,
             "edgeHeading" to Manage.Words.edgeHeading, "edgeNobody" to Manage.Words.edgeNobody,
-            "edgeUnasked" to Manage.Words.edgeUnasked, "edgeEvents" to Manage.Words.edgeEvents,
+            "edgeUnasked" to Manage.Words.edgeUnasked, "edgeEvents" to Manage.Words.edgeEvents, "edgeNotListening" to Manage.Words.edgeNotListening,
         )
         for ((key, value) in fixed) assertEquals(key, words.getString(key), value)
 
@@ -310,6 +310,19 @@ class ManageParityTest {
         }
         val heard = words.getJSONObject("edgeHeard")
         for (key in heard.keys()) assertEquals(key, heard.getString(key), Manage.Words.edgeHeard(if (key == "null") null else key))
+        val wayOut = words.getJSONArray("edgeWayOut")
+        for (i in 0 until wayOut.length()) {
+            val c = wayOut.getJSONArray(i)
+            assertEquals(c.getString(3), Manage.Words.edgeWayOut(if (c.isNull(0)) null else c.getBoolean(0), if (c.isNull(1)) null else c.getDouble(1), if (c.isNull(2)) null else c.getDouble(2)))
+        }
+        val names = words.getJSONArray("edgeNames")
+        for (i in 0 until names.length()) {
+            val c = names.getJSONArray(i)
+            assertEquals(c.getString(3), Manage.Words.edgeNames(c.getInt(0), c.getInt(1), if (c.isNull(2)) null else c.getString(2)))
+        }
+        val refused = words.getJSONArray("edgeRefused")
+        val top = refused.getJSONArray(0).let { a -> (0 until a.length()).map { a.getJSONArray(it).getString(0) to a.getJSONArray(it).getInt(1) } }
+        assertEquals(refused.getString(1), Manage.Words.edgeRefused(top))
         val resize = words.getJSONArray("resizeButton")
         for (i in 0 until resize.length()) {
             val c = resize.getJSONArray(i)
@@ -329,7 +342,7 @@ class ManageParityTest {
         val checked = fixed.keys + single.keys +
             setOf(
                 "expired", "signInRefused", "unreachable", "through", "throughLost", "unreachableEverywhere",
-                "edgeRead", "edgeRole", "edgeDns", "edgeGateway", "edgeLeases", "edgeHeard",
+                "edgeRead", "edgeRole", "edgeDns", "edgeGateway", "edgeLeases", "edgeHeard", "edgeWayOut", "edgeNames", "edgeRefused",
                 "resizeButton", "growButton", "heading", "kindTitle",
             )
         assertEquals(checked, words.keys().asSequence().toSet())

@@ -167,6 +167,11 @@ struct PoolManageView: View {
                 Text(Manage.Words.edgeRead(e.hostId, relativeTime(e.at)))
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
+                if e.listening == false {
+                    Text(Manage.Words.edgeNotListening)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.attention)
+                }
                 ForEach(e.routers, id: \.name) { r in
                     routerRows(r)
                 }
@@ -214,10 +219,24 @@ struct PoolManageView: View {
                 if let role = Manage.Words.edgeRole(r.role) {
                     Text(role).fleetType(.label).foregroundStyle(Design.Palette.ink)
                 }
-                Text(Manage.Words.edgeDns(r.dns))
-                    .fleetType(.label)
-                    .foregroundStyle(r.dns == false ? Design.Palette.attention : Design.Palette.ink)
-                Text(Manage.Words.edgeGateway(r.gateway))
+                // NAMES BY COUNT where the router keeps one (edge-router.js,
+                // MEASURED): what it answered and what the lists refused; the
+                // flag alone before that, and not answering is still the news.
+                if r.dns != false, let answered = r.answered {
+                    Text(Manage.Words.edgeNames(answered, refused: r.blocked ?? 0, since: r.since.map { relativeTime($0) }))
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.ink)
+                } else {
+                    Text(Manage.Words.edgeDns(r.dns))
+                        .fleetType(.label)
+                        .foregroundStyle(r.dns == false ? Design.Palette.attention : Design.Palette.ink)
+                }
+                if let top = r.topBlocked, !top.isEmpty {
+                    Text(Manage.Words.edgeRefused(top.map { ($0.name, $0.count) }))
+                        .fleetType(.micro)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+                Text(Manage.Words.edgeWayOut(r.gateway, ms: r.delay, loss: r.loss))
                     .fleetType(.label)
                     .foregroundStyle(r.gateway == false ? Design.Palette.attention : Design.Palette.ink)
                 if let n = r.leases {

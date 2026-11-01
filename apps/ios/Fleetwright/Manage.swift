@@ -834,6 +834,23 @@ enum Manage {
         static func edgeLeases(_ n: Int) -> String { n == 1 ? "1 DHCP lease" : "\(n) DHCP leases" }
         static func edgeUnreached(_ why: String) -> String { "Could not read it: \(why)" }
         static func edgeHeard(_ when: String?) -> String { when.map { "Last log line \($0)" } ?? "No log lines from it yet" }
+        /// The way out with dpinger's numbers, once a router measures it (edge-router.js, MEASURED); a router built before that has none, and the flag alone is said.
+        static func edgeWayOut(_ up: Bool?, ms: Double?, loss: Double?) -> String {
+            guard up == true, let ms else { return edgeGateway(up) }
+            let latency = ms < 1 ? "under 1 ms" : "\(Int(ms.rounded())) ms"
+            let l = loss ?? 0
+            let lost = l <= 0 ? "" : Int(l.rounded()) >= 1 ? ", losing \(Int(l.rounded()))% of pings" : ", losing under 1% of pings"
+            return "Its way out is up, \(latency)\(lost)"
+        }
+        /// Names by Unbound's own count since it started keeping one; refused is what the threat lists stopped.
+        static func edgeNames(_ answered: Int, refused: Int, since: String?) -> String {
+            let names = answered == 0 ? "no names" : answered == 1 ? "1 name" : "\(answered) names"
+            let stopped = refused == 0 ? "none" : "\(refused)"
+            return "Answered \(names) and refused \(stopped) since it started counting" + (since.map { ", \($0)" } ?? "")
+        }
+        /// The names the lists refused most, each with how often.
+        static func edgeRefused(_ names: [(String, Int)]) -> String { "Refused most: " + names.map { "\($0.0) (\($0.1))" }.joined(separator: ", ") }
+        static let edgeNotListening = "This machine cannot listen for their log lines: another program has the port they are sent to."
         static let methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
         static let nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
         /// In place of the actions on the pool's own machine. The same words as Android.

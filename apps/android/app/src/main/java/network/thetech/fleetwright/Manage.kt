@@ -807,6 +807,31 @@ internal object Manage {
         fun edgeLeases(n: Int) = if (n == 1) "1 DHCP lease" else "$n DHCP leases"
         fun edgeUnreached(why: String) = "Could not read it: $why"
         fun edgeHeard(time: String?) = time?.let { "Last log line $it" } ?: "No log lines from it yet"
+        /** The way out with dpinger's numbers, once a router measures it (edge-router.js, MEASURED); a router built before that has none, and the flag alone is said. */
+        fun edgeWayOut(up: Boolean?, ms: Double?, loss: Double?): String {
+            if (up != true || ms == null) return edgeGateway(up)
+            val latency = if (ms < 1) "under 1 ms" else "${Math.round(ms)} ms"
+            val l = loss ?: 0.0
+            val lost = when {
+                l <= 0 -> ""
+                Math.round(l) >= 1 -> ", losing ${Math.round(l)}% of pings"
+                else -> ", losing under 1% of pings"
+            }
+            return "Its way out is up, $latency$lost"
+        }
+        /** Names by Unbound's own count since it started keeping one; refused is what the threat lists stopped. */
+        fun edgeNames(answered: Int, refused: Int, since: String?): String {
+            val names = when (answered) {
+                0 -> "no names"
+                1 -> "1 name"
+                else -> "$answered names"
+            }
+            val stopped = if (refused == 0) "none" else "$refused"
+            return "Answered $names and refused $stopped since it started counting" + (since?.let { ", $it" } ?: "")
+        }
+        /** The names the lists refused most, each with how often. */
+        fun edgeRefused(names: List<Pair<String, Int>>) = "Refused most: " + names.joinToString(", ") { "${it.first} (${it.second})" }
+        const val edgeNotListening = "This machine cannot listen for their log lines: another program has the port they are sent to."
         const val methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
         const val nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
 

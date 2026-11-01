@@ -257,7 +257,7 @@ final class ManageParityTests: XCTestCase {
             "console": Manage.Words.console, "consoleAway": Manage.Words.consoleAway, "consoleShut": Manage.Words.consoleShut,
             "consoleEnded": Manage.Words.consoleEnded, "openAgain": Manage.Words.openAgain, "keyboard": Manage.Words.keyboard, "ctrlAltDel": Manage.Words.ctrlAltDel,
             "edgeHeading": Manage.Words.edgeHeading, "edgeNobody": Manage.Words.edgeNobody,
-            "edgeUnasked": Manage.Words.edgeUnasked, "edgeEvents": Manage.Words.edgeEvents,
+            "edgeUnasked": Manage.Words.edgeUnasked, "edgeEvents": Manage.Words.edgeEvents, "edgeNotListening": Manage.Words.edgeNotListening,
         ]
         for (key, value) in fixed { XCTAssertEqual(value, str(key), key) }
 
@@ -291,6 +291,14 @@ final class ManageParityTests: XCTestCase {
         for (key, want) in words["edgeHeard"] as? [String: String] ?? [:] {
             XCTAssertEqual(Manage.Words.edgeHeard(key == "null" ? nil : key), want, key)
         }
+        for c in one("edgeWayOut").compactMap({ $0 as? [Any] }) {
+            XCTAssertEqual(Manage.Words.edgeWayOut(c[0] as? Bool, ms: (c[1] as? NSNumber)?.doubleValue, loss: (c[2] as? NSNumber)?.doubleValue), c[3] as? String)
+        }
+        for c in one("edgeNames").compactMap({ $0 as? [Any] }) {
+            XCTAssertEqual(Manage.Words.edgeNames((c[0] as? NSNumber)?.intValue ?? 0, refused: (c[1] as? NSNumber)?.intValue ?? 0, since: c[2] as? String), c[3] as? String)
+        }
+        let refused = one("edgeRefused")
+        XCTAssertEqual(Manage.Words.edgeRefused((refused.first as? [[Any]] ?? []).map { ($0[0] as? String ?? "", ($0[1] as? NSNumber)?.intValue ?? 0) }), refused.last as? String)
         for c in one("resizeButton").compactMap({ $0 as? [Any] }) {
             let cpus = (c[0] as? NSNumber)?.intValue ?? 0
             let gib = (c[1] as? NSNumber)?.intValue ?? 0
@@ -308,7 +316,7 @@ final class ManageParityTests: XCTestCase {
         // phone would otherwise sit there proving nothing.
         let checked = Set(fixed.keys).union(single.keys)
             .union(["expired", "signInRefused", "unreachable", "through", "throughLost", "unreachableEverywhere",
-                    "edgeRead", "edgeRole", "edgeDns", "edgeGateway", "edgeLeases", "edgeHeard",
+                    "edgeRead", "edgeRole", "edgeDns", "edgeGateway", "edgeLeases", "edgeHeard", "edgeWayOut", "edgeNames", "edgeRefused",
                     "resizeButton", "growButton", "heading", "kindTitle"])
         XCTAssertEqual(Set(words.keys), checked)
     }
