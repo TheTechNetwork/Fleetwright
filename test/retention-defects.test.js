@@ -1,7 +1,8 @@
-// Five defects found by reading the join and retention paths end to end for
-// docs/auth-and-join.md, each written as the behaviour that was missing rather
-// than as the line that was wrong — because every one of them was a field or a
-// call that existed at every layer but one, and a test of any single function
+// Seven defects in the join and retention paths — the first five found by
+// reading them end to end for docs/auth-and-join.md, the last two in boxes'
+// journals — each written as the behaviour that was missing rather than as
+// the line that was wrong, because every one of them was a field or a call
+// that existed at every layer but one, and a test of any single function
 // could not see it.
 //
 //   1. a pin minted `ephemeral` produced a PERMANENT host record, so the
@@ -19,6 +20,11 @@
 //      coordinator that came up after; and one that was retired was revoked
 //      only in memory until the next host connected, so an eviction in between
 //      brought it back. Both sat under Machines as "not reporting" for good
+//   7. a machine from a hypervisor enrolled under the name the coordinator
+//      gave it and dialled under its hostname, because the sidecar wrote the
+//      name into a frozen config and the write threw where the enrol was
+//      logged, so the journal said "could not enrol itself" about a machine
+//      that had just done so
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -234,6 +240,22 @@ test('the PKCE verifier is still checked, just not byte-by-byte-and-stop', async
   assert.ok(bad.ok);
   const refused = await auth.redeem({ code: bad.code, clientId: reg.clientId, redirectUri: 'https://client.example/cb', verifier: 'w'.repeat(43) });
   assert.equal(refused.ok, false);
+});
+
+test('7. a machine that enrolled itself dials under that name on the boot that enrolled it', () => {
+  // Found in a holder's journal: "could not enrol itself: Cannot assign to
+  // read only property 'hostId'". The enrol had succeeded and the name was
+  // recorded beside the key, so a RESTART dialled right; the first boot dialled
+  // under the hostname, which cloud-init happened to have set to the same
+  // word on that holder, and would not have on a temporary runner. The
+  // contract has two halves: the config is frozen, and the sidecar never
+  // writes to it — the name a boot learns is carried beside the config.
+  const dir = mkdtempSync(path.join(tmpdir(), 'fleet-frozen-'));
+  const cfg = loadSidecarConfig({ FLEETWRIGHT_HOST_KEY: path.join(dir, 'host-key.json'), FLEETWRIGHT_COORDINATOR_URL: 'https://fleet.example' });
+  assert.ok(Object.isFrozen(cfg), 'the sidecar config is frozen');
+  const bin = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
+  const writes = bin.match(/\bcfg\.\w+\s*=(?!=)/g) ?? [];
+  assert.deepEqual(writes, [], 'the sidecar writes nothing into its frozen config');
 });
 
 test('a plain `enrol <pin>` records the name beside the key, like the Actions path', () => {

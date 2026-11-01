@@ -164,13 +164,20 @@ async function run() {
   // A MACHINE FROM SOMEBODY'S HYPERVISOR enrols itself, once, with the
   // ticket it was booted with, before it dials: the name it dials under is
   // the one the coordinator gives it here. See src/fleet/host/vm-join.js.
+  // THE NAME IS KEPT HERE, NOT WRITTEN BACK INTO THE CONFIG: the config is
+  // frozen (loadSidecarConfig), and writing to it threw, inside this try, so
+  // every holder's first boot logged "could not enrol itself" after enrolling
+  // fine, and dialled under its hostname — right only when cloud-init had made
+  // that the same word, and wrong for a temporary runner. A restart reads the
+  // recorded name back through the config; the first boot must not need one.
+  let hostId = cfg.hostId;
   /** @type {{ email: string, token: string|null }|null} */
   let fromVm = null;
   if (cfg.vmJoin && key) {
     try {
       const name = await enrolVmOnce({ file: cfg.vmJoin, origin: cfg.coordinatorUrl, hostKeyFile: cfg.hostKeyFile, publicJwk: key.publicJwk });
       if (name) {
-        cfg.hostId = name;
+        hostId = name;
         log.info(`this machine enrolled itself as ${name}, ${cfg.holderFor ? `the machine of its own that holds ${cfg.holderFor}` : 'a temporary host'}`);
       }
     } catch (e) {
@@ -180,7 +187,7 @@ async function run() {
     // owner has let it in from the phone, so it is not refused on every dial
     // until then (src/fleet/host/vm-join.js, waitToBeLetIn).
     if (cfg.holderFor) {
-      await waitToBeLetIn({ file: cfg.vmJoin, origin: cfg.coordinatorUrl, hostId: cfg.hostId, publicJwk: key.publicJwk, privateJwk: key.privateJwk, log });
+      await waitToBeLetIn({ file: cfg.vmJoin, origin: cfg.coordinatorUrl, hostId, publicJwk: key.publicJwk, privateJwk: key.privateJwk, log });
     }
     fromVm = vmLogin(cfg.vmJoin);
   }
@@ -189,9 +196,9 @@ async function run() {
     cfg.transport === 'websocket'
       ? new WebSocketTransport({
           origin: cfg.coordinatorUrl,
-          hostId: cfg.hostId,
+          hostId,
           proof: () =>
-            proveIdentity({ origin: cfg.coordinatorUrl, hostId: cfg.hostId, privateJwk: key.privateJwk }),
+            proveIdentity({ origin: cfg.coordinatorUrl, hostId, privateJwk: key.privateJwk }),
           // WHY A DIAL WAS REFUSED. The platform WebSocket does not surface the
           // body of a rejected upgrade, and the coordinator puts the reason
           // there — "not enrolled", "revoked", "the signature does not match"
@@ -199,7 +206,7 @@ async function run() {
           // the transport asks the same question `doctor` asks, over HTTP, and
           // logs the sentence.
           diagnose: () =>
-            checkEnrolled({ origin: cfg.coordinatorUrl, hostId: cfg.hostId, privateJwk: key.privateJwk })
+            checkEnrolled({ origin: cfg.coordinatorUrl, hostId, privateJwk: key.privateJwk })
               .then((known) => (known.ok ? null : known.reason)),
           logger: log,
           // Reaching the coordinator confirms an update on trial. A no-op when
@@ -237,7 +244,7 @@ else if (cfg.requireSigned === 'signers') log.info('this box takes only signed o
 const sidecar = new Sidecar({
     hub,
     transport,
-    hostId: cfg.hostId,
+    hostId,
     minter: mint.minter,
     // Present only inside a GitHub Actions job with id-token permission, which
     // is to say only on a runner.
