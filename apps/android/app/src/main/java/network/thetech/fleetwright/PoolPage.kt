@@ -273,6 +273,8 @@ private fun RouterRows(r: Fleet.VmEdges.Router) {
             r.reached == null && problem != null -> Text(problem, style = Design.Style.label, color = Design.Palette.inkDim.now)
             else -> {
                 Manage.Words.edgeRole(r.role)?.let { Text(it, style = Design.Style.label, color = Design.Palette.ink.now) }
+                // The way out first: it is what the machines behind the router have or have not, and the one line read when something is wrong. Names, leases and the log follow, in that order.
+                Text(Manage.Words.edgeWayOut(r.gateway, r.delay, r.loss), style = Design.Style.label, color = if (r.gateway == false) Design.Palette.attention.now else Design.Palette.ink.now)
                 // Names by count where the router keeps one (edge-router.js, MEASURED): what it answered and what the lists refused; the flag alone before that, and not answering is still the news.
                 val answered = r.answered
                 if (r.dns != false && answered != null) {
@@ -281,8 +283,8 @@ private fun RouterRows(r: Fleet.VmEdges.Router) {
                     Text(Manage.Words.edgeDns(r.dns), style = Design.Style.label, color = if (r.dns == false) Design.Palette.attention.now else Design.Palette.ink.now)
                 }
                 r.topBlocked?.takeIf { it.isNotEmpty() }?.let { Text(Manage.Words.edgeRefused(it), style = Design.Style.micro, color = Design.Palette.inkDim.now) }
-                Text(Manage.Words.edgeWayOut(r.gateway, r.delay, r.loss), style = Design.Style.label, color = if (r.gateway == false) Design.Palette.attention.now else Design.Palette.ink.now)
-                r.leases?.let { Text(Manage.Words.edgeLeases(it), style = Design.Style.label, color = Design.Palette.inkDim.now) }
+                // Always, null included: a count not read is cannot tell, and a line that vanished read as nothing to say (C-5).
+                Text(Manage.Words.edgeLeases(r.leases), style = Design.Style.label, color = Design.Palette.inkDim.now)
             }
         }
         Text(Manage.Words.edgeHeard(r.heardAt?.let { relative(it).toString() }), style = Design.Style.micro, color = Design.Palette.inkDim.now)

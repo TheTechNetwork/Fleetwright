@@ -219,6 +219,12 @@ struct PoolManageView: View {
                 if let role = Manage.Words.edgeRole(r.role) {
                     Text(role).fleetType(.label).foregroundStyle(Design.Palette.ink)
                 }
+                // THE WAY OUT FIRST: it is what the machines behind the router
+                // have or have not, and the one line read when something is
+                // wrong. Names, leases and the log follow, in that order.
+                Text(Manage.Words.edgeWayOut(r.gateway, ms: r.delay, loss: r.loss))
+                    .fleetType(.label)
+                    .foregroundStyle(r.gateway == false ? Design.Palette.attention : Design.Palette.ink)
                 // NAMES BY COUNT where the router keeps one (edge-router.js,
                 // MEASURED): what it answered and what the lists refused; the
                 // flag alone before that, and not answering is still the news.
@@ -236,12 +242,9 @@ struct PoolManageView: View {
                         .fleetType(.micro)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
-                Text(Manage.Words.edgeWayOut(r.gateway, ms: r.delay, loss: r.loss))
-                    .fleetType(.label)
-                    .foregroundStyle(r.gateway == false ? Design.Palette.attention : Design.Palette.ink)
-                if let n = r.leases {
-                    Text(Manage.Words.edgeLeases(n)).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
-                }
+                // ALWAYS, nil included: a count not read is cannot tell, and
+                // a line that vanished read as nothing to say (C-5).
+                Text(Manage.Words.edgeLeases(r.leases)).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
             }
             Text(Manage.Words.edgeHeard(r.heardAt.map { relativeTime($0) }))
                 .fleetType(.micro)

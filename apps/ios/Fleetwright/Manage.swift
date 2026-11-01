@@ -819,7 +819,10 @@ enum Manage {
         }
         static func edgeDns(_ answering: Bool?) -> String {
             switch answering {
-            case true?: return "Answering names"
+            // RUNNING, UNCOUNTED: a router built before it counted, or one whose
+            // count has nothing in it yet (edge-watch.js, statusOf). Said as
+            // uncounted, which is true of both, and not as counting none.
+            case true?: return "Answering names; none counted so far"
             case false?: return "Not answering names"
             case nil: return "Cannot tell whether it answers names"
             }
@@ -831,15 +834,26 @@ enum Manage {
             case nil: return "Cannot tell whether its way out is up"
             }
         }
-        static func edgeLeases(_ n: Int) -> String { n == 1 ? "1 DHCP lease" : "\(n) DHCP leases" }
+        /// What dnsmasq has out. Nil is the count not read, and is said (C-5): a quiet pool has none out, which is a different thing.
+        static func edgeLeases(_ n: Int?) -> String {
+            switch n {
+            case nil: return "Cannot tell how many DHCP leases it has out"
+            case 0?: return "No DHCP leases out"
+            case 1?: return "1 DHCP lease out"
+            case let n?: return "\(n) DHCP leases out"
+            }
+        }
         static func edgeUnreached(_ why: String) -> String { "Could not read it: \(why)" }
-        static func edgeHeard(_ when: String?) -> String { when.map { "Last log line \($0)" } ?? "No log lines from it yet" }
+        /// Its last log line, as the machine reading it heard it. None is said as none having reached that machine: whether the router logged nothing or sends its log elsewhere is not known from here.
+        static func edgeHeard(_ when: String?) -> String { when.map { "Last log line \($0)" } ?? "No log line has reached this machine" }
         /// The way out with dpinger's numbers, once a router measures it (edge-router.js, MEASURED); a router built before that has none, and the flag alone is said.
         static func edgeWayOut(_ up: Bool?, ms: Double?, loss: Double?) -> String {
             guard up == true, let ms else { return edgeGateway(up) }
             let latency = ms < 1 ? "under 1 ms" : "\(Int(ms.rounded())) ms"
+            // NO LOSS IS SAID, not left out: a measured way out with nothing
+            // lost is the good case, and silence read as the number missing.
             let l = loss ?? 0
-            let lost = l <= 0 ? "" : Int(l.rounded()) >= 1 ? ", losing \(Int(l.rounded()))% of pings" : ", losing under 1% of pings"
+            let lost = l <= 0 ? ", no pings lost" : Int(l.rounded()) >= 1 ? ", losing \(Int(l.rounded()))% of pings" : ", losing under 1% of pings"
             return "Its way out is up, \(latency)\(lost)"
         }
         /// Names by Unbound's own count since it started keeping one; refused is what the threat lists stopped.
