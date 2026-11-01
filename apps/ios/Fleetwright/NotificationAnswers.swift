@@ -67,7 +67,31 @@ enum NotificationAnswers {
             )
         })
         all.insert(poolReconnect())
+        all.insert(holderJoin())
         return all
+    }
+
+    /// A pool's own machine asking to join: the category the coordinator
+    /// sends with a `holder-join` push, and its one button.
+    static let holderCategory = "fleet.holder.join"
+    static let letInAction = "letin"
+
+    /// LET IT IN OPENS MACHINES, where the phone that made the machine lets
+    /// it in by itself the moment the card is on screen (HoldersAskingView),
+    /// and a phone that keeps its secret from before behind Face ID has the
+    /// button there. `.foreground` because that may need a screen;
+    /// `.authenticationRequired` so a locked phone in somebody else's hand
+    /// gets no further. The ordinary case needs no tap at all: the push also
+    /// wakes the app, which lets the machine in and replaces this
+    /// notification with the word that it joined (FleetwrightApp).
+    private static func holderJoin() -> UNNotificationCategory {
+        UNNotificationCategory(
+            identifier: holderCategory,
+            actions: [UNNotificationAction(identifier: letInAction, title: HolderJoin.letInWord,
+                                           options: [.foreground, .authenticationRequired])],
+            intentIdentifiers: [],
+            options: []
+        )
     }
 
     /// A pool whose servers Xen Orchestra has lost: the category the

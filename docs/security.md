@@ -617,10 +617,22 @@ machine of the fleet, through the coordinator.
   refused by the phone, which checks the proof before anything is let in.
   Somebody who read the drive in the window it exists could make a proof
   for a key of their own; that is the same reach as reading the pin, and
-  it ends the same way: one approval, which the person gives only to a
-  machine they just made, and which holds **one item**, the vault grant
-  being scoped to `hypervisor:<address>` (`only`, `docs/vault.md`), never
-  the person's other credentials.
+  it ends the same way: one approval, given only to a machine the person
+  just made, and which holds **one item**, the vault grant being scoped to
+  `hypervisor:<address>` (`only`, `docs/vault.md`), never the person's other
+  credentials. **The phone that made the machine gives that approval by
+  itself** when the proof checks, with nobody present: the secret is kept
+  as the fleet credential is (after the first unlock, this device only, not
+  in a backup; on Android, sealed to a Keystore key that needs nobody), and
+  no longer behind the owner's face. The face stood between a process
+  running as the app and the approval, and that process already holds the
+  fleet credential and the signing key that approve any box's key in the
+  vault with no face, so it guarded nothing the rest of the phone did not
+  give away. What a reader of the drive gains is unchanged: a proof for a
+  key of their own, which the phone would let in to hold that one item,
+  exactly as the person's tap would have, since the tap checked the same
+  proof and nothing else. A secret from before stays behind the face and is
+  read only from a tap.
 - **Working a machine** (`vmctl`, `docs/hypervisors.md`, "Working a
   machine"). The box works only a machine it tagged as made for the person
   asking, under that person's pool token: restart, a size within the

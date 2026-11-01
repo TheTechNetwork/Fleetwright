@@ -139,8 +139,9 @@ final class NotificationAnswersTests: XCTestCase {
         // last time it ran, so a category learned on demand arrives after the
         // notification it was for. All three, at launch, or none of them work.
         let registered = NotificationAnswers.categories()
-        // One per kind of question, and the pool's Reconnect beside them.
-        XCTAssertEqual(registered.count, NotificationAnswers.titles.count + 1)
+        // One per kind of question, and beside them the pool's Reconnect and
+        // the holder's Let it in.
+        XCTAssertEqual(registered.count, NotificationAnswers.titles.count + 2)
 
         for (kind, words) in NotificationAnswers.titles {
             guard let category = registered.first(where: {
@@ -176,5 +177,22 @@ final class NotificationAnswersTests: XCTestCase {
         XCTAssertTrue(options.contains(.foreground), "Reconnect would run without the screen Face ID needs")
         XCTAssertTrue(options.contains(.authenticationRequired), "Reconnect can be tapped on a locked phone")
         XCTAssertFalse(options.contains(.destructive), "Reconnect turns nothing off, and red would say it does")
+    }
+
+    // MARK: - a pool's own machine asking to join
+
+    func testAHolderAskingHasOneButtonThatOpensTheAppBehindAnUnlock() throws {
+        // The coordinator sends `fleet.holder.join` on a `holder-join` push.
+        // The phone that made the machine lets it in by itself when the push
+        // wakes the app; the button is for a phone that keeps its secret
+        // behind Face ID, which needs a screen, so it opens the app, and a
+        // locked phone gets no further than the lock.
+        let category = try XCTUnwrap(NotificationAnswers.categories().first { $0.identifier == NotificationAnswers.holderCategory })
+        XCTAssertEqual(category.actions.map(\.identifier), [NotificationAnswers.letInAction])
+        XCTAssertEqual(category.actions.map(\.title), [HolderJoin.letInWord])
+        let options = try XCTUnwrap(category.actions.first).options
+        XCTAssertTrue(options.contains(.foreground), "Let it in would run without the screen Face ID may need")
+        XCTAssertTrue(options.contains(.authenticationRequired), "Let it in can be tapped on a locked phone")
+        XCTAssertFalse(options.contains(.destructive), "Let it in turns nothing off, and red would say it does")
     }
 }

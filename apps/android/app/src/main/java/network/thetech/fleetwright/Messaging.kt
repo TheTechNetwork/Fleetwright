@@ -105,6 +105,20 @@ class Messaging : FirebaseMessagingService() {
             )
             return
         }
+        // A POOL'S OWN MACHINE ASKING TO JOIN, which this phone lets in by
+        // itself when it made it, and then draws as what happened
+        // (HolderNotice). Only one that arrives as data: sealed, or under its
+        // category from a coordinator that sends it; one the tray drew was
+        // drawn already, and Machines lets it in when it is next on screen.
+        if (HolderNotice.handles(data["kind"]) && (sealed || data["category"] == HolderNotice.CATEGORY)) {
+            HolderNotice.post(
+                applicationContext,
+                data,
+                data["title"] ?: message.notification?.title,
+                data["body"] ?: message.notification?.body,
+            )
+            return
+        }
         val words = NotificationAnswers.titlesFor(data["category"])
         if (words != null) {
             post(applicationContext, data, words)

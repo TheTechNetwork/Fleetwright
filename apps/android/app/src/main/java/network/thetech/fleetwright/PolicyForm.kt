@@ -310,7 +310,7 @@ internal fun PolicyForm(
                 line = if (choice.holderAskChoice) {
                     "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the " +
                         "fleet may use, so the pool does not need $machine to be awake. Once it is up it asks to join, and this phone " +
-                        "asks you to let it in and hold the pool."
+                        "lets it in to hold the pool by itself, as the phone that made it."
                 } else {
                     "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the " +
                         "fleet may use, so the pool does not need $machine to be awake. Once it joins, approve it under Machines and it " +

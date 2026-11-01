@@ -20,13 +20,35 @@ import Security
 /// comparison docs/vault.md asks a person to make by eye for an ordinary box,
 /// made here, because nobody can run a command on this machine to compare.
 ///
-/// THE SECRETS ARE KEPT behind the phone's owner (`.userPresence`: Face ID,
-/// Touch ID, or the passcode), on this phone only, a few per Xen Orchestra,
-/// because one address can have a pool's own machine on each of its pools.
-/// Reading them is the Face ID of the approval: the proof cannot be checked
-/// until the person has shown it is them.
+/// THE SECRETS ARE KEPT ON THIS PHONE ONLY, a few per Xen Orchestra, because
+/// one address can have a pool's own machine on each of its pools, and the
+/// phone that made a machine LETS IT IN BY ITSELF: the proof is the
+/// authorisation, carried from Apply to the request. Asked for: "If I
+/// authorize the creation of a holder why do I need to let it in? We can
+/// carry the authorization from the creation: if it's the same VM, allow it
+/// in." So a secret is kept as the fleet credential and the push key are
+/// (after the first unlock, this device only), readable by this app with
+/// nobody present, and a request it proves is let in the moment this phone
+/// sees it: on Machines, or when the asks-to-join push reaches it.
+///
+/// WHAT THE OWNER'S FACE GUARDED, and why it is not needed here. It stood
+/// between a process running as this app and the approval. That process
+/// already holds the fleet credential and the signing key that approve any
+/// box's key in the vault with no face (PhoneVault.approve, DeviceSigning),
+/// so the face on this one item guarded nothing the rest of the phone did
+/// not already give away; what it cost was a second tap for a machine the
+/// person had just asked for. The proof is what carries the security: only
+/// the machine that read this phone's secret off its own cloud-init drive
+/// can make it, the coordinator never has the secret, and the grant it
+/// earns is one item, the pool's.
+///
+/// A SECRET FROM BEFORE is still behind the face (`.userPresence`, the old
+/// service), and is read only from a tap, never quietly.
 enum HolderJoin {
-    private static let service = "network.thetech.fleetwright.holder-join"
+    /// Secrets this phone reads by itself.
+    private static let service = "network.thetech.fleetwright.holder-join.2"
+    /// Secrets from before, behind the owner's face: read from a tap only.
+    private static let faceService = "network.thetech.fleetwright.holder-join"
     /// How many secrets are kept for one address, newest first.
     static let keptPerAddress = 4
 
@@ -100,11 +122,11 @@ enum HolderJoin {
     // MARK: The secrets
 
     /// ONE ITEM PER SECRET, named `<address>#<when>`: the names can be listed
-    /// without the face, so a new one is added beside the others and the
-    /// oldest dropped, and one Face ID reads all of an address's at once.
+    /// without reading, so a new one is added beside the others and the
+    /// oldest dropped.
     private static func account(_ address: String, _ at: Int64) -> String { "\(address)#\(at)" }
 
-    private static func accounts(for address: String) -> [String] {
+    private static func accounts(for address: String, in service: String) -> [String] {
         let item: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -118,56 +140,86 @@ enum HolderJoin {
             .sorted(by: >)
     }
 
-    private static func remove(_ account: String) {
+    private static func remove(_ account: String, from service: String) {
         SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account] as CFDictionary)
+    }
+
+    /// Whether this phone keeps a secret for `address`: whether it made a
+    /// machine there it would let in by itself. Needs no reading.
+    static func made(_ address: String) -> Bool {
+        !accounts(for: address, in: service).isEmpty || !accounts(for: address, in: faceService).isEmpty
     }
 
     /// A new secret for a machine about to be made for `address`, kept here
     /// before it is sent, or nil when the Keychain would not keep it, in
     /// which case nothing is sent and the machine joins with its pin.
-    /// Writing needs no face; reading does.
+    ///
+    /// AFTER THE FIRST UNLOCK, THIS DEVICE ONLY, and nothing else in front of
+    /// it: the push that says the machine asks arrives with the phone in a
+    /// pocket, and this is read then (see the top of this file). Not in a
+    /// backup, so a restored phone does not let in what another made.
     static func newSecret(for address: String) -> String? {
         var bytes = [UInt8](repeating: 0, count: 32)
-        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess,
-              let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, .userPresence, nil)
-        else { return nil }
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return nil }
         let secret = bytes.map { String(format: "%02x", $0) }.joined()
-        for old in accounts(for: address).dropFirst(keptPerAddress - 1) { remove(old) }
+        for old in accounts(for: address, in: service).dropFirst(keptPerAddress - 1) { remove(old, from: service) }
         let item: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account(address, Int64(Date().timeIntervalSince1970 * 1000)),
             kSecValueData as String: Data(secret.utf8),
-            kSecAttrAccessControl as String: access,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
         return SecItemAdd(item as CFDictionary, nil) == errSecSuccess ? secret : nil
     }
 
-    /// One kept secret and the name it is kept under.
+    /// One kept secret, the name it is kept under, and where.
     struct Secret: Equatable, Sendable {
         let account: String
         let value: String
+        /// Kept behind the owner's face, from before this phone read them by itself.
+        var face = false
     }
 
-    /// The secrets kept for `address`, which puts Face ID up once with
-    /// `reason` under it. Nil when the person cancels or the face does not
-    /// match; empty when this phone keeps none for it.
-    static func unlock(_ address: String, reason: String) async -> [Secret]? {
-        guard !accounts(for: address).isEmpty else { return [] }
-        let context = LAContext()
-        context.localizedReason = reason
+    /// The secrets this phone reads by itself for `address`: the ones kept
+    /// since it let machines in by itself. Empty when it keeps none such.
+    static func secrets(for address: String) async -> [Secret] {
         let item: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnAttributes as String: true,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        return await read(item as CFDictionary, prefix: "\(address)#", face: false) ?? []
+    }
+
+    /// The secrets kept for `address`, for a tap: the ones this phone reads
+    /// by itself, and, when it keeps none such, the ones from before behind
+    /// the owner's face, which puts Face ID up once with `reason` under it.
+    /// Nil when the person cancels or the face does not match; empty when
+    /// this phone keeps none for it.
+    static func unlock(_ address: String, reason: String) async -> [Secret]? {
+        let quiet = await secrets(for: address)
+        if !quiet.isEmpty { return quiet }
+        guard !accounts(for: address, in: faceService).isEmpty else { return [] }
+        let context = LAContext()
+        context.localizedReason = reason
+        let item: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: faceService,
+            kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
             kSecUseAuthenticationContext as String: context,
         ]
-        let asked = item as CFDictionary
-        let prefix = "\(address)#"
-        // SecItemCopyMatching waits for the face, so not on the main actor;
-        // what comes back is unpacked there, into plain strings.
+        return await read(item as CFDictionary, prefix: "\(address)#", face: true)
+    }
+
+    /// SecItemCopyMatching may wait for the face, so not on the main actor;
+    /// what comes back is unpacked there, into plain strings. Nil is a read
+    /// that failed (cancelled, or no match); not found is none.
+    private static func read(_ asked: CFDictionary, prefix: String, face: Bool) async -> [Secret]? {
         let (status, found): (OSStatus, [Secret]) = await Task.detached {
             var out: CFTypeRef?
             let status = SecItemCopyMatching(asked, &out)
@@ -175,7 +227,7 @@ enum HolderJoin {
             let found = rows.compactMap { row -> Secret? in
                 guard let account = row[kSecAttrAccount as String] as? String, account.hasPrefix(prefix),
                       let data = row[kSecValueData as String] as? Data, let value = String(data: data, encoding: .utf8) else { return nil }
-                return Secret(account: account, value: value)
+                return Secret(account: account, value: value, face: face)
             }
             return (status, found)
         }.value
@@ -185,9 +237,85 @@ enum HolderJoin {
     }
 
     /// The one that let a machine in, gone: it proves nothing it should.
-    /// By its name, which needs no face.
+    /// By its name, which needs no reading.
     static func spent(_ secret: Secret) {
-        remove(secret.account)
+        remove(secret.account, from: secret.face ? faceService : service)
+    }
+
+    // MARK: Letting it in
+
+    /// How letting a machine in ended, in the words the card and a
+    /// notification say.
+    enum Outcome: Equatable {
+        /// In, and holding its pool.
+        case joined(String)
+        /// In, and the vault would not let it hold the pool: said, with what to do.
+        case joinedNotHolding(String)
+        /// Said and not let in: this phone did not make it, no request is
+        /// proved, or the fleet refused.
+        case refused(String)
+        /// Nothing to say: the person cancelled the face, or, quietly, the
+        /// only secrets are from before and need a tap.
+        case nothing
+
+        var said: String? {
+            switch self {
+            case let .joined(s), let .joinedNotHolding(s), let .refused(s): s
+            case .nothing: nil
+            }
+        }
+
+        var isIn: Bool {
+            switch self {
+            case .joined, .joinedNotHolding: true
+            case .refused, .nothing: false
+            }
+        }
+    }
+
+    /// THE ONE APPROVAL, from a tap or by itself (`quietly`). The request one
+    /// of this phone's secrets proves is the one let in: the fleet enrols
+    /// that key, and the vault lets the same key hold that pool and nothing
+    /// else of this person's. A request none of them proves is said as such
+    /// and nothing is let in. Quietly, only the secrets this phone reads by
+    /// itself are looked at, so nothing puts a face up from a background.
+    static func admit(_ w: Waiting, fleet: Fleet, settings: Settings, quietly: Bool) async -> Outcome {
+        guard !w.requests.isEmpty else { return .nothing }
+        let found: [Secret]?
+        if quietly {
+            let quiet = await secrets(for: w.address)
+            // Only secrets from before: a tap reads them, this does not.
+            if quiet.isEmpty && made(w.address) { return .nothing }
+            found = quiet
+        } else {
+            found = await unlock(w.address, reason: reason(w.hostId, w.address))
+        }
+        guard let secrets = found else { return .nothing }
+        if secrets.isEmpty { return .refused(notThisPhone(w.hostId)) }
+        guard let match = proven(w, secrets: secrets.map(\.value)) else { return .refused(notProven(w.hostId)) }
+        do {
+            let answer = try await fleet.approveHolder(w.hostId, key: match.request.key)
+            guard answer.ok == true else { return .refused(answer.text ?? "The fleet did not let \(w.hostId) in.") }
+            if let secret = secrets.first(where: { $0.value == match.secret }) { spent(secret) }
+            do {
+                _ = try await PhoneVault(settings: settings).approveHolder(fleet, hostId: w.hostId, key: match.request.publicJwk, address: w.address)
+                return .joined(joined(w.hostId, w.address))
+            } catch {
+                return .joinedNotHolding(joinedNotHolding(w.hostId, error.localizedDescription))
+            }
+        } catch {
+            return .refused(error.localizedDescription)
+        }
+    }
+
+    /// By itself, from the push that says a machine asks (FleetwrightApp):
+    /// the one waited on under that name, let in when this phone's secret
+    /// proves its request. Nil when there is no such name, or nothing to say.
+    static func admit(named hostId: String, settings: Settings) async -> Outcome? {
+        let fleet = Fleet(settings: settings)
+        guard let w = (try? await fleet.holders())?.first(where: { $0.hostId == hostId }) else { return nil }
+        let outcome = await admit(w, fleet: fleet, settings: settings, quietly: true)
+        return outcome == .nothing ? nil : outcome
     }
 
     // MARK: What both phones say
@@ -211,4 +339,12 @@ enum HolderJoin {
     static func joinedNotHolding(_ hostId: String, _ why: String) -> String {
         "\(hostId) has joined, and could not be approved to hold its pool: \(why) Approve it under its page."
     }
+    /// Under a name nothing has asked under yet, on the phone that made it.
+    static func byItself(_ hostId: String) -> String {
+        "This phone made \(hostId), so it lets it in by itself once it asks. Nothing to tap."
+    }
+    /// The notification, once it is in: the title, and `joined` under it.
+    static func joinedTitle(_ hostId: String) -> String { "\(hostId) joined" }
+    /// The one action on the asks-to-join notification.
+    static let letInWord = "Let it in"
 }
