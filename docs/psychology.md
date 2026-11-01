@@ -147,7 +147,13 @@ It leads with the most urgent true clause and nothing else, so a banner cannot
 say "3 machines healthy" while a session is waiting. And §7 gets its own branch:
 a fleet nobody can hear from is not a fleet with nothing running, and the app
 says which — *"the coordinator has no health from any machine, so this cannot
-say whether anything is running"*.
+say whether anything is running"*. And a fleet the app has not yet asked is
+neither: before `/api/hosts` has answered, or after an ask that failed with
+nothing held, the line says *"the fleet has not yet said which machines
+report"*, in the calm ink, because nothing is known to be wrong. The Sessions
+screen used to open red on "No machines are reporting" from a list that was
+empty only because nothing had filled it yet, beside a New session sheet that
+listed two machines it had asked for itself.
 
 **"Running" was doing two jobs.** A session mid-build and one that had not moved
 since Tuesday rendered identically, in the same font, and the difference is the

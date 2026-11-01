@@ -23,6 +23,7 @@ final class ReassuranceParityTests: XCTestCase {
             let unwell: [String]
             let blind: Bool
             let healthy: Int
+            let heard: Bool
         }
         let why: String
         let `in`: Input
@@ -53,7 +54,8 @@ final class ReassuranceParityTests: XCTestCase {
             quiet: input.quiet,
             unwell: input.unwell,
             blind: input.blind,
-            healthy: input.healthy
+            healthy: input.healthy,
+            heard: input.heard
         )
     }
 

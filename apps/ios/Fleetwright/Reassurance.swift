@@ -37,6 +37,14 @@ struct Reassurance {
     let blind: Bool
     /// Machines reporting normally.
     let healthy: Int
+    /// Whether the fleet has answered which machines report at all. An empty
+    /// list before the first answer, or after an ask that failed, is "we have
+    /// not heard yet", and that is not evidence of anything: the Sessions
+    /// screen opened red on the line below about no machine reporting, from
+    /// its own empty list, while the New session sheet beside it listed two
+    /// machines it had asked for itself. `blind` says what the fleet said;
+    /// this says whether it has said.
+    let heard: Bool
 
     /// The six fields directly, which is what the shared parity table supplies.
     ///
@@ -45,16 +53,19 @@ struct Reassurance {
     /// `headline` and `basis` are functions of these six numbers and nothing
     /// else, and being able to say so in a constructor is the same claim the
     /// Kotlin data class makes for free.
-    init(waiting: Int, running: Int, quiet: Int, unwell: [String], blind: Bool, healthy: Int) {
+    init(waiting: Int, running: Int, quiet: Int, unwell: [String], blind: Bool, healthy: Int, heard: Bool = true) {
         self.waiting = waiting
         self.running = running
         self.quiet = quiet
         self.unwell = unwell
         self.blind = blind
         self.healthy = healthy
+        self.heard = heard
     }
 
-    init(sessions: [Fleet.Session], hosts: [Fleet.FleetHost]) {
+    /// `heard` is whether the fleet has answered which machines report;
+    /// `hosts` is that answer, or what was held before one.
+    init(sessions: [Fleet.Session], hosts: [Fleet.FleetHost], heard: Bool = true) {
         waiting = sessions.filter { $0.prompt != nil }.count
         running = sessions.filter { $0.isRunning }.count
         // Only the ones that look STALLED. Counting finished sessions as
@@ -64,12 +75,14 @@ struct Reassurance {
         unwell = hosts.filter { $0.state != "healthy" }.map { $0.hostId }
         blind = hosts.isEmpty
         healthy = hosts.count - hosts.filter { $0.state != "healthy" }.count
+        self.heard = heard
     }
 
     /// The headline. One clause, and the most urgent true one.
     var headline: String {
         if waiting > 0 { return waiting == 1 ? "One session is waiting for you" : "\(waiting) sessions are waiting for you" }
         if !unwell.isEmpty { return unwell.count == 1 ? "One machine needs a look" : "\(unwell.count) machines need a look" }
+        if !heard { return "Asking which machines report" }
         if blind { return "No machines are reporting" }
         if running == 0 { return "Nothing is running" }
         return "Nothing needs you"
@@ -79,6 +92,13 @@ struct Reassurance {
     /// with no basis is a reassurance somebody has to take on faith, and the
     /// whole argument for this line is that they should not have to.
     var basis: String {
+        // NOT HEARD IS NOT HEARD: before the first answer, or after an ask that
+        // failed with nothing held, the fleet has said nothing about its
+        // machines, and "the coordinator has no health from any machine" is a
+        // claim about what it said.
+        if !heard {
+            return "The fleet has not yet said which machines report, so this cannot say whether anything is running."
+        }
         if blind {
             return "The coordinator has no health from any machine, so this cannot say whether anything is running."
         }
@@ -98,18 +118,24 @@ struct Reassurance {
     /// on Android.
     var tint: Color {
         if waiting > 0 { return Design.Palette.attention }
-        if blind || !unwell.isEmpty { return Design.Palette.bad }
+        if !unwell.isEmpty { return Design.Palette.bad }
+        // Not heard yet is not trouble: nothing is known to be wrong, and red
+        // on an unanswered question teaches the red to be ignored.
+        if !heard { return Design.Palette.inkDim }
+        if blind { return Design.Palette.bad }
         return Design.Palette.inkDim
     }
 
     /// Whether the quiet can be vouched for, which is what decides how loud the
     /// card is. Calm is LOW CONTRAST on purpose: claims that hold recede,
     /// claims that fail come forward.
-    var settled: Bool { waiting == 0 && !blind && unwell.isEmpty }
+    var settled: Bool { waiting == 0 && heard && !blind && unwell.isEmpty }
 
     var symbol: String {
         if waiting > 0 { return "hand.raised" }
-        if blind || !unwell.isEmpty { return "exclamationmark.triangle" }
+        if !unwell.isEmpty { return "exclamationmark.triangle" }
+        if !heard { return "ellipsis.circle" }
+        if blind { return "exclamationmark.triangle" }
         if running == 0 { return "moon.zzz" }
         return "checkmark.circle"
     }
