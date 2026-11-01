@@ -1002,6 +1002,19 @@ know its address" until the next apply. A router Xen Orchestra still has no
 address for is said as that, with when its guest agent comes; one it could not
 be asked about is said as the job's answer.
 
+**Which box reads them.** Only a box whose own look at the pool's Xen
+Orchestra reached it (`XoPools.seen`). The routers answer on the way out, the
+network Xen Orchestra is on and the pool's own machine is made on, so a box
+that cannot reach Xen Orchestra is not there and never tries: no connection is
+opened, Xen Orchestra is not asked where they are, and the phone is told "This
+machine did not try" in the quiet tone rather than "did not answer" in the
+attention tone. Asked for after a cloud runner holding the pool's token read
+both routers every half minute, reached neither, and was the report the phone
+showed. A box that reached Xen Orchestra once keeps reading through an outage
+of it; a box that has not looked yet says so. The coordinator ranks a report
+that saw a router, by its API or its syslog, over one that could not tell, so
+the box on the network is the one shown as soon as it has read them.
+
 **What the phone shows.** The pool's page gains an Edge routers card under its
 status, refreshed every 30 seconds while it is open:
 
@@ -1018,7 +1031,9 @@ edge routers yet"), never as fine.
 **What it needs:** a release with this in it on the boxes holding the pool,
 then one policy apply from the phone. That apply rebuilds the routers once.
 Syslog reaches only the pool's own machine and the machine that ran the job;
-another box holding the pool reads the API and sees no log lines.
+another box holding the pool on that network reads the API and sees no log
+lines, and one that cannot reach the pool's Xen Orchestra reads nothing and
+says so ("Which box reads them").
 
 **Not yet run** on real OPNsense: the user, the key, the certificate and the
 syslog destinations were written from OPNsense 26.7.6's own models and
