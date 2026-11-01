@@ -706,6 +706,13 @@ class Fleet(
         /** A pool's own machine: it holds the pool and runs no sessions. */
         val holder: Boolean = false,
         /**
+         * The pool it holds, for the person whose pool it is (core.js
+         * holdsFor): the address its page offers Make it again for. Null for
+         * anybody else, for one that has not said, and from a coordinator too
+         * old to say, each of which offers nothing (C-2, C-5).
+         */
+        val holds: String? = null,
+        /**
          * WHO THIS MACHINE TAKES UPDATE, UPGRADE, REBOOT AND RESTORING
          * SOMEBODY ELSE'S WORK FROM, when it pins its own admins
          * (src/fleet/host/pinned-admins.js, shaped per person by core.js
@@ -3315,6 +3322,7 @@ class Fleet(
                     takesSessions = o.takeIf { it.has("takesSessions") && !it.isNull("takesSessions") }?.optBoolean("takesSessions"),
                     administers = o.takeIf { it.has("administers") && !it.isNull("administers") }?.optBoolean("administers"),
                     holder = o.optBoolean("holder", false),
+                    holds = o.optString("holds").takeIf { it.isNotBlank() && it != "null" },
                     // ABSENT STAYS NULL: a box that cannot pin. `has` first
                     // inside it, for the reason everywhere else here: optInt
                     // reads a JSON null as 0, which would turn a record the box

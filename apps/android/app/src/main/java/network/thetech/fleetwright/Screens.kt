@@ -129,6 +129,15 @@ fun Quoted(text: String) {
 const val HOLDER_LINE = "This pool’s own machine. It holds the pool for the fleet and runs no sessions."
 
 /**
+ * Make it again, offered on a pool's own machine's page: what it does, said
+ * before the policy screen it opens. The same words on both phones
+ * (test/holder-sessions-in-apps.test.js).
+ */
+const val HOLDER_AGAIN_TITLE = "Make it again"
+const val HOLDER_AGAIN_LINE = "Removes this machine, disk and all, and makes a new one from the newest build of its suite, which asks to join; let it in under Machines. " +
+    "Opens the pool’s policy with that switched on, and Apply does it."
+
+/**
  * Whether the who-can-start line adds anything. A box degraded with nobody's
  * account on it already says so in the fleet's reason above the line, and the
  * line said it a second time in other words.
