@@ -745,7 +745,14 @@ export class XoPools {
         }
       }
       try {
-        if (vm.power_state !== 'Halted') await rpc.call('vm.stop', { id: vm.id, force: true });
+        // STOPPED CLEANLY WHERE IT CAN BE, so the sidecar inside is told and
+        // says goodbye (close 1000), which the coordinator retires on the
+        // spot. A hard stop cut the socket instead, and the machine then sat
+        // under Machines as "not reporting" for the ten minutes a runner gets
+        // to dial back, with nothing to say: vm-72ee54698806, removed at
+        // 18:18 and listed until 18:28. The hard one still follows a clean
+        // one refused, or a machine with no guest agent (#cleanOrHard).
+        if (vm.power_state !== 'Halted') await this.#cleanOrHard(rpc, 'vm.stop', vm);
         await rpc.call('vm.delete', { id: vm.id, deleteDisks: true });
         this.log.info(`sidecar: removed ${name}, which had ${overdue && vm.power_state !== 'Halted' ? 'run past its end' : 'stopped'}`);
       } catch (e) {

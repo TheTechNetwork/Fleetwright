@@ -143,7 +143,8 @@ test('a look reports the pool’s machine images, and sweeps machines that are d
   assert.equal(stand.calls[0].params.token, 'xo-limited-token', 'signed in with the limited token');
   const deleted = stand.calls.filter((c) => c.method === 'vm.delete').map((c) => c.params.id);
   assert.deepEqual(deleted.sort(), ['done', 'overdue'], 'stopped, or well past its end; never another VM');
-  assert.ok(stand.calls.some((c) => c.method === 'vm.stop' && c.params.id === 'overdue'));
+  // No guest agent said: the hard stop, which is the only one it can take.
+  assert.deepEqual(stand.calls.filter((c) => c.method === 'vm.stop').map((c) => c.params), [{ id: 'overdue', force: true }]);
   assert.ok(stand.rpc.closed);
 });
 
@@ -701,7 +702,8 @@ test('a stopped machine is removed only once it is old enough to have booted and
       vm('stopped', 'Halted', { age: 30, left: 30 }),
       vm('twice', 'Halted', { age: 30, left: 30, tags: [`fleetwright-restarted:${s - 120}`] }),
       vm('done', 'Halted', { age: 70, left: -10 }),
-      vm('overdue', 'Running', { age: 80, left: -20 }),
+      // With the guest agent, as the image installs it.
+      { ...vm('overdue', 'Running', { age: 80, left: -20 }), managementAgentDetected: true },
     ],
   });
   const pools = holder(stand, () => now);
@@ -709,7 +711,10 @@ test('a stopped machine is removed only once it is old enough to have booted and
   await pools.refresh();
   const did = (/** @type {string} */ method) => stand.calls.filter((c) => c.method === method).map((c) => c.params.id);
   assert.deepEqual(did('vm.delete'), ['done', 'overdue'], 'stopped past its end, or running past it: never one still booting, or stopped before its end');
-  assert.deepEqual(did('vm.stop'), ['overdue'], 'the running case as it was');
+  // A CLEAN STOP AT ITS END, so the sidecar inside says goodbye and the
+  // coordinator retires the machine then, not ten minutes on. It was a hard
+  // stop, which cut the socket and left the machine "not reporting".
+  assert.deepEqual(stand.calls.filter((c) => c.method === 'vm.stop').map((c) => c.params), [{ id: 'overdue', force: false }], 'the running case, stopped cleanly');
   assert.deepEqual(did('vm.start'), ['stopped'], 'stopped before its end: started again, and not a second time');
   assert.deepEqual(stand.calls.filter((c) => c.method === 'tag.add').map((c) => [c.params.id, c.params.tag]), [['stopped', `fleetwright-restarted:${s}`]]);
 });
