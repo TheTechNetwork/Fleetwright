@@ -324,6 +324,16 @@ lists for them. The refusal is `signature_required`, with the reason in words:
 The last one refuses on purpose. Enforcement that lapsed while the list was
 late would be enforcement a coordinator could lapse by holding the list back.
 
+**A phone lists its key before the first tap that needs it.** Each phone
+lists its key with the minter on its own, once it has a GitHub sign-in to do
+that with, and signs nothing until it has. It used to start the listing in the
+background and send the tap unsigned, so the first Apply update after a sign-in
+reached a box that enforces a quarter of a second before the minter listed the
+key, and was refused as not signed. Now a verb a box would want signed waits
+for the listing, at most once in ten minutes, and goes signed if it landed; a
+verb that goes unsigned anyway (`list`, `status`) still only starts it, so the
+key is usually listed before the first tap that needs it.
+
 **A key the list does not have is asked about again, once.** A box takes the
 list every ten minutes, and a phone signs as soon as the minter lists its key,
 so a phone added in between was refused on its first request: signed by a key

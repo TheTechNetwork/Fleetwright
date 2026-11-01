@@ -2897,16 +2897,33 @@ struct Fleet {
             body["host"] = host
             // SIGNED BY THIS PHONE, for the box it names, over exactly what is
             // sent (DeviceSigning.swift). Signed at sending, so a held command
-            // sent again later carries a fresh time. Until this phone's key is
-            // listed with the minter it goes unsigned, and listing is started.
+            // sent again later carries a fresh time.
+            //
+            // LISTED FIRST, WHEN IT IS NOT YET. This started the listing in
+            // the background and sent the tap unsigned, so the first Apply
+            // update after a GitHub sign-in reached a box that enforces a
+            // quarter of a second before the minter listed the key, and was
+            // refused as not signed, with the refusal's steps pointing at a
+            // delegation that could not have carried it. Now a verb a box
+            // would want signed waits for the listing, at most once in ten
+            // minutes (listIfNeeded), and is signed if it landed. One that
+            // goes unsigned anyway (list, status) still only starts it, so
+            // the key is listed before the first tap that needs it.
             let signing = DeviceSigning(settings: settings)
-            if let signed = signing.signature(verb: verb, params: typed, id: id, host: host) {
+            var signed = signing.signature(verb: verb, params: typed, id: id, host: host)
+            if signed == nil {
+                if IntentSigning.unsignedVerbs.contains(verb) {
+                    let fleet = self
+                    Task { await signing.listIfNeeded(fleet) }
+                } else {
+                    await signing.listIfNeeded(self)
+                    signed = signing.signature(verb: verb, params: typed, id: id, host: host)
+                }
+            }
+            if let signed {
                 body["sig"] = signed.sig
                 body["kid"] = signed.kid
                 body["issuedAt"] = signed.issuedAt
-            } else {
-                let fleet = self
-                Task { await signing.listIfNeeded(fleet) }
             }
         } else if !IntentSigning.unsignedVerbs.contains(verb) {
             // PLACED BY THE FLEET, so no box to sign for: a delegation instead,
