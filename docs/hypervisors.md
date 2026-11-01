@@ -80,7 +80,9 @@ What happens, from the phone to a session on a VM:
    under its name, tagged as made for you, in the fleet's set and running;
    still running either way, and once from each box. The hub keeps it as
    a runner's, and the file is deleted. It is then a temporary host in every
-   way: yours, placed only by name, retired with its key on disconnect.
+   way: yours, placed only by name, retired with its key on a goodbye, or
+   the moment a box holding the pool reports the pool without it
+   (`docs/ephemeral-hosts.md`).
 7. **The session starts on it**, from the first health frame that says it
    can take one; a frame from before its login has arrived holds the start
    for the next. A machine handed no login says so on its page, with what

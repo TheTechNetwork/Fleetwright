@@ -37,7 +37,17 @@ is told it is somebody else's (`scheduler.js`, `place`).
 same kind of host, admitted by a VM ticket rather than a GitHub job
 (`docs/hypervisors.md`, "Machines from your pool"). Its first health frame can
 arrive before it can take work, so a session held for it waits for the next
-frame instead of being dropped.
+frame instead of being dropped. And it is gone when its pool no longer has
+it: the box holding the pool removes it at its end (`docs/hypervisors.md`,
+"It ends on time"), and the next look that box reports, of the pool it was
+last listed on, reached and showing its pools and without the machine, retires
+it on the spot (`core.js`, `#retireMachinesGone`), as does its socket dropping
+after such a look. It used to sit under Machines as "not reporting" for the
+ten minutes below, with nothing to say. A look is believed only from a box
+that may act for the machine's owner, of a pool it reports as reached with
+its pools showing (a pool Xen Orchestra has lost lists no machines either),
+and never of a machine still connected; one no box has listed since the
+coordinator came up waits the ten minutes as before.
 
 **A disconnect takes it off the list, and a goodbye retires it.** For a real
 box, `disconnect` keeps the entry: it may come back, and its last known sessions
