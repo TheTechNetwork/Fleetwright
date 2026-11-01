@@ -165,6 +165,8 @@ export const CLAUDE_CHECK_MS = 15 * 60_000;
 const MAX_CLAUDE_PER_WINDOW = 5;
 /** Machines remembered as handed a Claude login, oldest first out (vmLoginsGiven). */
 const MAX_VM_LOGINS_REMEMBERED = 200;
+/** Machines from pools whose last-seen pool is kept, for retiring one its pool no longer has. */
+const MAX_VM_SEEN_ON = 500;
 
 /** GitHub sign-ins and renewals one person's devices may finish in MINT_WINDOW_MS. */
 const MAX_GITHUB_PER_WINDOW = 20;
@@ -483,6 +485,8 @@ export class CoordinatorCore {
     this.holderJoins = new HolderJoins({ now: () => this.now() });
     /** @type {Map<string, number>} temporary hosts seen missing, and since when (retireStranded) */
     this.missingSince = new Map();
+    /** @type {Map<string, string>} machines from pools, and the pool address a box last listed each on (#retireMachinesGone) */
+    this.vmSeenOn = new Map();
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
     this.firstHealthWaitMs = firstHealthWaitMs;
@@ -769,7 +773,13 @@ export class CoordinatorCore {
     // A DROP IS RECORDED, as a goodbye is. Without this the ring had no word
     // of a runner leaving mid-job, and a person reading it after the fact saw
     // a session simply stop being mentioned.
-    else if (ephemeral) this.record({ event: 'host.dropped', hostId, text: `temporary host dropped its connection (${reason}); it keeps its key and may dial back` });
+    else if (ephemeral) {
+      this.record({ event: 'host.dropped', hostId, text: `temporary host dropped its connection (${reason}); it keeps its key and may dial back` });
+      // A MACHINE FROM A POOL whose pool already shows it gone, by the last
+      // look a box reported, is retired now rather than kept for a dial-back
+      // that cannot come.
+      this.#retireMachinesGone({ machine: hostId });
+    }
   }
 
   /**
@@ -794,6 +804,80 @@ export class CoordinatorCore {
     // used to be saved: an eviction in between brought the key back, and the
     // machine with it, as a row that said "not reporting" for ever.
     this.onStateChanged?.();
+  }
+
+  /**
+   * A MACHINE FROM A POOL THAT ITS POOL NO LONGER HAS is retired now, not
+   * ten minutes on. The box holding the pool removes a machine at its end,
+   * disks and all (xo-pools.js, sweep), and the machine's socket drops as it
+   * is stopped; a drop is a runner's mid-job hiccup, so retireStranded gave
+   * it the ten minutes a runner gets to dial back, and for those ten minutes
+   * it sat under Machines as "not reporting", with nothing to say. Asked:
+   * "it should be gone as soon as its time expires."
+   *
+   * WHAT IS BELIEVED, because a wrong retirement revokes a live machine's
+   * key: a box that may act for the machine's owner (xoFor), reporting the
+   * pool the machine was last listed on as reachable, with its pools showing,
+   * and the machine not among its machines. A pool Xen Orchestra has lost
+   * shows no machines either, and that is not it; a machine still connected
+   * is not gone whatever a look says; and one no box has listed since this
+   * coordinator came up waits for retireStranded as before. Where each was
+   * last seen is kept in memory as the boxes report (vmSeenOn), and the
+   * box's word is taken only for a pool it may speak for.
+   *
+   * Run on each box's report, for every machine, and on a machine's drop,
+   * against every box's last report.
+   *
+   * @param {{ reporter?: string, machine?: string }} of
+   */
+  #retireMachinesGone({ reporter, machine } = {}) {
+    const boxes = reporter ? [this.registry.get(reporter)] : this.registry.reachable();
+    for (const h of this.hostIds?.serialise?.() ?? []) {
+      if (!h?.ephemeral || h.revokedAt || !String(h.enrolledBy || '').startsWith('vm:')) continue;
+      if (machine && h.hostId !== machine) continue;
+      if (this.registry.get(h.hostId)?.connected) continue;
+      const address = this.vmSeenOn.get(h.hostId);
+      if (!address) continue;
+      const owner = String(h.owner || '').toLowerCase();
+      for (const box of boxes) {
+        if (!box || box.ephemeral) continue;
+        const looks = xoFor(box, owner).filter((/** @type {any} */ e) => e?.address === address && e.reachable === true && Array.isArray(e.pools) && e.pools.length > 0 && Array.isArray(e.machines));
+        if (!looks.length || looks.some((/** @type {any} */ e) => e.machines.some((/** @type {any} */ m) => m?.name === h.hostId))) continue;
+        this.vmSeenOn.delete(h.hostId);
+        this.ephemeralHostRetired(h.hostId, `its pool no longer has it, by ${box.hostId}’s look`);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Where each machine from a pool is, as a box just reported it: the pool
+   * address each is listed on, for #retireMachinesGone. A machine's own
+   * report lists none; a box's lists the pools it holds. Taken only as the
+   * retirement takes it: of a machine this fleet enrolled, from a box that
+   * may act for its owner, under an entry that is the owner's, so a box
+   * that may not speak for a person cannot move their machine to a pool of
+   * its own choosing. Bounded, oldest first out, and a name goes when its
+   * machine is retired.
+   *
+   * @param {string} hostId @param {any} health
+   */
+  #noteMachinesSeen(hostId, health) {
+    const box = this.registry.get(hostId);
+    if (!box || box.ephemeral || !Array.isArray(health?.xo)) return;
+    for (const e of health.xo) {
+      if (typeof e?.address !== 'string' || !Array.isArray(e.machines)) continue;
+      const entryOwner = String(e.owner || '').toLowerCase();
+      for (const m of e.machines) {
+        const name = String(m?.name || '');
+        if (!/^vm-[0-9a-f]{12}$/.test(name)) continue;
+        const owner = String(this.hostIds?.get(name)?.owner || '').toLowerCase();
+        if (!owner || owner !== entryOwner || !mayActFor(box, owner)) continue;
+        this.vmSeenOn.delete(name);
+        this.vmSeenOn.set(name, e.address);
+      }
+    }
+    while (this.vmSeenOn.size > MAX_VM_SEEN_ON) this.vmSeenOn.delete(/** @type {string} */ (this.vmSeenOn.keys().next().value));
   }
 
   /**
@@ -902,6 +986,12 @@ export class CoordinatorCore {
       // it with the fleet's own token; the fleet says so once, and the phone
       // offers the reconnect (#onPoolsSeen).
       if (Array.isArray(msg.health?.xo)) await this.#onPoolsSeen(hostId);
+      // AND A MACHINE THE POOL NO LONGER HAS, retired by this look rather
+      // than ten minutes after its socket dropped (#retireMachinesGone).
+      if (Array.isArray(msg.health?.xo)) {
+        this.#noteMachinesSeen(hostId, msg.health);
+        this.#retireMachinesGone({ reporter: hostId });
+      }
       // A RUNNER THAT WAS ASKED FOR WITH A SESSION gets it now. Only once the
       // hub answers: a frame from a box whose hub is still starting would place
       // the start and have it refused.

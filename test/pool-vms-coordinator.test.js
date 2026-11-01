@@ -231,6 +231,79 @@ test('the machine enrols with its ticket once, as its owner’s temporary host, 
   assert.ok(!core.runnerStarts.has(r.vm));
 });
 
+// vm-72ee54698806, 1 November 2026: the box holding the pool removed it at
+// its end at 18:18, which cut its socket, and it sat under Machines as "not
+// reporting" until retireStranded's ten minutes were up. "Why is this staying
+// in hosts? It should be gone as soon as its time expires."
+test('a machine its pool no longer has is retired by the box’s next look, not ten minutes after its socket dropped', async () => {
+  const { admit } = await import('./helpers/enrolled-hosts.js');
+  const { core, asked } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } });
+  await admit(core, 'sam-box', { enrolledBy: SAM });
+  const health = (/** @type {any[]} */ xo) => ({ kind: 'health', health: { hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [], xo } });
+  const look = (/** @type {Record<string, any>} */ over = {}) => [{ ...holding(ELI)[0], machines: [], ...over }];
+  const retired = () => core.events.filter((e) => e.event === 'host.retired').map((e) => [e.hostId, e.text]);
+
+  const r = await core.dispatch(ask(eli));
+  const vm = r.vm;
+  const key = await generateKeyPair();
+  assert.equal((await core.enrolVm({ ticket: asked[0].spec.params.ticket, publicJwk: key.publicJwk })).status, 200);
+  core.registry.connect(vm, () => {}, { ephemeral: true, owner: ELI, actsFor: ELI });
+  await core.onHostMessage('deb14', health(look({ machines: [{ name: vm, state: 'Running', until: Date.now() + 3_600_000 }] })));
+
+  // STILL CONNECTED, and a look without it: Xen Orchestra behind, or ahead
+  // of the socket. Not gone.
+  await core.onHostMessage('deb14', health(look()));
+  assert.deepEqual(retired(), []);
+  // A BOX THAT MAY NOT SPEAK FOR ELI listing the machine on a pool of its
+  // own naming moves it nowhere: the look that counts is still of xo.lan.
+  await core.onHostMessage('sam-box', health(look({ address: 'bob.lan', machines: [{ name: vm, state: 'Running' }] })));
+  assert.equal(core.vmSeenOn.get(vm), 'xo.lan');
+  // Listed again, then its socket drops as the sweep stops it: a drop, as
+  // a runner's is, with the key kept.
+  await core.onHostMessage('deb14', health(look({ machines: [{ name: vm, state: 'Running' }] })));
+  core.hostDisconnected(vm, 'socket closed: 1006');
+  assert.equal(core.events.filter((e) => e.event === 'host.dropped').length, 1);
+  assert.deepEqual(retired(), []);
+  assert.ok(!core.hostIds.get(vm).revokedAt);
+
+  // LOOKS THAT DO NOT SAY IT IS GONE: the pool out of reach; Xen Orchestra
+  // answering with none of its pools, which lists no machines either; a
+  // box that may not speak for the owner; another pool of the owner's.
+  await core.onHostMessage('deb14', health(look({ reachable: false, problem: 'xo.lan did not answer' })));
+  await core.onHostMessage('deb14', health(look({ pools: [] })));
+  await core.onHostMessage('sam-box', health(look()));
+  await core.onHostMessage('deb14', health(look({ address: 'other.lan' })));
+  assert.deepEqual(retired(), []);
+
+  // THE POOL, REACHED, SHOWING ITS POOLS AND NOT THE MACHINE: gone.
+  await core.onHostMessage('deb14', health(look()));
+  assert.deepEqual(retired(), [[vm, 'temporary host went away (its pool no longer has it, by deb14’s look)']]);
+  assert.ok(core.hostIds.get(vm).revokedAt, 'its key went with it');
+  assert.ok(!core.registry.list().some((h) => h.hostId === vm), 'and its row');
+  assert.equal(core.registry.recentlyDropped(vm), null, 'and the memory of its drop');
+
+  // THE OTHER ORDER: the look that lacks it lands before the socket drops.
+  // Retired as the socket goes, from that look.
+  const r2 = await core.dispatch(ask(eli));
+  assert.equal((await core.enrolVm({ ticket: asked.at(-1).spec.params.ticket, publicJwk: (await generateKeyPair()).publicJwk })).status, 200);
+  core.registry.connect(r2.vm, () => {}, { ephemeral: true, owner: ELI, actsFor: ELI });
+  await core.onHostMessage('deb14', health(look({ machines: [{ name: r2.vm, state: 'Running' }] })));
+  await core.onHostMessage('deb14', health(look()));
+  assert.equal(retired().length, 1, 'connected: not gone');
+  core.hostDisconnected(r2.vm, 'socket closed: 1006');
+  assert.deepEqual(retired().at(-1), [r2.vm, 'temporary host went away (its pool no longer has it, by deb14’s look)']);
+
+  // ONE NO BOX HAS LISTED since this coordinator came up is not retired by
+  // a look that lacks it: it waits for retireStranded, as before.
+  const r3 = await core.dispatch(ask(eli));
+  assert.equal((await core.enrolVm({ ticket: asked.at(-1).spec.params.ticket, publicJwk: (await generateKeyPair()).publicJwk })).status, 200);
+  core.registry.connect(r3.vm, () => {}, { ephemeral: true, owner: ELI, actsFor: ELI });
+  core.hostDisconnected(r3.vm, 'socket closed: 1006');
+  await core.onHostMessage('deb14', health(look()));
+  assert.equal(retired().length, 2);
+  assert.ok(!core.hostIds.get(r3.vm).revokedAt);
+});
+
 test('a machine’s ticket lives minutes, and spent twice it is refused, said to the owner and the admins, and the host it let in is taken out (G14)', async () => {
   // The ticket travels on the machine's cloud-init drive, which every box
   // holding the pool's token may export through Xen Orchestra. Whoever read it
