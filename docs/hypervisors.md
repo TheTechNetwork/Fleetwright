@@ -72,9 +72,13 @@ What happens, from the phone to a session on a VM:
    services, which the image left off. The sidecar enrols itself once at
    `/api/enroll/vm` with the ticket, under the name the coordinator derives
    from it (`vm-<ticket id>`). Then it asks for your Claude login over the
-   connection its key opened, and the box that made it hands it over, sealed
-   to the machine (`vmlogin`, `docs/intents.md`): only for a machine that box
-   made for you, by the VM's id, still running, and once. The hub keeps it as
+   connection its key opened, and a box holding your login hands it over,
+   sealed to the machine (`vmlogin`, `docs/intents.md`): the box that made it,
+   by the VM's id, or, when that one holds no login of yours (your pool's own
+   machine is let in for the pool's item alone, and it is asked first to make
+   machines), another of your boxes, which finds the machine on your pool
+   under its name, tagged as made for you, in the fleet's set and running;
+   still running either way, and once from each box. The hub keeps it as
    a runner's, and the file is deleted. It is then a temporary host in every
    way: yours, placed only by name, retired with its key on disconnect.
 7. **The session starts on it**, from the first health frame that says it

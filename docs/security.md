@@ -1811,10 +1811,13 @@ and left in the host the first presentation enrolled. **Changed:** the drive
 carries no Claude login. The machine asks for it once enrolled, with the
 `claude-login` frame a runner sends and no job token; the coordinator asks the
 boxes holding the owner's pools with `vmlogin`, a verb only it sends
-(`#vmClaude`), and the box that made the machine seals the login it holds
-from the vault to the machine's one-request key, only for a VM it noted making
-(by the id `vm.create` answered), still under that name, running, for that
-person, and once (`XoPools#handLogin`); the coordinator relays ciphertext.
+(`#vmClaude`), and a box holding the person's login seals it to the machine's
+one-request key: the box that made the machine, for a VM it noted making (by
+the id `vm.create` answered), or, when the maker holds no login of theirs (a
+pool's own machine is let in for the pool's item alone), another of their
+boxes, for a VM it finds on their pool under that name, tagged as made for
+them and in the fleet's set; running either way, and once from each box
+(`XoPools#handLogin`); the coordinator relays ciphertext.
 Not the minter: it hands a login out on GitHub's word about a job, and a
 hand-out on the coordinator's word alone would widen what a compromised one
 reaches. A machine's ticket lives fifteen minutes (`VM_TICKET_TTL_MS`, as long
