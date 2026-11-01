@@ -29,6 +29,17 @@
 // the status flags and the last forty lines it keeps, owner only. Firewall
 // log lines are not sent here at all: what a session's machine tried to reach
 // is not this report's to carry.
+//
+// WHICH BOX READS THEM: one whose own look at the pool's Xen Orchestra reached
+// it (xo-pools.js, `seen`), and no other. Asked for: "a host that can't reach
+// it should never try", after a cloud runner holding the pool's token read
+// both routers every half minute, reached neither, and was the report the
+// phone showed. The routers answer on the way out, the network Xen Orchestra
+// is on and the pool's own machine is made on, so a box that cannot reach Xen
+// Orchestra is not there and does not try: it says so instead, as cannot
+// tell, which the coordinator ranks under any box that saw them. A box that
+// was there once keeps reading through a Xen Orchestra outage, which is a
+// moment the routers are wanted most.
 
 import dgram from 'node:dgram';
 import http from 'node:http';
@@ -114,7 +125,8 @@ export function statusOf({ vip, unbound, gateways, leases }) {
 export class EdgeWatch {
   /**
    * @param {{
-   *   pools: { held: Map<string, { owner: string, record: any }>, edgeAddresses?: (key: string) => Promise<Map<string, string>|null> },
+   *   pools: { held: Map<string, { owner: string, record: any }>, seen?: Map<string, { reachable: boolean|null }>, edgeAddresses?: (key: string) => Promise<Map<string, string>|null> },
+   *   reaches?: ((key: string) => boolean|null)|null,
    *   connect?: typeof connectPinnedTls,
    *   createSocket?: () => dgram.Socket,
    *   port?: number,
@@ -125,8 +137,19 @@ export class EdgeWatch {
    *   onChange?: () => void,
    * }} opts
    */
-  constructor({ pools, connect = connectPinnedTls, createSocket = () => dgram.createSocket('udp4'), port = EDGE_WATCH.syslogPort, apiPort = 443, pollMs = 30_000, now = () => Date.now(), log, onChange = () => {} }) {
+  constructor({ pools, reaches = null, connect = connectPinnedTls, createSocket = () => dgram.createSocket('udp4'), port = EDGE_WATCH.syslogPort, apiPort = 443, pollMs = 30_000, now = () => Date.now(), log, onChange = () => {} }) {
     this.pools = pools;
+    /**
+     * Whether this box's own last look at a pool's Xen Orchestra reached it:
+     * true, false, or null before it has looked. XoPools keeps that per pool
+     * in `seen`; a test hands its own.
+     * @type {(key: string) => boolean|null}
+     */
+    this.reaches = reaches ?? ((k) => this.pools?.seen?.get?.(k)?.reachable ?? null);
+    /** @type {Set<string>} the pools this box has reached Xen Orchestra for since it started */
+    this.there = new Set();
+    /** @type {Map<string, boolean>} what the journal was last told per pool: reading from here, or not */
+    this.said = new Map();
     this.apiPort = apiPort;
     this.connect = connect;
     this.createSocket = createSocket;
@@ -249,11 +272,12 @@ export class EdgeWatch {
       for (const k of [...this.seen.keys()]) if (!watched.some(([w]) => w === k)) this.seen.delete(k);
       for (const k of [...this.fromXo.keys()]) if (!watched.some(([w]) => w === k)) this.fromXo.delete(k);
       for (const [k, { record }] of watched) {
-        await this.#reread(k);
+        const can = this.#canTry(k, record);
+        if (can === true) await this.#reread(k);
         const names = [...new Set([...(record.edge.routers || []).map((/** @type {any} */ r) => r?.name), ...(this.learned.get(k)?.keys() ?? []), ...(this.fromXo.get(k)?.routers?.keys() ?? [])])].filter((n) => NAMES.includes(n));
         /** @type {RouterState[]} */
         const routers = [];
-        for (const name of names.sort()) routers.push(await this.#read(k, record, name));
+        for (const name of names.sort()) routers.push(await this.#read(k, record, name, can));
         const entry = this.seen.get(k) ?? { at: 0, routers: [], events: [] };
         entry.at = this.now();
         entry.routers = routers;
@@ -263,6 +287,32 @@ export class EdgeWatch {
     } finally {
       this.polling = false;
     }
+  }
+
+  /**
+   * Whether this box tries a pool's routers at all: true once its own look at
+   * the pool's Xen Orchestra has reached it, and from then on for as long as
+   * the box runs; false while the last look failed and none has succeeded;
+   * null before it has looked. The journal is told at each change.
+   *
+   * @param {string} k @param {any} record
+   * @returns {boolean|null}
+   */
+  #canTry(k, record) {
+    let can = null;
+    try {
+      can = this.reaches(k);
+    } catch {
+      can = null;
+    }
+    if (can === true) this.there.add(k);
+    const now = this.there.has(k) ? true : can === false ? false : null;
+    if (now !== null && this.said.get(k) !== now) {
+      this.said.set(k, now);
+      const where = String(record?.address || k);
+      this.log.info(now ? `sidecar: reading the edge routers of ${where} from here: this box reaches its Xen Orchestra` : `sidecar: not reading the edge routers of ${where} from here: this box cannot reach its Xen Orchestra, and they answer on that network`);
+    }
+    return now;
   }
 
   /**
@@ -288,11 +338,20 @@ export class EdgeWatch {
     this.fromXo.set(k, { at: this.now(), routers: routers ?? last?.routers ?? null });
   }
 
-  /** @param {string} k @param {any} record @param {string} name @returns {Promise<RouterState>} */
-  async #read(k, record, name) {
+  /** @param {string} k @param {any} record @param {string} name @param {boolean|null} can @returns {Promise<RouterState>} */
+  async #read(k, record, name, can = true) {
     const address = this.#addressOf(k, record, name);
     const heardAt = this.heard.get(`${k} ${name}`) ?? null;
     const base = { name, address, heardAt };
+    if (can !== true) {
+      // NOT FROM HERE. Nothing is opened to the router, and the phone is told
+      // it was not tried, not that it did not answer (C-5).
+      const problem =
+        can === false
+          ? 'This machine did not try: it cannot reach the pool’s Xen Orchestra, and the routers answer on that network.'
+          : 'This machine has not tried yet: it has not reached the pool’s Xen Orchestra, and the routers answer on that network.';
+      return { ...base, reached: null, role: null, dns: null, gateway: null, leases: null, problem };
+    }
     if (!address) {
       // XEN ORCHESTRA SAID IT HAS NONE, or could not be asked: two different
       // things, said as such (C-5).

@@ -60,11 +60,16 @@ function fakeSocket() {
 }
 
 /**
- * A box holding Eli's pool with the key to its routers.
+ * A box holding Eli's pool with the key to its routers, whose look at the
+ * pool's Xen Orchestra reached it (`seen`, as XoPools keeps it).
  * @param {ReturnType<typeof newWatch>} w @param {Array<{ name: string, address: string|null }>} routers
  */
 function holding(w, routers, key = w.key) {
-  return { held: new Map([[`${ELI} xo.lan`, { owner: ELI, record: { address: 'xo.lan', edge: { key, secret: w.secret, pin: w.pin, routers } } }]]) };
+  const k = `${ELI} xo.lan`;
+  return {
+    held: new Map([[k, { owner: ELI, record: { address: 'xo.lan', edge: { key, secret: w.secret, pin: w.pin, routers } } }]]),
+    seen: new Map([[k, { reachable: true }]]),
+  };
 }
 
 test('a router is read over TLS held to its certificate, with the key, into the flags the phone shows', async (t) => {
@@ -102,6 +107,57 @@ test('the key goes to nothing but the router’s own certificate, and a refused 
   const stale = new EdgeWatch({ pools: holding(w, [{ name: 'fleetwright-edge', address: '127.0.0.1' }], newWatch().key), apiPort: real.port, createSocket: fakeSocket });
   await stale.poll();
   assert.match(/** @type {any} */ (stale.reportFor(ELI, 'xo.lan')).routers[0].problem, /refused this machine’s key \(401\)[\s\S]*apply the policy again/);
+});
+
+test('a box that cannot reach the pool’s Xen Orchestra never tries its routers, and says it did not try rather than that they are down', async (t) => {
+  // A cloud runner holding the pool's token, off the pool's network: it read
+  // both routers every half minute, reached neither, and was the report shown.
+  const w = newWatch();
+  const { port, seen } = await router(t, w);
+  /** @type {boolean|null} */
+  let reachable = null;
+  let asked = 0;
+  const pools = { ...holding(w, [{ name: 'fleetwright-edge', address: '127.0.0.1' }]), async edgeAddresses() { asked++; return new Map(); } };
+  const said = /** @type {string[]} */ ([]);
+  const watch = new EdgeWatch({ pools, apiPort: port, createSocket: fakeSocket, reaches: () => reachable, log: { info: (m) => said.push(m), warn: (m) => said.push(m) } });
+
+  await watch.poll();
+  let r = /** @type {any} */ (watch.reportFor(ELI, 'xo.lan')).routers[0];
+  assert.equal(r.reached, null, 'cannot tell, not down');
+  assert.match(r.problem, /has not tried yet: it has not reached the pool’s Xen Orchestra/);
+  assert.deepEqual(seen, [], 'nothing was opened to the router before this box had reached Xen Orchestra');
+  assert.equal(asked, 0, 'nor was Xen Orchestra asked where the routers are');
+
+  reachable = false;
+  await watch.poll();
+  r = /** @type {any} */ (watch.reportFor(ELI, 'xo.lan')).routers[0];
+  assert.equal(r.reached, null);
+  assert.match(r.problem, /did not try: it cannot reach the pool’s Xen Orchestra, and the routers answer on that network/);
+  assert.deepEqual(seen, []);
+  assert.equal(said.filter((m) => /not reading the edge routers of xo.lan from here/.test(m)).length, 1, 'the journal is told once, not every half minute');
+
+  reachable = true;
+  await watch.poll();
+  r = /** @type {any} */ (watch.reportFor(ELI, 'xo.lan')).routers[0];
+  assert.equal(r.reached, true, 'read once this box reaches Xen Orchestra');
+  assert.ok(seen.length > 0);
+  assert.equal(asked, 1);
+  assert.equal(said.filter((m) => /reading the edge routers of xo.lan from here: this box reaches/.test(m)).length, 1);
+
+  // A PASSING XEN ORCHESTRA OUTAGE DOES NOT BLIND A BOX THAT WAS THERE: that
+  // is a moment the routers are wanted most.
+  reachable = false;
+  const before = seen.length;
+  await watch.poll();
+  assert.equal(/** @type {any} */ (watch.reportFor(ELI, 'xo.lan')).routers[0].reached, true);
+  assert.ok(seen.length > before);
+
+  // THE DEFAULT READS WHAT XoPools KEEPS: a pool whose last look failed is not tried.
+  const off = new EdgeWatch({ pools: { ...holding(w, [{ name: 'fleetwright-edge', address: '127.0.0.1' }]), seen: new Map([[`${ELI} xo.lan`, { reachable: false }]]) }, apiPort: port, createSocket: fakeSocket });
+  const was = seen.length;
+  await off.poll();
+  assert.equal(seen.length, was, 'nothing opened');
+  assert.match(/** @type {any} */ (off.reportFor(ELI, 'xo.lan')).routers[0].problem, /did not try/);
 });
 
 test('what OPNsense says it cannot tell stays cannot tell', () => {
