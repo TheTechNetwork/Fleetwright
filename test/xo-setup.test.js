@@ -605,7 +605,7 @@ test('the machine image is built after the policy, on the way out’s pool, behi
   const xo = await standIn(t, {
     sets: [chosenBefore()],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate'],
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured'], power_state: 'Running' } },
   });
   /** @type {any[]} */
   const asked = [];
@@ -674,7 +674,7 @@ test('the machine image is built after the policy, on the way out’s pool, behi
 
 test('the pool’s own machine is made last, from its image, with a pin asked for this job, and the person told to approve it', { skip }, async (t) => {
   // ASKED FOR: "dedicated hypervisor VM on the pool". src/fleet/host/xo-holder.js.
-  const vms = /** @type {Record<string, any>} */ ({ edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } });
+  const vms = /** @type {Record<string, any>} */ ({ edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured'], power_state: 'Running' } });
   const xo = await standIn(t, {
     sets: [{ ...chosenBefore(), objects: [...chosenBefore().objects, 'tpl'] }],
     more: ['network.create', 'resourceSet.addObject', 'vm.create', 'vm.start'],
@@ -731,7 +731,7 @@ test('a Xen Orchestra without disk.resize builds the image through vdi.set, and 
     const xo = await standIn(t, {
       sets: [chosenBefore()],
       more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', ...grow],
-      vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
+      vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured'], power_state: 'Running' } },
     });
     /** @type {any[]} */
     const asked = [];
@@ -763,7 +763,7 @@ test('an image that is there is rebuilt or removed when the person asks, removed
   const xo = await standIn(t, {
     sets: [{ ...chosenBefore(), objects: [...chosenBefore().objects, 'deb', 'u24'] }],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'vm.delete'],
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured'], power_state: 'Running' } },
     templates: {
       deb: { id: 'deb', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] },
       u24: { id: 'u24', type: 'VM-template', name_label: 'Fleetwright Ubuntu 24.04 LTS', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:ubuntu-24.04', 'fleetwright-channel:rolling'] },
@@ -804,7 +804,7 @@ test('an Apply that stops partway says what it had done by then, and one that st
   // says what it did (ctx.built): the failure now carries those sentences.
   // Two images stand in for router-then-image here, since the stand-in has
   // nothing an edge router is built from; it is one list whatever is on it.
-  const edge = { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' };
+  const edge = { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured'], power_state: 'Running' };
   const more = ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate'];
   const limits = { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 };
   const actor = 'eli@example.com';
@@ -917,7 +917,7 @@ test('a cancel during the uplink, or between two images, ends the job cancelled 
   // aborted nothing, the next build ran in full on a fresh signal, and the
   // job ended `done`. One signal per job now, looked at between each thing.
   const actor = 'eli@example.com';
-  const edge = { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' };
+  const edge = { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured'], power_state: 'Running' };
   const more = ['network.create', 'resourceSet.addObject', 'disk.import', 'disk.resize', 'vm.create', 'vm.attachDisk', 'vm.createCloudInitConfigDrive', 'vdi.delete', 'vm.start', 'vm.set', 'vm.convertToTemplate', 'vif.set'];
   const limits = { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 };
   await t.test('during the uplink, with an image asked for behind the edge already there', async () => {
@@ -1077,8 +1077,8 @@ test('a pair of edge routers is one edge to the phone, said to be a pair', { ski
   const xo = await standIn(t, {
     sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab'] }],
     vms: {
-      a: { id: 'a', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-node:0'], power_state: 'Running' },
-      b: { id: 'b', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-node:1'], power_state: 'Running' },
+      a: { id: 'a', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured', 'fleetwright-edge-node:0'], power_state: 'Running' },
+      b: { id: 'b', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured', 'fleetwright-edge-node:1'], power_state: 'Running' },
     },
   });
   const { setups } = await machine({ coordinatorUrl: 'https://fleet.test' });
@@ -1102,7 +1102,7 @@ test('labs are made by the policy job, each its kind, kept in the set, and the e
     sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab', 'net-l1'] }],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start'],
     nets: { 'net-l1': 'fleetwright-lab-1', 'net-l2': 'fleetwright-lab-2' },
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-watch', 'fleetwright-edge-labs:oc'], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_KEPT.watchPin]: WATCH.pin }) } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured', 'fleetwright-edge-watch', 'fleetwright-edge-labs:oc'], power_state: 'Running', xenStoreData: xenStoreAsXo({ [EDGE_KEPT.watchPin]: WATCH.pin }) } },
     vifs: {
       w: { id: 'w', type: 'VIF', $VM: 'edge', device: '0', $network: 'net-dmz' },
       a: { id: 'a', type: 'VIF', $VM: 'edge', device: '2', $network: 'net-l1' },
@@ -1151,7 +1151,7 @@ test('a router that carries its key in the clear has it taken off by the next po
   // build kept the routers' key and the pair's password. An upgrade must
   // close that without anybody doing anything but change a policy.
   // The VMs xo.getAllObjects answers with, as vm.set leaves them.
-  const vms = { edge: { id: 'edge', type: 'VM', $pool: 'p1', name_label: 'fleetwright-edge', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-watch'], power_state: 'Running', xenStoreData: xenStoreAsXo({ 'fleetwright-watch': JSON.stringify(WATCH) }) } };
+  const vms = { edge: { id: 'edge', type: 'VM', $pool: 'p1', name_label: 'fleetwright-edge', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured', 'fleetwright-edge-watch'], power_state: 'Running', xenStoreData: xenStoreAsXo({ 'fleetwright-watch': JSON.stringify(WATCH) }) } };
   const xo = await standIn(t, {
     sets: [{ ...chosenBefore(), objects: ['sr2', 'net-lab'] }],
     more: ['network.create', 'resourceSet.addObject', 'disk.import', 'vm.create', 'vm.attachDisk', 'vif.set', 'vm.start'],
@@ -1273,7 +1273,7 @@ test('through a phone, a policy makes the pool its own machine, and gigabyte bui
   const xo = await standIn(t, {
     sets: [{ ...chosenBefore(), objects: [...chosenBefore().objects, 'tpl'] }],
     more: ['network.create', 'resourceSet.addObject', 'vm.create', 'vm.start', 'disk.import', 'vm.attachDisk', 'vif.set'],
-    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates'], power_state: 'Running' } },
+    vms: { edge: { id: 'edge', type: 'VM', $pool: 'p1', tags: ['fleetwright-edge', 'fleetwright-edge-updates', 'fleetwright-edge-measured'], power_state: 'Running' } },
     templates: { tpl: { id: 'tpl', type: 'VM-template', name_label: 'Fleetwright Debian 13', $pool: 'p1', tags: ['fleetwright-image', 'fleetwright-image:debian-13'] } },
   });
   const relay = wire(xo.address);

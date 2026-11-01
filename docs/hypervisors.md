@@ -982,9 +982,31 @@ for each router:
 - its CARP role on the uplink's shared address (master, backup, starting, or
   none for one router alone);
 - whether Unbound is running;
-- whether its way out is up (a gateway dpinger has no data on reads "Online"
-  in OPNsense's own API; here it is cannot tell);
-- how many DHCP leases it holds.
+- whether its way out is up, and at what latency and loss (a gateway dpinger
+  has no data on reads "Online" in OPNsense's own API; here it is cannot
+  tell);
+- how many DHCP leases it holds;
+- how many names Unbound answered and how many the threat lists refused since
+  it started counting, and the five it refused most
+  (`unbound/diagnostics/stats`, which the key's `page-services-unbound`
+  covers; a router that is not counting answers `failed`, which is cannot
+  tell, not zero).
+
+**Built measured.** The first router read by this was fine and said almost
+nothing: "cannot tell whether its way out is up", "0 DHCP leases", "no log
+lines", twenty minutes after a rebuild. Each traced to its configuration.
+OPNsense 26.7 makes a DHCP WAN's gateway itself with monitoring off
+(`Gateways.php`: "disable monitoring by default"), so dpinger never ran and
+the way out was cannot tell for good; Unbound's statistics were off, so there
+was nothing to count; and of the five programs syslog forwards, dpinger was
+not running and Suricata's own syslog switch was off, so blocked traffic never
+reached syslog, while dnsmasq had no leases and the kernel and Unbound speak
+only at boot or on trouble. So every edge is now built measured
+(`edge-router.js`, MEASURED): a gateway item for the WAN with monitoring on,
+Unbound's `stats`, Suricata's `syslog`. It is tagged `fleetwright-edge-measured`,
+and an edge without the tag is rebuilt once on the next Apply, like one from
+before it updated itself. The box also reports whether it holds the syslog
+port (`listening`), so "no log lines" can be told from "could not listen".
 
 It listens for their syslog as it arrives and keeps forty lines a pool, DHCP's
 chatter held to twelve of them. A line's source address is where that router
@@ -1029,7 +1051,8 @@ attention tone. A pool nothing reads says so ("No machine reads this pool's
 edge routers yet"), never as fine.
 
 **What it needs:** a release with this in it on the boxes holding the pool,
-then one policy apply from the phone. That apply rebuilds the routers once.
+then one policy apply from the phone. That apply rebuilds the routers once,
+and once more for a router built before it was measured ("Built measured").
 Syslog reaches only the pool's own machine and the machine that ran the job;
 another box holding the pool on that network reads the API and sees no log
 lines, and one that cannot reach the pool's Xen Orchestra reads nothing and
@@ -1217,7 +1240,10 @@ so nothing in the fleet can switch them off.
   rule files: malware traffic, known botnet controllers, known-compromised
   hosts and Cobalt Strike servers. By default it **detects and logs**, by
   each machine's own address on the uplink, and drops nothing. **It can
-  drop instead**, chosen on the policy screen (below).
+  drop instead**, chosen on the policy screen (below). Its alerts and drops
+  go to syslog as well as its own log (`syslog` in the IDS settings, off in
+  OPNsense's default), which is how they reach the boxes that watch the
+  routers.
 - **Kept fresh.** OPNsense fetches neither the lists nor the rules at boot,
   only when a person applies a change in its web interface, which nobody
   does here, or from cron. The edge keeps `/var` in memory, so both are gone
@@ -1264,6 +1290,42 @@ would see the packet.
   next policy knows which kind it has.
 - **A phone that predates the switch sends nothing**, and its edge is left as
   it is, whichever kind it is.
+
+**What dropping can and cannot hit**, checked on 1 November 2026 against the
+four files as published and OPNsense 26.7's own IDS template, before the
+switch was turned on for a real pool. The question was whether dropping
+could take everything down, or something a session cannot work without.
+
+- **Everything: only when Suricata is not running.** The divert rule hands
+  packets to a socket, and a socket nobody reads passes nothing, so an edge
+  that drops and whose Suricata has stopped lets nothing out ("It fails
+  closed" above). Suricata reloads its rules in place every half hour without
+  stopping; it stops for the daily firmware update, which already takes the
+  way out down for its restart, and for nothing else by design. Names
+  (port 53 to the edge) and DHCP are decided before the divert rule and are
+  not diverted, so a machine behind a stopped Suricata still resolves and
+  still gets a lease; it cannot leave.
+- **Required traffic.** Three of the four files are address lists: 5
+  botnet-controller addresses, 540 compromised hosts, and threatview's
+  Cobalt Strike list (empty on the day). None of those addresses was in
+  Cloudflare's published ranges, which is where the coordinator and claude.ai
+  answer, and none was an address `api.anthropic.com`, `claude.ai`,
+  `claude.com`, `platform.claude.com`, `fleet.thetech.network`,
+  `github.com`, `deb.debian.org`, `pypi.org` or `registry.npmjs.org`
+  resolved to. The lists change twice an hour, so this is a snapshot, not a
+  guarantee: a shared address that lands on one would drop every name on it.
+- **The malware file**, 19,378 enabled rules: 6,824 match DNS questions,
+  which never reach Suricata here because a machine's questions go to the
+  edge's own Unbound and are not diverted; 4,578 match a TLS server name,
+  593 an HTTP host, 3,660 an HTTP path, each naming a specific malicious
+  host or family. 255 mention a tool's user agent (curl, Wget, Python, Go),
+  every one tied to a named family's path or host, not the tool alone. 84
+  set a flowbit without alerting and would drop as well; each is a named
+  family's handshake.
+- **Not run:** a packet dropped on a real pool, and a session doing ordinary
+  work behind a dropping edge for a day. Suricata's drops now reach syslog,
+  so the pool's page will show what it dropped, by the machine's address;
+  that is where a false drop would be seen first.
 
 **Booted in QEMU** with the blocking configuration: Suricata ran with
 `-d 8000` on the divert socket, `pfctl -sr` showed the rule that lets machines

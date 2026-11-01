@@ -11,8 +11,11 @@
 //   THE API, every half minute, over TLS held to the certificate the policy
 //   job made (edge-credentials.js), with the key the person's vault handed
 //   this box beside the pool's token: each router's CARP role on the uplink,
-//   whether Unbound runs, whether its way out is up, and how many leases it
-//   holds. That is how the routers are NOW.
+//   whether Unbound runs and how many names it answered and refused (and
+//   which it refused most), whether its way out is up and at what latency
+//   and loss, and how many leases it holds. That is how the routers are NOW.
+//   The numbers need a router built measured (edge-router.js, MEASURED); an
+//   older one answers the flags and cannot tell the rest.
 //
 //   SYSLOG, as it happens: CARP's changes of master, Unbound's and dnsmasq's
 //   complaints, the gateway monitor, Suricata starting. That is what happened
@@ -95,13 +98,19 @@ export function kindOf(program, text) {
   return 'system';
 }
 
+/** Every measure a router was not read for: cannot tell, each. */
+export const UNREAD = Object.freeze({ role: null, dns: null, gateway: null, leases: null, delay: null, loss: null, answered: null, blocked: null, since: null, topBlocked: null });
+
+/** How many of the names the lists refused most are named. */
+export const TOP_BLOCKED = 5;
+
 /**
- * What the four status calls said, reduced to the report's flags. Each is
- * null when its answer was missing or unreadable.
+ * What the five status calls said, reduced to the report's flags and
+ * numbers. Each is null when its answer was missing or unreadable.
  *
- * @param {{ vip?: any, unbound?: any, gateways?: any, leases?: any }} said
+ * @param {{ vip?: any, unbound?: any, gateways?: any, leases?: any, stats?: any }} said
  */
-export function statusOf({ vip, unbound, gateways, leases }) {
+export function statusOf({ vip, unbound, gateways, leases, stats }) {
   // CARP: the uplink's shared address, 10.254.0.1. One router alone has none.
   const row = Array.isArray(vip?.rows) ? vip.rows.find((/** @type {any} */ r) => r?.subnet === '10.254.0.1') : null;
   const s = String(row?.status || '').toLowerCase();
@@ -115,11 +124,37 @@ export function statusOf({ vip, unbound, gateways, leases }) {
   const st = String(gw?.status || '');
   const gateway = !gw || gw.monitor === '~' ? null : st === 'down' || st === 'force_down' ? false : ['none', 'delay', 'loss', 'delay+loss'].includes(st) ? true : null;
   const count = Array.isArray(leases?.rows) ? leases.rows.length : Number.isInteger(leases?.total) ? leases.total : null;
-  return { role, dns, gateway, leases: count };
+  // HOW THE WAY OUT IS, in dpinger's numbers ("0.4 ms", "0.0 %"), once it is
+  // monitored (edge-router.js, MEASURED); `~` is no measurement.
+  const num = (/** @type {unknown} */ v) => {
+    const n = parseFloat(String(v ?? ''));
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+  const measured = gw && gw.monitor !== '~';
+  const delay = measured ? num(gw.delay) : null;
+  const loss = measured ? num(gw.loss) : null;
+  // NAMES, by Unbound's own count (unbound/diagnostics/stats, from its query
+  // database): what it answered, what the threat lists refused, and the
+  // names refused most, since the first question it kept (start_time,
+  // seconds). `failed` is a router not counting: an older build, or its
+  // database not there yet; cannot tell, not zero.
+  const d = stats?.status === 'ok' && stats.data && typeof stats.data === 'object' ? stats.data : null;
+  const int = (/** @type {unknown} */ v) => (Number.isInteger(v) && /** @type {number} */ (v) >= 0 ? /** @type {number} */ (v) : null);
+  const answered = d ? int(d.total) : null;
+  const blocked = d ? int(d.blocked?.total) : null;
+  const since = d && Number.isFinite(Number(d.start_time)) && Number(d.start_time) > 0 ? Math.round(Number(d.start_time) * 1000) : null;
+  const topBlocked =
+    d && d.top_blocked && typeof d.top_blocked === 'object'
+      ? Object.entries(d.top_blocked)
+          .map(([name, v]) => ({ name: String(name).slice(0, 253), count: int(/** @type {any} */ (v)?.total) ?? 0 }))
+          .sort((a, b) => b.count - a.count)
+          .slice(0, TOP_BLOCKED)
+      : null;
+  return { role, dns, gateway, leases: count, delay, loss, answered, blocked, since, topBlocked };
 }
 
 /**
- * @typedef {{ name: string, address: string|null, reached: boolean|null, role: string|null, dns: boolean|null, gateway: boolean|null, leases: number|null, heardAt: number|null, problem: string|null }} RouterState
+ * @typedef {{ name: string, address: string|null, reached: boolean|null, role: string|null, dns: boolean|null, gateway: boolean|null, leases: number|null, delay: number|null, loss: number|null, answered: number|null, blocked: number|null, since: number|null, topBlocked: Array<{ name: string, count: number }>|null, heardAt: number|null, problem: string|null }} RouterState
  */
 
 export class EdgeWatch {
@@ -171,6 +206,13 @@ export class EdgeWatch {
     /** @type {ReturnType<typeof setInterval>|null} */
     this.timer = null;
     this.polling = false;
+    /**
+     * Whether this box has the syslog port: true once bound, false when
+     * somebody else has it, null before it tried. Reported, so "no log lines"
+     * can be told apart from "could not listen" (C-5).
+     * @type {boolean|null}
+     */
+    this.listening = null;
   }
 
   /** The pools this box holds a key to their routers for. */
@@ -206,7 +248,11 @@ export class EdgeWatch {
     const s = this.createSocket();
     this.socket = s;
     s.on('message', (msg, rinfo) => this.hear(msg.toString('utf8'), rinfo.address));
+    s.on('listening', () => {
+      this.listening = true;
+    });
     s.on('error', (e) => {
+      this.listening = false;
       this.log.warn(`sidecar: cannot listen for the edge routers' syslog on ${this.port}: ${e.message}. How they are is still read from their API.`);
       try {
         s.close();
@@ -350,7 +396,7 @@ export class EdgeWatch {
         can === false
           ? 'This machine did not try: it cannot reach the pool’s Xen Orchestra, and the routers answer on that network.'
           : 'This machine has not tried yet: it has not reached the pool’s Xen Orchestra, and the routers answer on that network.';
-      return { ...base, reached: null, role: null, dns: null, gateway: null, leases: null, problem };
+      return { ...base, reached: null, ...UNREAD, problem };
     }
     if (!address) {
       // XEN ORCHESTRA SAID IT HAS NONE, or could not be asked: two different
@@ -359,7 +405,7 @@ export class EdgeWatch {
       const problem = asked
         ? `Xen Orchestra does not know its address yet: its guest agent has not reported it (one built before the image carried the agent gets it with its first update, after ${EDGE_UPDATES.hours}:00 UTC). It has not sent this machine its logs either.`
         : 'Xen Orchestra did not know its address when the policy last ran, and it has not sent this machine its logs.';
-      return { ...base, reached: null, role: null, dns: null, gateway: null, leases: null, problem };
+      return { ...base, reached: null, ...UNREAD, problem };
     }
     const ask = (/** @type {string} */ method, /** @type {string} */ path) => this.#call(address, record.edge, method, path);
     try {
@@ -368,9 +414,12 @@ export class EdgeWatch {
       const unbound = await ask('GET', '/api/unbound/service/status');
       const gateways = await ask('GET', '/api/routes/gateway/status');
       const leases = await ask('POST', '/api/dnsmasq/leases/search');
-      return { ...base, reached: true, ...statusOf({ vip, unbound, gateways, leases }), problem: null };
+      // Unbound's count, last: a router built before it counted answers
+      // `failed` here, and the four above are still read.
+      const stats = await ask('GET', '/api/unbound/diagnostics/stats');
+      return { ...base, reached: true, ...statusOf({ vip, unbound, gateways, leases, stats }), problem: null };
     } catch (e) {
-      return { ...base, reached: false, role: null, dns: null, gateway: null, leases: null, problem: String(/** @type {Error} */ (e).message).slice(0, 200) };
+      return { ...base, reached: false, ...UNREAD, problem: String(/** @type {Error} */ (e).message).slice(0, 200) };
     }
   }
 
@@ -440,6 +489,6 @@ export class EdgeWatch {
     if (!e || !e.at) return null;
     // Heard since the read, as the read itself knew.
     const routers = e.routers.map((r) => ({ ...r, heardAt: this.heard.get(`${k} ${r.name}`) ?? r.heardAt }));
-    return { at: e.at, routers, events: [...e.events] };
+    return { at: e.at, listening: this.listening, routers, events: [...e.events] };
   }
 }
