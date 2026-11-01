@@ -102,6 +102,8 @@ const ON_PREFIX = 'fleetwright-on:';
  * Orchestra; a machine is worked only for the person it was made for.
  */
 const FOR_PREFIX = 'fleetwright-for:';
+/** How many machines a box remembers having handed a login (handLogin, `handed`). */
+const HANDED_REMEMBERED = 1000;
 /** The group network a machine is also on, and its address there. */
 const GROUP_TAG = 'fleetwright-grp:';
 /** The lab a machine is in, by its network's name. */
@@ -461,10 +463,18 @@ export class XoPools {
      * id is what tells the machine this box made from another VM somebody
      * gave the same name and tags, which any box holding the fleet's token can
      * make in its set. In memory, like the rest: a box that restarts before
-     * its machine asks has nothing to hand it, and says so (`handLogin`).
+     * its machine asks remembers nothing of it, and then vouches for it the
+     * way any other box does, by what the pool says of it (`handLogin`).
      * @type {Map<string, { vm: string, owner: string, at: number }>}
      */
     this.made = new Map();
+    /**
+     * THE MACHINES THIS BOX HAS HANDED A LOGIN, by name, newest kept: a
+     * machine is handed its login once from here, whether this box made it
+     * or vouched for it from the pool (`handLogin`). Bounded, oldest out.
+     * @type {Set<string>}
+     */
+    this.handed = new Set();
     /**
      * THE MACHINES BEING HANDED THEIR LOGIN THIS MOMENT, by name: taken out
      * of `made` before `handLogin` first waits on anything, and put back if
@@ -907,7 +917,11 @@ export class XoPools {
           `${labNet ? `, in ${labNet.name}: ${labNet.lab === 'open' ? 'it reaches the internet and nothing private' : 'it reaches the fleet and Claude and nothing else'}` : ''}` +
           `${joined && groupNet ? `, with the others on ${groupNet.name} at ${joined.address}` : ''}. ` +
           `It joins the fleet as your temporary machine in a minute or two, for ${life} minutes` +
-          `${claude ? '' : ', and has no Claude login of yours to run on: keep one in your vault'}.`,
+          // A POOL'S OWN MACHINE holds the pool and nothing else of the
+          // person's (docs/vault.md, `only`), so it never has the login to
+          // hand; another of their boxes hands it (handLogin). It used to
+          // say "keep one in your vault" to a person who had.
+          `${claude ? '' : this.holderFor ? ', and asks another of your machines for your Claude login once it joins: this one, your pool’s own machine, holds none' : ', and has no Claude login of yours to run on: keep one in your vault'}.`,
       };
     } catch (e) {
       // FROM THE POOL ITSELF: no room in the limits, an image taken out of
@@ -940,60 +954,69 @@ export class XoPools {
   }
 
   /**
-   * THE CLAUDE LOGIN for a machine this box made, once the machine has
-   * enrolled and asked over its own socket (the coordinator relays it as
-   * `vmlogin`). Sealed to `key`, which only that machine holds, so the
-   * coordinator carries what it cannot read.
+   * A machine made for `owner` asks for their Claude login (`vmlogin`, relayed
+   * by the coordinator), sealed to the key it sent.
    *
-   * ONLY A MACHINE MADE HERE, FOR THAT PERSON, STILL RUNNING, ONCE. Made
-   * here is the VM's id this box noted at vm.create, not its name or tags:
-   * any box holding the fleet's token can make a VM in the set with both. It
-   * must still carry that name and be running, so a machine somebody
-   * stopped, paused or replaced is handed nothing; and it is handed once, so
-   * a second ask, which would be the coordinator's or a copy's, is refused.
-   * `notHere` when this box did not make it, so the coordinator asks the
-   * next; after a restart this box made nothing, as far as it knows.
+   * THE BOX THAT MADE IT HANDS IT OVER, from its own memory of the machine
+   * (`made`), when it holds the owner's login. A POOL'S OWN MACHINE NEVER
+   * HOLDS IT: Let it in grants it the pool's item and nothing else of the
+   * owner's (docs/vault.md, `only`), and once approved it is asked first to
+   * make machines, so every machine it made joined with nothing to run on.
+   * It answered "holds no Claude login", and the coordinator, which asks the
+   * next box only on `notHere`, stopped there; the person, whose vault held
+   * one, was told to keep one. Now a maker without the login says `notHere`,
+   * and A BOX THAT HOLDS THE LOGIN HANDS IT TO A MACHINE ANOTHER BOX MADE,
+   * with the pool as the witness the maker's memory was: the machine is found
+   * on the owner's pools under its name, tagged as made for them, in the
+   * fleet's set and running, the same checks the maker makes, and handed once
+   * from this box (`handed`). The same answers a box that restarted between
+   * making a machine and its ask. What a compromised coordinator could get
+   * this way it could get from the maker already: the sealing key is the one
+   * thing it supplies either way.
    *
-   * ONCE MEANS ONE ASK AT A TIME TOO. The machine is taken out of `made` and
-   * put in `handing` before the first wait on Xen Orchestra, so a second ask
-   * arriving while the first is out finds nothing to hand and says the
-   * first has it; two asks at once used to both read `made` and both be
-   * handed the login. The entry goes back (`keep`) when the hand-over did
-   * not happen for a reason that may pass: the machine not running yet, a
-   * pool that would not say or could not be reached. It stays gone when
-   * the machine is not the one made here, or is on no pool that answered.
-   *
-   * A POOL THAT COULD NOT BE REACHED MAY BE THE ONE IT IS ON. With two
-   * pools, one down and the other without the machine, this used to answer
-   * "not on any of your pools any more", with neither `unreachable` nor
-   * `notHere`, so the coordinator stopped there and the machine never got
-   * its login. Now any pool unreached with the machine found nowhere is
-   * `unreachable`, and the entry is kept for the next ask.
+   * `notHere` is a machine this box cannot vouch for, `unreachable` the
+   * owner's pools not answering; on either the coordinator asks the next box.
    *
    * @param {{ owner: string, name: string, key: string }} ask
    * @returns {Promise<{ ok: boolean, text: string, sealed?: any, notHere?: boolean, unreachable?: boolean }>}
    */
   async handLogin({ owner, name, key }) {
     const who = String(owner || '').toLowerCase();
-    const made = this.made.get(String(name));
-    if (!made || made.owner !== who) {
-      if (!made && this.handing.has(String(name))) return { ok: false, text: `${name} is being handed its login already, so this ask is handed nothing.` };
-      return { ok: false, notHere: true, text: `${name} was not made by this box for ${who}, as far as it knows.` };
+    const id = String(name);
+    const made = this.made.get(id);
+    const mine = Boolean(made && made.owner === who);
+    if (!mine) {
+      if (this.handing.has(id)) return { ok: false, text: `${name} is being handed its login already, so this ask is handed nothing.` };
+      if (this.handed.has(id)) return { ok: false, text: `${name} was handed its login by this box already, so this ask is handed nothing.` };
     }
     const token = this.claude.get(who);
-    if (!token) return { ok: false, text: `This box holds no Claude login of ${who}\u2019s to hand ${name}. Keep one in your vault (claude setup-token), then ask for the machine again.` };
-    const mine = [...this.held.values()].filter((h) => h.owner === who);
+    if (!token) {
+      return {
+        ok: false,
+        notHere: true,
+        text: mine
+          ? `This box made ${name} but holds no Claude login of ${who}’s to hand it${this.holderFor ? ', being the pool’s own machine, which holds the pool and nothing else of theirs' : ''}; another of their machines may.`
+          : `This box holds no Claude login of ${who}’s to hand ${name}.`,
+      };
+    }
+    const held = [...this.held.values()].filter((h) => h.owner === who);
+    if (!held.length) return { ok: false, notHere: true, text: `This box holds none of ${who}’s pools, so it cannot see ${name}.` };
     // CLAIMED, before anything is waited on.
-    this.made.delete(String(name));
-    this.handing.add(String(name));
+    if (mine) this.made.delete(id);
+    this.handing.add(id);
     const keep = () => {
-      this.handing.delete(String(name));
-      if (!this.made.has(String(name))) this.made.set(String(name), made);
+      this.handing.delete(id);
+      if (mine && !this.made.has(id)) this.made.set(id, /** @type {NonNullable<typeof made>} */ (made));
     };
-    const spent = () => this.handing.delete(String(name));
+    const spent = () => this.handing.delete(id);
+    const done = () => {
+      spent();
+      if (this.handed.size >= HANDED_REMEMBERED) this.handed.delete(/** @type {string} */ (this.handed.values().next().value));
+      this.handed.add(id);
+    };
     /** @type {string[]} */
     const unreachable = [];
-    for (const { record } of mine) {
+    for (const { record } of held) {
       /** @type {any} */
       let rpc = null;
       try {
@@ -1004,24 +1027,29 @@ export class XoPools {
           continue;
         }
         const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
-        const vm = vms.find((v) => String(v?.id) === made.vm);
+        // The maker knows the machine by the id vm.create answered; another
+        // box by the name the coordinator relayed, which the tags below then
+        // have to bear out.
+        const vm = vms.find((v) => (mine ? String(v?.id) === /** @type {NonNullable<typeof made>} */ (made).vm : v?.name_label === id));
         if (!vm) continue;
         const set = await fleetSetOf(rpc);
-        if (vm.name_label !== name || tagValue(vm, FOR_PREFIX) !== who || !inFleetSet(vm, set)) {
+        if (vm.name_label !== id || tagValue(vm, FOR_PREFIX) !== who || !inFleetSet(vm, set)) {
           spent();
-          return { ok: false, text: `${name} is not the machine this box made any more, so it is handed nothing.` };
+          return mine
+            ? { ok: false, text: `${name} is not the machine this box made any more, so it is handed nothing.` }
+            : { ok: false, notHere: true, text: `${name} is on ${record.address}, but not as a machine the fleet made for ${who}, so this box hands it nothing.` };
         }
         if (vm.power_state !== 'Running') {
           keep();
           return { ok: false, text: `${name} is ${String(vm.power_state || 'not running').toLowerCase()}, so it is handed nothing.` };
         }
         const sealed = await seal({ to: key, aad: await claudeBindingFor(key), payload: { token } });
-        spent();
-        this.log.info(`sidecar: handed ${name} ${who}\u2019s Claude login`);
+        done();
+        this.log.info(`sidecar: handed ${name} ${who}’s Claude login${mine ? '' : ', a machine another box made'}`);
         return { ok: true, text: `Handed ${name} your Claude login.`, sealed };
       } catch (e) {
         keep();
-        return { ok: false, text: `${record.address} would not say whether ${name} is the machine made here: ${/** @type {Error} */ (e).message}` };
+        return { ok: false, text: `${record.address} would not say whether ${name} is ${mine ? 'the machine made here' : `a machine made for ${who}`}: ${/** @type {Error} */ (e).message}` };
       } finally {
         try {
           rpc?.close();
@@ -1036,13 +1064,15 @@ export class XoPools {
         ok: false,
         unreachable: true,
         text:
-          unreachable.length === mine.length
+          unreachable.length === held.length
             ? `Your pools could not be reached from here: ${unreachable.join('; ')}`
             : `${name} is not on the pools of yours that answered, and the rest could not be reached from here: ${unreachable.join('; ')}`,
       };
     }
     spent();
-    return { ok: false, text: `${name} is not on any of your pools any more, so it is handed nothing.` };
+    return mine
+      ? { ok: false, text: `${name} is not on any of your pools any more, so it is handed nothing.` }
+      : { ok: false, notHere: true, text: `${name} is not on any of ${who}’s pools this box holds.` };
   }
 
   /**

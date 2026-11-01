@@ -741,6 +741,70 @@ test('two asks for one machine’s login at once: one is handed it and the other
   assert.equal(paused.pools.handing.size, 0);
 });
 
+test('a pool’s own machine that made a machine holds no login to hand it and says so as notHere, and the box that holds the login hands it, vouched for by the pool', async () => {
+  // holder-5a5829's journal: "made vm-72ee54698806 ... for elibrody2". Let in
+  // for the pool's item alone, it held no Claude login, answered "holds no
+  // Claude login ... keep one in your vault" to a person whose vault held
+  // one, and the coordinator, which moves on only on notHere, stopped there.
+  // The machine ran with nothing to run on.
+  const maker = withMachine();
+  maker.pools.holderFor = 'xo.lan';
+  maker.pools.made.set('vm-111111111111', { vm: 'vm-uuid', owner: ELI, at: Date.now() });
+  const key = await newSealKey();
+  const said = await maker.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(said.ok, false);
+  assert.equal(said.notHere, true, 'the coordinator is sent to the next box');
+  assert.match(said.text, /made vm-111111111111 but holds no Claude login/);
+  assert.match(said.text, /pool’s own machine/);
+  assert.ok(maker.pools.made.has('vm-111111111111'), 'and remembers it still');
+  // The same words at make, for the person reading the reply.
+  assert.equal(maker.pools.claude.get(ELI), undefined);
+
+  // ANOTHER BOX, which made nothing but holds the login and the pool: the
+  // machine is found by name, tagged as made for the person, in the fleet's
+  // set, running — the maker's checks, with the pool as the witness.
+  const other = withMachine();
+  other.pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }, { name: 'claude', value: CLAUDE }] }]);
+  assert.equal(other.pools.made.size, 0);
+  const handed = await other.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(handed.ok, true, handed.text);
+  const inside = /** @type {any} */ (await openSealed({ privateKey: key.privateKey, publicKey: key.publicKey, aad: await (await import('../src/fleet/seal.js')).claudeBindingFor(key.publicKey), sealed: handed.sealed }));
+  assert.equal(inside.token, CLAUDE);
+  // ONCE from this box.
+  const again = await other.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(again.ok, false);
+  assert.equal(again.notHere, undefined, 'handed already is an answer, not a pass to the next box');
+  assert.match(again.text, /handed its login by this box already/);
+});
+
+test('a box vouching from the pool hands nothing to a machine made for somebody else, not in the fleet’s set, or not there', async () => {
+  const key = await newSealKey();
+  const theirs = withMachine({ owner: 'somebody@example.com' });
+  theirs.pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }, { name: 'claude', value: CLAUDE }] }]);
+  const r1 = await theirs.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(r1.ok, false);
+  assert.equal(r1.notHere, true, r1.text);
+  assert.match(r1.text, /not as a machine the fleet made for eli@example.com/);
+
+  const outside = xo({ objects: [pool, image, { type: 'VM', id: 'vm-uuid', name_label: 'vm-111111111111', power_state: 'Running', tags: [VM_IMAGE.sessionTag, `fleetwright-for:${ELI}`] }], outside: ['vm-uuid'] });
+  const stranger = holder(outside);
+  stranger.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }, { name: 'claude', value: CLAUDE }] }]);
+  const r2 = await stranger.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(r2.ok, false);
+  assert.equal(r2.notHere, true, r2.text);
+
+  const gone = holder(xo({ objects: [pool, image] }));
+  gone.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan', value: record() }, { name: 'claude', value: CLAUDE }] }]);
+  const r3 = await gone.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(r3.ok, false);
+  assert.equal(r3.notHere, true, r3.text);
+  assert.match(r3.text, /not on any of eli@example.com’s pools this box holds/);
+  // Nothing of the maker's path leaks: a box without the login says notHere too.
+  const empty = withMachine();
+  const r4 = await empty.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
+  assert.equal(r4.notHere, true, r4.text);
+});
+
 test('a machine not found on the pools that answered, with another unreached, is said to be so and kept for the next ask', async () => {
   // One of two pools down and the machine not on the other used to answer
   // "not on any of your pools any more", with neither `unreachable` nor
