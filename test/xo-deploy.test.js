@@ -31,7 +31,7 @@ import { execFileSync } from 'node:child_process';
 
 import { XoSetups, FLEET_USER } from '../src/fleet/host/xo-setup.js';
 import { probe } from '../src/fleet/host/xo-setup.js';
-import { INSTALLER, makeCertificate, parseKeyscan, sshFingerprint, sshProbe } from '../src/fleet/host/xo-deploy.js';
+import { INSTALLER, jobDir, makeCertificate, openPool, parseKeyscan, sshFingerprint, sshProbe } from '../src/fleet/host/xo-deploy.js';
 import { connectXo, connectPinnedTls } from '../src/fleet/host/xo-ws.js';
 import { XODEPLOY_STEPS } from '../src/fleet/protocol/intents.js';
 import { seal, open, newSealKey, xodeployAad, xosetupAad, xosetupHandoffAad } from '../src/fleet/seal.js';
@@ -59,10 +59,11 @@ function hostKeyBlob() {
 /**
  * A pool master on PATH, and the installer the job will be handed.
  *
- * @param {{ password?: string, scanned?: string, mode?: 'done'|'failed', unreachable?: boolean }} [opts]
+ * @param {{ password?: string, scanned?: string, mode?: 'done'|'failed', unreachable?: boolean, keyscan?: { say: string, times: number } }} [opts]
  *   `scanned` is the key ssh-keyscan reports, when it is not the pool's own.
+ *   `keyscan` turns that many scans away with what ssh-keyscan says of it.
  */
-function poolMaster({ password = ROOT_PASSWORD, scanned, mode = 'done', unreachable = false } = {}) {
+function poolMaster({ password = ROOT_PASSWORD, scanned, mode = 'done', unreachable = false, keyscan } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'xo-pool-'));
   const bin = path.join(dir, 'bin');
   const poolPath = path.join(dir, 'pool');
@@ -77,6 +78,7 @@ function poolMaster({ password = ROOT_PASSWORD, scanned, mode = 'done', unreacha
     keys,
     password,
     unreachable,
+    keyscan,
     log: logPath,
     poolPath,
     xe: {
@@ -481,6 +483,47 @@ test('the probe of an address with no Xen Orchestra reports its SSH host key, an
   const none = await sshProbe(POOL_MASTER);
   assert.equal(none.ssh.reachable, false);
   assert.deepEqual(none.ssh.keys, []);
+});
+
+// A WATCHDOG JOB ON rpi-7550, 1 November 2026: the sheet said the machine had
+// reached SSH at the pool master, from a probe thirty seconds before, and the
+// job said "nothing answered SSH at 192.168.1.128 from here" after a scan
+// that came back in under two seconds, which is a master that hung up and
+// not one that was silent. One refused connection threw the typed password
+// away, and the words gave the person nothing to go on.
+test('a pool master that turns one SSH connection away is asked again, and the job goes on', async () => {
+  const pool = poolMaster({ keyscan: { say: `connect to host ${POOL_MASTER} port 22: Connection refused`, times: 1 } });
+  const link = await openPool({ address: POOL_MASTER, hostKey: pool.pin, secret: { password: ROOT_PASSWORD }, dir: jobDir(), pauseMs: 20 });
+  await link.close();
+  assert.equal(pool.log().filter((e) => e.role === 'ssh-keyscan').length, 2, 'scanned again after the refusal, and not a third time');
+});
+
+test('a pool master that keeps turning SSH away is said in ssh-keyscan’s words, three times, and not as nothing answering', async () => {
+  const said = `connect to host ${POOL_MASTER} port 22: Connection refused`;
+  const pool = poolMaster({ keyscan: { say: said, times: 9 } });
+  await assert.rejects(
+    openPool({ address: POOL_MASTER, hostKey: pool.pin, secret: { password: ROOT_PASSWORD }, dir: jobDir(), pauseMs: 20 }),
+    (e) => {
+      assert.match(e.message, new RegExp(`^SSH at ${POOL_MASTER} would not talk to this machine, 3 times over \\d+ seconds?: ssh-keyscan said “${said}”\\. Nothing was sent to it; try again in a minute\\.$`));
+      assert.doesNotMatch(e.message, /nothing answered/i);
+      return true;
+    },
+  );
+  assert.equal(pool.log().filter((e) => e.role === 'ssh-keyscan').length, 3, 'three scans, then the answer');
+  assert.equal(pool.log().filter((e) => e.role === 'ssh').length, 0, 'the password went nowhere');
+  // The probe says the same of it, in place of "nothing answered".
+  const probed = await sshProbe(POOL_MASTER);
+  assert.equal(probed.ssh.reachable, false);
+  assert.equal(probed.text, `SSH at ${POOL_MASTER} would not talk to this machine: ssh-keyscan said “${said}”.`);
+});
+
+test('a pool master that is silent is said as silent, with how long was listened', async () => {
+  const pool = poolMaster({ unreachable: true });
+  await assert.rejects(
+    openPool({ address: POOL_MASTER, hostKey: pool.pin, secret: { password: ROOT_PASSWORD }, dir: jobDir(), pauseMs: 20 }),
+    (e) => e.message === `nothing answered SSH at ${POOL_MASTER} from here: ssh-keyscan heard nothing in 5 seconds, 3 times.`,
+  );
+  assert.equal(pool.log().filter((e) => e.role === 'ssh').length, 0);
 });
 
 test('through a phone the probe makes one attempt over HTTPS, and takes no look over SSH', async () => {
