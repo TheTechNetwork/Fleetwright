@@ -253,7 +253,13 @@ const sidecar = new Sidecar({
     // captured in the closure and goes nowhere else (docs/vault.md).
     // NOT ON A MACHINE FROM A HYPERVISOR: nobody approved its key, which is
     // new with every machine, and it is handed its owner's login instead.
-    vaultKey: key && !cfg.vmJoin
+    // EXCEPT THE POOL'S OWN MACHINE, whose key its owner did approve: Let it
+    // in grants it `hypervisor:<address>` and nothing else (docs/vault.md,
+    // `only`), and the vault is the only way that token reaches it. One that
+    // never asked held nothing, said `holder` of no pool in its health, was
+    // never asked first, and gave the phone no `holds` to draw Make it again
+    // from, for the whole life of every holder before this line.
+    vaultKey: key && (!cfg.vmJoin || cfg.holderFor)
       ? { publicJwk: key.publicJwk, sign: (/** @type {string} */ message) => sign(key.privateJwk, message) }
       : null,
     vmLogin: fromVm,

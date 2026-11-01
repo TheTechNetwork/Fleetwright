@@ -416,10 +416,15 @@ vault item, once you approve its key on its page under Machines. With it, the
 approval is the Let it in above, and holds that one item. Nothing the box or
 the coordinator does can approve it.
 
-**Once approved, it is asked first.** Its health marks that pool's entry
-`holder`. The coordinator then asks it before the other boxes holding your
-token, both to make your machines and to work them, after the box that last
-saw the machine. The other boxes are the fallback.
+**Once approved, it is asked first.** It asks the vault like any approved box,
+every ten minutes, and is given that one item; its health then marks that
+pool's entry `holder`. The coordinator asks it before the other boxes holding
+your token, both to make your machines and to work them, after the box that
+last saw the machine. The other boxes are the fallback. A machine from a
+hypervisor is otherwise given no vault key at all, since nobody approved it;
+the pool's own machine is the one whose key its owner did approve, and one
+made before the sidecar knew that held nothing, so its journal had no `vault:`
+line and the coordinator never learned which pool it held.
 
 **It runs no sessions.** It holds the pool for the fleet, and a session on it
 would share the one machine every other start on that pool goes through. The
