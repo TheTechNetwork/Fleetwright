@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import https from 'node:https';
 import { EventEmitter } from 'node:events';
 
-import { EdgeWatch, EVENTS, REREAD_MS, kindOf, parseSyslog, statusOf } from '../src/fleet/host/edge-watch.js';
+import { EdgeWatch, EVENTS, REREAD_MS, TOP_BLOCKED, UNREAD, kindOf, parseSyslog, statusOf } from '../src/fleet/host/edge-watch.js';
 import { newWatch } from '../src/fleet/host/edge-credentials.js';
 
 const ELI = 'eli@example.com';
@@ -25,6 +25,21 @@ const ANSWERS = {
   '/api/unbound/service/status': { status: 'running', widget: {} },
   '/api/routes/gateway/status': { status: 'ok', items: [{ name: 'WAN_DHCP', address: '192.168.1.1', status: 'none', status_translated: 'Online', loss: '0.0 %', delay: '0.4 ms', monitor: '192.168.1.1' }] },
   '/api/dnsmasq/leases/search': { total: 2, rowCount: 2, current: 1, rows: [{ address: '10.254.0.120' }, { address: '10.254.0.121' }] },
+  // unbound/diagnostics/stats, as scripts/unbound/stats.py prints it (handle_top).
+  '/api/unbound/diagnostics/stats': {
+    status: 'ok',
+    data: {
+      total: 412,
+      blocklist_size: 1000,
+      passed: 409,
+      resolved: { total: 300, pcnt: '72.82' },
+      blocked: { total: 3, pcnt: '0.73' },
+      local: { total: 9, pcnt: '2.18' },
+      start_time: 1_699_999_000,
+      top: { 'api.anthropic.com': { total: 120, pcnt: '29.34' } },
+      top_blocked: { 'bad.example': { total: 1, pcnt: '33.33', blocklist: 'atf', latest_policy_uuid: null }, 'evil.example': { total: 2, pcnt: '66.67', blocklist: 'hgz011', latest_policy_uuid: null } },
+    },
+  },
 };
 
 /**
@@ -54,7 +69,10 @@ async function router(t, w) {
 function fakeSocket() {
   const s = /** @type {any} */ (new EventEmitter());
   s.bound = null;
-  s.bind = (/** @type {number} */ p) => (s.bound = p);
+  s.bind = (/** @type {number} */ p) => {
+    s.bound = p;
+    s.emit('listening');
+  };
   s.close = () => {};
   return s;
 }
@@ -81,14 +99,36 @@ test('a router is read over TLS held to its certificate, with the key, into the 
   assert.equal(socket.bound, 5514, 'the routers’ syslog is listened for once a pool has a key');
   const r = /** @type {any} */ (watch.reportFor(ELI, 'xo.lan'));
   assert.equal(r.at, 1_700_000_000_000);
-  assert.deepEqual(r.routers[0], { name: 'fleetwright-edge', address: '127.0.0.1', heardAt: null, reached: true, role: 'master', dns: true, gateway: true, leases: 2, problem: null });
+  assert.equal(r.listening, true, 'the box says it has the syslog port');
+  assert.deepEqual(r.routers[0], {
+    name: 'fleetwright-edge',
+    address: '127.0.0.1',
+    heardAt: null,
+    reached: true,
+    role: 'master',
+    dns: true,
+    gateway: true,
+    leases: 2,
+    delay: 0.4,
+    loss: 0,
+    answered: 412,
+    blocked: 3,
+    since: 1_699_999_000_000,
+    topBlocked: [
+      { name: 'evil.example', count: 2 },
+      { name: 'bad.example', count: 1 },
+    ],
+    problem: null,
+  });
   assert.equal(r.routers[1].reached, null, 'a router with no known address is cannot tell, not down');
   assert.match(r.routers[1].problem, /did not know its address when the policy last ran/);
+  assert.deepEqual(r.routers[1].topBlocked, null);
   assert.deepEqual(seen.map((s) => `${s.method} ${s.path}`), [
     'POST /api/diagnostics/interface/get_vip_status',
     'GET /api/unbound/service/status',
     'GET /api/routes/gateway/status',
     'POST /api/dnsmasq/leases/search',
+    'GET /api/unbound/diagnostics/stats',
   ]);
   assert.equal(watch.reportFor('sam@example.com', 'xo.lan'), null, 'nobody else’s pool');
 });
@@ -161,9 +201,20 @@ test('a box that cannot reach the pool’s Xen Orchestra never tries its routers
 });
 
 test('what OPNsense says it cannot tell stays cannot tell', () => {
-  assert.deepEqual(statusOf({}), { role: null, dns: null, gateway: null, leases: null });
-  // dpinger with no data: OPNsense calls it Online with `~` everywhere.
-  assert.equal(statusOf({ gateways: { items: [{ name: 'WAN_DHCP', status: 'none', status_translated: 'Online', monitor: '~' }] } }).gateway, null);
+  assert.deepEqual(statusOf({}), UNREAD);
+  // dpinger with no data: OPNsense calls it Online with `~` everywhere. That
+  // is every router built before its gateway was monitored (MEASURED).
+  const unmonitored = statusOf({ gateways: { items: [{ name: 'WAN_DHCP', status: 'none', status_translated: 'Online', monitor: '~', delay: '~', loss: '~' }] } });
+  assert.deepEqual([unmonitored.gateway, unmonitored.delay, unmonitored.loss], [null, null, null]);
+  const slow = statusOf({ gateways: { items: [{ name: 'WAN_DHCP', status: 'delay', monitor: '192.168.1.1', delay: '312.5 ms', loss: '4.0 %' }] } });
+  assert.deepEqual([slow.gateway, slow.delay, slow.loss], [true, 312.5, 4]);
+  // A router not counting names (an older build, or its database not there yet) is cannot tell, not zero.
+  const uncounted = statusOf({ stats: { status: 'failed' } });
+  assert.deepEqual([uncounted.answered, uncounted.blocked, uncounted.since, uncounted.topBlocked], [null, null, null, null]);
+  const quiet = statusOf({ stats: { status: 'ok', data: { total: 0, blocked: { total: 0 }, start_time: 1_700_000_000, top_blocked: {} } } });
+  assert.deepEqual([quiet.answered, quiet.blocked, quiet.since, quiet.topBlocked], [0, 0, 1_700_000_000_000, []]);
+  const many = statusOf({ stats: { status: 'ok', data: { total: 9, blocked: { total: 9 }, start_time: 1, top_blocked: Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((i) => [`n${i}.example`, { total: i }])) } } });
+  assert.deepEqual(many.topBlocked?.map((t) => t.count), [7, 6, 5, 4, 3], `the ${TOP_BLOCKED} refused most, most first`);
   assert.equal(statusOf({ gateways: { items: [{ name: 'WAN_DHCP', status: 'down', monitor: '192.168.1.1' }] } }).gateway, false);
   assert.equal(statusOf({ gateways: { items: [{ name: 'WAN_DHCP', status: 'delay+loss', monitor: '192.168.1.1' }] } }).gateway, true, 'slow is still a way out');
   assert.equal(statusOf({ unbound: { status: 'stopped' } }).dns, false);

@@ -190,6 +190,12 @@ export const EDGE = Object.freeze({
   blocksTag: 'fleetwright-edge-blocks',
   /** On an edge that updates itself and carries the Xen guest agent (EDGE_UPDATES); one without it is rebuilt to get both. */
   updatesTag: 'fleetwright-edge-updates',
+  /**
+   * On an edge built so a box can measure it (edgeConfig, MEASURED): its way
+   * out monitored, Unbound counting what it answers and refuses, Suricata's
+   * alerts in syslog. One without it is rebuilt once to get them.
+   */
+  measuredTag: 'fleetwright-edge-measured',
   uplink: 'fleetwright-uplink',
   template: 'Other install media',
   /** The edge's LAN, which is the uplink: a range a home or office LAN rarely uses. */
@@ -481,6 +487,15 @@ export function fleetHosts(coordinatorUrl) {
  * syslog to the boxes in `syslog`. docs/hypervisors.md, "Watching the edge
  * routers".
  *
+ * MEASURED, on every edge, so what a box reads says something: the WAN's
+ * gateway monitored (a gateway item; OPNsense 26.7 leaves a dynamic
+ * gateway's monitoring off), Unbound counting what it answers and what the
+ * lists refuse (`stats`), and Suricata's alerts in syslog (`syslog`). Asked
+ * for when the card read "cannot tell whether its way out is up", "0 DHCP
+ * leases" and "no log lines" from a router that was fine: the first was
+ * cannot tell for good, and two of the five programs syslog forwards had
+ * nothing to say. Marked EDGE.measuredTag; an edge without it is rebuilt.
+ *
  * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null, watch?: import('./edge-credentials.js').Watch|null, syslog?: string[] }} [opts]
  * @returns {Buffer}
  */
@@ -601,9 +616,14 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
       : '') +
     '</rules><snatrules/><npt/><onetoone/></Filter>\n</Firewall>\n' +
     // Fixed ids, so the same edge is the same bytes, and the IDS can name its cron job.
-    '<unboundplus version="1.0.14"><general><enabled>1</enabled></general><dnsbl><blocklist uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e01">' +
+    // `stats`: Unbound keeps what it answered and what the lists refused, in
+    // memory (/var), which is what the stats call reads (MEASURED).
+    '<unboundplus version="1.0.14"><general><enabled>1</enabled><stats>1</stats></general><dnsbl><blocklist uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e01">' +
     `<enabled>1</enabled><type>${EDGE_FILTER.blocklists.join(',')}</type><description>Threats</description></blocklist></dnsbl></unboundplus>\n` +
-    `<IDS version="1.1.1"><general><enabled>1</enabled>${block ? '<mode>divert</mode>' : ''}<interfaces>${['lan', ...labIf].join(',')}</interfaces><homenet>${[`${EDGE.lan.address.replace(/\.\d+$/, '.0')}/${prefix}`, ...labNets].join(',')}</homenet>` +
+    // `syslog`: Suricata's alerts and drops to syslog as well as its own log,
+    // which is the only way they leave a router nobody can log in to
+    // (MEASURED; IDS.xml's default is off, and the box reads syslog).
+    `<IDS version="1.1.1"><general><enabled>1</enabled><syslog>1</syslog>${block ? '<mode>divert</mode>' : ''}<interfaces>${['lan', ...labIf].join(',')}</interfaces><homenet>${[`${EDGE.lan.address.replace(/\.\d+$/, '.0')}/${prefix}`, ...labNets].join(',')}</homenet>` +
     '<UpdateCron>5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e03</UpdateCron></general><files>' +
     EDGE_FILTER.rules.map((f, i) => `<file uuid="${RULE_FILE_UUID}${i}"><filename>${f}</filename><enabled>1</enabled></file>`).join('') +
     '</files>' +
@@ -623,6 +643,19 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     // (ROOM, in this function's comment).
     `<job><enabled>1</enabled><command>firmware auto-update</command><hours>${Number(EDGE_UPDATES.hours) + (ha?.node ?? 0)}</hours><description>Updates</description></job>` +
     '</jobs></cron>\n' +
+    // THE WAY OUT, MONITORED (MEASURED). OPNsense 26.7 makes a DHCP WAN's
+    // gateway itself and, in Gateways.php, "disable monitoring by default",
+    // so dpinger never ran and the status API said `~` for everything:
+    // cannot tell, for good. A gateway item for the WAN with no address is
+    // that dynamic gateway's settings (Gateways.php matches it by interface
+    // and protocol), and monitoring on makes dpinger ping what DHCP named as
+    // the router. Every field written, since no migration fills defaults in
+    // at the model's first version; the thresholds and interval empty are
+    // dpinger's own defaults (dpinger.inc).
+    '<Gateways version="1.0.0"><gateway_item uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e30"><disabled>0</disabled><name>WAN_DHCP</name><descr>The way out</descr><interface>wan</interface><ipprotocol>inet</ipprotocol>' +
+    '<gateway></gateway><defaultgw>1</defaultgw><fargw>0</fargw><monitor_disable>0</monitor_disable><monitor_noroute>0</monitor_noroute><monitor_killstates>0</monitor_killstates><monitor_killstates_priority>0</monitor_killstates_priority>' +
+    '<monitor></monitor><force_down>0</force_down><nosync>0</nosync><priority>254</priority><weight>1</weight><latencylow></latencylow><latencyhigh></latencyhigh><losslow></losslow><losshigh></losshigh>' +
+    '<interval></interval><time_period></time_period><loss_interval></loss_interval><data_length></data_length></gateway_item></Gateways>\n' +
     (watched ? watched.syslog : '') +
     '</OPNsense>\n</opnsense>\n';
   const body = Buffer.from(xml, 'utf8');
@@ -1267,7 +1300,7 @@ export async function ensureEdge(opts) {
   // old single router is removed without ever being started.
   const halfPair = Boolean(second) && !(edge && edge.tags.includes(`${EDGE_HA.nodeTag}0`));
   /** Whether a router differs from what the policy asks of it. @param {Awaited<ReturnType<typeof edgeState>>|null} st */
-  const differs = (st) => Boolean(st && (st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || st.unwatched));
+  const differs = (st) => Boolean(st && (st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || !st.measured || st.unwatched));
   // EITHER OF THEM. Only the first was asked, so a pair whose second differs
   // (finished in two runs that were answered differently) stayed so for good.
   const changed = differs(now) || differs(secondState) || exposed;
@@ -1429,6 +1462,10 @@ async function edgeState(admin, edge, { block = null, labs = null, watch = null 
     // AN EDGE FROM BEFORE IT UPDATED ITSELF (EDGE_UPDATES) is rebuilt once:
     // its configuration is fixed at build, so that is the only way it gets it.
     updates: edge?.tags?.includes?.(EDGE.updatesTag) === true,
+    // AN EDGE FROM BEFORE IT COULD BE MEASURED (edgeConfig, MEASURED) is
+    // rebuilt once, the same way: its way out monitored, Unbound counting,
+    // Suricata in syslog, none of which a built router can be given.
+    measured: edge?.tags?.includes?.(EDGE.measuredTag) === true,
     // AN EDGE WITHOUT THE KEY THE JOB BRINGS (edge-credentials.js), from
     // before it could be watched or with its key lost, is rebuilt once, the
     // same way: the key the phone is handed must be the one the router has.
@@ -1449,7 +1486,7 @@ async function edgeState(admin, edge, { block = null, labs = null, watch = null 
 async function ensureOne(opts, edge, force = false) {
   const { admin, egress, block = null, labs = null, rebuilding, say } = opts;
   const st = edge ? await edgeState(admin, edge, opts) : null;
-  if (edge && st && (force || st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || st.unwatched || st.exposed)) {
+  if (edge && st && (force || st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || !st.measured || st.unwatched || st.exposed)) {
     const keep = block ?? st.blocks;
     rebuilding?.();
     if (!force) {
@@ -1464,7 +1501,9 @@ async function ensureOne(opts, edge, force = false) {
               ? `Rebuilding the edge router with ${labsSaid(st.wantLabs)}. ${ONE_BOOT}`
               : !st.updates
                 ? `Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. ${ONE_BOOT}`
-                : `Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. ${ONE_BOOT}`,
+                : !st.measured
+                  ? `Rebuilding the edge router so your machines can read whether its way out is up, how many names it answers and refuses, and what it drops. ${ONE_BOOT}`
+                  : `Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. ${ONE_BOOT}`,
       );
     }
     // Built while the old one runs, started once the old one has stopped,
@@ -1977,7 +2016,7 @@ async function buildEdge({ admin, pool, egress, uplink, srs, fleetSrs, sr: chose
     VIFs: [{ network: egress.id, ...(wanMac ? { mac: wanMac } : {}) }, { network: uplink }, ...labs.map((l) => ({ network: l.id }))],
     CPUs: EDGE.cpus,
     memory: EDGE.memory,
-    tags: [EDGE.tag, EDGE.updatesTag, ...(watch ? [EDGE_WATCH.tag] : []), ...(block ? [EDGE.blocksTag] : []), ...(labs.length ? [`${LAB.edgeTag}${labsKey(labs)}`] : []), ...(ha ? [`${EDGE_HA.nodeTag}${ha.node}`] : [])],
+    tags: [EDGE.tag, EDGE.updatesTag, EDGE.measuredTag, ...(watch ? [EDGE_WATCH.tag] : []), ...(block ? [EDGE.blocksTag] : []), ...(labs.length ? [`${LAB.edgeTag}${labsKey(labs)}`] : []), ...(ha ? [`${EDGE_HA.nodeTag}${ha.node}`] : [])],
     bootAfterCreate: false,
   };
 
