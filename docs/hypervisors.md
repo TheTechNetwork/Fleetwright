@@ -397,9 +397,11 @@ is let in.
 
 **Make it again** is on the policy screen for the one there, from a box that
 says `holder-ask`, and on the machine's own page under Machines, for the person
-whose pool it is, which opens that screen with the switch on (the snapshot says
-which pool it holds, `holds`): Apply stops it, removes it with its disk, and
-makes a new one that asks to join (`holderAgain`). It is for a holder that never joined. One
+whose pool it is, which opens that screen with the switch on: Apply stops it,
+removes it with its disk, and makes a new one that asks to join
+(`holderAgain`). The snapshot says which pool a holder holds (`holds` on its
+row, from its own health, to the person whose pool it is and nobody else),
+which is how the phone knows to offer it there. It is for a holder that never joined. One
 that has joined does not need it. One that had joined and is made again anyway
 is also retired from the fleet: the job reports the name of the VM it removed
 (`xosetup.holder-removed`, a name of the coordinator's own shape only), and
