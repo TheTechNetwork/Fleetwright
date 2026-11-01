@@ -61,15 +61,16 @@ async function fleet() {
   let n = 0;
   /**
    * A request from Nina's phone, signed for `host` over the params it sends.
-   * Unsigned, with `{ unsigned: true }`: the app before its key is listed, or MCP.
-   * @param {string} verb @param {Record<string, unknown>} params @param {string} host @param {{ unsigned?: boolean }} [opts]
+   * Unsigned, with `{ unsigned: true }`: MCP, or with `fromApp` too, the app
+   * before its key is listed, as the Worker marks one (fleet-do.js).
+   * @param {string} verb @param {Record<string, unknown>} params @param {string} host @param {{ unsigned?: boolean, fromApp?: boolean }} [opts]
    */
-  const ask = async (verb, params, host, { unsigned = false } = {}) => {
+  const ask = async (verb, params, host, { unsigned = false, fromApp = false } = {}) => {
     const id = `signed-intent-${String(++n).padStart(4, '0')}`;
     const issuedAt = Date.now();
     const sig = await sign(privateJwk, intentSigningInput({ actor: NINA, id, issuedAt, params, verb }, host));
     const before = Object.fromEntries(Object.entries(sent).map(([h, frames]) => [h, frames.length]));
-    const r = await core.dispatch({ verb, params, id, actor: NINA, requester: { email: NINA, admin: true }, ...(host ? { preferHost: host } : {}), ...(unsigned ? {} : { sig, kid, issuedAt }) });
+    const r = await core.dispatch({ verb, params, id, actor: NINA, requester: { email: NINA, admin: true }, ...(host ? { preferHost: host } : {}), ...(unsigned ? {} : { sig, kid, issuedAt }), ...(fromApp ? { fromApp: true } : {}) });
     /** The intents this request put on each socket. */
     const frames = Object.entries(sent).flatMap(([h, all]) => all.slice(before[h]).filter((m) => m.kind === 'intent').map((m) => ({ host: h, ...m })));
     return { r, frames, sig };
@@ -211,6 +212,43 @@ test('an unsigned request goes to a box that enforces with a delegation that cov
   const r = await core.dispatch({ verb: 'start', params: { name: 'placed' }, actor: NINA, requester: { email: NINA, admin: true }, preferHost: 'box-strict', delegation: inline });
   assert.equal(r.ok, true, r.text);
   assert.deepEqual(core.delegationsFor({ email: NINA }).map((g) => g.id), [inline.grant.id]);
+});
+
+test('a refusal for want of a signature says what would have carried it, from where it came and what it asked', async () => {
+  // A holder's journal: an Apply update from the iPhone, refused a quarter of
+  // a second before the phone's key was listed, was sent to delegate to an
+  // MCP client, which is neither where it came from nor a thing that covers
+  // update (MCP_UNDELEGATED_VERBS). Each refusal now says its own way out,
+  // from the box's refusal and from the coordinator's own alike.
+  const { ask } = await fleet();
+  const steps = /open the Fleetwright app on your phone, go to You → Delegations/;
+  const listing = /Your phone signs what it sends once its key is listed with the minter, which happens after you sign in to GitHub under Runners\. Sign in there if you have not, then ask again\./;
+  const notDelegated = /An MCP client is never delegated update, which restarts a machine somebody may be working on\. Apply it from the Fleetwright app, on the machine’s page, or run fleetwright-sidecar update on the box\./;
+
+  // FROM A PHONE before its key is listed, refused by the box: how a phone
+  // comes to sign, and not the steps.
+  const phone = await ask('start', { name: 'from-phone' }, 'box-signers', { unsigned: true, fromApp: true });
+  assert.equal(phone.r.error?.code, 'signature_required');
+  assert.match(phone.r.text, listing);
+  assert.doesNotMatch(phone.r.text, steps);
+  // FROM AN MCP CLIENT, for the one verb no delegation to it covers: where to
+  // do it instead.
+  const update = await ask('update', { restart: 'yes' }, 'box-signers', { unsigned: true });
+  assert.equal(update.r.error?.code, 'signature_required');
+  assert.equal(update.frames.length, 1, 'sent to the box, which decides');
+  assert.match(update.r.text, notDelegated);
+  assert.doesNotMatch(update.r.text, steps);
+  // THE COORDINATOR'S OWN REFUSAL, for a box that takes only signed requests,
+  // by the same rule, with nothing sent.
+  const own = await ask('start', { name: 'strict-phone' }, 'box-strict', { unsigned: true, fromApp: true });
+  assert.equal(own.frames.length, 0);
+  assert.match(own.r.text, listing);
+  assert.doesNotMatch(own.r.text, steps);
+  const ownUpdate = await ask('update', { restart: 'yes' }, 'box-strict', { unsigned: true });
+  assert.equal(ownUpdate.frames.length, 0);
+  assert.match(ownUpdate.r.text, notDelegated);
+  // A SIGNED update from the phone is not this refusal at all.
+  assert.equal((await ask('update', { restart: 'yes' }, 'box-signers', { fromApp: true })).r.ok, true);
 });
 
 test('a box that enforces for the people it knows says what would have carried a request it refused unsigned', async () => {

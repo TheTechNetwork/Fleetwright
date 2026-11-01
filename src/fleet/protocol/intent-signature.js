@@ -50,6 +50,17 @@ export const UNSIGNED_VERBS = Object.freeze(['list', 'status', 'health', 'update
 export const COORDINATOR_UNSIGNED_VERBS = Object.freeze(['forgetperson', 'vmlogin', 'mint']);
 
 /**
+ * The verbs an MCP client offers that the phones leave out of the delegation
+ * they sign for one, on purpose (Fleet.swift `mcpVerbs`, Fleet.kt
+ * `MCP_DELEGATED_VERBS`, held to this list by test/delegations-apps.test.js):
+ * `update` restarts a box somebody may be working on, and `exchange` finishes
+ * a sign-in an MCP client never starts. A refusal that sent an MCP client to
+ * make a delegation for one of these would send it nowhere (core.js,
+ * remedyFor).
+ */
+export const MCP_UNDELEGATED_VERBS = Object.freeze(['exchange', 'update']);
+
+/**
  * Whether a box that enforces refuses this verb unless a person signed it.
  *
  * @param {string} verb

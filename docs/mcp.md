@@ -63,7 +63,9 @@ person signed on their phone: under You → Delegations, *Allow for a day* or
 *Allow for a week*. It covers the verbs the tools offer below that a box would
 want signed, less `exchange` and `update`, on any box, and the phone can revoke
 it there. Without one, a call to such a box is refused with a sentence saying
-where to allow it.
+where to allow it. A call for `update`, which the delegation never covers, is
+refused with where to do it instead: the machine's page in the app, or
+`fleetwright-sidecar update` on the box.
 
 ## What is not exposed, and why that is a policy rather than a lock
 

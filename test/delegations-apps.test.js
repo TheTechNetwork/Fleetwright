@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { iosSources } from './helpers/ios-sources.js';
 import { androidSources } from './helpers/android-sources.js';
 import { VERBS } from '../src/fleet/protocol/intents.js';
-import { DELEGATION_LIMITS, needsSignature } from '../src/fleet/protocol/intent-signature.js';
+import { DELEGATION_LIMITS, MCP_UNDELEGATED_VERBS, needsSignature } from '../src/fleet/protocol/intent-signature.js';
 import { COORDINATOR_ONLY, DEFAULT_DENY } from '../src/mcp/tools.js';
 
 /** The quoted strings in the list literal that follows `marker`: Swift's `[…]`, Kotlin's `listOf(…)`. */
@@ -24,11 +24,13 @@ function listAfter(src, marker) {
 // THE MCP DELEGATION IS A BOX'S CONTRACT: a verb missing from it is a tool an
 // MCP client offers that an enforcing box then refuses, and a verb added to it
 // is a permission nobody chose. So it is what the MCP server offers by default
-// that needs a signature, less the two the phones leave out on purpose, the
-// same on both phones, and small enough for a box to take.
+// that needs a signature, less the two the phones leave out on purpose
+// (MCP_UNDELEGATED_VERBS, which the coordinator's refusal reads so it never
+// sends an MCP client to delegate one of them), the same on both phones, and
+// small enough for a box to take.
 test('both phones delegate to an MCP client exactly the verbs it offers that a box would want signed', () => {
   const offered = Object.keys(VERBS).filter((v) => !DEFAULT_DENY.includes(v) && !COORDINATOR_ONLY.includes(v) && needsSignature(v));
-  const expected = offered.filter((v) => v !== 'exchange' && v !== 'update').sort();
+  const expected = offered.filter((v) => !MCP_UNDELEGATED_VERBS.includes(v)).sort();
   const ios = listAfter(iosSources(), 'static let mcpVerbs');
   const android = listAfter(androidSources(), 'internal val MCP_DELEGATED_VERBS');
   assert.deepEqual([...ios].sort(), expected);
