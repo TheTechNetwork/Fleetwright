@@ -24,9 +24,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
+import { Client, StreamableHTTPClientTransport, UnauthorizedError } from '@modelcontextprotocol/client';
 
 import { Coordinator } from './helpers/node-coordinator.js';
 
@@ -61,8 +59,9 @@ function clientStore() {
   /** @type {any} */ let information;
   /** @type {any} */ let tokens;
   /** @type {string|undefined} */ let verifier;
+  /** @type {any} */ let discovery;
   /** @type {URL|null} */ let redirectedTo = null;
-  /** @type {import('@modelcontextprotocol/sdk/client/auth.js').OAuthClientProvider} */
+  /** @type {import('@modelcontextprotocol/client').OAuthClientProvider} */
   const provider = {
     redirectUrl: 'http://127.0.0.1:51000/callback',
     clientMetadata: {
@@ -79,8 +78,14 @@ function clientStore() {
     redirectToAuthorization: (url) => { redirectedTo = url; },
     saveCodeVerifier: (v) => { verifier = v; },
     codeVerifier: () => { if (!verifier) throw new Error('no verifier saved'); return verifier; },
+    // Kept with the verifier, as the SDK asks: with it, v2 binds the code and
+    // the verifier to the authorization server that issued them (SEP-2352) and
+    // checks that binding when the code comes back. Without it the check is
+    // skipped and the SDK says so in a warning.
+    saveDiscoveryState: (d) => { discovery = d; },
+    discoveryState: () => discovery,
   };
-  return { provider, redirected: () => redirectedTo, tokens: () => tokens, information: () => information };
+  return { provider, redirected: () => redirectedTo, tokens: () => tokens, information: () => information, discovery: () => discovery };
 }
 
 test('the SDK client discovers, registers, is sent to sign in, exchanges the code and talks MCP — against our server', async (t) => {
@@ -104,6 +109,9 @@ test('the SDK client discovers, registers, is sent to sign in, exchanges the cod
   assert.equal(url.searchParams.get('client_id'), registered.client_id);
   assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
   assert.equal(url.searchParams.get('redirect_uri'), 'http://127.0.0.1:51000/callback');
+  // What v2 holds the code to when it comes back: our issuer, as our own
+  // metadata document states it. A mismatch here fails the exchange below.
+  assert.equal(store.discovery()?.authorizationServerMetadata?.issuer, base, 'the SDK bound the flow to our issuer');
   const challenge = url.searchParams.get('code_challenge');
   assert.ok(challenge);
 
