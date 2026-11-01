@@ -21,7 +21,10 @@ import java.security.SecureRandom
 import java.security.spec.MGF1ParameterSpec
 import java.security.spec.X509EncodedKeySpec
 import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
 import javax.crypto.Mac
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.OAEPParameterSpec
 import javax.crypto.spec.PSource
 import javax.crypto.spec.SecretKeySpec
@@ -43,25 +46,40 @@ import kotlin.coroutines.resume
  * never has the secret, so a coordinator that offered a key of its own under
  * the holder's name has no proof to offer with it.
  *
- * THE SECRETS ARE KEPT behind the phone's owner, as on iOS: written without
- * asking, read only after a fingerprint, face or the screen lock. A Keystore
- * key that needs a check for every use needs one to encrypt as well, so they
- * are encrypted to the public half of an RSA key pair kept in the Keystore,
- * which anybody may use, and opened with its private half. A few are kept per
- * Xen Orchestra, because one address can have a pool's own machine on each of
- * its pools.
+ * THE SECRETS ARE KEPT ON THIS PHONE ONLY, a few per Xen Orchestra, because
+ * one address can have a pool's own machine on each of its pools, and THE
+ * PHONE THAT MADE A MACHINE LETS IT IN BY ITSELF: the proof is the
+ * authorisation, carried from Apply to the request. Asked for: "If I
+ * authorize the creation of a holder why do I need to let it in? We can carry
+ * the authorization from the creation: if it's the same VM, allow it in." So
+ * a secret is sealed to an AES key in the Keystore that needs nobody, as the
+ * fleet credential is (Settings), readable by this app with the phone in a
+ * pocket, and a request it proves is let in the moment this phone sees it:
+ * on Machines, or when the asks-to-join push reaches it (HolderNotice).
  *
- * THE CHECK UNLOCKS THE KEY, NOT THE APP. The private half needs the owner for
- * each use, and the prompt is handed the cipher that uses it (a CryptoObject):
- * only the cipher the system gives back after a real check can open a secret.
- * It used to be usable for thirty seconds after any check, and the prompt was
- * a yes or no the app believed, so a hooked callback (Frida, or a privileged
- * app) could skip it after the phone was unlocked and still open them. One use
- * is one secret, so the newest is opened first and the rest only while none
- * has proved the request, which is one check in the ordinary case.
+ * WHAT THE OWNER'S CHECK GUARDED, and why it is not needed here. It stood
+ * between a process running as this app and the approval. That process
+ * already holds the fleet credential and the signing key that approve any
+ * box's key in the vault with no check (PhoneVault.approve, DeviceSigning),
+ * so the check on this one item guarded nothing the rest of the phone did not
+ * already give away; what it cost was a second tap for a machine the person
+ * had just asked for. The proof is what carries the security: only the
+ * machine that read this phone's secret off its own cloud-init drive can make
+ * it, the coordinator never has the secret, and the grant it earns is one
+ * item, the pool's.
+ *
+ * A SECRET FROM BEFORE is still sealed to the RSA key whose private half
+ * needs the owner for each use, and is opened only from a tap, by the prompt
+ * handed the cipher (a CryptoObject): only the cipher the system gives back
+ * after a real check opens it, never a yes or no the app believes. Never
+ * quietly.
  */
 internal object HolderJoin {
-    /** The key whose private half needs the owner for every use. */
+    /** The key that needs nobody: what a secret is sealed to now. */
+    private const val QUIET_KEY_ALIAS = "fleetwright.holder-join.3"
+    /** What a secret sealed to [QUIET_KEY_ALIAS] is kept as: `3:` then iv:ciphertext, both base64. */
+    private const val QUIET = "3:"
+    /** The key whose private half needs the owner for every use, from before: read from a tap only. */
     private const val KEY_ALIAS = "fleetwright.holder-join.2"
     /** The one that was usable for thirty seconds after any check; deleted, and nothing sealed to it is read. */
     private const val OLD_KEY_ALIAS = "fleetwright.holder-join"
@@ -124,31 +142,55 @@ internal object HolderJoin {
     /**
      * A new secret for a machine about to be made for [address], kept here
      * before it is sent, or null when the Keystore would not keep it, in which
-     * case nothing is sent and the machine joins with its pin.
+     * case nothing is sent and the machine joins with its pin. Sealed to the
+     * key that needs nobody, so the push that says the machine asks can be
+     * answered with the phone in a pocket (see the top of this file).
      */
     fun newSecret(settings: Settings, address: String): String? = runCatching {
         val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val secret = bytes.joinToString("") { "%02x".format(it) }
-        val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding").apply { init(Cipher.ENCRYPT_MODE, publicKey(), OAEP) }
-        val sealed = SEALED + Base64.encodeToString(cipher.doFinal(secret.toByteArray(Charsets.US_ASCII)), Base64.NO_WRAP)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, quietKey()) }
+        val sealed = QUIET + Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
+            Base64.encodeToString(cipher.doFinal(secret.toByteArray(Charsets.US_ASCII)), Base64.NO_WRAP)
         settings.putHolderSecrets(address, (listOf(sealed) + kept(settings, address)).take(KEPT_PER_ADDRESS))
         secret
     }.getOrNull()
 
-    /** The secrets kept for [address] that this phone will open: sealed to the current key, newest first. */
-    private fun kept(settings: Settings, address: String) = settings.holderSecrets(address).filter { it.startsWith(SEALED) }
+    /** The secrets kept for [address] that this phone will open, newest first: quietly, or from before behind the owner. */
+    private fun kept(settings: Settings, address: String) = settings.holderSecrets(address).filter { it.startsWith(QUIET) || it.startsWith(SEALED) }
+
+    /** Whether this phone keeps a secret for [address]: whether it made a machine there it would let in by itself. */
+    fun made(settings: Settings, address: String): Boolean = kept(settings, address).isNotEmpty()
 
     /** One kept secret, and the sealed form it is kept as. */
     data class Secret(val sealed: String, val value: String)
 
     /**
-     * The secrets kept for [waiting]'s address, each opened by its own check
-     * with [title] on it, newest first, until one proves a request [waiting]
-     * holds. Null when the person cancels or a check fails; empty when this
-     * phone keeps none it can open.
+     * The secrets this phone opens by itself for [address]: the ones sealed
+     * to the key that needs nobody. Empty when it keeps none such.
+     */
+    fun secrets(settings: Settings, address: String): List<Secret> {
+        val key = runCatching { quietKey() }.getOrNull() ?: return emptyList()
+        return kept(settings, address).filter { it.startsWith(QUIET) }.mapNotNull { sealed ->
+            runCatching {
+                val (iv, body) = sealed.removePrefix(QUIET).split(":", limit = 2)
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, Base64.decode(iv, Base64.NO_WRAP))) }
+                Secret(sealed, String(cipher.doFinal(Base64.decode(body, Base64.NO_WRAP)), Charsets.US_ASCII))
+            }.getOrNull()
+        }
+    }
+
+    /**
+     * The secrets kept for [waiting]'s address, for a tap: the ones this
+     * phone opens by itself, and, when it keeps none such, the ones from
+     * before, each opened by its own check with [title] on it, newest first,
+     * until one proves a request [waiting] holds. Null when the person
+     * cancels or a check fails; empty when this phone keeps none it can open.
      */
     suspend fun unlock(context: Context, settings: Settings, waiting: Waiting, title: String): List<Secret>? {
-        val kept = kept(settings, waiting.address)
+        val quiet = secrets(settings, waiting.address)
+        if (quiet.isNotEmpty()) return quiet
+        val kept = kept(settings, waiting.address).filter { it.startsWith(SEALED) }
         if (kept.isEmpty()) return emptyList()
         val key = privateKey() ?: return emptyList()
         val opened = mutableListOf<Secret>()
@@ -174,6 +216,26 @@ internal object HolderJoin {
     /** The one that let a machine in, gone: it proves nothing it should. */
     fun spent(settings: Settings, address: String, secret: Secret) {
         settings.putHolderSecrets(address, settings.holderSecrets(address).filter { it != secret.sealed })
+    }
+
+    /**
+     * The key that needs nobody: AES in the Keystore, non-extractable, with
+     * no owner check, as Settings keeps the fleet credential under. Made the
+     * first time a secret is sealed.
+     */
+    private fun quietKey(): SecretKey {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (store.getEntry(QUIET_KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(
+            KeyGenParameterSpec.Builder(QUIET_KEY_ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                // Deliberately NOT setUserAuthenticationRequired: the asks-to-join
+                // push is answered with the phone in a pocket (the top of this file).
+                .build(),
+        )
+        return generator.generateKey()
     }
 
     /** SHA-256 for the digest and SHA-1 for MGF1, which is what the Keystore's private half takes. */
@@ -245,6 +307,62 @@ internal object HolderJoin {
             }.onFailure { if (cont.isActive) cont.resume(null) }
         }
 
+    // Letting it in
+
+    /** How letting a machine in ended, in the words the card and a notification say. */
+    sealed class Outcome(val said: String?, val isIn: Boolean) {
+        /** In, and holding its pool. */
+        class Joined(said: String) : Outcome(said, true)
+        /** In, and the vault would not let it hold the pool: said, with what to do. */
+        class JoinedNotHolding(said: String) : Outcome(said, true)
+        /** Said and not let in: this phone did not make it, no request is proved, or the fleet refused. */
+        class Refused(said: String) : Outcome(said, false)
+        /** Nothing to say: the person cancelled the check, or, quietly, the only secrets are from before and need a tap. */
+        object Unsaid : Outcome(null, false)
+    }
+
+    /**
+     * THE ONE APPROVAL, from a tap or by itself ([quietly]). The request one
+     * of this phone's secrets proves is the one let in: the fleet enrols that
+     * key, and the vault lets the same key hold that pool and nothing else of
+     * this person's. A request none of them proves is said as such and
+     * nothing is let in. Quietly, only the secrets this phone opens by itself
+     * are looked at, so nothing puts a check up from a background.
+     */
+    suspend fun admit(context: Context, settings: Settings, waiting: Waiting, quietly: Boolean): Outcome {
+        if (waiting.requests.isEmpty()) return Outcome.Unsaid
+        val secrets = if (quietly) {
+            val quiet = secrets(settings, waiting.address)
+            // Only secrets from before: a tap opens them, this does not.
+            if (quiet.isEmpty() && made(settings, waiting.address)) return Outcome.Unsaid
+            quiet
+        } else {
+            unlock(context, settings, waiting, reason(waiting.hostId, waiting.address)) ?: return Outcome.Unsaid
+        }
+        if (secrets.isEmpty()) return Outcome.Refused(notThisPhone(waiting.hostId))
+        val (request, value) = proven(waiting, secrets.map { it.value }) ?: return Outcome.Refused(notProven(waiting.hostId))
+        val fleet = Fleet(settings)
+        val answer = fleet.approveHolder(waiting.hostId, request.key).getOrElse {
+            return Outcome.Refused(it.message ?: "The fleet did not let ${waiting.hostId} in.")
+        }
+        if (!answer.ok) return Outcome.Refused(answer.text.ifBlank { "The fleet did not let ${waiting.hostId} in." })
+        secrets.firstOrNull { it.value == value }?.let { spent(settings, waiting.address, it) }
+        return PhoneVault(settings).approveHolder(fleet, waiting.hostId, request.publicJwk, waiting.address).fold(
+            onSuccess = { Outcome.Joined(joined(waiting.hostId, waiting.address)) },
+            onFailure = { Outcome.JoinedNotHolding(joinedNotHolding(waiting.hostId, it.message ?: "the vault did not answer.")) },
+        )
+    }
+
+    /**
+     * By itself, from the push that says a machine asks (HolderNotice): the
+     * one waited on under that name, let in when this phone's secret proves
+     * its request. Null when there is no such name, or nothing to say.
+     */
+    suspend fun admit(context: Context, settings: Settings, hostId: String): Outcome? {
+        val waiting = Fleet(settings).holders().getOrNull()?.firstOrNull { it.hostId == hostId } ?: return null
+        return admit(context, settings, waiting, quietly = true).takeIf { it !is Outcome.Unsaid }
+    }
+
     // What both phones say
 
     fun asks(hostId: String) = "$hostId asks to join"
@@ -259,4 +377,10 @@ internal object HolderJoin {
     fun joined(hostId: String, address: String) = "$hostId has joined and holds $address."
     fun joinedNotHolding(hostId: String, why: String) =
         "$hostId has joined, and could not be approved to hold its pool: $why Approve it under its page."
+    /** Under a name nothing has asked under yet, on the phone that made it. */
+    fun byItself(hostId: String) = "This phone made $hostId, so it lets it in by itself once it asks. Nothing to tap."
+    /** The notification, once it is in: the title, and [joined] under it. */
+    fun joinedTitle(hostId: String) = "$hostId joined"
+    /** The one action on the asks-to-join notification. */
+    const val LET_IN_WORD = "Let it in"
 }

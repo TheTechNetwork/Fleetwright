@@ -387,19 +387,39 @@ The phone seals the secret to the job with the rest of the choice
    it is in, and wipes the secret once it is. The coordinator keeps at most
    three requests a name, pushes `<name> asks to join` to its owner, and never
    sees the secret.
-3. **The phone checks it, not the coordinator.** Machines shows the name first,
-   with the attention ring and **Let it in**. Face ID (or the fingerprint, or
-   the screen lock) opens the secrets this phone made for that address, and the
-   phone looks for a request one of them proves, made over the key the request
-   carries. A coordinator that offered a key of its own under the holder's name
-   has no proof to offer with it. A request no secret proves is said as such,
-   and nothing is let in. A phone that did not make the machine says it cannot
-   check it.
+3. **The phone checks it, not the coordinator, and the phone that made it
+   lets it in by itself.** The secrets this phone made for that address are
+   its own to read (kept as the fleet credential is: after the first unlock,
+   this device only, and never in a backup), and it looks for a request one
+   of them proves, made over the key the request carries. A coordinator that
+   offered a key of its own under the holder's name has no proof to offer with
+   it. The phone tries this the moment it sees the request: on Machines, where
+   the name is the first card, and from the push that says it asks, which
+   wakes the app. Asked for: *"If I authorize the creation of a holder why do
+   I need to let it in? Carry the authorization from the creation: if it's
+   the same VM, allow it in."* The proof is that authorisation, carried from
+   Apply to the request. A request no secret proves is said as such, and
+   nothing is let in; **Let it in** stays on the card, and on the push, for a
+   request the phone could not settle by itself: a phone that did not make the
+   machine says it cannot check it, and a secret from before this change is
+   still behind Face ID (or the fingerprint, or the screen lock), which the
+   tap opens.
 4. **One approval does both.** The phone lets that key into the fleet
    (`POST /api/holders/<name>/approve`), and approves the same key in the vault
    with a grant scoped to `hypervisor:<address>` and nothing else (`only`, in
-   docs/vault.md). The secret that proved it is deleted. **Decline** drops the
+   docs/vault.md). The secret that proved it is deleted, and the notification
+   that said it asks becomes the word that it joined. **Decline** drops the
    requests and keeps the name held for the right one.
+
+   **Why the owner's face is not in front of it any more.** It stood between a
+   process running as the app and the approval. That process already holds
+   the fleet credential and the signing key that approve any box's key in the
+   vault with no face, so the face on this one item guarded nothing the rest
+   of the phone did not already give away, and it cost a second tap for a
+   machine the person had just asked for. What carries the security is the
+   proof: only the machine that read this phone's secret off its own
+   cloud-init drive can make it, the coordinator never has the secret, and
+   the grant it earns is one item, the pool's.
 
 A box older than `holder-ask` still makes a machine that joins with its pin
 alone, as a permanent host of nobody's. The pin is on the drive of one that
@@ -422,10 +442,11 @@ owner, so it does not sit under Machines as "not reporting" beside the new
 one. Asked for: "Recreating holder didn't delete old one", about a row the
 VM had already left behind.
 
-**It holds nothing until you approve it.** Without the asking, it joins the
-fleet like any box, and the pool's token reaches it only as the `hypervisor:`
-vault item, once you approve its key on its page under Machines. With it, the
-approval is the Let it in above, and holds that one item. Nothing the box or
+**It holds nothing until your phone approves it.** Without the asking, it
+joins the fleet like any box, and the pool's token reaches it only as the
+`hypervisor:` vault item, once you approve its key on its page under Machines.
+With it, the approval is the one above, given by the phone that made it when
+the proof checks, or by your tap, and holds that one item. Nothing the box or
 the coordinator does can approve it.
 
 **Once approved, it is asked first.** It asks the vault like any approved box,

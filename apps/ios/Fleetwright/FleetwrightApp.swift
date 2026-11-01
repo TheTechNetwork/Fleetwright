@@ -277,6 +277,31 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         print("push registration failed: \(error.localizedDescription)")
     }
 
+    /// A PUSH THAT WAKES THE APP (`content-available`): a pool's own machine
+    /// asking to join. The phone that made it lets it in here, by itself,
+    /// with nobody present: the secret it kept at Apply proves the request
+    /// (HolderJoin.admit), the fleet enrols the key and the vault lets it
+    /// hold its pool, and the notification that said it asks is replaced by
+    /// the word that it joined. A phone that did not make it, or keeps its
+    /// secret from before behind Face ID, changes nothing here and leaves
+    /// the notification, whose button opens Machines. iOS gives this a few
+    /// seconds and no promise of running at all, so the card on Machines
+    /// does the same when it is next on screen.
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any]
+    ) async -> UIBackgroundFetchResult {
+        guard userInfo["kind"] as? String == "holder-join", let hostId = userInfo["hostId"] as? String, !hostId.isEmpty else { return .noData }
+        let settings = self.settings ?? Settings()
+        guard settings.configured, let outcome = await HolderJoin.admit(named: hostId, settings: settings), outcome.isIn else { return .noData }
+        let center = UNUserNotificationCenter.current()
+        let name = userInfo["name"] as? String ?? "holder-join-\(hostId)"
+        let asked = await center.deliveredNotifications().filter { $0.request.content.userInfo["name"] as? String == name }.map(\.request.identifier)
+        center.removeDeliveredNotifications(withIdentifiers: asked)
+        LocalNotice.post(title: HolderJoin.joinedTitle(hostId), body: outcome.said ?? "", id: name)
+        return .newData
+    }
+
     /// Show the notification even with the app open — a session that has hit a
     /// prompt is worth interrupting for whatever you were doing in the app.
     func userNotificationCenter(
@@ -340,8 +365,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             let address = info["address"] as? String ?? ""
             let action = response.actionIdentifier
             await MainActor.run {
-                // A POOL'S OWN MACHINE ASKING TO JOIN opens Machines, where it
-                // is the first card and Let it in is (HoldersAskingView).
+                // A POOL'S OWN MACHINE ASKING TO JOIN opens Machines, from the
+                // body and from Let it in alike: it is the first card there,
+                // the phone that made it lets it in as the card appears, and
+                // Let it in is on the card for one it cannot settle by itself
+                // (HoldersAskingView).
                 if kind == "holder-join" { return openMachines() }
                 // A POOL XEN ORCHESTRA NO LONGER SHOWS, or one it shows again.
                 // Reconnect on a lost one opens the reconnect for it, starting
