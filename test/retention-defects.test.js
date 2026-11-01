@@ -1,5 +1,5 @@
-// Seven defects in the join and retention paths — the first five found by
-// reading them end to end for docs/auth-and-join.md, the last two in boxes'
+// Eight defects in the join and retention paths — the first five found by
+// reading them end to end for docs/auth-and-join.md, the last three in boxes'
 // journals — each written as the behaviour that was missing rather than as
 // the line that was wrong, because every one of them was a field or a call
 // that existed at every layer but one, and a test of any single function
@@ -25,6 +25,9 @@
 //      name into a frozen config and the write threw where the enrol was
 //      logged, so the journal said "could not enrol itself" about a machine
 //      that had just done so
+//   8. a pool's own machine was given no vault key, as no machine from a
+//      hypervisor is, so it never asked for the one item Let it in granted
+//      it, held no pool, and was never the holder its name says it is
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -256,6 +259,24 @@ test('7. a machine that enrolled itself dials under that name on the boot that e
   const bin = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
   const writes = bin.match(/\bcfg\.\w+\s*=(?!=)/g) ?? [];
   assert.deepEqual(writes, [], 'the sidecar writes nothing into its frozen config');
+});
+
+test('8. a pool’s own machine asks the vault, which is the only way its pool’s token reaches it', () => {
+  // holder-b2eca0's journal, fourteen hours after it was let in: no vault
+  // line at all, where every other box says `vault: holding` every ten
+  // minutes. bin/fleetwright-sidecar hands a machine from a hypervisor no
+  // vault key, because nobody approves a machine's key; Let it in does
+  // exactly that for the pool's own machine, with `only` the pool's item,
+  // and nothing else delivers it (docs/hypervisors.md, "It holds nothing
+  // until you approve it"). Without it the box holds no pool, its health
+  // marks no `holder`, the coordinator never asks it first and never says
+  // `holds`, and the phone has nothing to draw Make it again from.
+  const bin = readFileSync(new URL('../bin/fleetwright-sidecar', import.meta.url), 'utf8');
+  const m = bin.match(/vaultKey:\s*key\s*&&\s*\(([^)]*)\)/);
+  assert.ok(m, 'the sidecar decides its vault key from more than "joined from a hypervisor"');
+  const terms = m[1].split('||').map((t) => t.trim());
+  assert.ok(terms.includes('!cfg.vmJoin'), 'a machine from a hypervisor still has none');
+  assert.ok(terms.includes('cfg.holderFor'), 'the pool’s own machine has one');
 });
 
 test('a plain `enrol <pin>` records the name beside the key, like the Actions path', () => {
