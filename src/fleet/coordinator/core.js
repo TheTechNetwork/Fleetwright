@@ -316,6 +316,30 @@ function holds(host, email) {
 }
 
 /**
+ * The pool a pool's own machine holds, as `holds` on its snapshot row, for
+ * the person whose pool it is: the address of the entry in its health it
+ * marks `holder`, seen as xoFor lets that person see it. The phone that holds
+ * that pool's token is theirs, and its page for the machine offers Make it
+ * again for the pool there, which replaces the machine with one born from
+ * the newest build (docs/hypervisors.md, "Make it again"). Asked for:
+ * "Holder should also allow to rebuild from that page".
+ *
+ * Nothing for anybody else, for a request with nobody named, and for a
+ * holder that has not reported yet, which is cannot tell, not no (C-5): the
+ * page then offers nothing. Deciding only what a page offers: the job it
+ * opens takes the person's own admin sign-in, as a policy change always has.
+ *
+ * @param {any} entry  the host's registry entry
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ */
+function holdsFor(entry, requester) {
+  const email = typeof requester?.email === 'string' && requester.email ? requester.email.toLowerCase() : null;
+  if (!email) return {};
+  const mine = xoFor(entry, email).find((/** @type {any} */ e) => e?.holder === true && typeof e.address === 'string' && e.address);
+  return mine ? { holds: mine.address } : {};
+}
+
+/**
  * A report that can say whose each session is: the hub answered, and listed
  * them. A sidecar whose hub is down reports `sessions: null`, which is "cannot
  * tell", never "none" (C-5), so a hand-back is never paid from one (#handBack).
@@ -6789,7 +6813,9 @@ export class CoordinatorCore {
       // placement uses, so New session › Where offers only the machines a
       // start would reach (C-2): not one that is not reporting or degraded,
       // not somebody else's temporary machine, and never a pool's own
-      // machine, which runs no sessions and says so (`holder`).
+      // machine, which runs no sessions and says so (`holder`), and which
+      // pool it holds (`holds`), for the person whose pool it is, so its
+      // page can offer Make it again for that pool (holdsFor).
       //
       // AND WHETHER THIS PERSON ADMINISTERS IT, by the rule placement refuses
       // with (hosts.js administers), so a machine's releases, image, labels,
@@ -6802,7 +6828,7 @@ export class CoordinatorCore {
         ...visibleHost(h, requester, this.registry.hosts.get(h.hostId)),
         takesSessions: takesSessions(h, requester, this.registry.hosts.get(h.hostId)),
         administers: administers(this.registry.hosts.get(h.hostId), requester),
-        ...(runsNoSessions(h.hostId) ? { holder: true } : {}),
+        ...(runsNoSessions(h.hostId) ? { holder: true, ...holdsFor(this.registry.hosts.get(h.hostId), requester) } : {}),
       })),
       devices: this.devices.size,
       events: visibleEvents(this.events.slice(-20), requester),

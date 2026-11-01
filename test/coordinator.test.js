@@ -536,6 +536,31 @@ test('the host list says which machines a start would reach, and which is a pool
   );
 });
 
+test('the host list says which pool a pool’s own machine holds, to the person whose pool it is', () => {
+  // Its page offers Make it again for that pool, on the phone that holds the
+  // pool's token (C-2): the address from the holder's own health, as it
+  // marks it, and only to its owner. Anybody else, nobody named, and a
+  // holder that has not said see no `holds`, which is cannot tell (C-5).
+  const core = new CoordinatorCore({ registry: new HostRegistry() });
+  const pool = { address: '10.10.10.230', owner: 'Eli@example.com', reachable: true, pools: [{ id: 'p', name: 'rack' }] };
+  core.registry.connect('holder-e8309c', () => {});
+  core.registry.recordHealth('holder-e8309c', health({ claudeAccounts: 0, xo: [{ ...pool, holder: true }] }));
+  // A box that is not a holder says it holds a pool too, as every box
+  // holding its token does; its row gets no `holds`.
+  core.registry.connect('deb13', () => {});
+  core.registry.recordHealth('deb13', health({ xo: [{ ...pool, holder: true }] }));
+  core.registry.connect('holder-aaaaaa', () => {});
+  core.registry.recordHealth('holder-aaaaaa', health({ claudeAccounts: 0 }));
+  const rows = (/** @type {any} */ who) => Object.fromEntries(core.snapshot(who).hosts.map((h) => [h.hostId, [h.holder === true, h.holds]]));
+  assert.deepEqual(rows({ email: 'eli@example.com', admin: true }), {
+    'holder-e8309c': [true, '10.10.10.230'],
+    deb13: [false, undefined],
+    'holder-aaaaaa': [true, undefined],
+  });
+  assert.deepEqual(rows({ email: 'sam@example.com', admin: true })['holder-e8309c'], [true, undefined], 'not another person’s, admin or not');
+  assert.deepEqual(rows(null)['holder-e8309c'], [true, undefined], 'nobody named is nobody’s');
+});
+
 test('an intent travels coordinator → websocket → sidecar → fleetwright and back', async (t) => {
   // The host must already report holding `bigjob`, because `stop` is pinned —
   // a fleet where no host claims the session refuses rather than picking one.
