@@ -24,7 +24,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Client, StreamableHTTPClientTransport, UnauthorizedError } from '@modelcontextprotocol/client';
+import { Client, IssuerMismatchError, StreamableHTTPClientTransport, UnauthorizedError } from '@modelcontextprotocol/client';
 
 import { Coordinator } from './helpers/node-coordinator.js';
 
@@ -127,8 +127,10 @@ test('the SDK client discovers, registers, is sent to sign in, exchanges the cod
 
   // 3. The redirect comes back with the code; the SDK spends it with the
   //    verifier it kept, at OUR token endpoint, and stores what it gets.
+  //    The callback carries `iss`, as the authorize page sends it (RFC 9207),
+  //    and the SDK checks it against the issuer it recorded at step 1.
   const second = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { authProvider: store.provider });
-  await second.finishAuth(/** @type {any} */ (issued).code);
+  await second.finishAuth(new URLSearchParams({ code: /** @type {any} */ (issued).code, iss: base }));
   const tokens = store.tokens();
   assert.match(String(tokens?.access_token), /^fwk_/, 'the access token IS a device credential');
   assert.equal(String(tokens?.token_type).toLowerCase(), 'bearer');
@@ -171,7 +173,7 @@ test('a revoked credential sends the SDK client back to sign in, not into a loop
     redirectUri: 'http://127.0.0.1:51000/callback', challenge: url.searchParams.get('code_challenge'),
   }));
   const second = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { authProvider: store.provider });
-  await second.finishAuth(issued.code);
+  await second.finishAuth(new URLSearchParams({ code: issued.code, iss: base }));
   const connected = new Client({ name: 'oracle', version: '0' });
   await connected.connect(second);
   await connected.close();
@@ -187,4 +189,31 @@ test('a revoked credential sends the SDK client back to sign in, not into a loop
   const third = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { authProvider: store.provider });
   await assert.rejects(new Client({ name: 'oracle', version: '0' }).connect(third), UnauthorizedError);
   await third.close().catch(() => {});
+});
+
+test('a code that comes back naming another issuer is refused by the SDK, before it is spent', async (t) => {
+  // The mix-up attack, from the client's side. Our metadata says we put `iss`
+  // on the callback; a callback naming a different server is what one looks
+  // like, and the SDK must stop there rather than spend the code at our token
+  // endpoint. This is the check that advertising the parameter switches on.
+  const { c, base } = await coordinator(t);
+  const store = clientStore();
+  const first = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { authProvider: store.provider });
+  await assert.rejects(new Client({ name: 'oracle', version: '0' }).connect(first), UnauthorizedError);
+  await first.close().catch(() => {});
+  const url = /** @type {URL} */ (store.redirected());
+  const issued = /** @type {any} */ (c.core.mcpAuthorizations.issueCode({
+    email: 'owner@example.com', name: null, clientId: store.information().client_id,
+    redirectUri: 'http://127.0.0.1:51000/callback', challenge: url.searchParams.get('code_challenge'),
+  }));
+
+  const second = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), { authProvider: store.provider });
+  await assert.rejects(
+    second.finishAuth(new URLSearchParams({ code: issued.code, iss: 'https://attacker.example' })),
+    (/** @type {any} */ err) => err instanceof IssuerMismatchError && err.kind === 'authorization_response',
+  );
+  assert.equal(store.tokens(), undefined, 'nothing was exchanged');
+
+  // And a callback with no `iss` at all is refused too, because we said we send one.
+  await assert.rejects(second.finishAuth(new URLSearchParams({ code: issued.code })), IssuerMismatchError);
 });

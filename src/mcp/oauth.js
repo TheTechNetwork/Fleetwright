@@ -82,6 +82,12 @@ export function authorizationServerMetadata(origin) {
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
     scopes_supported: ['fleet'],
+    // RFC 9207. The authorize page puts `iss` on every redirect it sends back
+    // with a code, and this is how a client knows to expect it, and so to
+    // refuse a callback without it. RFC 9207 registers it in the IANA
+    // metadata registry that RFC 8414 and OIDC discovery both draw on, so the
+    // one-document rule above still holds.
+    authorization_response_iss_parameter_supported: true,
   };
 }
 
