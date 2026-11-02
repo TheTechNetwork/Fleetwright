@@ -20,13 +20,13 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash, generateKeyPairSync, X509Certificate } from 'node:crypto';
 import tls from 'node:tls';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 import { XoSetups, FLEET_USER } from '../src/fleet/host/xo-setup.js';
@@ -59,11 +59,13 @@ function hostKeyBlob() {
 /**
  * A pool master on PATH, and the installer the job will be handed.
  *
- * @param {{ password?: string, scanned?: string, mode?: 'done'|'failed', unreachable?: boolean, keyscan?: { say: string, times: number } }} [opts]
+ * @param {{ password?: string, scanned?: string, mode?: 'done'|'failed', unreachable?: boolean, keyscan?: { say: string, times: number }, prompt?: string, asks?: boolean }} [opts]
  *   `scanned` is the key ssh-keyscan reports, when it is not the pool's own.
  *   `keyscan` turns that many scans away with what ssh-keyscan says of it.
+ *   `prompt` is what the master asks with in place of a password prompt;
+ *   `asks: false` is a master that never asks and turns the client away.
  */
-function poolMaster({ password = ROOT_PASSWORD, scanned, mode = 'done', unreachable = false, keyscan } = {}) {
+function poolMaster({ password = ROOT_PASSWORD, scanned, mode = 'done', unreachable = false, keyscan, prompt, asks } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'xo-pool-'));
   const bin = path.join(dir, 'bin');
   const poolPath = path.join(dir, 'pool');
@@ -79,6 +81,8 @@ function poolMaster({ password = ROOT_PASSWORD, scanned, mode = 'done', unreacha
     password,
     unreachable,
     keyscan,
+    prompt,
+    asks,
     log: logPath,
     poolPath,
     xe: {
@@ -524,6 +528,63 @@ test('a pool master that is silent is said as silent, with how long was listened
     (e) => e.message === `nothing answered SSH at ${POOL_MASTER} from here: ssh-keyscan heard nothing in 5 seconds, 3 times.`,
   );
   assert.equal(pool.log().filter((e) => e.role === 'ssh').length, 0);
+});
+
+// A WATCHDOG JOB ON holder-9fd878, 2 November 2026: "the pool master refused
+// the root password", four times, with a password the pool master took from
+// a laptop a minute later over exactly the route the box uses. The box's
+// askpass was `new URL('./xo-askpass.js', import.meta.url)`, a sibling that a
+// checkout has and a release, one bundled file, does not: node exited on a
+// missing file, ssh was given no password and said Permission denied, and
+// the job called that a refusal. This suite runs from a checkout, so it
+// passed. So the connection is opened here from a bundle built the way the
+// release is (tools/build-host-package.mjs), with nothing beside it.
+test('the password reaches the pool master from a released bundle, which has no files beside it', async () => {
+  const { build } = await import('esbuild');
+  const stage = mkdtempSync(path.join(os.tmpdir(), 'xo-bundle-'));
+  await build({
+    entryPoints: [path.join(HERE, '..', 'src', 'fleet', 'host', 'xo-deploy.js')],
+    outfile: path.join(stage, 'lib', 'xo-deploy.mjs'),
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    target: 'node20',
+    minify: false,
+    sourcemap: false,
+    logLevel: 'silent',
+  });
+  assert.deepEqual(readdirSync(path.join(stage, 'lib')), ['xo-deploy.mjs'], 'the bundle stands alone, as a release does');
+  const bundled = await import(pathToFileURL(path.join(stage, 'lib', 'xo-deploy.mjs')).href);
+  const pool = poolMaster();
+  const link = await bundled.openPool({ address: POOL_MASTER, hostKey: pool.pin, secret: { password: ROOT_PASSWORD }, dir: bundled.jobDir(), pauseMs: 20 });
+  await link.close();
+  assert.equal(pool.log().filter((e) => e.role === 'ssh' && e.argv.includes('ControlMaster=yes')).length, 1, 'signed in once');
+});
+
+test('a refusal is said by what the pool master asked for, not always as a wrong password', async () => {
+  // ssh says "Permission denied" for a wrong password, for a prompt this
+  // machine does not answer, and for a master that never asked; the job used
+  // to call all three the password's fault.
+  const asking = poolMaster({ prompt: 'Verification code: ' });
+  await assert.rejects(
+    openPool({ address: POOL_MASTER, hostKey: asking.pin, secret: { password: ROOT_PASSWORD }, dir: jobDir(), pauseMs: 20 }),
+    (e) => e.message === 'the pool master asked “Verification code:” rather than for a password, which this machine does not answer, so the password was not sent.',
+  );
+  const silent = poolMaster({ asks: false });
+  await assert.rejects(
+    openPool({ address: POOL_MASTER, hostKey: silent.pin, secret: { password: ROOT_PASSWORD }, dir: jobDir(), pauseMs: 20 }),
+    (e) => {
+      assert.match(e.message, /^the pool master did not ask this machine for a password before turning it away, so the password was not sent: ssh said “xcp1\.test: Permission denied \(publickey,gssapi-keyex,gssapi-with-mic\)\.”\. Either the pool master offers no way to send one, or this machine could not run its own password helper\.$/);
+      assert.doesNotMatch(e.message, /refused the root password/);
+      return true;
+    },
+  );
+  // A wrong password is still said as one, and only once it was tried.
+  const wrong = poolMaster({ password: 'not-the-one' });
+  await assert.rejects(
+    openPool({ address: POOL_MASTER, hostKey: wrong.pin, secret: { password: ROOT_PASSWORD }, dir: jobDir(), pauseMs: 20 }),
+    (e) => e.message === 'the pool master refused the root password.',
+  );
 });
 
 test('through a phone the probe makes one attempt over HTTPS, and takes no look over SSH', async () => {
