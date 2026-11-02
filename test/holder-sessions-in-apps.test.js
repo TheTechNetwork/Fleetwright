@@ -43,33 +43,62 @@ test('a degraded box with no account says it once, in the fleet’s reason', () 
   }
 });
 
-test('the pool’s own machine’s page offers Make it again, into the pool’s policy with it on (C-2)', () => {
-  // Asked for: "Holder should also allow to rebuild from that page". The
-  // same words on both phones, offered only where the fleet said which pool
-  // it holds (`holds`, core.js holdsFor), this phone holds that pool's token,
-  // and this person is the admin a policy change takes; and the policy
-  // screen it opens starts with the switch on, where the machine makes the
-  // new one ask and the pool has one, so Apply is still what does it.
+test('the pool’s own machine’s page offers Make it again, which does the rest by itself (C-2)', () => {
+  // Asked for: "Holder should also allow to rebuild from that page", then
+  // "Recreate the holder from the holder page less clicks". The same words
+  // on both phones, offered only where the fleet said which pool it holds
+  // (`holds`, core.js holdsFor), this phone holds that pool's token, and
+  // this person is the admin a policy change takes. The policy screen it
+  // opens starts with the switch on, where the machine makes the new one
+  // ask and the pool has one, and then SENDS THE CHOICE BY ITSELF: the tap
+  // on the page and the sign-in were the asking, and the form with Apply at
+  // the bottom of it was a scroll nobody came for.
   const title = 'Make it again';
-  const line = 'Removes this machine, disk and all, and makes a new one from the newest build of its suite, which asks to join; let it in under Machines. '
-    + 'Opens the pool’s policy with that switched on, and Apply does it.';
+  const line = 'Removes this machine, disk and all, and makes a new one from the newest build of its suite, which asks to join; this phone lets it in. '
+    + 'It asks for the pool’s admin sign-in, or opens the one this phone kept, and does the rest by itself.';
   // iOS
   assert.ok(PHONES[0].lines.includes(`let holderAgainTitle = "${title}"`), 'iOS title');
-  assert.ok(PHONES[0].lines.includes(`let holderAgainLine = "${line.slice(0, line.indexOf('Opens'))}"\n    + "${line.slice(line.indexOf('Opens'))}"`), 'iOS line');
+  assert.ok(PHONES[0].lines.includes(`let holderAgainLine = "${line.slice(0, line.indexOf('It asks'))}"\n    + "${line.slice(line.indexOf('It asks'))}"`), 'iOS line');
   assert.match(PHONES[0].fleet, /var holder: Bool\?[\s\S]{0,400}var holds: String\?/, 'iOS decodes holds');
   const host = I('HostView.swift');
   assert.match(host, /if holder, let holds, holdsHere, settings\.showsAdmin \{[\s\S]{0,200}AddHypervisorView\(settings: settings, policyFor: holds, makeHolderAgain: true\)[\s\S]{0,400}Text\(holderAgainTitle\)[\s\S]{0,80}Text\(holderAgainLine\)/, 'iOS offers it only then');
   assert.match(I('MachinesView.swift'), /holdsHere: reporting\?\.holds\.map \{ a in hypervisors\.contains \{ \$0\.address == a \} \} \?\? false/, 'iOS: only a pool this phone holds');
-  assert.match(I('AddHypervisorView.swift'), /if makeHolderAgain, choice\.holderAskChoice, opened\.holder\(on: choice\.egress\) != nil \{ choice\.holderAgain = true \}/, 'iOS opens with the switch on');
+  const form = I('AddHypervisorView.swift');
+  assert.match(form, /if makeHolderAgain, choice\.holderAskChoice, opened\.holder\(on: choice\.egress\) != nil \{ choice\.holderAgain = true \}/, 'iOS opens with the switch on');
   // Android
   assert.ok(PHONES[1].lines.includes(`const val HOLDER_AGAIN_TITLE = "${title}"`), 'Android title');
-  assert.ok(PHONES[1].lines.includes(`const val HOLDER_AGAIN_LINE = "${line.slice(0, line.indexOf('Opens'))}" +\n    "${line.slice(line.indexOf('Opens'))}"`), 'Android line');
+  assert.ok(PHONES[1].lines.includes(`const val HOLDER_AGAIN_LINE = "${line.slice(0, line.indexOf('It asks'))}" +\n    "${line.slice(line.indexOf('It asks'))}"`), 'Android line');
   assert.match(PHONES[1].fleet, /holds = o\.optString\("holds"\)\.takeIf \{ it\.isNotBlank\(\) && it != "null" \}/, 'Android parses holds');
   const page = A('MachinesScreen.kt');
   assert.match(page, /if \(h\?\.holder == true && holds != null && holdsHere && admin == true\) \{\s*SectionHead\(holds\)\s*OpenRow\(HOLDER_AGAIN_TITLE\) \{ onMakeAgain\(holds\) \}\s*Hint\(HOLDER_AGAIN_LINE\)/, 'Android offers it only then');
   assert.match(page, /holdsHere = fleetHosts\.firstOrNull \{ it\.hostId == id \}\?\.holds\?\.let \{ a -> held\.any \{ it\.address == a \} \} == true/, 'Android: only a pool this phone holds');
   assert.match(page, /HypervisorSheet\(settings, policyFor = pool, makeHolderAgain = true,/, 'Android opens the sheet for it');
-  assert.match(A('HypervisorSheet.kt'), /if \(policy && makeHolderAgain && c\.holderAskChoice && XoPolicy\.holderOn\(opened, c\.egress\) != null\) c\.copy\(holderAgain = true\) else c/, 'Android opens with the switch on');
+  const sheet = A('HypervisorSheet.kt');
+  assert.match(sheet, /if \(policy && makeHolderAgain && c\.holderAskChoice && XoPolicy\.holderOn\(opened, c\.egress\) != null\) c\.copy\(holderAgain = true\) else c/, 'Android opens with the switch on');
+
+  // SENT BY ITSELF, on both phones, on the same three conditions and no
+  // other: the switch went on, the machine is there, and the choice as it
+  // stands is one the machine would take. Apply's own function, so what
+  // goes is what a tap on Apply would have sent, secret and all.
+  assert.match(form, /if makeHolderAgain \{\s*if choice\.holderAgain, choice\.problem\(in: opened\) == nil, let mine = opened\.holder\(on: choice\.egress\) \{[\s\S]{0,300}straightThrough = true\s*await applyPolicy\(opened, job: job\)/, 'iOS sends it by itself');
+  assert.match(sheet, /if \(policy && makeHolderAgain && c != null\) \{\s*val mine = XoPolicy\.holderOn\(opened, c\.egress\)\s*if \(c\.holderAgain && mine != null && XoPolicy\.problem\(opened, c\) == null\) \{[\s\S]{0,300}straight = true\s*applyChoice\(r\.xosetup\)/, 'Android sends it by itself');
+  // The form is not drawn under it while it goes; the progress is, and says
+  // which machine goes and where the new one is made, in the same words.
+  assert.match(form, /if choosing, let inventory, !straightThrough \{\s*policySections\(inventory, job: job\)/, 'iOS draws progress, not the form');
+  assert.match(sheet, /straight -> \{\}\s*inv != null && c != null -> \{/, 'Android draws no form while it goes');
+  const said = 'Removing \\(name), disk and all, and making a new one on \\(straightWayOut), which asks to join; this phone lets it in.';
+  assert.ok(form.includes(`"${said}"`), 'iOS says what went');
+  assert.ok(sheet.includes('"Removing $name, disk and all, and making a new one on $wayOut, which asks to join; this phone lets it in."'), 'Android says what went');
+  // And when it could not, the form, with why, in the same words.
+  const whyNot = [
+    'cannot make a machine that asks to join, so nothing was made again by itself. Update it, or choose below.',
+    'has no machine of its own on the way out any more, so there is nothing to make again. This is what the fleet may use there, as it stands.',
+    'Nothing was made again by itself: ',
+  ];
+  for (const why of whyNot) {
+    assert.ok(form.includes(why), `iOS says why not: ${why.slice(0, 30)}`);
+    assert.ok(sheet.includes(why), `Android says why not: ${why.slice(0, 30)}`);
+  }
 });
 
 test('New session › Where offers only machines a start would reach (C-2)', () => {

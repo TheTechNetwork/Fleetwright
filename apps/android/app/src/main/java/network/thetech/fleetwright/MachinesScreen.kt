@@ -697,8 +697,10 @@ private fun MachinePage(
         // page". Offered only where it does something (C-2): the fleet said
         // which pool this machine holds, this phone holds that pool's token,
         // and this person is the admin a policy change takes (PoolPage, the
-        // same rule). It opens that sheet with the switch on; Apply there is
-        // still the word that does it. The same as iOS (HostView).
+        // same rule). It opens that sheet, which does the rest by itself after
+        // the same sign-in as any policy change: no Apply to scroll to. Asked
+        // for: "Recreate the holder from the holder page less clicks". The
+        // same as iOS (HostView).
         val holds = h?.holds
         if (h?.holder == true && holds != null && holdsHere && admin == true) {
             SectionHead(holds)

@@ -134,8 +134,8 @@ const val HOLDER_LINE = "This pool’s own machine. It holds the pool for the fl
  * (test/holder-sessions-in-apps.test.js).
  */
 const val HOLDER_AGAIN_TITLE = "Make it again"
-const val HOLDER_AGAIN_LINE = "Removes this machine, disk and all, and makes a new one from the newest build of its suite, which asks to join; let it in under Machines. " +
-    "Opens the pool’s policy with that switched on, and Apply does it."
+const val HOLDER_AGAIN_LINE = "Removes this machine, disk and all, and makes a new one from the newest build of its suite, which asks to join; this phone lets it in. " +
+    "It asks for the pool’s admin sign-in, or opens the one this phone kept, and does the rest by itself."
 
 /**
  * Whether the who-can-start line adds anything. A box degraded with nobody's
