@@ -152,9 +152,17 @@ import kotlinx.coroutines.withContext
  * @param via the machine to try first for a reconnect: the one the push
  *   named, which saw the pools go. Null tries the one that got through last.
  * @param makeHolderAgain opened from the pool's own machine's page to make it
- *   again (MachinesScreen): the switch is on when the choice appears, where
- *   the machine makes the new one ask and the pool has one. Apply is still
- *   what does it. Read only with [policyFor].
+ *   again (MachinesScreen). THE TAP ON THAT PAGE AND THE SIGN-IN ARE THE
+ *   WHOLE OF IT: once the machine has read the pool, and the pool has one on
+ *   the way out and the machine makes the new one ask, the choice goes by
+ *   itself with the switch on and nothing else changed (`straight`), as
+ *   Apply would have sent it. It used to open the form with the switch on
+ *   and wait for Apply at the bottom of it, a scroll past storage, networks,
+ *   the way out, groups, labs and limits that nobody came here to read.
+ *   Asked for: "Recreate the holder from the holder page less clicks". A
+ *   pool with none, or a machine that cannot make one ask, opens as any
+ *   policy change, and says why nothing was done by itself. Read only with
+ *   [policyFor]. The same as iOS (AddHypervisorView, straightThrough).
  */
 @Composable
 internal fun HypervisorSheet(
@@ -275,6 +283,14 @@ internal fun HypervisorSheet(
     var applying by remember { mutableStateOf(false) }
     // The machine took the choice: the form goes, and is not offered again.
     var applied by rememberSaveable { mutableStateOf(false) }
+    // MAKE IT AGAIN WENT WITHOUT THE FORM: the pool opened with the machine
+    // there and the switch on, and the choice was sent as Apply would have.
+    // Drawn as progress in the form's place, with which machine goes and
+    // where the new one is made; and why not, in the form, when it could not.
+    var straight by rememberSaveable { mutableStateOf(false) }
+    var straightName by rememberSaveable { mutableStateOf<String?>(null) }
+    var straightWayOut by rememberSaveable { mutableStateOf("") }
+    var straightNote by remember { mutableStateOf("") }
     // What the machine said when it did not take the choice. Kept apart from
     // `refusal`, which the poll clears on every answer, because the person
     // needs to read it while they change what it was about.
@@ -869,6 +885,9 @@ internal fun HypervisorSheet(
         unopened = false
         applied = false
         choiceRefusal = ""
+        straight = false
+        straightName = null
+        straightNote = ""
     }
 
     fun cancelJob(setup: Fleet.Setup) {
@@ -920,6 +939,9 @@ internal fun HypervisorSheet(
                 choice = null
             } else {
                 choiceRefusal = r.text.ifBlank { "The fleet did not answer, so the choice was not applied. Try again." }
+                // Refused straight through: the form, with the refusal under
+                // it, as any Apply the machine refused.
+                straight = false
             }
             r.xosetup?.let { progress = it }
             applying = false
@@ -1031,6 +1053,24 @@ internal fun HypervisorSheet(
                             // any policy change. The same as iOS (AddHypervisorView).
                             if (policy && makeHolderAgain && c.holderAskChoice && XoPolicy.holderOn(opened, c.egress) != null) c.copy(holderAgain = true) else c
                         }
+                        // AND SENT, WITHOUT THE FORM, when that is what the
+                        // person came for and the switch could go on: the tap
+                        // on the machine's page and the sign-in were the
+                        // asking, and nothing else in the choice differs from
+                        // what the pool has. Otherwise the form, with one line
+                        // on why nothing went by itself.
+                        val c = choice
+                        if (policy && makeHolderAgain && c != null) {
+                            val mine = XoPolicy.holderOn(opened, c.egress)
+                            if (c.holderAgain && mine != null && XoPolicy.problem(opened, c) == null) {
+                                straightName = mine.name
+                                straightWayOut = opened.networks.firstOrNull { it.id == c.egress }?.name ?: "the way out"
+                                straight = true
+                                applyChoice(r.xosetup)
+                            } else {
+                                straightNote = straightRefusal(opened, c, runningOn.ifBlank { r.hostId ?: "The machine" }, address.trim())
+                            }
+                        }
                     } else {
                         unopened = true
                     }
@@ -1069,7 +1109,13 @@ internal fun HypervisorSheet(
                 if (setup == null) {
                     if (!pollStopped) Hint("Asking where it has got to…")
                 } else {
-                    SetupProgress(setup, policy, reconnect)
+                    SetupProgress(setup, policy, reconnect, straight = straight)
+                    // WHAT WENT WITHOUT THE FORM, said where the form would
+                    // have been, for as long as the job is live (C-5: a screen
+                    // that removes a machine says so).
+                    val live = setup.state == "choosing" || setup.state == "running" || setup.state == "waiting"
+                    val gone = straightName
+                    if (straight && live && gone != null) Hint(straightLine(gone, straightWayOut), color = Design.Palette.ink.now)
                 }
                 when (val outcome = handedBack) {
                     XoHandoff.Outcome.Kept -> Hint("The token is kept on this phone now, encrypted. No machine in the fleet keeps it on disk.")
@@ -1107,7 +1153,10 @@ internal fun HypervisorSheet(
                             // it let go; nothing is applied before a choice.
                             cancelAccepted -> Hint("Cancelling. Nothing has been changed.", color = Design.Palette.ink.now)
                             applied -> Hint("Sent. $machine is applying it.", color = Design.Palette.ink.now)
+                            // Sent by itself and not yet taken: the line above says what.
+                            straight -> {}
                             inv != null && c != null -> {
+                                if (straightNote.isNotBlank()) Hint(straightNote, color = Design.Palette.ink.now)
                                 PolicyForm(inv, c, enabled = !applying && !cancelling, canEdge = canEdge, machine = machine, onChange = { choice = it }, canImage = canImage)
                                 val problem = XoPolicy.problem(inv, c)
                                 Hint("$machine waits ten minutes for your choice, then lets go without changing anything.")
@@ -1770,8 +1819,28 @@ private fun Detail(label: String, value: String?) {
  * bar moves to its new place: a change of state is news (MOTION 2), and the
  * crossfade is what Reduce Motion keeps.
  */
+/**
+ * What Make it again sent without the form: which machine goes and where the
+ * new one is made. The same words as iOS (AddHypervisorView, straightLine).
+ */
+private fun straightLine(name: String, wayOut: String) =
+    "Removing $name, disk and all, and making a new one on $wayOut, which asks to join; this phone lets it in."
+
+/**
+ * Why Make it again from the machine's page did nothing by itself, and
+ * opened the form instead: in the order the switch is withheld. The same
+ * words as iOS (AddHypervisorView, straightRefusal).
+ */
+private fun straightRefusal(inv: XoPolicy.Inventory, c: XoPolicy.Choice, machine: String, pool: String): String {
+    if (!c.holderAskChoice) return "$machine cannot make a machine that asks to join, so nothing was made again by itself. Update it, or choose below."
+    if (XoPolicy.holderOn(inv, c.egress) == null) {
+        return "$pool has no machine of its own on the way out any more, so there is nothing to make again. This is what the fleet may use there, as it stands."
+    }
+    return "Nothing was made again by itself: ${XoPolicy.problem(inv, c) ?: "the choice as it stands would be refused"}. Choose below."
+}
+
 @Composable
-private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false, reconnect: Boolean = false) {
+private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false, reconnect: Boolean = false, straight: Boolean = false) {
     val of = setup.of ?: (if (reconnect) XoReconnect.STEPS.size else if (policy) XoPolicy.STEPS.size else XoSetup.STEPS.size)
     val step = setup.step ?: 0
     val ended = setup.state == "done" || setup.state == "failed" || setup.state == "cancelled"
@@ -1793,7 +1862,9 @@ private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false, reconnect
     }
     val words = when (setup.state) {
         "waiting" -> "Waiting for the sign-in"
-        "choosing" -> "Waiting for your choice"
+        // Nobody is choosing when Make it again went by itself: the choice
+        // is sent and the machine has not yet said it is applying it.
+        "choosing" -> if (straight) "Sending the choice" else "Waiting for your choice"
         "done" -> if (reconnect) "Finished" else if (policy) "Changed" else "Added"
         "failed" -> "Stopped"
         "cancelled" -> "Cancelled"

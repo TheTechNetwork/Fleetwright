@@ -1135,8 +1135,8 @@ let holderLine = "This pool’s own machine. It holds the pool for the fleet and
 /// before the policy screen it opens. The same words on both phones
 /// (test/holder-sessions-in-apps.test.js).
 let holderAgainTitle = "Make it again"
-let holderAgainLine = "Removes this machine, disk and all, and makes a new one from the newest build of its suite, which asks to join; let it in under Machines. "
-    + "Opens the pool’s policy with that switched on, and Apply does it."
+let holderAgainLine = "Removes this machine, disk and all, and makes a new one from the newest build of its suite, which asks to join; this phone lets it in. "
+    + "It asks for the pool’s admin sign-in, or opens the one this phone kept, and does the rest by itself."
 
 /// Whether the who-can-start line adds anything. A box degraded with nobody's
 /// account on it already says so in the fleet's reason above the line, and

@@ -429,11 +429,18 @@ is let in.
 
 **Make it again** is on the policy screen for the one there, from a box that
 says `holder-ask`, and on the machine's own page under Machines, for the person
-whose pool it is, which opens that screen with the switch on: Apply stops it,
-removes it with its disk, and makes a new one that asks to join
-(`holderAgain`). The snapshot says which pool a holder holds (`holds` on its
-row, from its own health, to the person whose pool it is and nobody else),
-which is how the phone knows to offer it there. It is for a holder that never joined. One
+whose pool it is: Apply stops it, removes it with its disk, and makes a new
+one that asks to join (`holderAgain`). From the machine's page the tap and the
+sign-in are the whole of it: the screen opens, Face ID opens the kept sign-in
+or the person types it, and once the box has read the pool the phone sends the
+choice by itself, with the switch on and nothing else changed, in place of the
+form and its Apply (asked for: "Recreate the holder from the holder page less
+clicks"). The form opens instead, with one line on why, when the pool has no
+such machine on the way out any more, the box cannot make one that asks, or
+the choice as it stands would be refused. The snapshot says which pool a
+holder holds (`holds` on its row, from its own health, to the person whose
+pool it is and nobody else), which is how the phone knows to offer it there.
+It is for a holder that never joined. One
 that has joined does not need it. One that had joined and is made again anyway
 is also retired from the fleet: the job reports the name of the VM it removed
 (`xosetup.holder-removed`, a name of the coordinator's own shape only), and

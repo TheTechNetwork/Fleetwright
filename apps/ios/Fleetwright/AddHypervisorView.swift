@@ -96,9 +96,17 @@ struct AddHypervisorView: View {
     /// pool had gone, or read its page. Nil starts from the one that got
     /// through last time, as a policy change does.
     let preferred: String?
-    /// Opened from the pool's own machine's page to make it again (HostView):
-    /// the switch is on when the choice appears, where the machine makes the
-    /// new one ask and the pool has one. Apply is still what does it.
+    /// Opened from the pool's own machine's page to make it again (HostView).
+    /// THE TAP ON THAT PAGE AND THE SIGN-IN ARE THE WHOLE OF IT: once the
+    /// machine has read the pool, and the pool has one on the way out and
+    /// the machine makes the new one ask, the choice goes by itself with the
+    /// switch on and nothing else changed (`straightThrough`), as Apply would
+    /// have sent it. It used to open the form with the switch on and wait for
+    /// Apply at the bottom of it, a scroll past storage, networks, the way
+    /// out, groups, labs and limits that nobody came here to read. Asked for:
+    /// "Recreate the holder from the holder page less clicks". A pool with
+    /// none, or a machine that cannot make one ask, opens as any policy
+    /// change, and says why nothing was done by itself.
     let makeHolderAgain: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -161,6 +169,14 @@ struct AddHypervisorView: View {
     /// What the machine read, opened, while it waits on the person.
     @State private var inventory: XOPolicy.Inventory?
     @State private var choice = XOPolicy.Choice()
+    /// Make it again is being sent without the form: the pool opened with
+    /// the machine there and the switch on, and Apply went by itself. The
+    /// progress is drawn in the form's place, with what is being done.
+    @State private var straightThrough = false
+    /// Which machine goes and where the new one is made, kept from the
+    /// inventory, which is dropped once the choice has gone.
+    @State private var straightName: String?
+    @State private var straightWayOut = ""
     /// What the machines may do, as Apply sent it, kept with the pool once
     /// the job is done.
     @State private var sentGrants: (upgrades: Bool, reboot: Bool)?
@@ -299,7 +315,7 @@ struct AddHypervisorView: View {
             if noXenOrchestra { installSection }
             if let chosen, job == nil { signInSection(chosen) }
             if let job {
-                if choosing, let inventory {
+                if choosing, let inventory, !straightThrough {
                     policySections(inventory, job: job)
                 } else {
                     progressSection(job)
@@ -829,6 +845,14 @@ struct AddHypervisorView: View {
                     .fleetType(.bodyStrong)
                     .foregroundStyle(tone(progress?.state))
                     .contentTransition(.opacity)
+                // WHAT WENT WITHOUT THE FORM, said where the form would have
+                // been, for as long as the job is live (C-5: a screen that
+                // removes a machine says so).
+                if straightThrough, running, let line = straightLine {
+                    Text(line)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.ink)
+                }
                 if let state = liveState, XOSetupWords.ordinal(state) != nil {
                     // THE BUILD'S OWN BAR while the machine says how far it
                     // has got. Asked for: "this needs proper progress"; the
@@ -924,7 +948,17 @@ struct AddHypervisorView: View {
     /// ends are not.
     private func headline(_ state: XOSetupAttributes.ContentState) -> String {
         if isReconnect { return reconnectHeadline(state) }
+        // Nobody is choosing: the choice went by itself and the machine has
+        // not yet said it is applying it.
+        if straightThrough, state.state == "choosing" { return "Sending the choice" }
         return isPolicy ? XOPolicy.statusLine(state) : XOSetupWords.headline(state)
+    }
+
+    /// What Make it again sent without the form: which machine goes and
+    /// where the new one is made. The same words as Android.
+    private var straightLine: String? {
+        guard let name = straightName else { return nil }
+        return "Removing \(name), disk and all, and making a new one on \(straightWayOut), which asks to join; this phone lets it in."
     }
 
     /// A reconnect's words, which end on the pools. Done with what came back
@@ -1371,6 +1405,20 @@ struct AddHypervisorView: View {
         mine.running
             ? "\(mine.name) is there and running. It holds the pool once you have approved it under Machines."
             : "\(mine.name) is there and stopped. Apply starts it."
+    }
+
+    /// Why Make it again from the machine's page did nothing by itself, and
+    /// opened the form instead: in the order the switch is withheld. The same
+    /// words as Android.
+    private func straightRefusal(_ inv: XOPolicy.Inventory) -> String {
+        let pool = policyFor ?? trimmedAddress
+        if !choice.holderAskChoice {
+            return "\(hostId) cannot make a machine that asks to join, so nothing was made again by itself. Update it, or choose below."
+        }
+        if inv.holder(on: choice.egress) == nil {
+            return "\(pool) has no machine of its own on the way out any more, so there is nothing to make again. This is what the fleet may use there, as it stands."
+        }
+        return "Nothing was made again by itself: \(choice.problem(in: inv) ?? "the choice as it stands would be refused"). Choose below."
     }
 
     /// What making it again does. The same words as Android.
@@ -2287,6 +2335,22 @@ struct AddHypervisorView: View {
                     // that cannot make one ask, opens as any policy change.
                     if makeHolderAgain, choice.holderAskChoice, opened.holder(on: choice.egress) != nil { choice.holderAgain = true }
                 }
+                // AND SENT, WITHOUT THE FORM, when that is what the person
+                // came for and the switch could go on: the tap on the
+                // machine's page and the sign-in were the asking, and nothing
+                // else in the choice differs from what the pool has. Otherwise
+                // the form, with one line on why nothing went by itself.
+                if makeHolderAgain {
+                    if choice.holderAgain, choice.problem(in: opened) == nil, let mine = opened.holder(on: choice.egress) {
+                        straightName = mine.name
+                        straightWayOut = opened.networks.first { $0.id == choice.egress }?.name ?? "the way out"
+                        straightThrough = true
+                        await applyPolicy(opened, job: job)
+                    } else {
+                        result = straightRefusal(opened)
+                        failed = false
+                    }
+                }
             } else {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not
                 // one it can choose for, and the machine is holding a signed-in
@@ -2360,8 +2424,12 @@ struct AddHypervisorView: View {
             }
             if let state = answer.xosetup { await apply(state) }
             if answer.ok == false { refuse(answer.text ?? "\(hostId) did not take that choice.") }
+            // Refused straight through: the form, with the refusal under it,
+            // as any Apply the machine refused.
+            if answer.ok == false { straightThrough = false }
         } catch {
             refuse(error.localizedDescription)
+            straightThrough = false
         }
     }
 
@@ -2430,6 +2498,8 @@ struct AddHypervisorView: View {
         policyJob = nil
         inventory = nil
         choice = XOPolicy.Choice()
+        straightThrough = false
+        straightName = nil
         reconnectJob = nil
         outcome = nil
         outcomeUnopened = false

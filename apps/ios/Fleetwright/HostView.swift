@@ -142,8 +142,9 @@ struct HostView: View {
             // something (C-2): the fleet said which pool this machine holds,
             // this phone holds that pool's token, and this person is the
             // admin a policy change takes (ManageView, the same rule). It
-            // opens that screen with the switch on; Apply there is still the
-            // word that does it, after the same sign-in as any policy change.
+            // opens that screen, which does the rest by itself after the same
+            // sign-in as any policy change: no Apply to scroll to. Asked for:
+            // "Recreate the holder from the holder page less clicks".
             if holder, let holds, holdsHere, settings.showsAdmin {
                 Section {
                     NavigationLink {
