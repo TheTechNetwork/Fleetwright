@@ -1981,7 +1981,18 @@ new password for Xen Orchestra's admin. In order:
    OpenSSH master connection as root, answering the password prompt through
    `SSH_ASKPASS` from a unix socket in the job's 0700 directory, and wipes the
    password as soon as the master is up. The password is never in an argument,
-   an environment or a file. It then reads the pool: that this is its master,
+   an environment or a file. The askpass program itself is written into that
+   directory for the job, not found beside the code: a release is one bundled
+   file with no code beside it, and a program reached by `import.meta.url`
+   existed only in a checkout, so on every packaged box ssh was given no
+   password and the job said the pool master had refused it (asked for:
+   "Using the valid password just tested it", from holder-9fd878). A refusal
+   is said by what reached the socket: the pool master refused the root
+   password, when it asked for one and was given it; it asked with a prompt
+   that is not for a password, quoted, which the box does not answer; or it
+   did not ask before turning the box away, with ssh's own last line, which
+   is a master that offers no way to send a password or a box that could not
+   run its own helper. It then reads the pool: that this is its master,
    its default storage, the network of the master's management interface, and
    whether an earlier install's VM (`fleetwright-xo`) is already there, which
    stops the job with what to do.

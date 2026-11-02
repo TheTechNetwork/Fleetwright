@@ -8,7 +8,9 @@
 //   - the host key: a master connection is refused, as real ssh refuses it,
 //     unless StrictHostKeyChecking=yes and the job's known_hosts file holds
 //     this key;
-//   - the password: asked of SSH_ASKPASS, once, and compared;
+//   - the password: asked of SSH_ASKPASS, once, and compared; or asked with
+//     a prompt of the test's choosing, or not asked at all, as a real master
+//     may;
 //   - the master: with -f it backgrounds a process holding the ControlPath
 //     and exits 0, so the caller's "signed in" is ssh's own exit code;
 //   - every other ssh rides the master: one without a live ControlPath and
@@ -108,8 +110,14 @@ function ssh() {
     const known = o.userknownhostsfile && existsSync(o.userknownhostsfile) ? readFileSync(o.userknownhostsfile, 'utf8') : '';
     const key = config.keys[0];
     if (o.stricthostkeychecking !== 'yes' || !known.includes(`${key.type} ${key.blob}`)) fail('Host key verification failed.');
-    const asked = spawnSync(String(process.env.SSH_ASKPASS), [`root@${rest[0]}'s password: `], { encoding: 'utf8', env: process.env });
-    if (asked.status !== 0 || asked.stdout.replace(/\n$/, '') !== config.password) fail('Permission denied, please try again.');
+    // WHAT THE MASTER ASKS, as a real one may: for a password, by default
+    // the way OpenSSH's password method words it; with another prompt
+    // (`prompt`), as a PAM module may; or nothing at all (`asks: false`), as a
+    // master with password logins off, which turns the client away naming
+    // the methods it does take.
+    if (config.asks === false) fail(`${rest[0]}: Permission denied (publickey,gssapi-keyex,gssapi-with-mic).`);
+    const asked = spawnSync(String(process.env.SSH_ASKPASS), [config.prompt ?? `root@${rest[0]}'s password: `], { encoding: 'utf8', env: process.env });
+    if (asked.status !== 0 || asked.stdout.replace(/\n$/, '') !== config.password) fail(`Permission denied, please try again.\r\n${rest[0]}: Permission denied (publickey,password).`);
     if (!flags['-f']) fail('the fake only backgrounds');
     const held = spawn(process.execPath, [process.argv[1], 'hold', control], { detached: true, stdio: 'ignore', env: { FAKE_POOL_CONFIG: process.env.FAKE_POOL_CONFIG } });
     held.unref();

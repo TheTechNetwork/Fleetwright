@@ -87,7 +87,6 @@ import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeF
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { splitAddress } from './xo-ws.js';
 import { resource } from '../../core/resources.js';
@@ -515,9 +514,56 @@ export async function fetchInstaller({ dir, installer = INSTALLER, fetch = globa
  */
 
 /**
+ * The program ssh runs when the pool master asks for root's password
+ * (SSH_ASKPASS), written into the job's own directory beside the socket it
+ * asks. It connects to that socket, hands over the prompt, prints the one
+ * answer and exits; the sidecar answers once, to a prompt that asks for a
+ * password, and closes.
+ *
+ * WHY A PROGRAM AND A SOCKET, and not the password in an environment variable
+ * for ssh to read back: an environment is copied into every process the
+ * master starts and can be read from /proc for as long as it runs, which for
+ * an install is half an hour.
+ *
+ * WRITTEN INTO THE JOB'S DIRECTORY, NOT FOUND BESIDE THIS FILE. It was a file
+ * of its own, reached by `new URL('./xo-askpass.js', import.meta.url)`, which
+ * is a path that exists in a checkout and nowhere else: a release is one
+ * bundled file, lib/fleetwright-sidecar.mjs, and code files are not laid
+ * beside it (tools/build-host-package.mjs, src/core/resources.js). On every
+ * packaged box the askpass ran node on a file that was not there, exited,
+ * ssh was given no password and said Permission denied, and the job read
+ * that as the pool master refusing the root password. The suite runs from a
+ * checkout, where the sibling exists, so it passed. Seen from holder-9fd878
+ * on 2 November 2026, with a password the pool master took from a laptop a
+ * minute later. The test now opens the connection from a bundle built the
+ * way the release is.
+ */
+const ASKPASS_SOURCE = [
+  "import net from 'node:net';",
+  'const socketPath = process.env.FLEETWRIGHT_ASKPASS_SOCKET;',
+  'if (!socketPath) process.exit(1);',
+  "let answer = '';",
+  "const c = net.connect(socketPath, () => c.write(String(process.argv[2] ?? '').replace(/\\n/g, ' ') + '\\n'));",
+  "c.on('data', (d) => { answer += d; });",
+  "c.on('end', () => { if (!answer) process.exit(1); process.stdout.write(answer); });",
+  "c.on('error', () => process.exit(1));",
+  '',
+].join('\n');
+
+/**
  * Open the master connection: the host key held to the one the person
  * accepted, the root password answered once through the askpass socket and
  * wiped, and every later ssh made unable to ask for one.
+ *
+ * WHAT A REFUSAL IS SAID AS depends on what reached the socket, because ssh
+ * says "Permission denied" for three different things and only one of them
+ * is a wrong password: the pool master asked for a password, was given it
+ * and refused it; it asked with a prompt that is not for a password, which
+ * this machine does not answer; or no prompt reached this machine at all,
+ * which is a pool master that offers no way to send one, or this machine's
+ * own askpass not running. Each is said as itself, with ssh's own last line
+ * where it adds anything, so the person is not sent to check a password
+ * that was never tried.
  *
  * `secret.password` is wiped here, on every way out.
  *
@@ -555,8 +601,12 @@ export async function openPool({ address, hostKey, secret, dir, signal, timeoutM
     const clientOpts = [...common, '-o', `ControlPath=${control}`, '-o', 'ControlMaster=no', '-o', 'BatchMode=yes', '-p', String(port)];
 
     // THE PASSWORD, through a socket in this job's own directory, answered
-    // once and only to a password prompt.
+    // once and only to a password prompt. What reached the socket is kept,
+    // because it is what tells a refused password from a password never asked
+    // for (below).
     const socketPath = path.join(dir, 'pw.sock');
+    /** @type {{ prompt: string|null, answered: boolean }} */
+    const heard = { prompt: null, answered: false };
     const asked = await new Promise((resolve, reject) => {
       const server = net.createServer((c) => {
         let prompt = '';
@@ -564,7 +614,9 @@ export async function openPool({ address, hostKey, secret, dir, signal, timeoutM
         c.on('data', (d) => {
           prompt += d;
           if (!prompt.includes('\n')) return;
+          heard.prompt = prompt.trim();
           if (/password/i.test(prompt) && secret.password) {
+            heard.answered = true;
             c.end(`${secret.password}\n`);
             secret.password = undefined;
             server.close();
@@ -580,7 +632,8 @@ export async function openPool({ address, hostKey, secret, dir, signal, timeoutM
       });
     });
     const askpass = path.join(dir, 'askpass');
-    const helper = fileURLToPath(new URL('./xo-askpass.js', import.meta.url));
+    const helper = path.join(dir, 'askpass.js');
+    writeFileSync(helper, ASKPASS_SOURCE, { mode: 0o600 });
     writeFileSync(askpass, `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(helper)} "$@"\n`, { mode: 0o700 });
 
     // THE MASTER, backgrounded by ssh itself once it has authenticated (-f),
@@ -612,8 +665,14 @@ export async function openPool({ address, hostKey, secret, dir, signal, timeoutM
       } catch {
         /* nothing written */
       }
-      const why = /Permission denied|Authentication failed/i.test(said + master.stderr)
+      const denied = /Permission denied|Authentication failed/i.test(said + master.stderr);
+      const why = denied && heard.answered
         ? 'the pool master refused the root password.'
+        : denied && heard.prompt !== null
+          ? `the pool master asked “${heard.prompt}” rather than for a password, which this machine does not answer, so the password was not sent.`
+          : denied
+            ? `the pool master did not ask this machine for a password before turning it away, so the password was not sent: ssh said “${lastLine(said || master.stderr || 'Permission denied')}”. ` +
+              'Either the pool master offers no way to send one, or this machine could not run its own password helper.'
         : /Host key verification failed|REMOTE HOST IDENTIFICATION/i.test(said + master.stderr)
           ? 'the pool master answered with a different SSH host key than the one you accepted, so the password was not sent.'
           : `SSH to the pool master did not connect: ${lastLine(said || master.stderr || master.error || 'no reason given')}`;
