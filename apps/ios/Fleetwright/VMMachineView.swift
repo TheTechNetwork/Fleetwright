@@ -7,11 +7,16 @@ import SwiftUI
 /// box holding the pool last saw, and every fact may be missing: nil is
 /// CANNOT TELL and is said so, never drawn as a blank or a zero (C-5).
 ///
-/// THE CONSOLE HERE IS XEN ORCHESTRA'S OWN, opened in the browser where you
-/// sign in to it: this page is drawn from what the box holding the pool saw,
-/// and works without the pool's token on this phone. Where this phone does
-/// hold it, the pool's page opens the console in the app (VMConsoleView), on
-/// the pool's own network; a screen does not travel through the fleet.
+/// THE CONSOLE IS IN THE APP WHERE THIS PHONE HOLDS THE POOL'S TOKEN
+/// (VMConsoleView, the pool page's own): the phone opens the socket to Xen
+/// Orchestra with the token and the pinned certificate, and a web view draws
+/// the bytes, never seeing the token. Asked for: "Why not open in web view":
+/// this page is drawn from what the box holding the pool saw and works on a
+/// phone without the token, so it offered only Xen Orchestra's own page in
+/// Safari, and said this phone never holds the token, which on the phone
+/// that set the pool up was not so. Without the token it is still Xen
+/// Orchestra's page, where you sign in. A screen does not travel through the
+/// fleet either way: the console opens from the pool's own network.
 ///
 /// THE ACTIONS ARE THE BOX'S: it holds the token and works the machine under
 /// your name, and only a machine tagged as made for you (xo-pools.js,
@@ -25,6 +30,10 @@ struct VMMachineView: View {
 
     @State private var machine: Fleet.VMMachine?
     @State private var loaded = false
+    /// This phone holds the token of the pool this machine is on
+    /// (XOSetupHandoff), read with the machine: the console in the app is
+    /// offered only then (C-2).
+    @State private var holdsHere = false
     @State private var busy = false
     @State private var message = ""
     @State private var failed = false
@@ -181,7 +190,17 @@ struct VMMachineView: View {
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
-            if let console = m.consoleURL {
+            // IN THE APP where this phone holds the pool's token, for a machine
+            // that is running (a stopped one has no screen); Xen Orchestra's
+            // own page otherwise, where you sign in.
+            if holdsHere, m.state == "Running", let vm = m.vm {
+                NavigationLink {
+                    VMConsoleView(address: m.address, vm: vm, name: m.name)
+                } label: {
+                    Label(Manage.Words.console, systemImage: "rectangle.on.rectangle")
+                        .frame(minHeight: 44)
+                }
+            } else if let console = m.consoleURL {
                 Link(destination: console) {
                     Label("Open its console in Xen Orchestra", systemImage: "rectangle.on.rectangle")
                         .frame(minHeight: 44)
@@ -190,9 +209,16 @@ struct VMMachineView: View {
         } header: {
             sectionHead("Reach it")
         } footer: {
-            Text("SSH takes the public keys you keep under You › SSH keys, on machines made after you add them. "
-                 + "The console is Xen Orchestra’s own page, which asks you to sign in there: this phone never holds the pool’s token.")
+            Text("SSH takes the public keys you keep under You › SSH keys, on machines made after you add them. " + consoleFooter)
         }
+    }
+
+    /// Where the console comes from, as it stands for this phone. The same
+    /// words as Android (VmMachinePage).
+    private var consoleFooter: String {
+        holdsHere
+            ? "The console opens in the app, from the pool’s own network, with the pool’s token this phone holds; the page that draws it never sees the token."
+            : "The console is Xen Orchestra’s own page, which asks you to sign in there: this phone does not hold the pool’s token."
     }
 
     // MARK: What you can do
@@ -279,6 +305,7 @@ struct VMMachineView: View {
         // A FAILED REQUEST IS NOT A MISSING MACHINE: what was shown stays.
         if let got = try? await fleet.vmMachines() {
             let found = got.first { $0.name == name }
+            holdsHere = found.map { XOSetupHandoff.held().contains($0.address) } ?? false
             withAnimation(Design.Motion.settle(reduceMotion)) { machine = found }
             if let found, !busy {
                 cpus = found.cpus ?? cpus

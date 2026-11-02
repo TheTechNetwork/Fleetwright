@@ -1,5 +1,6 @@
 // Working a machine from your own hypervisor, on the phones: its page (what
-// it is, SSH, Xen Orchestra's console, restart, longer, a new size, end it),
+// it is, SSH, the console in the app or Xen Orchestra's, restart, longer, a
+// new size, end it),
 // the operating systems an image can be made of, your SSH keys in the vault,
 // and the network a new machine goes on.
 //
@@ -42,7 +43,8 @@ const SHARED = [
   'The fleet has no report of this machine. The box holding your pool may not have looked yet, or it has been removed.',
   'No address reported yet. Its guest agent says it once it has booted.',
   'Open its console in Xen Orchestra',
-  'The console is Xen Orchestra’s own page, which asks you to sign in there: this phone never holds the pool’s token.',
+  'The console is Xen Orchestra’s own page, which asks you to sign in there: this phone does not hold the pool’s token.',
+  'The console opens in the app, from the pool’s own network, with the pool’s token this phone holds; the page that draws it never sees the token.',
   'Give it longer',
   'Restart with this size',
   'End it now',
@@ -71,7 +73,14 @@ test('iOS: the machines on your pools are read from the snapshot, and worked thr
   assert.match(I_HOST, /if hostId\.hasPrefix\("vm-"\) \{/);
 });
 
-test('iOS: a machine’s page opens Xen Orchestra’s own console, and offers only what can be done', () => {
+test('iOS: a machine’s page opens the console in the app where this phone holds the pool’s token, Xen Orchestra’s own page otherwise, and offers only what can be done', () => {
+  // THE CONSOLE IN THE APP, the pool page's (VMConsoleView), on the machine's
+  // page too: offered only where this phone holds the pool's token, read with
+  // the machine, and for a machine that is running (C-2). Asked for: "Why not
+  // open in web view". Otherwise Xen Orchestra's own page, as before.
+  assert.match(I_PAGE, /holdsHere = found\.map \{ XOSetupHandoff\.held\(\)\.contains\(\$0\.address\) \} \?\? false/);
+  assert.match(I_PAGE, /if holdsHere, m\.state == "Running", let vm = m\.vm \{\s*NavigationLink \{\s*VMConsoleView\(address: m\.address, vm: vm, name: m\.name\)[\s\S]{0,200}\} else if let console = m\.consoleURL \{/);
+  assert.match(I_PAGE, /Label\(Manage\.Words\.console, systemImage: "rectangle\.on\.rectangle"\)/);
   assert.match(I_FLEET, /return URL\(string: "https:\/\/\\\(address\)\/#\/vms\/\\\(vm\)\/console"\)/);
   assert.match(I_FLEET, /var sshCommand: String\? \{ ip\.map \{ "ssh fleetwright@\\\(\$0\)" \} \}/);
   // A restart of a machine that is not running is refused, so it is not offered.
@@ -141,7 +150,10 @@ test('Android: the machines on your pools are read from the snapshot, and worked
   assert.match(A_LIST, /if \(hostId\.startsWith\("vm-"\)\) \{/);
 });
 
-test('Android: a machine’s page opens Xen Orchestra’s own console, and offers only what can be done', () => {
+test('Android: a machine’s page opens the console in the app where this phone holds the pool’s token, Xen Orchestra’s own page otherwise, and offers only what can be done', () => {
+  assert.match(A_PAGE, /val holdsHere = remember\(machine\?\.address\) \{ machine\?\.address\?\.let \{ a -> XoHandoff\.held\(settings\)\.any \{ it\.address == a \} \} \?: false \}/);
+  assert.match(A_PAGE, /if \(holdsHere && m\.state == "Running" && m\.vm != null\) \{\s*OpenRow\(Manage\.Words\.console\) \{ console = true \}\s*\} else \{\s*m\.consoleUrl\?\.let/);
+  assert.match(A_PAGE, /if \(console && onScreen\?\.vm != null\) \{\s*ConsolePage\(settings, onScreen\.address, onScreen\.vm, onScreen\.name\) \{ console = false \}/);
   assert.match(A_FLEET, /"https:\/\/\$address\/#\/vms\/\$vm\/console"/);
   assert.match(A_FLEET, /val sshCommand: String\? get\(\) = ip\?\.let \{ "ssh fleetwright@\$it" \}/);
   assert.match(A_PAGE, /enabled = !busy && m\.state == "Running"/);

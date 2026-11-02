@@ -2265,8 +2265,10 @@ class Fleet(
         }
 
         /**
-         * The console in Xen Orchestra's own web UI, which signs you in there:
-         * this phone never holds the pool's token.
+         * The console in Xen Orchestra's own web UI, which signs you in there,
+         * so it needs no token on this phone: what the machine's page offers
+         * where this phone does not hold the pool's token. Where it does, the
+         * page opens the console in the app (ConsolePage).
          */
         val consoleUrl: String? get() = if (vm == null || address.isBlank()) null else "https://$address/#/vms/$vm/console"
 

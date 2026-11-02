@@ -359,7 +359,11 @@ because noVNC expects a secure context.
 **Only on the pool's own network.** The row appears while this phone watches
 the pool itself. When the page is read through one of your machines, the row
 says the console opens only from the pool's own network. A screen does not
-travel through the fleet.
+travel through the fleet. A machine made for a session (Machines → On your
+hypervisor) has the same row on its page where this phone holds the pool's
+token (`hypervisors.md`, "Working a machine"); that page has no watch to
+know which network the phone is on, so the console says when it cannot
+reach the pool.
 
 **Typing.** Keyboard raises the phone's keyboard, and each key goes to the
 machine as a key press. iOS catches keys in a native view, because it raises

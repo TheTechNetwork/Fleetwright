@@ -44,9 +44,16 @@ import kotlinx.coroutines.launch
  * box holding the pool last saw, and every fact may be missing: null is
  * CANNOT TELL and is said so, never drawn as a blank or a zero (C-5).
  *
- * THE CONSOLE IS XEN ORCHESTRA'S OWN, opened in the browser where you sign in
- * to it. This phone never holds the pool's token, and a console stream
- * through the fleet would make it hold one.
+ * THE CONSOLE IS IN THE APP WHERE THIS PHONE HOLDS THE POOL'S TOKEN
+ * (ConsolePage, the pool page's own): the phone opens the socket to Xen
+ * Orchestra with the token and the pinned certificate, and a web view draws
+ * the bytes, never seeing the token. Asked for: "Why not open in web view":
+ * this page is drawn from what the box holding the pool saw and works on a
+ * phone without the token, so it offered only Xen Orchestra's own page in
+ * the browser, and said this phone never holds the token, which on the phone
+ * that set the pool up was not so. Without the token it is still Xen
+ * Orchestra's page, where you sign in. A screen does not travel through the
+ * fleet either way: the console opens from the pool's own network.
  *
  * THE ACTIONS ARE THE BOX'S: it holds the token and works the machine under
  * your name, and only a machine tagged as made for you (xo-pools.js,
@@ -68,6 +75,11 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
     var cpus by remember { mutableStateOf(2) }
     var memoryGib by remember { mutableStateOf(4) }
     var asking by remember { mutableStateOf<String?>(null) }
+    // The console in the app, open; and whether this phone holds the token
+    // of the pool this machine is on (XoHandoff), read once per address: the
+    // console in the app is offered only then (C-2).
+    var console by remember(name) { mutableStateOf(false) }
+    val holdsHere = remember(machine?.address) { machine?.address?.let { a -> XoHandoff.held(settings).any { it.address == a } } ?: false }
 
     suspend fun load() {
         // A FAILED REQUEST IS NOT A MISSING MACHINE: what was shown stays.
@@ -106,6 +118,12 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
     }
 
     LaunchedEffect(name) { load() }
+
+    val onScreen = machine
+    if (console && onScreen?.vm != null) {
+        ConsolePage(settings, onScreen.address, onScreen.vm, onScreen.name) { console = false }
+        return
+    }
 
     asking?.let { ask ->
         AlertDialog(
@@ -195,12 +213,18 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                 } else {
                     Hint("No address reported yet. Its guest agent says it once it has booted.")
                 }
-                m.consoleUrl?.let { console ->
-                    OpenRow("Open its console in Xen Orchestra") { uri.openUri(console) }
+                // IN THE APP where this phone holds the pool's token, for a machine
+                // that is running (a stopped one has no screen); Xen Orchestra's
+                // own page otherwise, where you sign in. The same as iOS.
+                if (holdsHere && m.state == "Running" && m.vm != null) {
+                    OpenRow(Manage.Words.console) { console = true }
+                } else {
+                    m.consoleUrl?.let { page -> OpenRow("Open its console in Xen Orchestra") { uri.openUri(page) } }
                 }
                 Hint(
                     "SSH takes the public keys you keep under You › SSH keys, on machines made after you add them. " +
-                        "The console is Xen Orchestra’s own page, which asks you to sign in there: this phone never holds the pool’s token.",
+                        if (holdsHere) "The console opens in the app, from the pool’s own network, with the pool’s token this phone holds; the page that draws it never sees the token."
+                        else "The console is Xen Orchestra’s own page, which asks you to sign in there: this phone does not hold the pool’s token.",
                 )
 
                 SectionHead("Work it")

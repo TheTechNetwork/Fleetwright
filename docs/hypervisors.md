@@ -273,10 +273,16 @@ Each that interrupts a session asks first. None is held on the phone to be
 sent later: a restart replayed hours after it was asked for is not what
 anybody asked for.
 
-**The console is Xen Orchestra's own**, opened in the browser at
-`https://<address>/#/vms/<id>/console`, where you sign in to Xen Orchestra.
-The phone never holds the pool's token, and a console streamed through the
-fleet would make it hold one.
+**The console opens in the app** on a phone that holds the pool's token, for
+a machine that is running: the same console as the pool's page under
+Hypervisors (`docs/manage.md`, "The console"), the phone opening the socket
+to Xen Orchestra with the token and the pinned certificate and a web view
+drawing the bytes, from the pool's own network. Asked for: "Why not open in
+web view". On a phone that does not hold the token, the console is Xen
+Orchestra's own, opened in the browser at
+`https://<address>/#/vms/<id>/console`, where you sign in to Xen Orchestra;
+a console streamed through the fleet would make the phone hold a token it
+does not have.
 
 **SSH.** Keep your public keys under You › Credentials › SSH keys. They are
 one secret in your vault, `SSH_AUTHORIZED_KEYS`, one key a line, checked on
