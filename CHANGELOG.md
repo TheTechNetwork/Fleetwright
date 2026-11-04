@@ -33,6 +33,12 @@ describes the iOS app, and everything since 0.4.15 comes with it.**
   addresses and what its edge routers measure.
 - **Pinned admins** on a machine's page, on both phones, with no button for
   a verb the box would refuse.
+- **Proxmox VE, in alpha.** A fleet host can now run its machines on a
+  Proxmox node as well as on XCP-ng, set up by one script run as root on
+  the node. Machines are fenced by Proxmox's own firewall, and the fleet
+  holds only a token limited to what the script grants it. There are no
+  Proxmox screens on the phones yet, and the script has not yet been run
+  end to end on a real node.
 
 ## 0.4.15 — 2026-10-18
 
