@@ -378,7 +378,8 @@ test('a closed lab machine is alone on its lab, asks only its gateway for names,
     ]);
     assert.ok(!pve.state.rules.some((/** @type {any} */ x) => x.type === 'group'), 'a closed lab went behind the fence, which lets the internet through');
     assert.deepEqual(pve.state.ipsets[200].sort(), ['198.51.100.9', '203.0.113.7']);
-    assert.ok(asked.includes('fleet.example.com') && asked.includes('api.anthropic.com'));
+    // Exactly the names a closed lab may reach: the coordinator and Claude's own.
+    assert.deepEqual([...new Set(asked)].sort(), ['fleet.example.com', ...REQUIRED_HOSTS].sort());
     await pools.refresh();
     assert.equal(pools.report()[0].networks.find((/** @type {any} */ n) => n.name === 'fwlab2')?.taken, true);
     const again = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: `fwt_0123456789ac_${'d'.repeat(48)}`, lab: true, network: closed.id, coordinatorUrl: 'https://fleet.example.com' });
