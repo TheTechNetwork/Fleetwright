@@ -306,8 +306,11 @@ test('the setup script embeds the snippets, privileges and image the driver expe
   assert.deepEqual(privs('STORAGE_PRIVS'), [...PVE_STORAGE_PRIVS]);
   assert.deepEqual(privs('NET_PRIVS'), [...PVE_NET_PRIVS]);
   assert.deepEqual(privs('ROOT_PRIVS'), [...PVE_ROOT_PRIVS]);
-  assert.match(script, new RegExp(`^IMAGE_URL=${DEBIAN_IMAGE.url.replace(/[.]/g, '\\.')}$`, 'm'));
-  assert.match(script, new RegExp(`^IMAGE_SHA512=${DEBIAN_IMAGE.sha512}$`, 'm'));
+  // Whole lines compared as text: a URL made into a pattern is a pattern of
+  // whatever characters the URL happens to hold.
+  const lines = script.split('\n');
+  assert.ok(lines.includes(`IMAGE_URL=${DEBIAN_IMAGE.url}`), 'the script downloads another image');
+  assert.ok(lines.includes(`IMAGE_SHA512=${DEBIAN_IMAGE.sha512}`), 'the script checks another digest');
   assert.equal(spawnSync('bash', ['-n', fileURLToPathSafe('../install/fleetwright-pve-setup')]).status, 0);
 });
 
