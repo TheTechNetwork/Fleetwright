@@ -139,7 +139,7 @@ export const OPNSENSE_IMAGE = Object.freeze({
  */
 export const EDGE_IMAGE = Object.freeze({
   // renovate: datasource=github-releases depName=edge-image packageName=TheTechNetwork/Fleetwright
-  build: '26.7.8_1-20261031-15',
+  build: '26.7.8_1-20261031-17',
   /** The build everything below was copied from. */
   checked: '26.7.8_1-20261031-15',
   /** The OPNsense release it is, and the version of its core package it was updated to. */
