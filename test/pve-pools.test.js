@@ -22,6 +22,7 @@ import {
 import { poolRecord } from '../src/fleet/host/xo-pools.js';
 import { Pools } from '../src/fleet/host/pools.js';
 import { DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
+import { REQUIRED_HOSTS } from '../src/core/egress.js';
 
 const openssl = spawnSync('openssl', ['version']).status === 0;
 const skip = !openssl && 'needs openssl to make certificates for the stand-in';
@@ -67,9 +68,18 @@ async function standIn({ cert, firewall = true, perms = null, version = '9.0.3' 
       '/pool/fleetwright': Object.fromEntries(PVE_ROLE_PRIVS.map((p) => [p, 1])),
       '/storage/local-lvm': { 'Datastore.AllocateSpace': 1, 'Datastore.Audit': 1 },
       '/sdn/zones/localnetwork/vmbr1': { 'SDN.Use': 1 },
+      '/sdn/zones/fwgrp/fwgrp1': { 'SDN.Use': 1, 'SDN.Audit': 1 },
+      '/sdn/zones/fwlab/fwlab1': { 'SDN.Use': 1, 'SDN.Audit': 1 },
+      '/sdn/zones/fwlab/fwlab2': { 'SDN.Use': 1, 'SDN.Audit': 1 },
       '/': { 'Sys.Audit': 1 },
     },
     /** @type {any[]} */ rules: [],
+    /** @type {Record<number, string[]>} */ ipsets: {},
+    vnets: [
+      { vnet: 'fwgrp1', zone: 'fwgrp', alias: 'fleetwright-group' },
+      { vnet: 'fwlab1', zone: 'fwlab', alias: 'fleetwright-lab:open' },
+      { vnet: 'fwlab2', zone: 'fwlab', alias: 'fleetwright-lab:closed' },
+    ],
   };
   const upid = (/** @type {string} */ what) => `UPID:pve1:0000ABCD:00000001:6700000:${what}:100:fleetwright@pve!fleet:`;
   const server = https.createServer(cert, (req, res) => {
@@ -89,6 +99,9 @@ async function standIn({ cert, firewall = true, perms = null, version = '9.0.3' 
       if (p === '/cluster/firewall/options') return ok({ enable: state.firewall ? 1 : 0 });
       if (p === '/cluster/firewall/groups') return ok([{ group: PVE_FENCE_GROUP }]);
       if (p === '/cluster/nextid') return ok(String(state.nextid++));
+      if (p === '/cluster/sdn/vnets') return ok(state.vnets);
+      const subnets = /^\/cluster\/sdn\/vnets\/fwlab(\d)\/subnets$/.exec(p);
+      if (subnets) return ok([{ subnet: `fwlab-10.250.${subnets[1]}.0-24`, gateway: `10.250.${subnets[1]}.1` }]);
       if (p.startsWith('/nodes/pve1/tasks/')) return ok({ status: 'stopped', exitstatus: 'OK' });
       if (vmAt) {
         const v = state.vms.get(Number(vmAt[1]));
@@ -109,6 +122,9 @@ async function standIn({ cert, firewall = true, perms = null, version = '9.0.3' 
         }
         if (rest === '/firewall/options') return (v.firewall = params), ok(null);
         if (rest === '/firewall/rules') return state.rules.push({ vmid: v.vmid, ...params }), ok(null);
+        if (rest === '/firewall/ipset') return (state.ipsets[v.vmid] = []), ok(null);
+        if (rest === '/firewall/ipset/fwallow' && req.method === 'GET') return ok((state.ipsets[v.vmid] ?? []).map((cidr) => ({ cidr })));
+        if (rest === '/firewall/ipset/fwallow') return (state.ipsets[v.vmid] ??= []).push(params.cidr), ok(null);
         if (rest === '/status/start') return (v.status = 'running'), ok(upid('qmstart'));
         if (rest === '/status/stop') return (v.status = 'stopped'), ok(upid('qmstop'));
         if (rest === '/status/shutdown') return (v.status = 'stopped'), ok(upid('qmshutdown'));
@@ -176,7 +192,7 @@ test('a machine is cloned into the pool with its join in its SMBIOS, put behind 
     assert.deepEqual(seen.wide, []);
     const image = seen.images[0];
     assert.match(image.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-    assert.deepEqual(seen.networks.map((/** @type {any} */ n) => n.name), ['vmbr1']);
+    assert.deepEqual(seen.networks.map((/** @type {any} */ n) => [n.name, n.group, n.lab ?? null]), [['fwgrp1', true, null], ['fwlab1', false, 'open'], ['fwlab2', false, 'closed'], ['vmbr1', false, null]]);
 
     const r = await pools.make({ owner: OWNER, template: image.id, ticket: TICKET, minutes: 90, coordinatorUrl: 'https://fleet.example.com/x' });
     assert.equal(r.ok, true, r.text);
@@ -191,7 +207,7 @@ test('a machine is cloned into the pool with its join in its SMBIOS, put behind 
     assert.equal(decodeURIComponent(vm.config.sshkeys), 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGq eli@laptop');
     assert.match(vm.config.net0, /bridge=vmbr0/);
     assert.match(vm.config.net0, /firewall=1/);
-    assert.deepEqual(pve.state.rules, [{ vmid: 200, type: 'group', action: PVE_FENCE_GROUP, enable: '1' }]);
+    assert.deepEqual(pve.state.rules, [{ vmid: 200, type: 'group', action: PVE_FENCE_GROUP, pos: '0', enable: '1' }]);
     const mark = markOf(vm.config.description);
     assert.equal(mark?.for, OWNER);
     assert.equal(mark?.until, NOW / 1000 + 90 * 60);
@@ -215,7 +231,7 @@ test('with the datacenter firewall off, no machine is made where it would reach 
     assert.match(r.text, /firewall is off/);
     assert.ok(!pve.state.asked.some((a) => a.endsWith('/clone')), 'a clone was made anyway');
     // ON A NETWORK THE PERSON CHOSE, it is made, on that bridge.
-    const chosen = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: TICKET, network: seen.networks[0].id, coordinatorUrl: 'https://fleet.example.com' });
+    const chosen = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: TICKET, network: seen.networks.find((/** @type {any} */ n) => n.name === 'vmbr1').id, coordinatorUrl: 'https://fleet.example.com' });
     assert.equal(chosen.ok, true, chosen.text);
     assert.match(pve.state.vms.get(200).config.net0, /bridge=vmbr1/);
     assert.deepEqual(pve.state.rules, []);
@@ -312,6 +328,91 @@ test('a machine is given longer from when it was made, refused past the cap, and
   }
 });
 
+test('a machine in a group gets a second interface at its own address, let through before the fence', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf });
+  try {
+    const pools = new PvePools({ now: () => NOW, ...fast });
+    pools.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    await pools.refresh();
+    const [seen] = pools.report();
+    const grp = seen.networks.find((/** @type {any} */ n) => n.group);
+    assert.equal(grp?.name, 'fwgrp1');
+    const r = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: TICKET, group: grp.id, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(r.ok, true, r.text);
+    const vm = pve.state.vms.get(200);
+    assert.match(vm.config.net1, /^virtio=02:01:23:45:67:89,bridge=fwgrp1,firewall=1$/);
+    assert.match(vm.config.ipconfig1, /^ip=10\.200\.\d+\.\d+\/16$/);
+    assert.deepEqual(pve.state.rules.map((/** @type {any} */ x) => [x.pos, x.type, x.iface ?? x.action]), [['0', 'in', 'net1'], ['1', 'out', 'net1'], ['2', 'group', PVE_FENCE_GROUP]]);
+    const mark = markOf(vm.config.description);
+    assert.equal(mark?.grp, 'fwgrp1');
+    assert.equal(`ip=${mark?.gip}/16`, vm.config.ipconfig1);
+  } finally {
+    await pve.close();
+  }
+});
+
+test('a closed lab machine is alone on its lab, asks only its gateway for names, and reaches only the fleet and Claude', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf });
+  /** @type {string[]} */
+  const asked = [];
+  try {
+    const pools = new PvePools({ now: () => NOW, ...fast, resolve: async (h) => (asked.push(h), h === 'fleet.example.com' ? ['203.0.113.7'] : ['198.51.100.9']) });
+    pools.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    await pools.refresh();
+    const [seen] = pools.report();
+    const closed = seen.networks.find((/** @type {any} */ n) => n.lab === 'closed');
+    assert.equal(closed?.name, 'fwlab2');
+    assert.equal(closed?.taken, false);
+    const r = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: TICKET, lab: true, network: closed.id, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(r.ok, true, r.text);
+    const vm = pve.state.vms.get(200);
+    assert.match(vm.config.net0, /bridge=fwlab2/);
+    assert.equal(vm.firewall.policy_out, 'DROP');
+    assert.deepEqual(pve.state.rules.map((/** @type {any} */ x) => [x.type, x.proto ?? '', x.dport ?? '', x.dest ?? '']), [
+      ['out', 'udp', '67:68', ''],
+      ['out', 'udp', '53', '10.250.2.1'],
+      ['out', 'tcp', '53', '10.250.2.1'],
+      ['out', 'tcp', '443', '+guest/fwallow'],
+    ]);
+    assert.ok(!pve.state.rules.some((/** @type {any} */ x) => x.type === 'group'), 'a closed lab went behind the fence, which lets the internet through');
+    assert.deepEqual(pve.state.ipsets[200].sort(), ['198.51.100.9', '203.0.113.7']);
+    assert.ok(asked.includes('fleet.example.com') && asked.includes('api.anthropic.com'));
+    await pools.refresh();
+    assert.equal(pools.report()[0].networks.find((/** @type {any} */ n) => n.name === 'fwlab2')?.taken, true);
+    const again = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: `fwt_0123456789ac_${'d'.repeat(48)}`, lab: true, network: closed.id, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(again.ok, false);
+    assert.match(again.text, /has a machine on it/);
+  } finally {
+    await pve.close();
+  }
+});
+
+test('an open lab machine asks only its gateway for names and is fenced from everything private', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf });
+  try {
+    const pools = new PvePools({ now: () => NOW, ...fast });
+    pools.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    await pools.refresh();
+    const [seen] = pools.report();
+    const open = seen.networks.find((/** @type {any} */ n) => n.lab === 'open');
+    const r = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: TICKET, lab: true, network: open.id, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(r.ok, true, r.text);
+    assert.equal(pve.state.vms.get(200).firewall.policy_out, 'ACCEPT');
+    assert.deepEqual(pve.state.rules.map((/** @type {any} */ x) => [x.type, x.action, x.dport ?? '', x.dest ?? '']), [
+      ['out', 'ACCEPT', '53', '10.250.1.1'],
+      ['out', 'ACCEPT', '53', '10.250.1.1'],
+      ['out', 'DROP', '53', ''],
+      ['out', 'DROP', '53', ''],
+      ['group', PVE_FENCE_GROUP, '', ''],
+    ]);
+  } finally {
+    await pve.close();
+  }
+});
+
 test('a token that can do more than the fleet needs is reported, by path and privilege', () => {
   const wide = wideOf({
     '/pool/fleetwright': { 'VM.Allocate': 1, 'VM.Clone': 1 },
@@ -362,6 +463,8 @@ test('the setup script embeds the snippets, privileges and image the driver expe
   assert.ok(lines.includes(`IMAGE_URL=${DEBIAN_IMAGE.url}`), 'the script downloads another image');
   assert.ok(lines.includes(`IMAGE_SHA512=${DEBIAN_IMAGE.sha512}`), 'the script checks another digest');
   assert.equal(spawnSync('bash', ['-n', fileURLToPathSafe('../install/fleetwright-pve-setup')]).status, 0);
+  // A CLOSED LAB'S NAMES are the sandbox's required hosts, as the edge router's are.
+  assert.deepEqual(/^REQUIRED="([^"]+)"/m.exec(script)?.[1].split(' '), [...REQUIRED_HOSTS]);
 });
 
 /** @param {string} rel */

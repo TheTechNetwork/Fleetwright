@@ -1635,6 +1635,14 @@ const OPENAPI = JSON.stringify({
                             "type": "string",
                             "description": "the Xen Orchestra it is on"
                           },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "xo",
+                              "proxmox"
+                            ],
+                            "description": "which hypervisor the image is on: `xo` for Xen Orchestra, `proxmox` for Proxmox VE. Absent from an older coordinator, which means `xo`."
+                          },
                           "hosts": {
                             "type": "array",
                             "items": {
