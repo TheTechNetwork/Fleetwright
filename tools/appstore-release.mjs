@@ -340,9 +340,9 @@ export const REVIEW_NOTES = [
   'This app has no username-and-password login and no account to sign up for, so there is no demo account to provide.',
   'To look around: on the first screen, tap "Look around the demo fleet". No sign-in and nothing to type. '
     + 'It connects to a demonstration fleet with two machines and a few sessions, and every screen of the app works against it.',
-  '"Sign in with Apple" on that screen is for people who run a fleet of their own: it signs this device in to the fleet at the address '
-    + 'typed above it, which has to allow the person’s email address first. It is not a login to this app or to any account of ours, '
-    + 'and it is not needed to review the app.',
+  '"Sign in with Apple" appears on that screen once a fleet address is typed into the field above it. It is for people who run a fleet '
+    + 'of their own: it signs this device in to the fleet at that address, which has to allow the person’s email address first. '
+    + 'It is not a login to this app or to any account of ours, and it is not needed to review the app.',
 ].join('\n\n');
 
 async function main() {
@@ -517,7 +517,9 @@ async function main() {
   if (WHATS_NEW) attributes.whatsNew = WHATS_NEW;
   try {
     const listing = storeListing();
-    attributes.description = listing.full;
+    // The App Store's own description, not Play's: the Play copy names Android,
+    // Google and an APK, and App Review rejected 0.4.15 under 2.3.10 for it.
+    attributes.description = listing.appStore;
     // The short description is Play's field; on the App Store the equivalent
     // slot is promotional text, which is the one thing editable WITHOUT a new
     // version — so the same sentence lands in the place it belongs on each

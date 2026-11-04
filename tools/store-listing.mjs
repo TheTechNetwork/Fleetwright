@@ -78,6 +78,20 @@ export function storeListing(path = LISTING_PATH) {
   const name = required(md, /App name/i, 'App name');
   const short = required(md, /Short description/i, 'Short description');
   const full = required(md, /Full description/i, 'Full description');
+  // THE APP STORE'S OWN DESCRIPTION. It used to be sent Play's, and App Review
+  // rejected 0.4.15 under guideline 2.3.10 for it: "remove Android
+  // references". Play's copy is about an APK, a Google sign-in and Android 11;
+  // none of that describes the iOS app.
+  const appStore = required(md, /^## App Store description/i, 'App Store description');
+  // Refused here, not on review a week later. Words for another platform's
+  // store or its sign-in are what 2.3.10 named; the iOS app has neither.
+  const elsewhere = /\b(android|google play|play store|apk)\b|sign in with google/i.exec(appStore);
+  if (elsewhere) {
+    throw new Error(
+      `the App Store description mentions "${elsewhere[0]}" — App Review rejects that under guideline 2.3.10.\n` +
+        'It is the iOS app on that page; Play has a description of its own.',
+    );
+  }
   // THE FIELDS APP STORE CONNECT STILL WANTED TYPED after the description
   // arrived: the first submission was refused for every one of them, with the
   // answers in nobody's head. Required, like the rest — an empty keyword
@@ -94,6 +108,7 @@ export function storeListing(path = LISTING_PATH) {
     ['App name', name, 30],
     ['Short description', short, 80],
     ['Full description', full, 4000],
+    ['App Store description', appStore, 4000],
     ['Keywords', keywords, 100],
   ].filter(([, v, max]) => String(v).length > Number(max));
   if (tooLong.length) {
@@ -106,5 +121,5 @@ export function storeListing(path = LISTING_PATH) {
     if (!/^https:\/\/\S+$/.test(v)) throw new Error(`${k} is not one https URL: ${JSON.stringify(v)}`);
   }
 
-  return { name, short, full, keywords, supportUrl, privacyPolicyUrl, copyright };
+  return { name, short, full, appStore, keywords, supportUrl, privacyPolicyUrl, copyright };
 }

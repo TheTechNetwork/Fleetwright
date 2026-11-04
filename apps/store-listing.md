@@ -1,6 +1,9 @@
-# Fleetwright — Play Store listing copy
+# Fleetwright — store listing copy
 
-Paste into Play Console → Grow → Store presence → Main store listing.
+One document for both stores. Play's copy is pasted into Play Console → Grow →
+Store presence → Main store listing. The App Store's is written by
+`tools/appstore-release.mjs` on every submission: the App Store description,
+the short description as promotional text, the keywords and the URLs below.
 
 ---
 
@@ -68,6 +71,56 @@ DELIBERATELY SMALL
 No analytics. No advertising. No third-party trackers. The only network traffic is between this app and the coordinator address you typed in, and the only data it holds is that address, this device's credential, the address you signed in with, and whatever your coordinator returns.
 
 Requires Android 11 or later.
+```
+
+---
+
+## App Store description (4000 char max)
+
+THE APP STORE GETS ITS OWN, because App Review rejected 0.4.15 under guideline
+2.3.10 for the Play one: "Revise the app's description to remove Android
+references." The Play copy says Google, APK, keystore, dynamic colour and
+"Requires Android 11", and none of that is true of the iOS app.
+
+Two things the Play copy can claim and this one cannot: the iOS app reports
+crashes and hangs to an error tracker (Sentry, with no identifiers and every
+on-screen word masked), and it talks to GitHub or Xen Orchestra when you point
+it at them. So it does not say "the only network traffic is the coordinator".
+`tools/store-listing.mjs` refuses this block if it names Android or Google Play.
+
+```
+Fleetwright is an iPhone and iPad client for a fleet of coding agent sessions.
+
+One screen: what is running, and the handful of things worth doing about it from wherever you are. Every session across every host in one list, with the ones that have stopped and are waiting on a person marked so you can find them at a glance.
+
+WHAT IT DOES
+
+• See every session: name, status and the host it is on, pulled from your coordinator on open and on demand.
+• Start a new session without touching a terminal.
+• Stop a session that has gone somewhere you did not want it to go.
+• Resume a stopped session with a summary of where it left off.
+• Peek at the live pane output for any session, so you can read what it is actually doing before deciding anything.
+• Open a running session in Remote Control, and go from reading it to driving it.
+• Get a notification the moment a session stops and waits on you.
+• Ask Siri, or build it into Shortcuts: "start a dev session on my fleet".
+
+YOU BRING THE SERVER
+
+Fleetwright is a client, not a service. It talks to an agent fleet coordinator that you run yourself. On first launch it asks for the coordinator's address, then for you to sign in with Apple. Until then there is nothing to show: the app does not ship with a backend, and your fleet decides which email addresses it lets in. Choose "Share My Email" when you sign in, because a hidden address matches nobody on a fleet's list.
+
+To see it working first, tap "Look around the demo fleet". It is a sample fleet with nothing real behind it, and nothing to type.
+
+Signing in gets this device a credential of its own, issued by your coordinator and revocable on its own. It is kept in the keychain on this device. Nothing is built into the app: a credential shipped inside an app is public to anybody who unpacks it, and one shared between devices cannot be revoked for just one of them.
+
+DESIGNED TO BE READ, NOT DECODED
+
+Every session state is shown as a word, never as a colour alone; colour only reinforces it. That matters outdoors, and it matters for the roughly one in twelve men with a colour vision deficiency.
+
+DELIBERATELY SMALL
+
+No analytics, no advertising and no tracking. If the app crashes or hangs, a report goes to the developer's error tracker, with no identifiers, no IP address and every word on the screen masked. Everything else the app sends goes to the coordinator you typed in, or to a service you connect it to yourself.
+
+Requires iOS 26 or iPadOS 26 or later.
 ```
 
 ---
@@ -175,3 +228,11 @@ Account creation: *No*, the app has no accounts of its own.
 
 **App Store Connect → App Privacy**: Contact Info → Email Address → linked to
 the user, used for App Functionality. Tracking: **No**.
+
+**And on the App Store, crash reports.** The iOS app sends crashes and hangs
+to Sentry, with no identifiers, no IP address and every word on the screen
+masked (`FleetwrightApp.swift`, `startErrorReporting`). The App Store
+description says so, and the App Privacy answers have to agree with it:
+Diagnostics → Crash Data → **not** linked to the user, used for App
+Functionality. Checking the form against this is a step in App Store
+Connect, because nothing in this repository can write those answers.

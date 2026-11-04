@@ -20,6 +20,7 @@ import { storeListing, LISTING_PATH } from '../tools/store-listing.mjs';
 
 /** The sections every document now has to carry, for fixtures about other things. */
 const TAIL = [
+  '## App Store description (4000 char max)', '', '```', 'the iOS copy', '```', '',
   '## Keywords (100 char max)', '', '```', 'a,b', '```', '',
   '## Support URL', '', '```', 'https://example.test/support', '```', '',
   '## Privacy policy URL', '', '```', 'https://example.test/privacy', '```', '',
@@ -107,7 +108,7 @@ test('the release applies the listing, and never dies for want of it', () => {
   // already on the store is what stays, and it says so.
   const src = readFileSync(new URL('../tools/appstore-release.mjs', import.meta.url), 'utf8');
   assert.match(src, /import \{ storeListing \} from '\.\/store-listing\.mjs'/);
-  assert.match(src, /attributes\.description = listing\.full/);
+  assert.match(src, /attributes\.description = listing\.appStore/);
   // Short description is Play's field; promotional text is the App Store's
   // equivalent slot, and the only one editable without a new version.
   assert.match(src, /attributes\.promotionalText = listing\.short/);
@@ -146,4 +147,25 @@ test('the document is where both stores read from, not one of them', () => {
   const md = readFileSync(LISTING_PATH, 'utf8');
   assert.match(md, /App Store Connect/, 'the shared document stopped covering the App Store');
   assert.match(md, /Play/, 'the shared document stopped covering Play');
+});
+
+test('the App Store gets its own description, with no other platform in it', () => {
+  // App Review rejected 0.4.15 under guideline 2.3.10 for the Play copy, which
+  // the App Store was being sent: "remove Android references". The real
+  // document's App Store block is what ships, so it is the one checked.
+  const l = storeListing();
+  assert.notEqual(l.appStore, l.full, 'the App Store is being sent the Play description again');
+  assert.doesNotMatch(l.appStore, /android|google|play store|\bapk\b/i);
+  assert.match(l.appStore, /Sign in with Apple|sign in with Apple/, 'the App Store copy does not name the sign-in the iOS app offers');
+  assert.match(l.appStore, /Look around the demo fleet/, 'the App Store copy lost the way in that needs no fleet');
+
+  // And the parser refuses one that does, naming the word, so the next edit
+  // that pastes Play's copy across fails here rather than in App Review.
+  const withAndroid = [
+    '## App name (30 char max)', '', '```', 'Fleetwright', '```', '',
+    '## Short description (80 char max)', '', '```', 'short', '```', '',
+    '## Full description (4000 char max)', '', '```', 'body', '```', '',
+    '## App Store description (4000 char max)', '', '```', 'Requires Android 11 or later.', '```', '',
+  ].join('\n') + TAIL.slice(TAIL.indexOf('## Keywords'));
+  assert.throws(() => parse(withAndroid), /mentions "Android".*2\.3\.10/);
 });
