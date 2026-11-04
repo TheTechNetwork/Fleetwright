@@ -310,6 +310,16 @@ struct AddHypervisorView: View {
     var body: some View {
         Form {
             if let pool = policyFor, job == nil { fleetSection(pool) }
+            // PROXMOX IS ITS OWN SCREEN, offered here only when adding, which
+            // is where somebody who typed its address ends up.
+            if policyFor == nil && reconnectFor == nil && job == nil {
+                Section {
+                    NavigationLink("It is Proxmox VE") { AddProxmoxView(settings: settings) }
+                        .frame(minHeight: 44)
+                } footer: {
+                    Text("This screen is for Xen Orchestra. A Proxmox VE cluster is added with one command on the node and the line it prints.")
+                }
+            }
             whereSection
             if probes != nil { machinesSection }
             if noXenOrchestra { installSection }

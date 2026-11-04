@@ -183,6 +183,7 @@ internal fun HypervisorSheet(
 
     var address by rememberSaveable { mutableStateOf(policyFor ?: reconnectFor ?: "") }
     var probing by remember { mutableStateOf(false) }
+    var proxmox by rememberSaveable { mutableStateOf(false) }
     // NULL IS NOT ASKED. An empty list is a fleet with nothing permanent to ask.
     var probes by remember { mutableStateOf<List<Fleet.Probe>?>(null) }
     var probeText by remember { mutableStateOf("") }
@@ -1097,11 +1098,21 @@ internal fun HypervisorSheet(
         XoDeploySheet(settings, address.trim(), probes, onDismiss = { deploying = false })
         return
     }
+    // PROXMOX IS ITS OWN SCREEN, offered while adding, which is where
+    // somebody who typed its address ends up (ProxmoxSheet).
+    if (proxmox) {
+        ProxmoxSheet(settings, onDismiss = { proxmox = false })
+        return
+    }
 
     val title = if (reconnect) "Reconnect its servers" else if (policy) "What the fleet may use" else "Add a hypervisor"
     FullScreen(title = title, onDismiss = { password = ""; onDismiss() }) {
         val setup = progress
         val waitingOn = unvouched
+        if (!policy && !reconnect && job == null) {
+            OpenRow("It is Proxmox VE") { proxmox = true }
+            Hint("This screen is for Xen Orchestra. A Proxmox VE cluster is added with one command on the node and the line it prints.")
+        }
         when {
             job != null -> {
                 SectionHead(if (policy || reconnect) address else "Setting up")

@@ -149,6 +149,17 @@ struct MachinesView: View {
                 }
                 .fleetCard(radius: Design.Radius.cardSmall)
                 .fleetRow()
+                // PROXMOX VE beside it, the same shape: its own screen,
+                // because it asks for none of what Xen Orchestra's does.
+                NavigationLink {
+                    AddProxmoxView(settings: settings)
+                } label: {
+                    Label("Add Proxmox VE", systemImage: "square.stack.3d.up")
+                        .fleetType(.body)
+                        .frame(minHeight: 44)
+                }
+                .fleetCard(radius: Design.Radius.cardSmall)
+                .fleetRow()
             }
 
             // THE POOLS THIS PHONE HOLDS, each a way to its page: what is on

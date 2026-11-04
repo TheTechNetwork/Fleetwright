@@ -137,10 +137,14 @@ The same script in a root shell on any node (Datacenter › the node › Shell
 in Proxmox's own web interface):
 
 ```
-bash fleetwright-pve-setup
+curl -fsSLo /root/fleetwright-pve-setup https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/fleetwright-pve-setup && bash /root/fleetwright-pve-setup
 ```
 
-prints the line at the end, to paste into Add a hypervisor › Proxmox.
+prints the line at the end. **This is built in both apps**: Machines › Add
+Proxmox VE (or "It is Proxmox VE" on Add a hypervisor) shows the command to
+run, which fetches the script from this repository's `main`, and takes the
+line. It keeps the line in the vault as `hypervisor:<address>`, and the
+boxes pick it up on their next vault pass, within ten minutes.
 
 ### What it makes
 
