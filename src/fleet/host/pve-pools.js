@@ -57,7 +57,9 @@ import { createHash } from 'node:crypto';
 import { PveApi } from './pve-api.js';
 import { seal, claudeBindingFor } from '../seal.js';
 import { machineGrantsOf } from '../../core/grants.js';
-import { HYPERVISOR_ITEM, MAX_MINUTES, SSH_KEYS_ITEM, sshKeys } from './xo-pools.js';
+import { lookup } from 'node:dns/promises';
+import { HYPERVISOR_ITEM, MAX_MINUTES, SSH_KEYS_ITEM, sshKeys, groupPlace } from './xo-pools.js';
+import { fleetHosts } from './edge-router.js';
 import { JOIN_RUNCMD } from './vm-image.js';
 
 /** What a Proxmox record says it is, beside Xen Orchestra's, which says nothing. */
@@ -67,6 +69,18 @@ export const PVE_IMAGE_TAG = 'fleetwright-image';
 export const PVE_SESSION_TAG = 'fleetwright-session';
 /** The cluster security group the setup script makes and every machine is put behind. */
 export const PVE_FENCE_GROUP = 'fleetwright-isolate';
+/**
+ * THE NETWORKS THE SETUP MAKES for labs and groups (install/fleetwright-pve-setup),
+ * as SDN zones of their own: a group network is a VNet in `fwgrp`, a lab a
+ * VNet in `fwlab` whose alias says its kind. Only the root setup can make an
+ * SDN network, which is the same reason Xen Orchestra's policy job made them
+ * with the admin sign-in: the fleet's token may use one, never make one.
+ */
+export const PVE_GROUP_ZONE = 'fwgrp';
+export const PVE_LAB_ZONE = 'fwlab';
+export const PVE_LAB_ALIAS = 'fleetwright-lab:';
+/** The per-machine ipset a closed lab's HTTPS may go to. */
+export const PVE_ALLOW_SET = 'fwallow';
 /** The line in a machine's notes that says what it is. */
 export const MARK = 'fleetwright:';
 /** The line a setup script prints, and the phone keeps. */
@@ -113,7 +127,7 @@ const MAX_MACHINES = 200;
 /**
  * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', grants?: any }} PveRecord
  * @typedef {{ id: string, name: string, node: string, vmid: number, pool: string|null, poolName: string|null, bridge: string|null }} PveImage
- * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string }} PveNetwork
+ * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string, lab?: 'open'|'closed', gateway?: string|null, taken?: boolean|null }} PveNetwork
  */
 
 const TOKEN_RE = /^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,64}![A-Za-z0-9._-]{1,64}=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -196,7 +210,7 @@ export function pveIdOf(address, kind, key) {
  * with MARK is read, and only its known fields are kept.
  *
  * @param {unknown} description
- * @returns {{ for: string, until: number, made: number, from: string|null, on: string|null, busy: number|null }|null}
+ * @returns {{ for: string, until: number, made: number, from: string|null, on: string|null, busy: number|null, grp: string|null, gip: string|null, lab: string|null }|null}
  */
 export function markOf(description) {
   const line = String(description || '').split('\n').find((l) => l.startsWith(MARK));
@@ -216,12 +230,15 @@ export function markOf(description) {
     from: typeof m.from === 'string' ? m.from : null,
     on: typeof m.on === 'string' ? m.on : null,
     busy: Number.isFinite(m.busy) ? Number(m.busy) : null,
+    grp: typeof m.grp === 'string' ? m.grp : null,
+    gip: typeof m.gip === 'string' ? m.gip : null,
+    lab: typeof m.lab === 'string' ? m.lab : null,
   };
 }
 
-/** @param {{ for: string, until: number, made: number, from?: string|null, on?: string|null, busy?: number|null }} m */
+/** @param {{ for: string, until: number, made: number, from?: string|null, on?: string|null, busy?: number|null, grp?: string|null, gip?: string|null, lab?: string|null }} m */
 export function markText(m) {
-  const line = JSON.stringify({ v: 1, for: m.for, until: m.until, made: m.made, ...(m.from ? { from: m.from } : {}), ...(m.on ? { on: m.on } : {}), ...(m.busy ? { busy: m.busy } : {}) });
+  const line = JSON.stringify({ v: 1, for: m.for, until: m.until, made: m.made, ...(m.from ? { from: m.from } : {}), ...(m.on ? { on: m.on } : {}), ...(m.busy ? { busy: m.busy } : {}), ...(m.grp ? { grp: m.grp } : {}), ...(m.gip ? { gip: m.gip } : {}), ...(m.lab ? { lab: m.lab } : {}) });
   return `A temporary machine for ${m.for}, made by Fleetwright. It powers off by itself at its end and is then removed.\n${MARK}${line}`;
 }
 
@@ -261,18 +278,32 @@ export function wideOf(perms, pool) {
 /**
  * The networks the token may put a machine on: every bridge or VNet Proxmox
  * grants it SDN.Use on, by zone. With none, a machine goes on its image's own
- * bridge, and nothing else is offered.
+ * bridge, and nothing else is offered. A VNet in the group zone is a group
+ * network; one in the lab zone is a lab when its alias names its kind, and
+ * is not offered at all when it does not, since a lab whose kind is not known
+ * cannot be promised to reach what it says.
  *
  * @param {Record<string, Record<string, number>>} perms @param {string} address
+ * @param {Array<{ vnet?: string, zone?: string, alias?: string }>} [vnets]  /cluster/sdn/vnets
+ * @param {Map<string, string>} [gateways]  lab VNet to its gateway
  * @returns {PveNetwork[]}
  */
-export function networksOf(perms, address) {
+export function networksOf(perms, address, vnets = [], gateways = new Map()) {
   /** @type {PveNetwork[]} */
   const out = [];
+  const alias = new Map((Array.isArray(vnets) ? vnets : []).map((v) => [`${v?.zone}/${v?.vnet}`, String(v?.alias || '')]));
   for (const [path, privs] of Object.entries(perms || {})) {
     const m = /^\/sdn\/zones\/([A-Za-z0-9_-]{1,40})\/([A-Za-z0-9_.-]{1,40})$/.exec(path);
     if (!m || !privs?.['SDN.Use']) continue;
-    out.push({ id: pveIdOf(address, 'net', `${m[1]}/${m[2]}`), name: m[2], pool: null, group: false, zone: m[1] });
+    const [, zone, name] = m;
+    const base = { id: pveIdOf(address, 'net', `${zone}/${name}`), name, pool: null, group: zone === PVE_GROUP_ZONE, zone };
+    if (zone === PVE_LAB_ZONE) {
+      const kind = alias.get(`${zone}/${name}`)?.startsWith(PVE_LAB_ALIAS) ? alias.get(`${zone}/${name}`)?.slice(PVE_LAB_ALIAS.length) : null;
+      if (kind !== 'open' && kind !== 'closed') continue;
+      out.push({ ...base, lab: kind, gateway: gateways.get(name) ?? null });
+      continue;
+    }
+    out.push(base);
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -319,10 +350,15 @@ export class PvePools {
    *   now?: () => number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
    *   sleep?: (ms: number) => Promise<void>,
+   *   resolve?: (host: string) => Promise<string[]>,
    * }} [opts]
    */
-  constructor({ api = (o) => new PveApi(o), now = () => Date.now(), log, sleep } = {}) {
+  constructor({ api = (o) => new PveApi(o), now = () => Date.now(), log, sleep, resolve = async (h) => (await lookup(h, { all: true, family: 4 })).map((a) => a.address) } = {}) {
     this.api = api;
+    /** IPv4 addresses for a name, for a closed lab's allow list. */
+    this.resolve = resolve;
+    /** The coordinator a machine was last made for, which a closed lab's list is kept to. */
+    this.coordinatorUrl = '';
     this.now = now;
     this.sleep = sleep;
     this.log = log || { info() {}, warn() {} };
@@ -434,6 +470,18 @@ export class PvePools {
     const fw = await api.get('/cluster/firewall/options').catch(() => null);
     const groups = await api.get('/cluster/firewall/groups').catch(() => null);
     const fenced = fw === null || groups === null ? null : Number(fw?.enable) === 1 && (Array.isArray(groups) ? groups : []).some((g) => g?.group === PVE_FENCE_GROUP);
+    // THE LAB AND GROUP NETWORKS, as the setup made them, and each lab's
+    // gateway, which its machine's names and addresses come from.
+    const vnets = await api.get('/cluster/sdn/vnets').catch(() => []);
+    /** @type {Map<string, string>} */
+    const gateways = new Map();
+    for (const v of Array.isArray(vnets) ? vnets : []) {
+      if (v?.zone !== PVE_LAB_ZONE || typeof v.vnet !== 'string') continue;
+      const subs = await api.get(`/cluster/sdn/vnets/${encodeURIComponent(v.vnet)}/subnets`).catch(() => []);
+      const gw = (Array.isArray(subs) ? subs : []).map((x) => String(x?.gateway || '')).find((g) => /^\d{1,3}(\.\d{1,3}){3}$/.test(g));
+      if (gw) gateways.set(v.vnet, gw);
+    }
+    const nets = networksOf(perms, record.address, vnets, gateways);
     // THE MACHINES: in the pool, tagged, named as the fleet names them, and
     // marked; the sweep first, then what is left, for the phone's page.
     /** @type {any[]} */
@@ -473,13 +521,22 @@ export class PvePools {
         memory: Number.isFinite(Number(cfg.memory)) ? Number(cfg.memory) * 1024 * 1024 : null,
         image: images.find((i) => i.id === mark.from)?.name ?? null,
         network: mark.on ?? bridgeOf(cfg.net0),
-        group: null,
-        groupIp: null,
-        lab: null,
+        group: mark.grp,
+        groupIp: mark.gip,
+        lab: mark.lab ? { name: mark.lab, open: nets.find((n) => n.name === mark.lab)?.lab === 'open' } : null,
         net: null,
         node: String(v.node),
         vmid: Number(v.vmid),
       });
+    }
+    // A CLOSED LAB'S LIST KEPT CURRENT: the names it may reach resolve to
+    // other addresses over time, and an address added is never one the
+    // machine chose. Only added to, never taken from, so a look that
+    // resolved less than last time cuts off nothing in use.
+    if (this.coordinatorUrl) {
+      for (const x of machines.filter((y) => y.state === 'Running' && y.lab && !y.lab.open)) {
+        await this.#allow(api, `/nodes/${encodeURIComponent(x.node)}/qemu/${x.vmid}`, this.coordinatorUrl).catch(() => {});
+      }
     }
     return {
       address: record.address,
@@ -489,7 +546,9 @@ export class PvePools {
       version: typeof version?.version === 'string' ? version.version.slice(0, 20) : null,
       pools: [poolEntry],
       images,
-      networks: networksOf(perms, record.address).map((n) => ({ ...n, pool: poolEntry.id })),
+      // A LAB IS TAKEN while a machine of the fleet's is on it, as this look
+      // saw: a lab holds one machine at a time.
+      networks: nets.map((n) => ({ ...n, pool: poolEntry.id, ...(n.lab ? { taken: machines.some((x) => x.lab?.name === n.name) } : {}) })),
       machines,
       fenced,
       supported,
@@ -507,8 +566,7 @@ export class PvePools {
     const who = String(owner || '').toLowerCase();
     const m = TICKET_RE.exec(String(ticket || ''));
     if (!m) return { ok: false, text: 'That machine came without the ticket it enrols with, so it was not made.' };
-    if (lab) return { ok: false, text: 'Labs are not built on Proxmox yet, so the machine was not made. Start it on one of the cluster’s networks instead.' };
-    if (group) return { ok: false, text: 'Machines that work together are not built on Proxmox yet, so the machine was not made.' };
+    if (lab && group) return { ok: false, text: 'A machine in a lab is on the lab’s network alone, so it joins no group. It was not made.' };
     const name = `vm-${m[1]}`;
     const found = [...this.held.entries()].find(([k, h]) => h.owner === who && this.seen.get(k)?.images?.some((/** @type {any} */ i) => i.id === template));
     if (!found) return { ok: false, text: 'This box holds no pool of yours with that machine image.' };
@@ -523,8 +581,16 @@ export class PvePools {
           : `${record.address} would not say which Proxmox VE it runs, so the machine was not made.`,
       };
     }
-    const chosen = network ? seen.networks.find((/** @type {any} */ n) => n.id === network) : null;
-    if (network && !chosen) return { ok: false, text: 'That network is not one this box saw on your cluster, so the machine was not made.' };
+    // A LAB, only one of the cluster's lab networks, and only one seen empty.
+    const labNet = lab ? seen.networks.find((/** @type {any} */ n) => n.id === network && n.lab) : null;
+    if (lab && !labNet) return { ok: false, text: 'That is not a lab this box saw on your cluster, so the machine was not made.' };
+    if (labNet && labNet.taken !== false) return { ok: false, text: `${labNet.name} ${labNet.taken ? 'has a machine on it' : 'could not be seen to be empty'}, so the machine was not made. Choose another lab.` };
+    if (labNet && !labNet.gateway) return { ok: false, text: `${labNet.name} has no gateway this box could read, so a machine there would have no names. It was not made; run the setup again.` };
+    const chosen = network && !lab ? seen.networks.find((/** @type {any} */ n) => n.id === network && !n.group && !n.lab) : null;
+    if (network && !lab && !chosen) return { ok: false, text: 'That network is not one this box saw on your cluster, so the machine was not made.' };
+    // A GROUP NETWORK, as well as its own: only one of the cluster's.
+    const groupNet = group ? seen.networks.find((/** @type {any} */ n) => n.id === group && n.group) : null;
+    if (group && !groupNet) return { ok: false, text: 'That is not a group network this box saw on your cluster, so the machine was not made.' };
     // NOT FENCED IS NOT MADE QUIETLY: a machine on the image's bridge with the
     // datacenter's firewall off reaches everything that bridge does. Made on a
     // network the person chose, it reaches what they chose; made by default,
@@ -537,6 +603,19 @@ export class PvePools {
           : `${record.address} would not say whether its firewall is on, so the machine was not made. Choose a network for it in New session › Where, or let the token read /cluster/firewall (run the setup again).`,
       };
     }
+    // A CLOSED LAB'S WAY OUT, resolved before anything is made: with no
+    // address for the fleet, the machine could not enrol, and would sit there.
+    const closed = labNet?.lab === 'closed';
+    if (closed) {
+      this.coordinatorUrl = coordinatorUrl;
+      const any = (await Promise.all(fleetHosts(coordinatorUrl).map((h) => this.resolve(h).catch(() => [])))).flat();
+      if (!any.length) return { ok: false, text: 'None of the fleet’s or Claude’s names resolved from this box, so a machine in a closed lab could reach nothing it needs. It was not made.' };
+    }
+    // ITS PLACE ON THE GROUP NETWORK: a MAC and an address from its ticket's
+    // id, moved past any a machine in that group has, as on Xen Orchestra.
+    const joined = groupNet
+      ? groupPlace(m[1], new Set(seen.machines.filter((/** @type {any} */ x) => x.group === groupNet.name && x.groupIp).map((/** @type {any} */ x) => x.groupIp)))
+      : null;
     const life = Math.max(5, Math.min(MAX_MINUTES, Number(minutes) || DEFAULT_MINUTES));
     const made = Math.floor(this.now() / 1000);
     const until = made + life * 60;
@@ -558,7 +637,7 @@ export class PvePools {
           return { ok: false, unreachable: true, text: `${record.address} could not be reached from here: ${/** @type {Error} */ (e).message}` };
         }
         try {
-          await api.waitTask(await api.post(`${src}/clone`, { newid: next, name, pool: record.pool, description: markText({ for: who, until, made, from: image.id, on: chosen?.name ?? image.bridge }) }), { sleep: this.sleep });
+          await api.waitTask(await api.post(`${src}/clone`, { newid: next, name, pool: record.pool, description: markText({ for: who, until, made, from: image.id, on: labNet?.name ?? chosen?.name ?? image.bridge, grp: groupNet?.name ?? null, gip: joined?.address ?? null, lab: labNet?.name ?? null }) }), { sleep: this.sleep });
           vmid = next;
         } catch (e) {
           lastError = e;
@@ -581,15 +660,23 @@ export class PvePools {
         smbios1,
         ciuser: 'fleetwright',
         ...(keys.length ? { sshkeys: encodeURIComponent(keys.join('\n')) } : {}),
-        net0: net0On(cfg.net0, chosen?.name ?? null),
+        net0: net0On(cfg.net0, labNet?.name ?? chosen?.name ?? null),
+        // ON THE GROUP NETWORK TOO, at its own address: Proxmox's cloud-init
+        // writes it, so it is set before anything inside listens.
+        ...(joined && groupNet ? { net1: `virtio=${joined.mac},bridge=${groupNet.name},firewall=1`, ipconfig1: `ip=${joined.address}/16` } : {}),
       });
       // BEHIND THE FENCE, unless the person chose the network: the cluster's
       // group, on the bridge, out of the guest's reach.
-      if (!chosen) {
-        await api.put(`${dst}/firewall/options`, { enable: 1, policy_in: 'DROP', policy_out: 'ACCEPT' });
-        await api.post(`${dst}/firewall/rules`, { type: 'group', action: PVE_FENCE_GROUP, enable: 1 });
-      }
+      if (!chosen) await this.#fence(api, dst, { lab: labNet, group: Boolean(joined), coordinatorUrl });
       await api.waitTask(await api.post(`${dst}/status/start`, {}), { sleep: this.sleep });
+      // ALONE IN ITS LAB: another box may have put a machine on the same lab
+      // in the same moment. The one made second goes, as on Xen Orchestra.
+      if (labNet) {
+        const others = await this.#onLab(api, record.pool, labNet.name, vmid);
+        if (others === null || others.some((o) => o.made < made || (o.made === made && o.name < name))) {
+          throw new Error(`${labNet.name} ${others === null ? 'could not be seen to be yours alone' : 'was taken a moment ago by another machine'}. Choose another lab`);
+        }
+      }
       this.#noteMade(name, { vmid, node: image.node, owner: who, at: this.now() });
       this.log.info(`sidecar: made ${name} from ${image.name} on ${record.address} for ${who}`);
       const claude = this.claude.get(who) ?? null;
@@ -597,7 +684,11 @@ export class PvePools {
         ok: true,
         vm: pveIdOf(record.address, 'vm', `${vmid}:${made}`),
         text:
-          `Making ${name} from ${image.name} on ${record.address}${chosen ? `, on ${chosen.name}` : ', behind the cluster’s firewall: it reaches the internet and nothing private'}. ` +
+          `Making ${name} from ${image.name} on ${record.address}` +
+          (labNet
+            ? `, in ${labNet.name}: ${closed ? 'it reaches the fleet and Claude and nothing else' : 'it reaches the internet and nothing private'}`
+            : chosen ? `, on ${chosen.name}` : ', behind the cluster’s firewall: it reaches the internet and nothing private') +
+          `${joined && groupNet ? `, with the others on ${groupNet.name} at ${joined.address}` : ''}. ` +
           `It joins the fleet as your temporary machine in a minute or two, for ${life} minutes${claude ? '' : ', and has no Claude login of yours to run on: keep one in your vault'}.`,
       };
     } catch (e) {
@@ -612,6 +703,78 @@ export class PvePools {
       }
       return { ok: false, text: `${record.address} would not make the machine: ${/** @type {Error} */ (e).message}` };
     }
+  }
+
+  /**
+   * THE FIREWALL A MACHINE IS MADE BEHIND, on the bridge, out of its reach.
+   * Rules are placed by position, in the order they are matched.
+   *
+   *   default   the cluster's fence group: SSH in, the internet out and nothing
+   *             private; and, in a group, everything on the group network
+   *             both ways, before the fence, since 10.200/16 is private.
+   *   open lab  names from the lab's gateway alone, then the fence.
+   *   closed    names from the gateway alone (which answers only the
+   *             fleet's and Claude's), HTTPS to their addresses alone (a set
+   *             on the machine, kept current by every look), and nothing
+   *             else in or out. docs/proxmox.md, "Labs".
+   *
+   * @param {any} api @param {string} dst
+   * @param {{ lab: any, group: boolean, coordinatorUrl: string }} how
+   */
+  async #fence(api, dst, { lab, group, coordinatorUrl }) {
+    const closed = lab?.lab === 'closed';
+    await api.put(`${dst}/firewall/options`, { enable: 1, policy_in: 'DROP', policy_out: closed ? 'DROP' : 'ACCEPT' });
+    /** @type {Array<Record<string, unknown>>} */
+    const rules = [];
+    if (group) rules.push({ type: 'in', action: 'ACCEPT', iface: 'net1' }, { type: 'out', action: 'ACCEPT', iface: 'net1' });
+    if (lab) {
+      if (closed) rules.push({ type: 'out', action: 'ACCEPT', proto: 'udp', dport: '67:68' });
+      rules.push(
+        { type: 'out', action: 'ACCEPT', proto: 'udp', dport: '53', dest: lab.gateway },
+        { type: 'out', action: 'ACCEPT', proto: 'tcp', dport: '53', dest: lab.gateway },
+      );
+      if (closed) {
+        await api.post(`${dst}/firewall/ipset`, { name: PVE_ALLOW_SET, comment: 'Fleetwright: the fleet and Claude' });
+        await this.#allow(api, dst, coordinatorUrl);
+        rules.push({ type: 'out', action: 'ACCEPT', proto: 'tcp', dport: '443', dest: `+guest/${PVE_ALLOW_SET}` });
+      } else {
+        rules.push({ type: 'out', action: 'DROP', proto: 'udp', dport: '53' }, { type: 'out', action: 'DROP', proto: 'tcp', dport: '53' });
+      }
+    }
+    if (!closed) rules.push({ type: 'group', action: PVE_FENCE_GROUP });
+    for (const [pos, r] of rules.entries()) await api.post(`${dst}/firewall/rules`, { ...r, pos, enable: 1 });
+  }
+
+  /**
+   * A closed lab machine's allow list: the addresses the fleet's and Claude's
+   * names resolve to now, added to what it has.
+   *
+   * @param {any} api @param {string} dst @param {string} coordinatorUrl
+   */
+  async #allow(api, dst, coordinatorUrl) {
+    const have = new Set((await api.get(`${dst}/firewall/ipset/${PVE_ALLOW_SET}`).catch(() => []) ?? []).map((/** @type {any} */ e) => String(e?.cidr || '').replace(/\/32$/, '')));
+    const want = [...new Set((await Promise.all(fleetHosts(coordinatorUrl).map((h) => this.resolve(h).catch(() => [])))).flat())];
+    for (const ip of want) if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !have.has(ip)) await api.post(`${dst}/firewall/ipset/${PVE_ALLOW_SET}`, { cidr: ip });
+  }
+
+  /**
+   * The other machines of the fleet's on a lab, by name and when each was
+   * made, or null when the pool would not say.
+   *
+   * @param {any} api @param {string} pool @param {string} labName @param {number} self
+   * @returns {Promise<Array<{ name: string, made: number }>|null>}
+   */
+  async #onLab(api, pool, labName, self) {
+    const p = await api.get(`/pools/${encodeURIComponent(pool)}`).catch(() => null);
+    if (!p) return null;
+    /** @type {Array<{ name: string, made: number }>} */
+    const out = [];
+    for (const v of (Array.isArray(p.members) ? p.members : []).filter((/** @type {any} */ x) => x?.type === 'qemu' && Number(x.vmid) !== self && Number(x.template) !== 1 && tagsOf(x).includes(PVE_SESSION_TAG))) {
+      const cfg = await api.get(`/nodes/${encodeURIComponent(v.node)}/qemu/${Number(v.vmid)}/config`).catch(() => null);
+      const mk = markOf(cfg?.description);
+      if (mk?.lab === labName) out.push({ name: String(v.name), made: mk.made });
+    }
+    return out;
   }
 
   /** @param {string} name @param {{ vmid: number, node: string, owner: string, at: number }} made */
@@ -788,7 +951,7 @@ export function pveBuildConfig() {
     '# Fleetwright: builds the machine image (install/fleetwright-pve-setup).',
     '# Powers off when it is done. Still running means it failed.',
     'package_update: true',
-    'packages: [curl, ca-certificates, openssh-server, qemu-guest-agent]',
+    'packages: [curl, ca-certificates, openssh-server, qemu-guest-agent, avahi-daemon, libnss-mdns]',
     'runcmd:',
     '  - |',
     '    set -eu',

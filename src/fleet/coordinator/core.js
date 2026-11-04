@@ -7292,12 +7292,12 @@ export class CoordinatorCore {
    * holding their pools' tokens reported (health `xo`, src/fleet/host/xo-pools.js).
    *
    * @param {{ email?: string|null, admin?: boolean }|null} requester
-   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>}
+   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, kind: 'xo'|'proxmox', hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>}
    */
   vmImagesFor(requester) {
     const email = String(requester?.email || '').toLowerCase();
     if (!email) return [];
-    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>} */
+    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, kind: 'xo'|'proxmox', hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>} */
     const found = new Map();
     for (const h of this.#vmHolders(email, null)) {
       for (const entry of h.entries) {
@@ -7321,6 +7321,7 @@ export class CoordinatorCore {
             pool: image.pool,
             poolName: image.poolName,
             address: entry.address,
+            kind: entry.kind,
             hosts: [h.host.hostId],
             // THE NETWORKS IT CAN GO ON besides the uplink: the pool's, that
             // the fleet may use, for "reachable from my network".
@@ -7437,7 +7438,7 @@ export class CoordinatorCore {
    * not reach it rather than that nobody holds it.
    *
    * @param {string} email @param {string|null} template @param {{ unreached?: boolean }} [opts]
-   * @returns {Array<{ host: any, entries: Array<{ address: string, networks: Array<{ id: string, name: string, pool: string|null, group: boolean, lab: 'open'|'closed'|null, taken: boolean|null, perPerson: number|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
+   * @returns {Array<{ host: any, entries: Array<{ address: string, kind: 'xo'|'proxmox', networks: Array<{ id: string, name: string, pool: string|null, group: boolean, lab: 'open'|'closed'|null, taken: boolean|null, perPerson: number|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
    */
   #vmHolders(email, template, { unreached = false } = {}) {
     /** @type {Array<{ host: any, entries: any[] }>} */
@@ -7448,6 +7449,10 @@ export class CoordinatorCore {
         .filter((/** @type {any} */ e) => (unreached ? e?.reachable === false : e?.reachable !== false))
         .map((/** @type {any} */ e) => ({
           address: String(e.address || ''),
+          // WHICH HYPERVISOR, as the box said: Proxmox's entries say so
+          // (src/fleet/host/pve-pools.js), and an entry that says nothing is
+          // Xen Orchestra's, which is every entry from before Proxmox.
+          kind: e.kind === 'proxmox' ? 'proxmox' : 'xo',
           networks: (Array.isArray(e.networks) ? e.networks : [])
             .filter((/** @type {any} */ n) => XO_UUID_RE.test(String(n?.id)))
             .map((/** @type {any} */ n) => ({

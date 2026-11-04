@@ -32,10 +32,11 @@
 #   fleetwright-pve-setup [--address HOST[:PORT]] [--storage ID] [--bridge NAME]
 #                         [--enable-firewall] [--channel stable|rolling]
 #                         [--no-image] [--rebuild-image] [--expire-days N]
-#                         [--line-file PATH]
+#                         [--line-file PATH] [--coordinator URL]
+#                         [--groups 0-4] [--labs-open 0-4] [--labs-closed 0-4]
 #
 # Lines for the phone, beside the ones for a person:
-#   fleetwright-step: NAME     pool, user, token, fence, image, line, done
+#   fleetwright-step: NAME     pool, user, token, fence, networks, image, line, done
 #   fleetwright-error: TEXT    the reason it stopped
 #
 # Safe to run again: everything it makes it finds first.
@@ -60,6 +61,10 @@ ADDRESS=""
 STORAGE=""
 BRIDGE=vmbr0
 ENABLE_FIREWALL=0
+GROUP_NETS=2
+LABS_OPEN=1
+LABS_CLOSED=1
+COORDINATOR=""
 CHANNEL=stable
 IMAGE=1
 REBUILD=0
@@ -76,6 +81,10 @@ while [ $# -gt 0 ]; do
     --storage) STORAGE="${2:?--storage needs a storage id}"; shift 2 ;;
     --bridge) BRIDGE="${2:?--bridge needs a bridge name}"; shift 2 ;;
     --enable-firewall) ENABLE_FIREWALL=1; shift ;;
+    --groups) GROUP_NETS="${2:?--groups needs a number}"; shift 2 ;;
+    --labs-open) LABS_OPEN="${2:?--labs-open needs a number}"; shift 2 ;;
+    --labs-closed) LABS_CLOSED="${2:?--labs-closed needs a number}"; shift 2 ;;
+    --coordinator) COORDINATOR="${2:?--coordinator needs the https address of the fleet}"; shift 2 ;;
     --channel) CHANNEL="${2:?--channel needs stable or rolling}"; shift 2 ;;
     --no-image) IMAGE=0; shift ;;
     --rebuild-image) REBUILD=1; shift ;;
@@ -90,6 +99,14 @@ done
 case "$CHANNEL" in stable | rolling) ;; *) die "--channel is stable or rolling" ;; esac
 case "$EXPIRE_DAYS" in '' | *[!0-9]*) die "--expire-days is a number of days" ;; esac
 case "$BRIDGE" in *[!A-Za-z0-9_.-]*) die "--bridge is a bridge's name" ;; esac
+for n in "$GROUP_NETS" "$LABS_OPEN" "$LABS_CLOSED"; do case "$n" in [0-4]) ;; *) die "--groups, --labs-open and --labs-closed are 0 to 4 each" ;; esac; done
+[ $((LABS_OPEN + LABS_CLOSED)) -le 4 ] || die "four labs at most, open and closed together"
+COORD_HOST="$(printf '%s' "$COORDINATOR" | sed -n 's#^https://\([A-Za-z0-9.-]*\)\(:[0-9]*\)\{0,1\}/*.*$#\1#p')"
+if [ "$LABS_CLOSED" -gt 0 ] && [ -z "$COORD_HOST" ]; then
+  # A CLOSED LAB ANSWERS ONLY THE FLEET'S NAMES, so it has to know the fleet's.
+  # The app's command carries it; by hand, say it or make no closed lab.
+  die "a closed lab needs --coordinator https://<your fleet's address>, or --labs-closed 0"
+fi
 [ "$(id -u)" = 0 ] || die "run this as root on a Proxmox VE node"
 for c in pveum pvesh pvesm qm perl openssl curl sha512sum; do
   command -v "$c" >/dev/null || die "$c is missing: this is not a Proxmox VE node"
@@ -190,6 +207,101 @@ else
   say "  Machines are made only on networks you choose until it is on. To turn it on: run this again with --enable-firewall."
 fi
 
+# --- 4b. labs and groups -------------------------------------------------------
+# docs/proxmox.md, "Labs and groups". SDN networks the fleet's token may use and
+# never make: a group network is a VNet in the zone fwgrp, with no address of
+# the node's on it, so nothing reaches it but its machines; a lab is a VNet in
+# fwlab, 10.250.<n>.0/24 with the node at .1 doing NAT, and dnsmasq here
+# handing out addresses and names. An open lab's names are anybody's; a closed
+# lab's are only the fleet's and Claude's (REQUIRED, the sandbox's own list,
+# src/core/egress.js). The firewall on each machine does the rest, out of its
+# reach (src/fleet/host/pve-pools.js, #fence).
+step networks
+# The hosts Claude cannot work without (src/core/egress.js, REQUIRED_HOSTS; the test holds them equal).
+REQUIRED="api.anthropic.com platform.claude.com claude.ai claude.com"
+sdn_has() { pvesh get "/cluster/sdn/$1" --output-format json | json "join \"\\n\", map { \$_->{$2} // '' } @\$d" | grep -qx "$3"; }
+zone() { sdn_has zones zone "$1" || pvesh create /cluster/sdn/zones --type simple --zone "$1" --ipam pve >/dev/null; }
+vnet() { # zone vnet alias
+  sdn_has vnets vnet "$2" || pvesh create /cluster/sdn/vnets --vnet "$2" --zone "$1" --alias "$3" >/dev/null
+  pvesh set "/cluster/sdn/vnets/$2" --alias "$3" >/dev/null
+  pveum acl modify "/sdn/zones/$1/$2" --users "$USER_ID" --roles FleetwrightNet
+}
+NETS_MADE=0
+if [ "$GROUP_NETS" -gt 0 ]; then
+  zone fwgrp
+  for i in $(seq 1 "$GROUP_NETS"); do vnet fwgrp "fwgrp$i" "fleetwright-group"; done
+  NETS_MADE=1
+fi
+OPEN_IF=""; CLOSED_IF=""
+if [ $((LABS_OPEN + LABS_CLOSED)) -gt 0 ]; then
+  zone fwlab
+  for i in $(seq 1 $((LABS_OPEN + LABS_CLOSED))); do
+    if [ "$i" -le "$LABS_OPEN" ]; then kind=open; OPEN_IF="$OPEN_IF fwlab$i"; else kind=closed; CLOSED_IF="$CLOSED_IF fwlab$i"; fi
+    vnet fwlab "fwlab$i" "fleetwright-lab:$kind"
+    if ! pvesh get "/cluster/sdn/vnets/fwlab$i/subnets" --output-format json | json 'scalar @$d' | grep -qv '^0$'; then
+      pvesh create "/cluster/sdn/vnets/fwlab$i/subnets" --type subnet --subnet "10.250.$i.0/24" --gateway "10.250.$i.1" --snat 1 >/dev/null
+    fi
+  done
+  NETS_MADE=1
+fi
+[ "$NETS_MADE" = 0 ] || { pvesh set /cluster/sdn >/dev/null; sleep 5; }
+if [ -n "$OPEN_IF$CLOSED_IF" ]; then
+  # NAMES AND ADDRESSES FOR THE LABS, from dnsmasq here: one for the open labs,
+  # which asks the node's own resolver, and one for the closed, which has none
+  # (no-resolv) and asks it only for the fleet's names and the names under them.
+  command -v dnsmasq >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dnsmasq >/dev/null
+  systemctl disable --now dnsmasq >/dev/null 2>&1 || true
+  UPSTREAM="$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)"
+  [ -n "$UPSTREAM" ] || die "this node has no resolver in /etc/resolv.conf for the labs to ask"
+  mkdir -p /etc/fleetwright
+  labconf() { # kind interfaces
+    {
+      echo "# Fleetwright's $1 labs (install/fleetwright-pve-setup). Made again by every run."
+      echo "port=53"; echo "bind-interfaces"; echo "except-interface=lo"; echo "no-hosts"
+      if [ "$1" = closed ]; then
+        echo "no-resolv"
+        for h in $COORD_HOST $REQUIRED; do echo "server=/$h/$UPSTREAM"; done
+      fi
+      for ifc in $2; do
+        n="${ifc#fwlab}"
+        echo "interface=$ifc"
+        echo "dhcp-range=set:$ifc,10.250.$n.100,10.250.$n.250,255.255.255.0,1h"
+        echo "dhcp-option=tag:$ifc,option:router,10.250.$n.1"
+        echo "dhcp-option=tag:$ifc,option:dns-server,10.250.$n.1"
+      done
+    } >"/etc/fleetwright/lab-dns-$1.conf"
+  }
+  cat >/etc/systemd/system/fleetwright-lab-dns@.service <<'UNIT'
+[Unit]
+Description=Fleetwright: names and addresses for the %i labs
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq -k --conf-file=/etc/fleetwright/lab-dns-%i.conf
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  for kind in open closed; do
+    ifs="$OPEN_IF"; [ "$kind" = open ] || ifs="$CLOSED_IF"
+    if [ -n "$ifs" ]; then labconf "$kind" "$ifs"; systemctl enable --now "fleetwright-lab-dns@$kind" >/dev/null; systemctl restart "fleetwright-lab-dns@$kind"
+    else systemctl disable --now "fleetwright-lab-dns@$kind" >/dev/null 2>&1 || true; fi
+  done
+  # AND LET THEM ASK: with the datacenter's firewall on, the node drops what a
+  # lab's machine sends to it unless a rule says otherwise.
+  while pvesh get /cluster/firewall/rules --output-format json | json 'join "\n", map { $_->{pos} } grep { ($_->{comment} // "") eq "fleetwright-labs" } @$d' | head -1 | grep -q .; do
+    pvesh delete "/cluster/firewall/rules/$(pvesh get /cluster/firewall/rules --output-format json | json 'join "\n", map { $_->{pos} } grep { ($_->{comment} // "") eq "fleetwright-labs" } @$d' | head -1)"
+  done
+  for r in "udp 53" "tcp 53" "udp 67"; do
+    set -- $r
+    pvesh create /cluster/firewall/rules --type in --action ACCEPT --proto "$1" --dport "$2" --source 10.250.0.0/16 --enable 1 --comment fleetwright-labs >/dev/null
+  done
+fi
+say "networks: $GROUP_NETS group network(s), $LABS_OPEN open lab(s), $LABS_CLOSED closed lab(s)"
+
 # --- 5. the image --------------------------------------------------------------
 step image
 SNIPPETS="$(pvesm status --content snippets --enabled 1 2>/dev/null | awk 'NR>1 && $3=="active" {print $1; exit}')"
@@ -215,7 +327,7 @@ cat <<'BUILD' | sed "s/@CHANNEL@/$CHANNEL/" >"$SNIPPET_DIR/fleetwright-pve-build
 # Fleetwright: builds the machine image (install/fleetwright-pve-setup).
 # Powers off when it is done. Still running means it failed.
 package_update: true
-packages: [curl, ca-certificates, openssh-server, qemu-guest-agent]
+packages: [curl, ca-certificates, openssh-server, qemu-guest-agent, avahi-daemon, libnss-mdns]
 runcmd:
   - |
     set -eu

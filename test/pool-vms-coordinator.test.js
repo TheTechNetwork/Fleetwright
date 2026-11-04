@@ -76,6 +76,12 @@ test('a person is offered the images their own pools have, once each, with the b
   assert.deepEqual(core.snapshot(null).vmImages, [], 'no person, no pool');
 });
 
+test('an image says which hypervisor it is on, so a phone words its labs for that one', () => {
+  const pve = [{ ...holding(ELI, [OTHER])[0], address: 'pve.lan:8006', kind: 'proxmox' }];
+  const { core } = fleet({ deb14: { xo: [...holding(ELI), ...pve] } });
+  assert.deepEqual(core.snapshot(eli).vmImages.map((/** @type {any} */ i) => [i.name, i.kind]), [['Debian 13', 'xo'], ['Other', 'proxmox']]);
+});
+
 test('a member sees which pools a box holds only for themselves', () => {
   const { core } = fleet({ deb14: { xo: [...holding(ELI), ...holding(SAM)] } });
   const seen = core.snapshot(sam).hosts.find((/** @type {any} */ h) => h.hostId === 'deb14');
