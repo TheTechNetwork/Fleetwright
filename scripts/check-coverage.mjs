@@ -107,6 +107,11 @@ const run = spawnSync(
   { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
 );
 
+// WHAT THE SUITE ITSELF SAID, first, so scripts/verify.sh can report the run
+// it did not make twice: its `tests` line is this one when coverage runs too.
+// Both reporter formats, as verify.sh reads them.
+console.log(`suite: ${(run.stdout || '').split('\n').filter((l) => /^(#|ℹ) (pass|fail) \d+/.test(l)).join(' ')}`);
+
 // THE SUITE FAILING IS NOT A COVERAGE ANSWER. A run with failing tests covers
 // whatever it happened to reach before it stopped, and ratcheting against that
 // would record a floor from a broken run. Say what failed and stop.
