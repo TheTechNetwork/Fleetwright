@@ -22,7 +22,7 @@
 //   privileges are what Proxmox's ACLs grant, and every look reads them back
 //   (`/access/permissions`) and reports any that is wider than the fleet
 //   needs (`wide`), by path and privilege. Xen Orchestra's resource set was
-//   measured to leak in eleven ways (docs/hypervisors.md, "What Xen
+//   measured to leak in several ways (docs/hypervisors.md, "What Xen
 //   Orchestra lets whom do"); here a leak is something the box can see.
 //
 //   WHAT THE FLEET MAY USE IS WHAT PROXMOX LETS THE TOKEN USE. Storage it may
