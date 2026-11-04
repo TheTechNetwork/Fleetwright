@@ -586,7 +586,9 @@ export class PvePools {
       // would otherwise wait for the sweep with a ticket in it.
       if (vmid !== null) {
         const dst = `/nodes/${encodeURIComponent(image.node)}/qemu/${vmid}`;
-        await api.post(`${dst}/status/stop`, {}).catch(() => {});
+        // The stop is a task; a delete sent before it has ended is refused
+        // for a VM still running, and the half-made machine would stay.
+        await api.post(`${dst}/status/stop`, {}).then((/** @type {string} */ upid) => api.waitTask(upid, { sleep: this.sleep, timeoutMs: 60_000 })).catch(() => {});
         await api.del(dst, { purge: 1, 'destroy-unreferenced-disks': 1 }).catch(() => {});
       }
       return { ok: false, text: `${record.address} would not make the machine: ${/** @type {Error} */ (e).message}` };
@@ -706,6 +708,10 @@ export class PvePools {
       if (action === 'extend') {
         const most = mark.made + MAX_MINUTES * 60;
         const to = Math.min(most, Math.max(mark.until, Math.floor(this.now() / 1000)) + Math.max(5, Math.min(MAX_MINUTES, Number(minutes) || 60)) * 60);
+        // FROM WHEN IT WAS MADE, NOT FROM NOW, as xo-pools.js says: asking
+        // again and again does not keep a machine alive for ever, and asking
+        // past the cap is refused rather than answered as done.
+        if (to <= mark.until) return { ok: false, text: `${name} already runs to the longest a machine can, ${MAX_MINUTES} minutes from when it was made.` };
         await api.put(`${base}/config`, { description: markText({ ...mark, until: to }) });
         return { ok: true, until: to * 1000, text: to === most ? `${name} runs until ${MAX_MINUTES} minutes from when it was made, which is as long as a machine is given.` : `${name} runs ${Math.round((to - mark.until) / 60)} minutes longer.` };
       }

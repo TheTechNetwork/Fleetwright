@@ -1,5 +1,5 @@
 // Proxmox VE's own REST API, as a box holding a pool's token speaks it.
-// docs/proxmox.md, "The connection".
+// docs/proxmox.md, "Setting it up", for how a record comes to trust a cluster.
 //
 // ONE REQUEST, ONE CONNECTION, CHECKED BEFORE A BYTE IS WRITTEN. Every call
 // opens TLS, holds the server to what the record trusts, and only then hands

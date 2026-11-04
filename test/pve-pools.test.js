@@ -268,6 +268,32 @@ test('the Claude login is handed once, sealed, to a running machine marked as th
   }
 });
 
+test('a machine is given longer from when it was made, refused past the cap, and ended with a clean shutdown', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf });
+  const made = NOW / 1000 - 60;
+  pve.state.vms.set(302, { vmid: 302, node: 'pve1', name: 'vm-cccccccccccc', template: 0, tags: 'fleetwright-session', status: 'running', config: { description: markText({ for: OWNER, until: made + 3600, made }) } });
+  try {
+    const pools = new PvePools({ now: () => NOW, ...fast });
+    pools.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    const hour = await pools.control({ owner: OWNER, name: 'vm-cccccccccccc', action: 'extend', minutes: 60 });
+    assert.equal(hour.ok, true, hour.text);
+    assert.equal(hour.until, (made + 7200) * 1000);
+    const cap = await pools.control({ owner: OWNER, name: 'vm-cccccccccccc', action: 'extend', minutes: 400 });
+    assert.equal(cap.ok, true, cap.text);
+    assert.equal(cap.until, (made + 350 * 60) * 1000);
+    const past = await pools.control({ owner: OWNER, name: 'vm-cccccccccccc', action: 'extend', minutes: 60 });
+    assert.equal(past.ok, false);
+    assert.match(past.text, /longest a machine can/);
+    const end = await pools.control({ owner: OWNER, name: 'vm-cccccccccccc', action: 'stop' });
+    assert.equal(end.ok, true, end.text);
+    assert.ok(pve.state.asked.includes('POST /nodes/pve1/qemu/302/status/shutdown'));
+    assert.ok(!pve.state.asked.includes('POST /nodes/pve1/qemu/302/status/stop'));
+  } finally {
+    await pve.close();
+  }
+});
+
 test('a token that can do more than the fleet needs is reported, by path and privilege', () => {
   const wide = wideOf({
     '/pool/fleetwright': { 'VM.Allocate': 1, 'VM.Clone': 1 },

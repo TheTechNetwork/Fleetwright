@@ -94,8 +94,11 @@ case "$BRIDGE" in *[!A-Za-z0-9_.-]*) die "--bridge is a bridge's name" ;; esac
 for c in pveum pvesh pvesm qm perl openssl curl sha512sum; do
   command -v "$c" >/dev/null || die "$c is missing: this is not a Proxmox VE node"
 done
-PVE_MAJOR="$(pveversion | sed -n 's#^pve-manager/\([0-9]*\)\..*#\1#p')"
-[ -n "$PVE_MAJOR" ] && [ "$PVE_MAJOR" -ge 7 ] || die "this needs Proxmox VE 7 or newer"
+# 7.2 AND NEWER: `import-from` on a disk, which the image build rests on,
+# arrived in 7.2. Compared as versions, so 7.10 is newer than 7.2.
+PVE_VER="$(pveversion | sed -n 's#^pve-manager/\([0-9][0-9.]*\).*#\1#p' | cut -d. -f1,2)"
+PVE_MAJOR="${PVE_VER%%.*}"
+[ -n "$PVE_VER" ] && [ "$(printf '%s\n7.2\n' "$PVE_VER" | sort -V | head -1)" = 7.2 ] || die "this needs Proxmox VE 7.2 or newer, and this is ${PVE_VER:-not a Proxmox VE node}"
 NODE="$(hostname)"
 
 # The expression is always one written in this file, never anything read.
@@ -251,7 +254,8 @@ else
     --scsi0 "$STORAGE:0,import-from=$img,discard=on" --ide2 "$STORAGE:cloudinit" --boot order=scsi0 \
     --serial0 socket --vga serial0 --agent 1 --ipconfig0 ip=dhcp \
     --cicustom "user=$SNIPPETS:snippets/fleetwright-pve-build.yaml" --tags fleetwright-build >/dev/null
-  qm disk resize "$ID" scsi0 16G >/dev/null
+  # `qm disk resize` from 7.3; `qm resize` before it.
+  qm disk resize "$ID" scsi0 16G >/dev/null 2>&1 || qm resize "$ID" scsi0 16G >/dev/null
   say "building the image in VM $ID; it powers itself off when Fleetwright is installed (a few minutes)"
   qm start "$ID"
   for _ in $(seq 1 150); do

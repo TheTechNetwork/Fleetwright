@@ -81,8 +81,9 @@ of ours, before any of this was written, and built in rather than found again:
   it reports is the size it runs at.
 - **`+` in a form body is a space.** Every body is URL-encoded
   (`formOf`), so a key or a size with a `+` arrives as written.
-- **Proxmox VE 8 and 9 name some privileges differently** (`VM.Monitor` is
-  gone in 9). The roles here use only names both have.
+- **Proxmox VE 9 adds privileges of its own for the guest agent**
+  (`VM.GuestAgent.*`), beside 8's. The roles here use only names both have,
+  and nothing here asks the agent anything yet.
 - **A Cloudflare Worker cannot reach a node's private address or accept its
   self-signed certificate**, which is why that integration goes through a
   tunnel. A Fleetwright box is on the network and runs Node, so it reaches
