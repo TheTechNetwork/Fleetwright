@@ -396,6 +396,9 @@ export function poolRecord(name, value) {
   }
   const address = name.slice(HYPERVISOR_ITEM.length);
   if (!r || typeof r !== 'object' || r.address !== address || typeof r.token !== 'string' || !r.token) return null;
+  // A PROXMOX CLUSTER'S RECORD is pve-pools.js's (docs/proxmox.md). Read as
+  // Xen Orchestra's it would be dialled over a WebSocket it does not speak.
+  if (r.kind !== undefined) return null;
   const plain = r.plain === true;
   const pin = typeof r.pin === 'string' && /^[0-9a-f]{64}$/.test(r.pin) ? r.pin : null;
   // A pinned connection needs its pin; only a person's acceptance of plain
