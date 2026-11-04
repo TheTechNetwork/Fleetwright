@@ -38,6 +38,10 @@ struct YouView: View {
 
     private var signedIn: Bool { !settings.credential.isEmpty }
     private var inDemo: Bool { Demo.isActive(settings.coordinatorURL) }
+    /// Nothing typed yet, or only spaces: no fleet to sign in to.
+    private var fleetAddressBlank: Bool {
+        settings.coordinatorURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         Form {
@@ -164,17 +168,26 @@ struct YouView: View {
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
                 .textContentType(.URL)
-            SignInWithAppleButton(.signIn, onRequest: SignIn.configure, onCompletion: signIn)
-                .signInWithAppleButtonStyle(.black)
-                .frame(height: 44)
-                .disabled(settings.coordinatorURL.isEmpty || signingIn)
-            // WHY IT IS GREY, SAID OUT LOUD, about the field that really is
-            // just above it now. A disabled control with no reason beside it
-            // reads as a broken app.
-            if settings.coordinatorURL.isEmpty {
+            // NOT DRAWN UNTIL THERE IS A FLEET TO SIGN IN TO, rather than
+            // drawn disabled. `SignInWithAppleButton` ignores `.disabled` in
+            // how it LOOKS: it stays the same solid black button and simply
+            // stops answering. App Review tapped it on an iPad with the field
+            // empty, saw nothing happen, and rejected 0.4.15 under 2.1(a) for
+            // a button that does nothing. The sentence below takes its place
+            // and says what the button is waiting for. Blank, not empty, as
+            // on Android: a field holding a space is no address either.
+            if fleetAddressBlank {
                 Text("Enter your fleet's address first — signing in means signing in to a fleet.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
+            } else {
+                SignInWithAppleButton(.signIn, onRequest: SignIn.configure, onCompletion: signIn)
+                    .signInWithAppleButtonStyle(.black)
+                    .frame(height: 44)
+                    // Still disabled while a sign-in is in flight; the line
+                    // under it says "signing in…" for exactly that time, so
+                    // an unanswering button is never left unexplained.
+                    .disabled(signingIn)
             }
             if !signInResult.isEmpty {
                 Text(signInResult).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
