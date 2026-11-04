@@ -3,7 +3,7 @@
 // trust the record carries is exercised and not assumed. docs/proxmox.md.
 //
 // What the stand-in cannot prove is that a live Proxmox answers these paths
-// as it does; it answers them as Proxmox VE 8's API documentation has them,
+// as it does; it answers them as Proxmox VE 9's API documentation has them,
 // and the first run on a real cluster is listed in docs/proxmox.md as not done.
 
 import { test } from 'node:test';
@@ -54,7 +54,7 @@ function certificates() {
  * A Proxmox with one node, a pool, a template, and whatever VMs a test puts
  * in it. `asked` is every request, `authorized` whether any carried a token.
  */
-async function standIn({ cert, firewall = true, perms = null } = /** @type {any} */ ({})) {
+async function standIn({ cert, firewall = true, perms = null, version = '9.0.3' } = /** @type {any} */ ({})) {
   const state = {
     authorized: 0,
     /** @type {string[]} */ asked: [],
@@ -84,7 +84,7 @@ async function standIn({ cert, firewall = true, perms = null } = /** @type {any}
       const ok = (/** @type {any} */ data) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data }));
       const vmAt = /^\/nodes\/pve1\/qemu\/(\d+)(\/.*)?$/.exec(p);
       if (p === '/access/permissions') return ok(state.perms);
-      if (p === '/version') return ok({ version: '8.2.4' });
+      if (p === '/version') return ok({ version });
       if (p === '/pools/fleetwright') return ok({ members: [...state.vms.values()].map((v) => ({ type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, tags: v.tags, status: v.status })) });
       if (p === '/cluster/firewall/options') return ok({ enable: state.firewall ? 1 : 0 });
       if (p === '/cluster/firewall/groups') return ok([{ group: PVE_FENCE_GROUP }]);
@@ -134,7 +134,7 @@ test('a cluster is trusted by its own CA, and a server another CA signed is neve
   const fake = await standIn({ cert: certs.stranger });
   try {
     const good = new PveApi({ address: real.address, token: TOKEN, trust: { ca: certs.ca } });
-    assert.equal((await good.get('/version')).version, '8.2.4');
+    assert.equal((await good.get('/version')).version, '9.0.3');
     const bad = new PveApi({ address: fake.address, token: TOKEN, trust: { ca: certs.ca } });
     await assert.rejects(bad.get('/version'), /this cluster's CA did not sign/);
     assert.equal(fake.state.authorized, 0, 'the token reached a server the cluster did not vouch for');
@@ -142,7 +142,7 @@ test('a cluster is trusted by its own CA, and a server another CA signed is neve
     // A CERTIFICATE OF SOMEBODY'S OWN is reached by handing over its file with
     // its root, as the setup does, and still with the chain checked.
     const own = new PveApi({ address: fake.address, token: TOKEN, trust: { ca: certs.stranger.cert + certs.strangerRoot } });
-    assert.equal((await own.get('/version')).version, '8.2.4');
+    assert.equal((await own.get('/version')).version, '9.0.3');
   } finally {
     await real.close();
     await fake.close();
@@ -219,6 +219,24 @@ test('with the datacenter firewall off, no machine is made where it would reach 
     assert.equal(chosen.ok, true, chosen.text);
     assert.match(pve.state.vms.get(200).config.net0, /bridge=vmbr1/);
     assert.deepEqual(pve.state.rules, []);
+  } finally {
+    await pve.close();
+  }
+});
+
+test('a cluster older than Proxmox VE 9 is reported as such, and no machine is made on it', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf, version: '8.4.1' });
+  try {
+    const pools = new PvePools({ now: () => NOW, ...fast });
+    pools.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    await pools.refresh();
+    const [seen] = pools.report();
+    assert.equal(seen.supported, false);
+    const r = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: TICKET, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(r.ok, false);
+    assert.match(r.text, /runs Proxmox VE 8\.4\.1/);
+    assert.ok(!pve.state.asked.some((a) => a.endsWith('/clone')), 'a clone was made on an unsupported cluster');
   } finally {
     await pve.close();
   }

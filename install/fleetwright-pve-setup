@@ -94,11 +94,13 @@ case "$BRIDGE" in *[!A-Za-z0-9_.-]*) die "--bridge is a bridge's name" ;; esac
 for c in pveum pvesh pvesm qm perl openssl curl sha512sum; do
   command -v "$c" >/dev/null || die "$c is missing: this is not a Proxmox VE node"
 done
-# 7.2 AND NEWER: `import-from` on a disk, which the image build rests on,
-# arrived in 7.2. Compared as versions, so 7.10 is newer than 7.2.
-PVE_VER="$(pveversion | sed -n 's#^pve-manager/\([0-9][0-9.]*\).*#\1#p' | cut -d. -f1,2)"
+# PROXMOX VE 9 AND NEWER, and nothing older: one API and one set of
+# privilege names to be right about, not three (docs/proxmox.md, "Which
+# Proxmox"). src/fleet/host/pve-pools.js refuses an older cluster too.
+PVE_VER="$(pveversion | sed -n 's#^pve-manager/\([0-9][0-9.]*\).*#\1#p')"
 PVE_MAJOR="${PVE_VER%%.*}"
-[ -n "$PVE_VER" ] && [ "$(printf '%s\n7.2\n' "$PVE_VER" | sort -V | head -1)" = 7.2 ] || die "this needs Proxmox VE 7.2 or newer, and this is ${PVE_VER:-not a Proxmox VE node}"
+case "$PVE_MAJOR" in '' | *[!0-9]*) die "this is not a Proxmox VE node (pveversion said nothing it could read)" ;; esac
+[ "$PVE_MAJOR" -ge 9 ] || die "this needs Proxmox VE 9 or newer, and this is $PVE_VER. Upgrade the node first."
 NODE="$(hostname)"
 
 # The expression is always one written in this file, never anything read.
@@ -142,12 +144,9 @@ pveum acl modify "/storage/$STORAGE" --users "$USER_ID" --roles FleetwrightStora
 # Only `/` itself, not what is under it: whether the datacenter's firewall is
 # on, so the app never calls a machine fenced on a cluster that fences nothing.
 pveum acl modify / --users "$USER_ID" --roles FleetwrightAudit --propagate 0
-# A BRIDGE NEEDS SDN.Use from Proxmox VE 8 on; 7 has no such path, and lets
-# anybody who may configure a VM's network use any bridge.
-if [ "$PVE_MAJOR" -ge 8 ]; then
-  role FleetwrightNet "$NET_PRIVS"
-  pveum acl modify "/sdn/zones/localnetwork/$BRIDGE" --users "$USER_ID" --roles FleetwrightNet
-fi
+# A BRIDGE NEEDS SDN.Use, on its path under the local network zone.
+role FleetwrightNet "$NET_PRIVS"
+pveum acl modify "/sdn/zones/localnetwork/$BRIDGE" --users "$USER_ID" --roles FleetwrightNet
 say "user $USER_ID, on pool $POOL, storage $STORAGE and bridge $BRIDGE"
 
 # --- 3. the token --------------------------------------------------------------
@@ -254,8 +253,7 @@ else
     --scsi0 "$STORAGE:0,import-from=$img,discard=on" --ide2 "$STORAGE:cloudinit" --boot order=scsi0 \
     --serial0 socket --vga serial0 --agent 1 --ipconfig0 ip=dhcp \
     --cicustom "user=$SNIPPETS:snippets/fleetwright-pve-build.yaml" --tags fleetwright-build >/dev/null
-  # `qm disk resize` from 7.3; `qm resize` before it.
-  qm disk resize "$ID" scsi0 16G >/dev/null 2>&1 || qm resize "$ID" scsi0 16G >/dev/null
+  qm disk resize "$ID" scsi0 16G >/dev/null
   say "building the image in VM $ID; it powers itself off when Fleetwright is installed (a few minutes)"
   qm start "$ID"
   for _ in $(seq 1 150); do
@@ -268,7 +266,7 @@ else
   # where its owner lets it (src/core/grants.js), and a person is waiting.
   qm set "$ID" --delete cicustom >/dev/null
   qm set "$ID" --name "$IMAGE_NAME" --cicustom "vendor=$SNIPPETS:snippets/fleetwright-pve-vendor.yaml" --tags fleetwright-image >/dev/null
-  qm set "$ID" --ciupgrade 0 >/dev/null 2>&1 || true
+  qm set "$ID" --ciupgrade 0 >/dev/null
   qm template "$ID"
   for old in $existing; do qm destroy "$old" --purge 1 >/dev/null 2>&1 || say "could not remove the old image, template $old"; done
   say "image: template $ID, $IMAGE_NAME"

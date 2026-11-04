@@ -100,6 +100,13 @@ const MAX_MADE = 64;
 const HANDED_REMEMBERED = 1000;
 /** Proxmox keeps `smbios1` under 512 characters; the join must fit with the VM's own uuid. */
 const SMBIOS_MAX = 500;
+/**
+ * THE OLDEST PROXMOX THIS SPEAKS TO: 9. One API and one set of privilege
+ * names, the ones the roles and the stand-in use; an older cluster is
+ * reported and refused rather than half worked (docs/proxmox.md, "Which
+ * Proxmox").
+ */
+export const PVE_MIN_MAJOR = 9;
 /** How many machines a look reads the notes of: a pool is a fleet's, not a datacenter's. */
 const MAX_MACHINES = 200;
 
@@ -253,8 +260,8 @@ export function wideOf(perms, pool) {
 
 /**
  * The networks the token may put a machine on: every bridge or VNet Proxmox
- * grants it SDN.Use on, by zone. A Proxmox older than 8 has no such path, and
- * then a machine goes on its image's own bridge, and nothing else is offered.
+ * grants it SDN.Use on, by zone. With none, a machine goes on its image's own
+ * bridge, and nothing else is offered.
  *
  * @param {Record<string, Record<string, number>>} perms @param {string} address
  * @returns {PveNetwork[]}
@@ -411,6 +418,9 @@ export class PvePools {
     const pool = (await api.get(`/pools/${encodeURIComponent(record.pool)}`)) || {};
     const members = /** @type {any[]} */ (Array.isArray(pool.members) ? pool.members : []).filter((m) => m?.type === 'qemu' && Number.isInteger(Number(m.vmid)) && typeof m.node === 'string');
     const version = await api.get('/version').catch(() => null);
+    const major = Number(/^(\d+)\./.exec(String(version?.version ?? ''))?.[1]);
+    // NULL IS "COULD NOT TELL", never "supported" (C-5).
+    const supported = Number.isFinite(major) ? major >= PVE_MIN_MAJOR : null;
     const poolEntry = { id: pveIdOf(record.address, 'pool', record.pool), name: record.pool };
     // THE IMAGES: templates in the fleet's pool, tagged as the script tags them.
     /** @type {PveImage[]} */
@@ -482,6 +492,7 @@ export class PvePools {
       networks: networksOf(perms, record.address).map((n) => ({ ...n, pool: poolEntry.id })),
       machines,
       fenced,
+      supported,
       wide: wideOf(perms, record.pool),
     };
   }
@@ -504,6 +515,14 @@ export class PvePools {
     const [k, { record }] = found;
     const seen = this.seen.get(k);
     const image = /** @type {PveImage} */ (seen.images.find((/** @type {any} */ i) => i.id === template));
+    if (seen.supported !== true) {
+      return {
+        ok: false,
+        text: seen.supported === false
+          ? `${record.address} runs Proxmox VE ${seen.version}, and machines are made on ${PVE_MIN_MAJOR} or newer only. Upgrade the cluster, then try again.`
+          : `${record.address} would not say which Proxmox VE it runs, so the machine was not made.`,
+      };
+    }
     const chosen = network ? seen.networks.find((/** @type {any} */ n) => n.id === network) : null;
     if (network && !chosen) return { ok: false, text: 'That network is not one this box saw on your cluster, so the machine was not made.' };
     // NOT FENCED IS NOT MADE QUIETLY: a machine on the image's bridge with the

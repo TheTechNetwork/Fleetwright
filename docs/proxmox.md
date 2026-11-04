@@ -65,7 +65,7 @@ sealed once it has joined; the clock on the machine, swept by any box.
 
 ### What a live cluster taught
 
-Measured against a running Proxmox VE 8 and 9 estate by another integration
+Measured against a running Proxmox VE estate by another integration
 of ours, before any of this was written, and built in rather than found again:
 
 - **200 is "a task was queued", not "it worked".** Start, stop, shutdown,
@@ -81,14 +81,21 @@ of ours, before any of this was written, and built in rather than found again:
   it reports is the size it runs at.
 - **`+` in a form body is a space.** Every body is URL-encoded
   (`formOf`), so a key or a size with a `+` arrives as written.
-- **Proxmox VE 9 adds privileges of its own for the guest agent**
-  (`VM.GuestAgent.*`), beside 8's. The roles here use only names both have,
-  and nothing here asks the agent anything yet.
+
 - **A Cloudflare Worker cannot reach a node's private address or accept its
   self-signed certificate**, which is why that integration goes through a
   tunnel. A Fleetwright box is on the network and runs Node, so it reaches
   the node directly and trusts its CA; a cluster reached through a tunnel
   with a public certificate is the `public` trust, and works the same.
+
+## Which Proxmox
+
+**Proxmox VE 9 and newer, and nothing older.** One API and one set of
+privilege names to be right about, rather than three, each with its own
+fallbacks that nothing here can test. The setup script refuses a node older
+than 9 before it changes anything, and the box reports a cluster's version
+on every look (`supported`) and makes no machine on one older than 9,
+saying which version it found. A cluster on an older one is upgraded first.
 
 ## Setting it up
 
@@ -142,7 +149,7 @@ Finding each first, so it is safe to run again:
 1. the pool `fleetwright`;
 2. the user `fleetwright@pve` with no password, and four roles: `Fleetwright`
    on the pool (`PVE_ROLE_PRIVS`), `FleetwrightStorage` on one storage,
-   `FleetwrightNet` on one bridge (Proxmox 8 and later), and
+   `FleetwrightNet` on one bridge, and
    `FleetwrightAudit` (`Sys.Audit`) on `/` alone, not propagated, to read
    whether the firewall is on;
 3. a token, which lasts a year by default; running the script again makes a
@@ -238,4 +245,4 @@ it answers `notHere`, and an `unreachable` from either is kept.
 - Machines kept ready (`vmStandby`), which have not been tried against a
   cluster.
 - A machine's address on its page: Proxmox has it from the guest agent,
-  which needs `VM.GuestAgent.Audit` (Proxmox 9) or `VM.Monitor` (8).
+  which needs `VM.GuestAgent.Audit`.
