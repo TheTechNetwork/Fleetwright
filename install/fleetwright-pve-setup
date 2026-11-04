@@ -1,0 +1,315 @@
+#!/bin/bash
+# fleetwright-pve-setup: lets a Fleetwright fleet make machines on this
+# Proxmox VE cluster. docs/proxmox.md.
+#
+# RUN ONCE, AS ROOT, ON ANY NODE, and normally BY THE PHONE (docs/proxmox.md,
+# "From the phone"): the app signs in to the node over SSH, writes this script
+# from its own bundle, and starts it detached with --line-file, so the phone
+# may lock or close mid-build; it follows the steps in the journal and reads
+# the line from the file. Run by hand (Datacenter › the node › Shell), it
+# prints the line instead. Either way the root password goes only from the
+# phone to the node, and the fleet is given a token born limited.
+#
+#   1. A pool, `fleetwright`, which is everything the fleet may touch.
+#   2. A user, fleetwright@pve, with no password, and roles that let it clone
+#      templates in the pool into the pool, power and size what it made, and
+#      allocate disk on one storage and use one bridge. Nothing else: no
+#      other VM, no node, no user, no permission.
+#   3. A token for that user, which is what the line carries. Running this
+#      again makes a new one and the old one stops working.
+#   4. A firewall group, `fleetwright-isolate`, that holds a machine to the
+#      internet and nothing private. The box that clones a machine puts it
+#      behind the group, on the bridge, out of the guest's reach. It does
+#      nothing while the datacenter's firewall is off, and the app says so.
+#   5. The machine image: Debian 13's cloud image, checked against its
+#      published SHA-512, with Fleetwright installed and not joined, as a
+#      template in the pool.
+#   6. The line: `fleetwright-pve:1:` and the address, the token, the pool,
+#      and how to trust this cluster: its own CA, read from
+#      /etc/pve/pve-root-ca.pem, which signs every node's certificate.
+#
+# Usage:
+#   fleetwright-pve-setup [--address HOST[:PORT]] [--storage ID] [--bridge NAME]
+#                         [--enable-firewall] [--channel stable|rolling]
+#                         [--no-image] [--rebuild-image] [--expire-days N]
+#                         [--line-file PATH]
+#
+# Lines for the phone, beside the ones for a person:
+#   fleetwright-step: NAME     pool, user, token, fence, image, line, done
+#   fleetwright-error: TEXT    the reason it stopped
+#
+# Safe to run again: everything it makes it finds first.
+set -euo pipefail
+
+POOL=fleetwright
+USER_ID=fleetwright@pve
+TOKEN_NAME=fleet
+FENCE=fleetwright-isolate
+IMAGE_NAME=fleetwright-debian-13
+# The image, pinned (src/fleet/host/vm-image.js, DEBIAN_IMAGE; the test holds them equal).
+IMAGE_URL=https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2
+IMAGE_SHA512=3ace18e33bdd036edb49d1f79342bd01d2ab980e35194edb0b410435cd543538d286a0bd13bbb0835f7862306e3d385ce2f6a70d8ecf0bd961111166adbc1b8e
+
+# EVERY PRIVILEGE, by where it applies (src/fleet/host/pve-pools.js, PVE_*_PRIVS).
+ROLE_PRIVS="VM.Allocate VM.Clone VM.Audit VM.PowerMgmt VM.Config.CPU VM.Config.Memory VM.Config.Network VM.Config.Options VM.Config.HWType VM.Config.Cloudinit Pool.Audit"
+STORAGE_PRIVS="Datastore.AllocateSpace Datastore.Audit"
+NET_PRIVS="SDN.Use SDN.Audit"
+ROOT_PRIVS="Sys.Audit"
+
+ADDRESS=""
+STORAGE=""
+BRIDGE=vmbr0
+ENABLE_FIREWALL=0
+CHANNEL=stable
+IMAGE=1
+REBUILD=0
+EXPIRE_DAYS=365
+LINE_FILE=""
+
+say() { printf 'fleetwright: %s\n' "$*"; }
+step() { printf 'fleetwright-step: %s\n' "$1"; }
+die() { printf 'fleetwright: %s\nfleetwright-error: %s\n' "$*" "$*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --address) ADDRESS="${2:?--address needs HOST[:PORT]}"; shift 2 ;;
+    --storage) STORAGE="${2:?--storage needs a storage id}"; shift 2 ;;
+    --bridge) BRIDGE="${2:?--bridge needs a bridge name}"; shift 2 ;;
+    --enable-firewall) ENABLE_FIREWALL=1; shift ;;
+    --channel) CHANNEL="${2:?--channel needs stable or rolling}"; shift 2 ;;
+    --no-image) IMAGE=0; shift ;;
+    --rebuild-image) REBUILD=1; shift ;;
+    --expire-days) EXPIRE_DAYS="${2:?--expire-days needs a number}"; shift 2 ;;
+    --line-file) LINE_FILE="${2:?--line-file needs a path}"; shift 2 ;;
+    # Read from stdin there is no file to print the head of.
+    -h | --help) if [ -f "$0" ]; then sed -n '2,40p' "$0"; else echo "see docs/proxmox.md, \"Setting it up\""; fi; exit 0 ;;
+    *) die "unknown option $1 (--help says what there is)" ;;
+  esac
+done
+
+case "$CHANNEL" in stable | rolling) ;; *) die "--channel is stable or rolling" ;; esac
+case "$EXPIRE_DAYS" in '' | *[!0-9]*) die "--expire-days is a number of days" ;; esac
+case "$BRIDGE" in *[!A-Za-z0-9_.-]*) die "--bridge is a bridge's name" ;; esac
+[ "$(id -u)" = 0 ] || die "run this as root on a Proxmox VE node"
+for c in pveum pvesh pvesm qm perl openssl curl sha512sum; do
+  command -v "$c" >/dev/null || die "$c is missing: this is not a Proxmox VE node"
+done
+# PROXMOX VE 9 AND NEWER, and nothing older: one API and one set of
+# privilege names to be right about, not three (docs/proxmox.md, "Which
+# Proxmox"). src/fleet/host/pve-pools.js refuses an older cluster too.
+PVE_VER="$(pveversion | sed -n 's#^pve-manager/\([0-9][0-9.]*\).*#\1#p')"
+PVE_MAJOR="${PVE_VER%%.*}"
+case "$PVE_MAJOR" in '' | *[!0-9]*) die "this is not a Proxmox VE node (pveversion said nothing it could read)" ;; esac
+[ "$PVE_MAJOR" -ge 9 ] || die "this needs Proxmox VE 9 or newer, and this is $PVE_VER. Upgrade the node first."
+NODE="$(hostname)"
+
+# The expression is always one written in this file, never anything read.
+json() { perl -MJSON::PP -e 'my $d = decode_json(join("", <STDIN>)); print eval($ARGV[0]) // "", "\n"' "$1"; }
+
+# --- the address, and the storage ----------------------------------------------
+if [ -z "$ADDRESS" ]; then
+  ip="$(hostname -I | awk '{print $1}')"
+  [ -n "$ip" ] || die "this node has no address to give; pass --address"
+  ADDRESS="$ip:8006"
+fi
+if [ -z "$STORAGE" ]; then
+  STORAGE="$(pvesm status --content images --enabled 1 2>/dev/null | awk 'NR>1 && $3=="active" {print $1; exit}')"
+  [ -n "$STORAGE" ] || die "no active storage here holds disk images; pass --storage"
+fi
+pvesm status --storage "$STORAGE" >/dev/null 2>&1 || die "storage $STORAGE is not on this node"
+ip link show "$BRIDGE" >/dev/null 2>&1 || die "bridge $BRIDGE is not on this node; pass --bridge"
+
+# --- 1. the pool ---------------------------------------------------------------
+step pool
+pveum pool list --output-format json | json 'join "\n", map { $_->{poolid} } @$d' | grep -qx "$POOL" ||
+  pveum pool add "$POOL" --comment "Fleetwright: everything the fleet may touch. Its machines and its images live here."
+say "pool $POOL"
+
+# --- 2. the user, its roles and where they apply --------------------------------
+step user
+role() { # name privs
+  if pveum role list --output-format json | json 'join "\n", map { $_->{roleid} } @$d' | grep -qx "$1"; then
+    pveum role modify "$1" --privs "$2"
+  else
+    pveum role add "$1" --privs "$2"
+  fi
+}
+role Fleetwright "$ROLE_PRIVS"
+role FleetwrightStorage "$STORAGE_PRIVS"
+role FleetwrightAudit "$ROOT_PRIVS"
+pveum user list --output-format json | json 'join "\n", map { $_->{userid} } @$d' | grep -qx "$USER_ID" ||
+  pveum user add "$USER_ID" --comment "Fleetwright's fleet. No password; it signs in with its token alone."
+pveum acl modify "/pool/$POOL" --users "$USER_ID" --roles Fleetwright
+pveum acl modify "/storage/$STORAGE" --users "$USER_ID" --roles FleetwrightStorage
+# Only `/` itself, not what is under it: whether the datacenter's firewall is
+# on, so the app never calls a machine fenced on a cluster that fences nothing.
+pveum acl modify / --users "$USER_ID" --roles FleetwrightAudit --propagate 0
+# A BRIDGE NEEDS SDN.Use, on its path under the local network zone.
+role FleetwrightNet "$NET_PRIVS"
+pveum acl modify "/sdn/zones/localnetwork/$BRIDGE" --users "$USER_ID" --roles FleetwrightNet
+say "user $USER_ID, on pool $POOL, storage $STORAGE and bridge $BRIDGE"
+
+# --- 3. the token --------------------------------------------------------------
+step token
+pveum user token remove "$USER_ID" "$TOKEN_NAME" >/dev/null 2>&1 || true
+EXPIRE="$(( $(date +%s) + EXPIRE_DAYS * 86400 ))"
+SECRET="$(pveum user token add "$USER_ID" "$TOKEN_NAME" --privsep 0 --expire "$EXPIRE" \
+  --comment "Fleetwright's fleet, made $(date -I) by fleetwright-pve-setup" --output-format json | json '$d->{value}')"
+[ -n "$SECRET" ] || die "Proxmox made no token"
+say "a new token, which lasts $EXPIRE_DAYS days; any line printed before this one no longer works"
+
+# --- 4. the fence --------------------------------------------------------------
+step fence
+# Rules in order, first match wins. In: SSH alone. Out: addresses and names,
+# then nothing private, then everything else (the policy the box sets).
+if ! pvesh get /cluster/firewall/groups --output-format json | json 'join "\n", map { $_->{group} } @$d' | grep -qx "$FENCE"; then
+  pvesh create /cluster/firewall/groups --group "$FENCE" --comment "Fleetwright: a machine reaches the internet and nothing private"
+fi
+while pvesh get "/cluster/firewall/groups/$FENCE" --output-format json | json 'scalar @$d' | grep -qv '^0$'; do
+  pvesh delete "/cluster/firewall/groups/$FENCE/0"
+done
+pos=0
+rule() { pvesh create "/cluster/firewall/groups/$FENCE" --pos "$pos" --enable 1 "$@" >/dev/null; pos=$((pos + 1)); }
+rule --type in --action ACCEPT --proto tcp --dport 22
+rule --type out --action ACCEPT --proto udp --dport 67:68
+rule --type out --action ACCEPT --proto udp --dport 53
+rule --type out --action ACCEPT --proto tcp --dport 53
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 fc00::/7; do
+  rule --type out --action DROP --dest "$net"
+done
+FIREWALL="$(pvesh get /cluster/firewall/options --output-format json | json '$d->{enable} // 0')"
+if [ "$FIREWALL" != 1 ] && [ "$ENABLE_FIREWALL" = 1 ]; then
+  pvesh set /cluster/firewall/options --enable 1
+  FIREWALL=1
+  say "turned the datacenter's firewall on; its own rules keep this node's web interface and SSH open to the local network"
+fi
+if [ "$FIREWALL" = 1 ]; then
+  say "firewall group $FENCE, with the datacenter's firewall on"
+else
+  say "firewall group $FENCE, but the datacenter's firewall is OFF, so it holds nothing back."
+  say "  Machines are made only on networks you choose until it is on. To turn it on: run this again with --enable-firewall."
+fi
+
+# --- 5. the image --------------------------------------------------------------
+step image
+SNIPPETS="$(pvesm status --content snippets --enabled 1 2>/dev/null | awk 'NR>1 && $3=="active" {print $1; exit}')"
+if [ -z "$SNIPPETS" ]; then
+  content="$(pvesh get /storage/local --output-format json | json '$d->{content}')"
+  pvesm set local --content "${content:+$content,}snippets"
+  SNIPPETS=local
+  say "storage local now keeps snippets too, for the image's cloud-init"
+fi
+SNIPPET_DIR="$(pvesh get "/storage/$SNIPPETS" --output-format json | json '$d->{path}')/snippets"
+mkdir -p "$SNIPPET_DIR"
+cat >"$SNIPPET_DIR/fleetwright-pve-vendor.yaml" <<'VENDOR'
+#cloud-config
+# Fleetwright: a machine cloned from this template joins the fleet by itself
+# (docs/proxmox.md). The join is in its SMBIOS serial, put there by the box
+# that cloned it; this reads it as root on the first boot.
+runcmd:
+  - [sh, -c, 'umask 077; mkdir -p /run/fleetwright && cat /sys/class/dmi/id/product_serial >/run/fleetwright/join.json']
+  - [sh, -c, 'j=/usr/local/sbin/fleetwright-vm-join; [ -x "$j" ] || j=/opt/fleetwright/current/install/fleetwright-vm-join; exec "$j" "$0"', /run/fleetwright/join.json]
+VENDOR
+cat <<'BUILD' | sed "s/@CHANNEL@/$CHANNEL/" >"$SNIPPET_DIR/fleetwright-pve-build.yaml"
+#cloud-config
+# Fleetwright: builds the machine image (install/fleetwright-pve-setup).
+# Powers off when it is done. Still running means it failed.
+package_update: true
+packages: [curl, ca-certificates, openssh-server, qemu-guest-agent]
+runcmd:
+  - |
+    set -eu
+    curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network @CHANNEL@ main" >/etc/apt/sources.list.d/fleetwright.list
+    echo 'fleetwright fleetwright/user string fleetwright' | debconf-set-selections
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends fleetwright
+    test -x /opt/fleetwright/current/install/fleetwright-vm-join
+    systemctl enable qemu-guest-agent || true
+    systemctl disable --now fleetwright-sidecar fleetwright 2>/dev/null || true
+    rm -f /var/lib/fleetwright-sidecar/host-key.json /var/lib/fleetwright-sidecar/host-key.json.*
+    truncate -s 0 /etc/machine-id
+    rm -f /var/lib/dbus/machine-id /etc/ssh/ssh_host_*
+    cloud-init clean --logs
+    poweroff
+BUILD
+
+existing="$(pvesh get "/pools/$POOL" --output-format json | json 'join "\n", map { $_->{vmid} } grep { ($_->{template} // 0) == 1 && ($_->{tags} // "") =~ /(^|[;, ])fleetwright-image($|[;, ])/ } @{$d->{members}}')"
+if [ "$IMAGE" = 0 ]; then
+  say "no image built (--no-image)${existing:+; the pool has template $existing}"
+elif [ -n "$existing" ] && [ "$REBUILD" = 0 ]; then
+  say "image: template $existing, already in the pool (--rebuild-image makes it again)"
+else
+  img="/var/tmp/$(basename "$IMAGE_URL")"
+  if ! echo "$IMAGE_SHA512  $img" | sha512sum -c --status 2>/dev/null; then
+    say "downloading Debian 13's cloud image"
+    curl -fL --retry 3 -o "$img.part" "$IMAGE_URL"
+    echo "$IMAGE_SHA512  $img.part" | sha512sum -c --status || { rm -f "$img.part"; die "the image did not match its published SHA-512; nothing was built"; }
+    mv "$img.part" "$img"
+  fi
+  ID="$(pvesh get /cluster/nextid)"
+  qm create "$ID" --name "$IMAGE_NAME-build" --pool "$POOL" --memory 2048 --cores 2 --cpu host --ostype l26 \
+    --net0 "virtio,bridge=$BRIDGE,firewall=1" --scsihw virtio-scsi-single \
+    --scsi0 "$STORAGE:0,import-from=$img,discard=on" --ide2 "$STORAGE:cloudinit" --boot order=scsi0 \
+    --serial0 socket --vga serial0 --agent 1 --ipconfig0 ip=dhcp \
+    --cicustom "user=$SNIPPETS:snippets/fleetwright-pve-build.yaml" --tags fleetwright-build >/dev/null
+  qm disk resize "$ID" scsi0 16G >/dev/null
+  say "building the image in VM $ID; it powers itself off when Fleetwright is installed (a few minutes)"
+  qm start "$ID"
+  for _ in $(seq 1 150); do
+    [ "$(qm status "$ID" | awk '{print $2}')" = stopped ] && break
+    sleep 10
+  done
+  [ "$(qm status "$ID" | awk '{print $2}')" = stopped ] ||
+    die "VM $ID was still running after 25 minutes, so the install failed. Its console: qm terminal $ID. It is kept for you to look at; qm destroy $ID removes it."
+  # A CLONE STARTS WITHOUT UPGRADING EVERYTHING: Fleetwright updates itself
+  # where its owner lets it (src/core/grants.js), and a person is waiting.
+  qm set "$ID" --delete cicustom >/dev/null
+  qm set "$ID" --name "$IMAGE_NAME" --cicustom "vendor=$SNIPPETS:snippets/fleetwright-pve-vendor.yaml" --tags fleetwright-image >/dev/null
+  qm set "$ID" --ciupgrade 0 >/dev/null
+  qm template "$ID"
+  for old in $existing; do qm destroy "$old" --purge 1 >/dev/null 2>&1 || say "could not remove the old image, template $old"; done
+  say "image: template $ID, $IMAGE_NAME"
+fi
+
+# --- 6. the line ---------------------------------------------------------------
+step line
+# HOW TO TRUST THIS CLUSTER. Its own CA, unless the web interface was given a
+# certificate of somebody else's (pveproxy-ssl.pem): then publicly trusted if it
+# verifies against the system's roots (ACME), and that file itself if it holds
+# its own root. Anything else would need the chain check turned off to reach,
+# and the fleet never does that (src/fleet/host/pve-api.js).
+CUSTOM=/etc/pve/local/pveproxy-ssl.pem
+CA=/etc/pve/pve-root-ca.pem
+TRUST=ca
+if [ -f "$CUSTOM" ] && ! openssl verify -CAfile "$CA" "$CUSTOM" >/dev/null 2>&1; then
+  if openssl verify "$CUSTOM" >/dev/null 2>&1; then
+    TRUST=public
+  elif openssl verify -CAfile "$CUSTOM" "$CUSTOM" >/dev/null 2>&1; then
+    CA="$CUSTOM"
+  else
+    die "the web interface's certificate ($CUSTOM) is signed by a CA this node does not hold, so the fleet could not check it. Put the CA's certificate after it in that file, or use an ACME certificate, and run this again."
+  fi
+fi
+LINE="$(KIND=proxmox ADDRESS="$ADDRESS" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POOL="$POOL" TRUST="$TRUST" CA_FILE="$CA" perl -MJSON::PP -MMIME::Base64 -e '
+  my %r = (kind => $ENV{KIND}, address => $ENV{ADDRESS}, token => $ENV{TOKEN}, pool => $ENV{POOL});
+  if ($ENV{TRUST} eq "ca") { local $/; open my $f, "<", $ENV{CA_FILE} or die; $r{ca} = <$f>; }
+  else { $r{trust} = "public"; }
+  my $b = encode_base64(JSON::PP->new->canonical->encode(\%r), "");
+  $b =~ tr{+/}{-_}; $b =~ s/=+$//;
+  print "fleetwright-pve:1:$b";')"
+
+# TO A FILE ONLY ROOT READS, when the phone runs this: the journal it follows
+# keeps what is printed, and the line is the token. The phone reads the file
+# and removes it. Written whole or not at all.
+if [ -n "$LINE_FILE" ]; then
+  ( umask 077; printf '%s\n' "$LINE" >"$LINE_FILE.part" && mv -f "$LINE_FILE.part" "$LINE_FILE" )
+  say "done; the line for the phone is in $LINE_FILE"
+else
+  say "done. In the Fleetwright app, Machines › Add a hypervisor › Proxmox, paste this line."
+  say "It is the token: keep it to the app, and run this again to make a new one."
+  echo
+  echo "$LINE"
+  echo
+fi
+step done

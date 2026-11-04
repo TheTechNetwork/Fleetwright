@@ -10,8 +10,8 @@ machine of its own** that holds it ("A machine of its own"), and **labs**: netwo
 own on the edge router, open or closed, a session's machine alone on one
 ("Labs"). **Not yet run:** a real XCP-ng pool behind Xen Orchestra, and the
 install on one. Seeing inside a lab is designed and not built ("Seeing what
-crossed a lab"). XCP-ng, through Xen Orchestra; Proxmox is a direction ("The
-interface", below) with nothing built for it.
+crossed a lab"). XCP-ng, through Xen Orchestra; Proxmox is a second driver ("The
+interface", below, and `proxmox.md`).
 
 A session today runs in a container on a box, or on a GitHub Actions runner
 that is gone in six hours. Neither is a real machine on a network you own:
@@ -1723,28 +1723,15 @@ pool's own machine is asked for, since that machine is cloned from it. Asked
 for after the first three images were built with the install script that did
 not stop at a failed step: any of them may be one to replace.
 
-## The interface, if Proxmox is ever a second driver
+## The interface: Proxmox is the second driver
 
-**A direction, not a feature.** Nothing in `src/` speaks to Proxmox, and no
-interface of this shape exists in the code: `src/fleet/host/xo-pools.js` calls
-Xen Orchestra's own methods by name (`vm.create`, `vm.start`, `vm.delete`,
-`xo.getAllObjects`). What is written down here is the shape those calls have,
-so that a second hypervisor would be a second driver behind it and not a
-second design:
-
-```
-create({ name, template, userData, networks, tags, expiresAt }) → { id }
-start(id)  destroy(id, { disks: true })  list({ tag })  status(id)
-createNetwork(name) → { id }  destroyNetwork(id)
-```
-
-**Xen Orchestra** maps onto it directly. **Proxmox** would map onto it as a
-clone of a template VM, user data through a cloud-init snippet, a VNet under
-SDN for a lab network, and a token whose role is granted on one resource
-pool, which is the same bound as the resource set, and the same reason.
-Template and lab files would not change between the two. Until somebody
-builds it, this section is the whole of Proxmox in Fleetwright, and
-`ROADMAP.md` carries it as asked for.
+**Built for the host; see [`proxmox.md`](./proxmox.md).** `src/fleet/host/pools.js`
+puts this file's `XoPools` and Proxmox's `PvePools` behind the one face the
+sidecar calls (`adopt`, `report`, `refresh`, `make`, `handLogin`, `control`),
+so the coordinator and the protocol did not change: a Proxmox template is
+named by a UUID the box derives (`pveIdOf`), and a record that carries
+`kind: "proxmox"` is passed over here. What Proxmox does differently, and why,
+is `proxmox.md`, "What XCP-ng taught".
 
 ## Order of work
 
@@ -1758,8 +1745,7 @@ networks ("Machines that work together"); machines kept booted and waiting
 router ("What the edge filters"); what each machine did on the network; labs
 ("Labs"), and the edge routers watched from the phone. **Next:** seeing what
 crossed a lab, which is designed and not built; a pool's first machine image
-through the phone ("Next: a pool's first machine image"); and a second
-hypervisor, which is a direction (above).
+through the phone ("Next: a pool's first machine image"); and Proxmox's phone screens (`proxmox.md`).
 
 ## Onboarding: nothing made by hand
 

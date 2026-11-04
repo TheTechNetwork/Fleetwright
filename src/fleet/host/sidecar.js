@@ -61,6 +61,8 @@ import { signingInput, fingerprint } from '../crypto.js';
 import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
 import { XoPools } from './xo-pools.js';
+import { PvePools } from './pve-pools.js';
+import { Pools } from './pools.js';
 import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
 import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
@@ -293,7 +295,7 @@ export class Sidecar {
    *   vaultKey?: { publicJwk: { x: string, y: string }, sign: (message: string) => Promise<string> }|null,
    *   vaultIntervalMs?: number,
    *   xoStateDir?: string|null,
-   *   xoPools?: XoPools|null,
+   *   xoPools?: XoPools|Pools|null,
    *   edgeWatch?: EdgeWatch|null,
    *   holderFor?: string,
    *   vmLogin?: { email: string, token: string|null }|null,
@@ -519,10 +521,12 @@ export class Sidecar {
     this.intentKeys = vaultKey && transport?.origin
       ? new IntentKeys({ origin: transport.origin, dir: xoStateDir, hostKey: vaultKey, ask: (request, signature) => this.#askKeys(request, signature), log: this.log })
       : null;
-    /** @type {XoPools|null} */
+    /** @type {XoPools|Pools|null} */
     // ON A POOL'S OWN MACHINE, the Xen Orchestra it was made to hold
     // (xo-holder.js): its health says so, and the coordinator asks it first.
-    this.pools = xoPools ?? (vaultKey ? new XoPools({ log: this.log, holderFor }) : null);
+    // AND PROXMOX'S CLUSTERS beside Xen Orchestra's pools, behind one face
+    // (pools.js, docs/proxmox.md).
+    this.pools = xoPools ?? (vaultKey ? new Pools({ xo: new XoPools({ log: this.log, holderFor }), pve: new PvePools({ log: this.log }) }) : null);
     /**
      * THE POOLS' EDGE ROUTERS, read with the key the person's vault keeps
      * beside a pool's token (edge-watch.js), for the pools that have one.
