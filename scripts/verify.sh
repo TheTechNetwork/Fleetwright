@@ -51,9 +51,29 @@ fi
 #
 # Skipping is ANNOUNCED rather than silent. A verification script that can
 # quietly do less than it says is the same failure this file's header is about.
+# ONE RUN OF THE SUITE, NOT TWO, when coverage runs as well: coverage runs
+# every test file `npm test` does (scripts/check-coverage.mjs, testFiles), under
+# the same build, and its exit says whether the suite passed and names what
+# failed. Running both meant every local verify ran the whole suite twice: on
+# 4 November that was 59 seconds for the suite and 66 for coverage, of a 127
+# second gate, and each grows with every test added, which is why this got
+# slower and slower. CI is unchanged: its suite runs in the Node matrix with
+# coverage skipped, and coverage runs in `checks` with the suite skipped.
+cov_out=''
+cov_ok=''
+if [ -z "${VERIFY_SKIP_TESTS:-}" ] && [ -z "${VERIFY_SKIP_COVERAGE:-}" ]; then
+  if cov_out=$(node scripts/check-coverage.mjs 2>&1); then cov_ok=1; else cov_ok=0; fi
+fi
+
 printf 'tests      ... '
 if [ -n "${VERIFY_SKIP_TESTS:-}" ]; then
   printf 'skipped (VERIFY_SKIP_TESTS)\n'
+elif [ -n "$cov_ok" ]; then
+  if printf '%s' "$cov_out" | grep -q 'the suite did not pass'; then
+    printf 'FAILED\n%s\n' "$(printf '%s' "$cov_out" | grep -E '^(not ok|✖)' | head -10)"; fail=1
+  else
+    printf '%s (one run, under coverage)\n' "$(printf '%s' "$cov_out" | sed -n 's/^suite: //p' | head -1)"
+  fi
 elif out=$(npm test --silent 2>&1); then
   # BOTH REPORTER FORMATS, and the second one is why this line was blank.
   #
@@ -78,14 +98,25 @@ fi
 # once, here, in the `checks` job that skips the suite. One place, one
 # implementation, and CI keeps running this file rather than a copy of it.
 #
-# It runs the suite itself, so this is the second execution locally. Twenty-one
-# seconds, against the class of bug that is the whole reason the comments in
-# this file exist: code that shipped because nothing ever executed it.
+# It runs the suite itself, and locally that run is the `tests` line's too
+# (above), so the suite runs once. It is worth its time against the class of
+# bug that is the whole reason the comments in this file exist: code that
+# shipped because nothing ever executed it.
 #
 # It fails on a DROP, never on a low number. See scripts/check-coverage.mjs.
 printf 'coverage   ... '
 if [ -n "${VERIFY_SKIP_COVERAGE:-}" ]; then
   printf 'skipped (VERIFY_SKIP_COVERAGE)\n'
+elif [ "$cov_ok" = 1 ]; then
+  printf '%s\n' "$(printf '%s' "$cov_out" | tail -1)"
+elif [ "$cov_ok" = 0 ]; then
+  # A failing suite was said on the `tests` line; a drop is said here.
+  if printf '%s' "$cov_out" | grep -q 'the suite did not pass'; then
+    printf 'not judged: the suite did not pass (above)\n'
+  else
+    printf 'FAILED\n%s\n' "$cov_out"
+  fi
+  fail=1
 elif out=$(node scripts/check-coverage.mjs 2>&1); then
   printf '%s\n' "$(printf '%s' "$out" | tail -1)"
 else
