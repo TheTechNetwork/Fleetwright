@@ -8,30 +8,30 @@
 // a pool a few dozen things a pass; a connection each costs nothing worth the
 // state a kept-alive one would carry.
 //
-// THREE WAYS TO TRUST A SERVER, and the record says which (pve-pools.js,
-// pveRecord):
+// TWO WAYS TO TRUST A SERVER, and the record says which (pve-pools.js,
+// pveRecord). Neither turns chain checking off.
 //
-//   ca      THE CLUSTER'S OWN CA, which the setup script read from
-//           /etc/pve/pve-root-ca.pem on the node. Every node's certificate is
-//           signed by it and renewed by Proxmox under it, so a pin to the
-//           cluster survives what a pin to one certificate does not: the
-//           renewal `pvecm updatecerts` makes, and reaching a second node of
-//           the same cluster. This is the lesson of Xen Orchestra's pin
-//           (xo-ws.js), which named one leaf certificate and broke the day it
-//           changed. The chain must end at that CA and no other: `ca` replaces
-//           the system's roots, so a publicly signed certificate for the same
-//           name is refused. The name is not checked, because the address is
-//           most often an IP the node's certificate may not list, and a CA
-//           that exists only on this cluster already says which servers it is.
-//   pin     ONE CERTIFICATE, by its SHA-256: a certificate somebody installed
-//           by hand as pveproxy-ssl.pem, which no CA of the cluster signed.
+//   ca      CERTIFICATES THE SETUP READ ON THE NODE, as the only roots.
+//           Normally the cluster's own CA, /etc/pve/pve-root-ca.pem: every
+//           node's certificate is signed by it and renewed by Proxmox under it,
+//           so a pin to the cluster survives what a pin to one certificate does
+//           not, the renewal `pvecm updatecerts` makes and a second node of the
+//           same cluster. This is the lesson of Xen Orchestra's pin (xo-ws.js),
+//           which named one leaf and broke the day it changed. When somebody
+//           installed a certificate of their own (pveproxy-ssl.pem) that no CA
+//           of the cluster signed and no public one did either, the setup hands
+//           over that file instead, which must hold its own root. Either way
+//           `ca` replaces the system's roots, so a publicly signed certificate
+//           for the same name is refused. The name is not checked, because the
+//           address is most often an IP the certificate may not list, and roots
+//           that exist only on this cluster already say which servers it is.
 //   public  A PUBLICLY TRUSTED CERTIFICATE (ACME, which Proxmox renews every
-//           sixty days), checked as a browser checks it, name and all.
+//           sixty days, or a tunnel's), checked as a browser checks it.
 
 import https from 'node:https';
 import tls from 'node:tls';
 import net from 'node:net';
-import { certSha256, splitAddress } from './xo-ws.js';
+import { splitAddress } from './xo-ws.js';
 
 /** Proxmox's API port, when an address names none. */
 export const PVE_PORT = 8006;
@@ -39,7 +39,7 @@ export const PVE_PORT = 8006;
 export const MAX_ANSWER_BYTES = 4 * 1024 * 1024;
 
 /**
- * @typedef {{ ca?: string|null, pin?: string|null, trust?: 'ca'|'pin'|'public' }} Trust
+ * @typedef {{ ca?: string|null, trust?: 'ca'|'public' }} Trust
  */
 
 export class PveError extends Error {
@@ -57,18 +57,15 @@ export class PveError extends Error {
  * @returns {Promise<tls.TLSSocket>}
  */
 export function connectTrusted({ host, port, trust, timeoutMs = 15_000 }) {
-  const kind = trust.trust ?? (trust.ca ? 'ca' : trust.pin ? 'pin' : 'public');
+  const kind = trust.ca ? 'ca' : 'public';
   return new Promise((resolve, reject) => {
     const socket = tls.connect({
       host,
       port,
       ...(net.isIP(host) ? {} : { servername: host }),
       ALPNProtocols: ['http/1.1'],
-      ...(kind === 'ca'
-        ? { ca: [String(trust.ca)], rejectUnauthorized: true, checkServerIdentity: () => undefined }
-        : kind === 'pin'
-          ? { rejectUnauthorized: false }
-          : { rejectUnauthorized: true }),
+      rejectUnauthorized: true,
+      ...(kind === 'ca' ? { ca: [String(trust.ca)], checkServerIdentity: () => undefined } : {}),
     });
     const timer = setTimeout(() => {
       socket.destroy();
@@ -76,14 +73,6 @@ export function connectTrusted({ host, port, trust, timeoutMs = 15_000 }) {
     }, timeoutMs);
     socket.once('secureConnect', () => {
       clearTimeout(timer);
-      if (kind === 'pin') {
-        const cert = socket.getPeerCertificate();
-        if ((cert?.raw ? certSha256(cert.raw) : null) !== trust.pin) {
-          socket.destroy();
-          reject(new Error(`${host}:${port} answered with a different certificate from the one setup read on the node. Nothing was sent.`));
-          return;
-        }
-      }
       resolve(socket);
     });
     socket.once('error', (e) => {

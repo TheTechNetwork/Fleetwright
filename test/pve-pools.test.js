@@ -47,7 +47,7 @@ function certificates() {
   leaf('cluster');
   leaf('other');
   const f = (/** @type {string} */ n) => readFileSync(path.join(dir, n), 'utf8');
-  return { ca: f('cluster.pem'), leaf: { key: f('cluster-leaf.key'), cert: f('cluster-leaf.pem') }, stranger: { key: f('other-leaf.key'), cert: f('other-leaf.pem') } };
+  return { ca: f('cluster.pem'), leaf: { key: f('cluster-leaf.key'), cert: f('cluster-leaf.pem') }, stranger: { key: f('other-leaf.key'), cert: f('other-leaf.pem') }, strangerRoot: f('other.pem') };
 }
 
 /**
@@ -139,6 +139,10 @@ test('a cluster is trusted by its own CA, and a server another CA signed is neve
     await assert.rejects(bad.get('/version'), /this cluster's CA did not sign/);
     assert.equal(fake.state.authorized, 0, 'the token reached a server the cluster did not vouch for');
     assert.deepEqual(fake.state.asked, []);
+    // A CERTIFICATE OF SOMEBODY'S OWN is reached by handing over its file with
+    // its root, as the setup does, and still with the chain checked.
+    const own = new PveApi({ address: fake.address, token: TOKEN, trust: { ca: certs.stranger.cert + certs.strangerRoot } });
+    assert.equal((await own.get('/version')).version, '8.2.4');
   } finally {
     await real.close();
     await fake.close();
@@ -149,10 +153,12 @@ test('the line the setup prints is a record the vault keeps; one that says no wa
   const ca = '-----BEGIN CERTIFICATE-----\n' + 'A'.repeat(120) + '\n-----END CERTIFICATE-----\n';
   const rec = recordFor('pve.lan:8006', ca);
   const line = CONNECTION_PREFIX + Buffer.from(JSON.stringify(rec)).toString('base64url');
-  assert.deepEqual(parseConnection(line), { address: 'pve.lan:8006', token: TOKEN, pool: 'fleetwright', ca, pin: null, trust: 'ca' });
+  assert.deepEqual(parseConnection(line), { address: 'pve.lan:8006', token: TOKEN, pool: 'fleetwright', ca, trust: 'ca' });
   assert.ok(pveRecord('hypervisor:pve.lan:8006', JSON.stringify(rec)));
   const { ca: _, ...untrusted } = rec;
   assert.equal(parseConnection(CONNECTION_PREFIX + Buffer.from(JSON.stringify(untrusted)).toString('base64url')), null);
+  // NOR IS A PIN ALONE: reaching it would mean turning the chain check off.
+  assert.equal(parseConnection(CONNECTION_PREFIX + Buffer.from(JSON.stringify({ ...untrusted, pin: 'a'.repeat(64) })).toString('base64url')), null);
   // XEN ORCHESTRA'S DRIVER passes over it, rather than dial a WebSocket at Proxmox.
   assert.equal(poolRecord('hypervisor:pve.lan:8006', JSON.stringify({ ...rec, pin: 'a'.repeat(64) })), null);
 });

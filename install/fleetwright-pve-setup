@@ -256,23 +256,24 @@ fi
 # --- 6. the line ---------------------------------------------------------------
 # HOW TO TRUST THIS CLUSTER. Its own CA, unless the web interface was given a
 # certificate of somebody else's (pveproxy-ssl.pem): then publicly trusted if it
-# verifies against the system's roots (ACME), and pinned by its SHA-256 if not.
+# verifies against the system's roots (ACME), and that file itself if it holds
+# its own root. Anything else would need the chain check turned off to reach,
+# and the fleet never does that (src/fleet/host/pve-api.js).
 CUSTOM=/etc/pve/local/pveproxy-ssl.pem
 CA=/etc/pve/pve-root-ca.pem
 TRUST=ca
-PIN=""
 if [ -f "$CUSTOM" ] && ! openssl verify -CAfile "$CA" "$CUSTOM" >/dev/null 2>&1; then
   if openssl verify "$CUSTOM" >/dev/null 2>&1; then
     TRUST=public
+  elif openssl verify -CAfile "$CUSTOM" "$CUSTOM" >/dev/null 2>&1; then
+    CA="$CUSTOM"
   else
-    TRUST=pin
-    PIN="$(openssl x509 -in "$CUSTOM" -outform DER | sha256sum | awk '{print $1}')"
+    die "the web interface's certificate ($CUSTOM) is signed by a CA this node does not hold, so the fleet could not check it. Put the CA's certificate after it in that file, or use an ACME certificate, and run this again."
   fi
 fi
-LINE="$(KIND=proxmox ADDRESS="$ADDRESS" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POOL="$POOL" TRUST="$TRUST" PIN="$PIN" CA_FILE="$CA" perl -MJSON::PP -MMIME::Base64 -e '
+LINE="$(KIND=proxmox ADDRESS="$ADDRESS" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POOL="$POOL" TRUST="$TRUST" CA_FILE="$CA" perl -MJSON::PP -MMIME::Base64 -e '
   my %r = (kind => $ENV{KIND}, address => $ENV{ADDRESS}, token => $ENV{TOKEN}, pool => $ENV{POOL});
   if ($ENV{TRUST} eq "ca") { local $/; open my $f, "<", $ENV{CA_FILE} or die; $r{ca} = <$f>; }
-  elsif ($ENV{TRUST} eq "pin") { $r{pin} = $ENV{PIN}; }
   else { $r{trust} = "public"; }
   my $b = encode_base64(JSON::PP->new->canonical->encode(\%r), "");
   $b =~ tr{+/}{-_}; $b =~ s/=+$//;

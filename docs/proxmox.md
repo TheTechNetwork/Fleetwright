@@ -105,6 +105,10 @@ each first so it is safe to run again:
    to install Fleetwright from apt, left unjoined and turned into a template;
 6. one line, `fleetwright-pve:1:…`: the address, the token, the pool and the
    cluster's CA, which the phone keeps as `hypervisor:<address>` in the vault.
+   A web interface given a certificate of somebody's own is trusted as a
+   browser would trust it when a public CA signed it (ACME), or by that
+   certificate's file when the file holds its own root; any other is refused
+   at setup, because reaching it would mean turning the chain check off.
 
 Its options: `--address`, `--storage`, `--bridge`, `--enable-firewall`,
 `--channel stable|rolling`, `--no-image`, `--rebuild-image`,

@@ -104,14 +104,15 @@ const SMBIOS_MAX = 500;
 const MAX_MACHINES = 200;
 
 /**
- * @typedef {{ address: string, token: string, pool: string, ca: string|null, pin: string|null, trust: 'ca'|'pin'|'public', grants?: any }} PveRecord
+ * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', grants?: any }} PveRecord
  * @typedef {{ id: string, name: string, node: string, vmid: number, pool: string|null, poolName: string|null, bridge: string|null }} PveImage
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string }} PveNetwork
  */
 
 const TOKEN_RE = /^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,64}![A-Za-z0-9._-]{1,64}=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const POOL_RE = /^[A-Za-z0-9_-]{1,40}$/;
-const PEM_RE = /^-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]{100,8000}\n-----END CERTIFICATE-----\n?$/;
+/** One certificate, or a file of them: the cluster's CA, or a certificate of somebody's own with its root. */
+const PEM_RE = /^(?:-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]{100,8000}\n-----END CERTIFICATE-----\n?){1,4}$/;
 
 /**
  * A Proxmox record as the vault handed it, or null for anything that is not
@@ -139,14 +140,14 @@ function recordOf(r, address) {
   if (typeof r.token !== 'string' || !TOKEN_RE.test(r.token)) return null;
   if (typeof r.pool !== 'string' || !POOL_RE.test(r.pool)) return null;
   const ca = typeof r.ca === 'string' && PEM_RE.test(r.ca) ? r.ca : null;
-  const pin = typeof r.pin === 'string' && /^[0-9a-f]{64}$/.test(r.pin) ? r.pin : null;
   // A RECORD SAYS HOW TO TRUST THE SERVER, and one that cannot is no record:
-  // there is no plain HTTP here, because Proxmox has none.
-  /** @type {'ca'|'pin'|'public'|null} */
-  const trust = ca ? 'ca' : pin ? 'pin' : r.trust === 'public' ? 'public' : null;
+  // there is no plain HTTP here, because Proxmox has none, and no pin to a
+  // certificate with the chain check turned off (pve-api.js).
+  /** @type {'ca'|'public'|null} */
+  const trust = ca ? 'ca' : r.trust === 'public' ? 'public' : null;
   if (!trust) return null;
   const grants = machineGrantsOf(r.grants);
-  return { address: r.address, token: r.token, pool: r.pool, ca, pin, trust, ...(grants ? { grants } : {}) };
+  return { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(grants ? { grants } : {}) };
 }
 
 /**
@@ -307,7 +308,7 @@ export function smbiosWith(current, join) {
 export class PvePools {
   /**
    * @param {{
-   *   api?: (opts: { address: string, token: string, trust: { ca?: string|null, pin?: string|null, trust?: 'ca'|'pin'|'public' } }) => any,
+   *   api?: (opts: { address: string, token: string, trust: { ca?: string|null, trust?: 'ca'|'public' } }) => any,
    *   now?: () => number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
    *   sleep?: (ms: number) => Promise<void>,
@@ -336,7 +337,7 @@ export class PvePools {
 
   /** @param {PveRecord} record */
   #client(record) {
-    return this.api({ address: record.address, token: record.token, trust: { ca: record.ca, pin: record.pin, trust: record.trust } });
+    return this.api({ address: record.address, token: record.token, trust: { ca: record.ca, trust: record.trust } });
   }
 
   /**

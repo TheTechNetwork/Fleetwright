@@ -27,9 +27,16 @@ export class Pools {
     this.pve = pve;
   }
 
-  /** Every token held, Xen Orchestra's and Proxmox's, keyed `owner address`. */
+  /**
+   * Every token held, Xen Orchestra's and Proxmox's, keyed `owner address`.
+   * @returns {Map<string, { owner: string, record: import('./xo-pools.js').PoolRecord|import('./pve-pools.js').PveRecord }>}
+   */
   get held() {
-    return new Map([...this.xo.held, ...this.pve.held]);
+    /** @type {Map<string, { owner: string, record: import('./xo-pools.js').PoolRecord|import('./pve-pools.js').PveRecord }>} */
+    const all = new Map();
+    for (const [k, v] of this.xo.held) all.set(k, v);
+    for (const [k, v] of this.pve.held) all.set(k, v);
+    return all;
   }
 
   /** What each Xen Orchestra pool was last seen as, for edge-watch.js. */
