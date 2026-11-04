@@ -1807,7 +1807,13 @@ struct Fleet {
         /// own on its edge router, open or closed; nil from a coordinator
         /// older than labs, and empty when the pool has none.
         var labs: [Lab]? = nil
+        /// Which hypervisor it is on: `proxmox`, or `xo` for Xen Orchestra;
+        /// nil from a coordinator older than Proxmox, which is Xen Orchestra.
+        var kind: String? = nil
         var id: String { template }
+        /// On Proxmox VE, where a machine is behind the cluster's firewall and
+        /// a lab is a network on the cluster, not on an edge router.
+        var onProxmox: Bool { kind == "proxmox" }
 
         struct Network: Codable, Hashable, Identifiable {
             let id: String

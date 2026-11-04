@@ -2145,12 +2145,17 @@ class Fleet(
          * than labs, and empty when the pool has none.
          */
         val labs: List<VmLab>? = null,
+        /** Which hypervisor it is on: `proxmox`, or `xo`; null from a coordinator older than Proxmox, which is Xen Orchestra. */
+        val kind: String? = null,
     ) {
         /** "New machine from Fleetwright Debian 13 on rack", for a picker. */
         val label: String get() = "New machine from $name" + (poolName?.let { " on $it" } ?: "")
 
         /** The first free lab of that kind, or null when none is. */
         fun freeLab(open: Boolean): VmLab? = labs?.firstOrNull { it.open == open && it.free }
+
+        /** On Proxmox VE, where a machine is behind the cluster's firewall and a lab is a network on the cluster, not on an edge router. */
+        val onProxmox: Boolean get() = kind == "proxmox"
     }
 
     /**
@@ -2199,6 +2204,7 @@ class Fleet(
                     networks = networksOf(o.optJSONArray("networks")),
                     groups = networksOf(o.optJSONArray("groups")),
                     labs = labsOf(o.optJSONArray("labs")),
+                    kind = o.optString("kind").takeIf { it.isNotBlank() && it != "null" },
                 )
             }
         }

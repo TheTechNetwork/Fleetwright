@@ -189,6 +189,29 @@ struct StartSheet: View {
     }
 
     /// The machine image chosen, when it is one from your hypervisor.
+    /// What a lab is, in the words of the hypervisor it is on: a network on
+    /// Xen Orchestra's edge router, or one the setup made on a Proxmox VE
+    /// cluster and its firewall holds (docs/proxmox.md, "Labs and groups").
+    /// A function of its own, so the type checker sees strings and not one
+    /// long expression.
+    static func labFooter(proxmox: Bool, open: Bool) -> String {
+        let what = proxmox
+            ? "A lab is a network of its own on your cluster, and this machine is alone on it. "
+            : "A lab is a network of its own on your edge router, and this machine is alone on it. "
+        let reach: String
+        if !open {
+            reach = "It reaches the fleet and Claude and nothing else, so the session still runs, and everything else it tries is blocked."
+        } else if proxmox {
+            reach = "It reaches the internet and nothing private: not your network, not the cluster's other machines, not another lab."
+        } else {
+            reach = "It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab."
+        }
+        let cost = proxmox
+            ? " It costs no extra machine: the lab is a network the setup made on the cluster, and the cluster's firewall holds it there."
+            : " It costs no extra machine: the lab is an interface on the router you already have."
+        return what + reach + cost + " When its time runs out, or you end it on its page, the machine is removed and the lab is free for the next one."
+    }
+
     private var chosenImage: Fleet.VMImage? {
         guard host.hasPrefix(vmImageTag) else { return nil }
         let id = String(host.dropFirst(vmImageTag.count))
@@ -486,7 +509,7 @@ struct StartSheet: View {
                         // network of yours puts the machine beside your own.
                         if vmLab.isEmpty, let networks = chosenImage?.networks, !networks.isEmpty {
                             Picker("Network", selection: $vmNetwork) {
-                                Text("Behind the edge router").tag("")
+                                Text(chosenImage?.onProxmox == true ? "Behind the cluster’s firewall" : "Behind the edge router").tag("")
                                 ForEach(networks) { network in Text(network.name).tag(network.id) }
                             }
                         }
@@ -531,12 +554,7 @@ struct StartSheet: View {
                         Text("Where").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                     } footer: {
                         if chosenPlatform == "lab" {
-                            Text("A lab is a network of its own on your edge router, and this machine is alone on it. "
-                                 + (vmLab == "open"
-                                    ? "It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab."
-                                    : "It reaches the fleet and Claude and nothing else, so the session still runs, and everything else it tries is blocked.")
-                                 + " It costs no extra machine: the lab is an interface on the router you already have."
-                                 + " When its time runs out, or you end it on its page, the machine is removed and the lab is free for the next one.")
+                            Text(Self.labFooter(proxmox: chosenImage?.onProxmox == true, open: vmLab == "open"))
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
                         } else if chosenPlatform == "vm" {

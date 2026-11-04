@@ -515,7 +515,10 @@ fun StartSheet(
                             Text("Network", style = MaterialTheme.typography.labelMedium)
                             AssistChip(
                                 onClick = { vmNetwork = "" },
-                                label = { Text(if (vmNetwork.isEmpty()) "Behind the edge router \u2713" else "Behind the edge router") },
+                                label = {
+                                    val behind = if (images.firstOrNull { it.template == template }?.onProxmox == true) "Behind the cluster’s firewall" else "Behind the edge router"
+                                    Text(if (vmNetwork.isEmpty()) "$behind \u2713" else behind)
+                                },
                             )
                             networks.forEach { n ->
                                 AssistChip(
@@ -601,11 +604,15 @@ fun StartSheet(
                             // Remote Control, so the notification that matters
                             // is the one when its task is done.
                             if (platform == "vm" && vmLab.isNotEmpty()) {
+                                val pve = images.firstOrNull { it.template == template }?.onProxmox == true
                                 Text(
-                                    "A lab is a network of its own on your edge router, and this machine is alone on it. " +
-                                        (if (vmLab == "open") "It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab."
+                                    (if (pve) "A lab is a network of its own on your cluster, and this machine is alone on it. "
+                                    else "A lab is a network of its own on your edge router, and this machine is alone on it. ") +
+                                        (if (vmLab == "open") (if (pve) "It reaches the internet and nothing private: not your network, not the cluster's other machines, not another lab."
+                                        else "It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab.")
                                         else "It reaches the fleet and Claude and nothing else, so the session still runs, and everything else it tries is blocked.") +
-                                        " It costs no extra machine: the lab is an interface on the router you already have." +
+                                        (if (pve) " It costs no extra machine: the lab is a network the setup made on the cluster, and the cluster's firewall holds it there."
+                                        else " It costs no extra machine: the lab is an interface on the router you already have.") +
                                         " When its time runs out, or you end it on its page, the machine is removed and the lab is free for the next one.",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
