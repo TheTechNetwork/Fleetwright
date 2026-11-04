@@ -11,6 +11,35 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## 0.4.16 — 2026-11-04
+
+**Sign in with Apple no longer looks ready before it is, the App Store page
+describes the iOS app, and everything since 0.4.15 comes with it.**
+
+- **Sign in with Apple appears once there is a fleet to sign in to.** With
+  the address field empty the button was disabled but still looked live,
+  so a tap on it seemed to do nothing. Until an address is typed, the
+  sentence saying what is missing takes its place. "Look around the demo
+  fleet" needs no address at all.
+- **The App Store page has a description of its own.** It had been given
+  the Play one, which talks about Android and a Google sign-in. The new one
+  describes the iOS app, and says plainly that crash reports go to the
+  developer's error tracker with nothing identifying in them.
+- **Notifications open on the phone.** Their words travel sealed to the
+  phone they are for, and the phone opens them, on iOS and Android.
+- **More of a pool from its page.** "Make it again" rebuilds the pool's own
+  machine in one tap. The console opens inside the app. The phone that made
+  a machine lets it in by itself. The page shows the pool master's
+  addresses and what its edge routers measure.
+- **Pinned admins** on a machine's page, on both phones, with no button for
+  a verb the box would refuse.
+- **Proxmox VE, in alpha.** A fleet host can now run its machines on a
+  Proxmox node as well as on XCP-ng, set up by one script run as root on
+  the node. Machines are fenced by Proxmox's own firewall, and the fleet
+  holds only a token limited to what the script grants it. There are no
+  Proxmox screens on the phones yet, and the script has not yet been run
+  end to end on a real node.
+
 ## 0.4.15 — 2026-10-18
 
 **The release's screenshots finish, and the wrong ones already on the store
