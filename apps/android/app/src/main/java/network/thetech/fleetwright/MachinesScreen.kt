@@ -101,6 +101,7 @@ fun MachinesScreen(
     // SAVEABLE, because a setup takes minutes and a phone turns: a rotation
     // that forgot these would close the progress on a job still running.
     var addingHypervisor by rememberSaveable { mutableStateOf(false) }
+    var addingProxmox by rememberSaveable { mutableStateOf(false) }
     var hypervisorJob by rememberSaveable { mutableStateOf<String?>(null) }
     // A pool whose policy is being changed, by address. Saveable for the same
     // reason; the job itself starts over after a rotation (HypervisorSheet).
@@ -202,6 +203,7 @@ fun MachinesScreen(
     }
     if (keepingReady) VmStandbyScreen(settings, poolImages, onDismiss = { keepingReady = false; scope.launch { loadHosts() } })
     if (adding) AddMachineSheet(settings, onDismiss = { adding = false })
+    if (addingProxmox) ProxmoxSheet(settings, onDismiss = { addingProxmox = false })
     if (addingHypervisor) {
         // KEYED ON THE JOB: a second notification, tapped while the sheet is
         // already open on another job, retargets it rather than leaving the
@@ -341,6 +343,9 @@ fun MachinesScreen(
                                 hypervisorJob = null
                                 addingHypervisor = true
                             }
+                            // PROXMOX VE beside it: its own screen, because it
+                            // asks for none of what Xen Orchestra's does.
+                            OpenRow("Add Proxmox VE") { addingProxmox = true }
                         }
                     }
                 }

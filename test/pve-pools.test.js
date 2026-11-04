@@ -375,3 +375,19 @@ test('ids are UUIDs that tell two templates under one number apart', () => {
   assert.match(a, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   assert.notEqual(a, b);
 });
+
+// THE LINE CROSSES THREE LANGUAGES: the script prints it, both phones read
+// it, and the boxes read it again. The Swift and Kotlin compile only in CI,
+// so what they read is held to the JavaScript here, as text: the prefix a
+// line must start with, and the one command both phones show for the node.
+test('both phones read the line the boxes read, and show the same command for the node', () => {
+  const ios = readFileSync(new URL('../apps/ios/Fleetwright/AddProxmoxView.swift', import.meta.url), 'utf8');
+  const android = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/ProxmoxSheet.kt', import.meta.url), 'utf8');
+  assert.equal(/static let prefix = "([^"]+)"/.exec(ios)?.[1], CONNECTION_PREFIX);
+  assert.equal(/const val PREFIX = "([^"]+)"/.exec(android)?.[1], CONNECTION_PREFIX);
+  const url = (/static let scriptURL = "([^"]+)"/.exec(ios) ?? [])[1];
+  assert.equal((/const val SCRIPT_URL = "([^"]+)"/.exec(android) ?? [])[1], url);
+  assert.ok(url?.endsWith('/install/fleetwright-pve-setup'), 'the command fetches something other than the setup script');
+  const ran = (/** @type {string} */ s, /** @type {RegExp} */ re) => (re.exec(s)?.[1] ?? '').replace(/\\\(scriptURL\)|\$SCRIPT_URL/, url ?? '');
+  assert.equal(ran(ios, /static let setupCommand = "([^"]+)"/), ran(android, /const val SETUP_COMMAND = "([^"]+)"/));
+});
