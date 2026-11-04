@@ -498,3 +498,42 @@ test('both phones read the line the boxes read, and show the same command for th
   assert.equal(iosRan, ran(android, /fun setupCommand\(coordinator: String\): String = "([^"]+)"/));
   assert.ok(iosRan.endsWith('--coordinator https://fleet.example'), iosRan);
 });
+
+// SETUP FROM THE PHONE runs the same commands on the node from either app,
+// and the script takes what they pass it. Read as text, as above.
+test('both phones start, follow and take the setup on the node with the same commands', () => {
+  const ios = readFileSync(new URL('../apps/ios/Fleetwright/ProxmoxSSH.swift', import.meta.url), 'utf8');
+  const android = readFileSync(new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/ProxmoxSsh.kt', import.meta.url), 'utf8');
+  const script = readFileSync(new URL('../install/fleetwright-pve-setup', import.meta.url), 'utf8');
+  const constant = (/** @type {string} */ s, /** @type {string} */ name) => new RegExp(`(?:static let|const val) ${name} = "([^"]+)"`).exec(s)?.[1];
+  assert.equal(constant(ios, 'unit'), constant(android, 'UNIT'));
+  assert.equal(constant(ios, 'lineFile'), constant(android, 'LINE_FILE'));
+  // The commands, with each language's interpolation written one way.
+  const norm = (/** @type {string} */ s) => s
+    .replace(/\\\((unit|lineFile|since|run)\)/g, (_, n) => `{${n}}`)
+    .replace(/\$\{?(UNIT|LINE_FILE|since|run)\}?/g, (_, n) => `{${({ UNIT: 'unit', LINE_FILE: 'lineFile' })[n] ?? n}}`)
+    .replace(/"\s*\+\s*"/g, '')
+    .replace(/\\"/g, '"');
+  const grab = (/** @type {string} */ s, /** @type {RegExp} */ re) => norm(re.exec(s)?.[1] ?? '');
+  // To the end of the return statement, which either language may break
+  // across lines with a `+`.
+  assert.equal(
+    grab(ios, /static func startCommand[\s\S]*?return ("[\s\S]*?")\n\s*\}/),
+    grab(android, /fun startCommand[\s\S]*?return ("[\s\S]*?")\n\s*\}/),
+  );
+  assert.equal(
+    grab(ios, /static func pollCommand[\s\S]*?\{\s*("[\s\S]*?")\n\s*\}/),
+    grab(android, /fun pollCommand\(since: Long\): String =\s*("[\s\S]*?")\n\n/),
+  );
+  assert.equal(norm(constant(ios, 'takeLine') ?? ''), norm(constant(android, 'TAKE_LINE') ?? ''));
+  // What they pass the script is what it takes, and the lines it prints are
+  // the ones they read.
+  assert.match(script, /--line-file\) LINE_FILE=/);
+  assert.match(script, /--coordinator\) COORDINATOR=/);
+  assert.match(script, /step\(\) \{ printf 'fleetwright-step: %s\\n'/);
+  assert.match(script, /fleetwright-error: %s/);
+  for (const step of ['pool', 'user', 'token', 'fence', 'networks', 'image', 'line', 'done']) {
+    assert.match(script, new RegExp(`^step ${step}$`, 'm'), `the script has no step ${step}`);
+    assert.ok(ios.includes(`case "${step}":`) && android.includes(`"${step}" ->`), `a phone has no words for ${step}`);
+  }
+});

@@ -40,6 +40,18 @@ packages:
     url: https://github.com/getsentry/sentry-cocoa
     # renovate: datasource=github-releases depName=getsentry/sentry-cocoa
     exactVersion: 9.32.0
+  # SSH, for one thing: setting up a Proxmox VE node from this phone, as root,
+  # the password going from the phone to the node and nowhere else
+  # (ProxmoxSSH.swift, docs/proxmox.md "From the phone"). Apple's own, and
+  # not a client built on a fork of it.
+  SwiftNIOSSH:
+    url: https://github.com/apple/swift-nio-ssh
+    # renovate: datasource=github-tags depName=apple/swift-nio-ssh
+    exactVersion: 0.15.1
+  SwiftNIO:
+    url: https://github.com/apple/swift-nio
+    # renovate: datasource=github-tags depName=apple/swift-nio
+    exactVersion: 2.105.0
 
 # THE VERSION, ONCE, FOR EVERY TARGET. App Store Connect refuses an upload
 # whose extension carries a different CFBundleShortVersionString or
@@ -71,6 +83,14 @@ targets:
       # A sealed notification is rewritten before it is shown, and a scheme
       # that does not build the extension does not type-check it.
       - target: FleetwrightPush
+      # SSH for a Proxmox node's setup (ProxmoxSSH.swift): Apple's
+      # swift-nio-ssh and the two parts of swift-nio it runs on.
+      - package: SwiftNIOSSH
+        product: NIOSSH
+      - package: SwiftNIO
+        product: NIOCore
+      - package: SwiftNIO
+        product: NIOPosix
     # THE TEST TARGET JOINS THIS TARGET'S SCHEME, rather than being declared in
     # a `schemes:` block of its own. CI runs `xcodebuild -scheme Fleetwright`,
     # and a test target that exists but is in no scheme's test action is a
