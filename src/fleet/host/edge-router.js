@@ -139,16 +139,16 @@ export const OPNSENSE_IMAGE = Object.freeze({
  */
 export const EDGE_IMAGE = Object.freeze({
   // renovate: datasource=github-releases depName=edge-image packageName=TheTechNetwork/Fleetwright
-  build: '26.7.8_1-20261031-15',
+  build: '26.7.8_1-20261031-17',
   /** The build everything below was copied from. */
-  checked: '26.7.8_1-20261031-15',
+  checked: '26.7.8_1-20261031-17',
   /** The OPNsense release it is, and the version of its core package it was updated to. */
   release: '26.7',
   version: '26.7.8_1',
-  url: 'https://github.com/TheTechNetwork/Fleetwright/releases/download/edge-image/26.7.8_1-20261031-15/fleetwright-edge-26.7-26.7.8_1-amd64.img.zst',
+  url: 'https://github.com/TheTechNetwork/Fleetwright/releases/download/edge-image/26.7.8_1-20261031-17/fleetwright-edge-26.7-26.7.8_1-amd64.img.zst',
   /** As the release's SHA256SUMS lists it, and as downloaded. */
-  sha256: 'de73c5c69277ea6489ea09c558eaf2ac2a77034a72d57867f87ceee033634c37',
-  compressedSize: 424443590,
+  sha256: '3d82c2192015d683f7d0c6cab5c22a5bc761e2e98b7498a45b9960f425dda5fa',
+  compressedSize: 423882241,
   rawSize: 3221225472,
   /** /usr/local/etc/config.xml, as the image carries it, and its SHA-256. */
   config: Object.freeze({ offset: 712876032, length: 5234, sha256: '1e81cde6bebe59e0aa769bd6b187f2247bd1155cddb52253ca1f2a17c51fe2e5' }),
@@ -158,18 +158,18 @@ export const EDGE_IMAGE = Object.freeze({
     inode: 6523,
     data: Object.freeze({ offset: 32014336, length: 32768 }),
     edits: Object.freeze([
-      { offset: 66552, was: '4c51000000000000', becomes: '4b51000000000000', what: 'superblock: free blocks' },
-      { offset: 66568, was: '5f0c000000000000', becomes: '610c000000000000', what: 'superblock: free fragments' },
-      { offset: 131100, was: '57', becomes: '56', what: 'cylinder group 0' },
+      { offset: 66552, was: '1c51000000000000', becomes: '1b51000000000000', what: 'superblock: free blocks' },
+      { offset: 66568, was: 'df0d000000000000', becomes: 'e10d000000000000', what: 'superblock: free fragments' },
+      { offset: 131100, was: '59', becomes: '58', what: 'cylinder group 0' },
       { offset: 147545, was: 'ff', becomes: '00', what: 'cylinder group 0' },
-      { offset: 162026, was: 'de', becomes: 'dc', what: 'cylinder group 0' },
+      { offset: 162026, was: 'fe', becomes: 'fc', what: 'cylinder group 0' },
       { offset: 1833744, was: '72140000000000001000000000000000', becomes: '00800000000000004000000000000000', what: 'inode 6523: size and sectors' },
       { offset: 1833840, was: 'daa7020000000000', becomes: '881e000000000000', what: 'inode 6523: first block' },
-      { offset: 31555584, was: 'a613000057030000fab3000060010000', becomes: 'a613000056030000fab3000060010000', what: 'summary of cylinder group 0' },
-      { offset: 31555600, was: '1f0000008001000081de0100e0000000', becomes: '1f0000008001000081de0100e2000000', what: 'summary of cylinder group 1' },
-      { offset: 502399012, was: 'e0', becomes: 'e2', what: 'cylinder group 1' },
-      { offset: 502399036, was: '0e', becomes: '0f', what: 'cylinder group 1' },
-      { offset: 502420899, was: '80', becomes: '8c', what: 'cylinder group 1' },
+      { offset: 31555584, was: 'a613000059030000fab3000056010000', becomes: 'a613000058030000fab3000056010000', what: 'summary of cylinder group 0' },
+      { offset: 31555600, was: '1e0000008101000086de0100da000000', becomes: '1e0000008101000086de0100dc000000', what: 'summary of cylinder group 1' },
+      { offset: 502399012, was: 'da', becomes: 'dc', what: 'cylinder group 1' },
+      { offset: 502399036, was: '10', becomes: '11', what: 'cylinder group 1' },
+      { offset: 502420899, was: '00', becomes: '0c', what: 'cylinder group 1' },
     ]),
   }),
 });
