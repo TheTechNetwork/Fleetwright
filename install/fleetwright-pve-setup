@@ -2,10 +2,13 @@
 # fleetwright-pve-setup: lets a Fleetwright fleet make machines on this
 # Proxmox VE cluster. docs/proxmox.md.
 #
-# RUN ONCE, AS ROOT, ON ANY NODE (Datacenter › the node › Shell is enough).
-# It makes everything the fleet needs and prints ONE LINE for the phone. No
-# password leaves this node: the fleet is given a token born limited, and
-# what it may do is Proxmox's to enforce.
+# RUN ONCE, AS ROOT, ON ANY NODE, and normally BY THE PHONE (docs/proxmox.md,
+# "From the phone"): the app signs in to the node over SSH, writes this script
+# from its own bundle, and starts it detached with --line-file, so the phone
+# may lock or close mid-build; it follows the steps in the journal and reads
+# the line from the file. Run by hand (Datacenter › the node › Shell), it
+# prints the line instead. Either way the root password goes only from the
+# phone to the node, and the fleet is given a token born limited.
 #
 #   1. A pool, `fleetwright`, which is everything the fleet may touch.
 #   2. A user, fleetwright@pve, with no password, and roles that let it clone
@@ -29,6 +32,11 @@
 #   fleetwright-pve-setup [--address HOST[:PORT]] [--storage ID] [--bridge NAME]
 #                         [--enable-firewall] [--channel stable|rolling]
 #                         [--no-image] [--rebuild-image] [--expire-days N]
+#                         [--line-file PATH]
+#
+# Lines for the phone, beside the ones for a person:
+#   fleetwright-step: NAME     pool, user, token, fence, image, line, done
+#   fleetwright-error: TEXT    the reason it stopped
 #
 # Safe to run again: everything it makes it finds first.
 set -euo pipefail
@@ -56,9 +64,11 @@ CHANNEL=stable
 IMAGE=1
 REBUILD=0
 EXPIRE_DAYS=365
+LINE_FILE=""
 
 say() { printf 'fleetwright: %s\n' "$*"; }
-die() { printf 'fleetwright: %s\n' "$*" >&2; exit 1; }
+step() { printf 'fleetwright-step: %s\n' "$1"; }
+die() { printf 'fleetwright: %s\nfleetwright-error: %s\n' "$*" "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -70,7 +80,9 @@ while [ $# -gt 0 ]; do
     --no-image) IMAGE=0; shift ;;
     --rebuild-image) REBUILD=1; shift ;;
     --expire-days) EXPIRE_DAYS="${2:?--expire-days needs a number}"; shift 2 ;;
-    -h | --help) sed -n '2,32p' "$0"; exit 0 ;;
+    --line-file) LINE_FILE="${2:?--line-file needs a path}"; shift 2 ;;
+    # Read from stdin there is no file to print the head of.
+    -h | --help) if [ -f "$0" ]; then sed -n '2,40p' "$0"; else echo "see docs/proxmox.md, \"Setting it up\""; fi; exit 0 ;;
     *) die "unknown option $1 (--help says what there is)" ;;
   esac
 done
@@ -103,11 +115,13 @@ pvesm status --storage "$STORAGE" >/dev/null 2>&1 || die "storage $STORAGE is no
 ip link show "$BRIDGE" >/dev/null 2>&1 || die "bridge $BRIDGE is not on this node; pass --bridge"
 
 # --- 1. the pool ---------------------------------------------------------------
+step pool
 pveum pool list --output-format json | json 'join "\n", map { $_->{poolid} } @$d' | grep -qx "$POOL" ||
   pveum pool add "$POOL" --comment "Fleetwright: everything the fleet may touch. Its machines and its images live here."
 say "pool $POOL"
 
 # --- 2. the user, its roles and where they apply --------------------------------
+step user
 role() { # name privs
   if pveum role list --output-format json | json 'join "\n", map { $_->{roleid} } @$d' | grep -qx "$1"; then
     pveum role modify "$1" --privs "$2"
@@ -134,6 +148,7 @@ fi
 say "user $USER_ID, on pool $POOL, storage $STORAGE and bridge $BRIDGE"
 
 # --- 3. the token --------------------------------------------------------------
+step token
 pveum user token remove "$USER_ID" "$TOKEN_NAME" >/dev/null 2>&1 || true
 EXPIRE="$(( $(date +%s) + EXPIRE_DAYS * 86400 ))"
 SECRET="$(pveum user token add "$USER_ID" "$TOKEN_NAME" --privsep 0 --expire "$EXPIRE" \
@@ -142,6 +157,7 @@ SECRET="$(pveum user token add "$USER_ID" "$TOKEN_NAME" --privsep 0 --expire "$E
 say "a new token, which lasts $EXPIRE_DAYS days; any line printed before this one no longer works"
 
 # --- 4. the fence --------------------------------------------------------------
+step fence
 # Rules in order, first match wins. In: SSH alone. Out: addresses and names,
 # then nothing private, then everything else (the policy the box sets).
 if ! pvesh get /cluster/firewall/groups --output-format json | json 'join "\n", map { $_->{group} } @$d' | grep -qx "$FENCE"; then
@@ -173,6 +189,7 @@ else
 fi
 
 # --- 5. the image --------------------------------------------------------------
+step image
 SNIPPETS="$(pvesm status --content snippets --enabled 1 2>/dev/null | awk 'NR>1 && $3=="active" {print $1; exit}')"
 if [ -z "$SNIPPETS" ]; then
   content="$(pvesh get /storage/local --output-format json | json '$d->{content}')"
@@ -254,6 +271,7 @@ else
 fi
 
 # --- 6. the line ---------------------------------------------------------------
+step line
 # HOW TO TRUST THIS CLUSTER. Its own CA, unless the web interface was given a
 # certificate of somebody else's (pveproxy-ssl.pem): then publicly trusted if it
 # verifies against the system's roots (ACME), and that file itself if it holds
@@ -279,8 +297,17 @@ LINE="$(KIND=proxmox ADDRESS="$ADDRESS" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POO
   $b =~ tr{+/}{-_}; $b =~ s/=+$//;
   print "fleetwright-pve:1:$b";')"
 
-say "done. In the Fleetwright app, Machines › Add a hypervisor › Proxmox, paste this line."
-say "It is the token: keep it to the app, and run this again to make a new one."
-echo
-echo "$LINE"
-echo
+# TO A FILE ONLY ROOT READS, when the phone runs this: the journal it follows
+# keeps what is printed, and the line is the token. The phone reads the file
+# and removes it. Written whole or not at all.
+if [ -n "$LINE_FILE" ]; then
+  ( umask 077; printf '%s\n' "$LINE" >"$LINE_FILE.part" && mv -f "$LINE_FILE.part" "$LINE_FILE" )
+  say "done; the line for the phone is in $LINE_FILE"
+else
+  say "done. In the Fleetwright app, Machines › Add a hypervisor › Proxmox, paste this line."
+  say "It is the token: keep it to the app, and run this again to make a new one."
+  echo
+  echo "$LINE"
+  echo
+fi
+step done

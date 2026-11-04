@@ -6,7 +6,9 @@ cluster, sweeps what is done, and makes, hands the login to, restarts,
 extends, resizes and ends machines on it, behind the same seam as Xen
 Orchestra (`src/fleet/host/pools.js`), so the coordinator and the protocol
 did not change. The cluster is set up by one script run as root on a node
-(`install/fleetwright-pve-setup`), which prints one line. **Not built:**
+(`install/fleetwright-pve-setup`), which the phone is to run itself over
+SSH ("From the phone"; the phone half is not built) or a person runs by
+hand. **Not built:**
 the phone screens below, labs, machines that work together, and the pool
 page's own actions. **Not yet run:** the script on a real node, and a
 machine made on a real cluster. The tests run the driver against a stand-in
@@ -48,6 +50,13 @@ sealed once it has joined; the clock on the machine, swept by any box.
   `fenced: false`, and **a machine is not made on the default network**: only
   on a network the person chose for it (`make`). The script turns it on only
   when asked (`--enable-firewall`), because it is the person's datacenter.
+- **The firewall isolates; it does not show anything.** A machine behind
+  `fleetwright-isolate` cannot reach your network, and nothing records what
+  it did reach. Inspecting traffic needs it to pass through something that
+  looks: a router VM in front of it, which is what XCP-ng's edge router is,
+  or a mirror of its interface on the node (Open vSwitch's port mirroring,
+  or `tc mirred` on a Linux bridge) into a capture. Neither is built here,
+  and Xen Orchestra's "Seeing what crossed a lab" is not built either.
 - **The ticket is readable** by anybody holding the token, in the machine's
   `smbios1`, for the machine's life; Xen Orchestra's cloud-init drive was
   destroyed five minutes after boot. The ticket is single use, lives fifteen
@@ -82,14 +91,52 @@ of ours, before any of this was written, and built in rather than found again:
 
 ## Setting it up
 
+### From the phone
+
+**This is how it is meant to be done, and the phone half is not built yet.**
+Machines › Add a hypervisor › Proxmox asks for the node's address and its
+root password (or uses an SSH key the phone keeps), and does the rest itself.
+No machine of the fleet is involved, so the password goes from the phone to
+the node and nowhere else:
+
+1. **The phone connects over SSH.** The first time, it shows the node's host
+   key fingerprint, to compare with `ssh-keygen -lf
+   /etc/ssh/ssh_host_ed25519_key.pub` on the node's console, and remembers it
+   for that address; a different key later is refused and said.
+2. **It writes the script from its own bundle**, the copy that shipped with
+   the app, to `/root/fleetwright-pve-setup`, so nothing is downloaded from
+   GitHub to run as root.
+3. **It starts it detached**: `systemd-run --unit=fleetwright-pve-setup
+   --collect /root/fleetwright-pve-setup --line-file
+   /root/.fleetwright-pve-line`. The image takes a few minutes to build and
+   a phone locks, so the job must not die with the SSH session.
+4. **It follows the job** with `journalctl -fu fleetwright-pve-setup -o cat`:
+   the `fleetwright-step:` lines move the Live Activity on iOS and the ongoing
+   notification on Android, and `fleetwright-error:` is the sentence shown if
+   it stops. Opened again, it reconnects and carries on reading.
+5. **It reads the line from the file and removes it.** The line is the token,
+   so it is never printed where the journal would keep it. The phone keeps it
+   in the vault as `hypervisor:<address>`, then checks it: one look over HTTPS
+   with the token, trusting the CA the line carries, before it calls the
+   cluster added.
+
+The root password is used for that session and dropped, or kept behind Face
+ID or a fingerprint when the person asks, as Xen Orchestra's sign-in is.
+
+### By hand
+
+The same script in a root shell on any node (Datacenter › the node › Shell
+in Proxmox's own web interface):
+
 ```
-curl -fsSLo /tmp/fleetwright-pve-setup https://raw.githubusercontent.com/thetechnetwork/fleetwright/<release>/install/fleetwright-pve-setup
-bash /tmp/fleetwright-pve-setup
+bash fleetwright-pve-setup
 ```
 
-Run as root on any node: Datacenter › the node › Shell in Proxmox's own web
-interface is enough, from a laptop or the phone's browser. It makes, finding
-each first so it is safe to run again:
+prints the line at the end, to paste into Add a hypervisor › Proxmox.
+
+### What it makes
+
+Finding each first, so it is safe to run again:
 
 1. the pool `fleetwright`;
 2. the user `fleetwright@pve` with no password, and four roles: `Fleetwright`
@@ -104,15 +151,15 @@ each first so it is safe to run again:
 5. the machine image: Debian 13's cloud image, pinned and checked, booted once
    to install Fleetwright from apt, left unjoined and turned into a template;
 6. one line, `fleetwright-pve:1:…`: the address, the token, the pool and the
-   cluster's CA, which the phone keeps as `hypervisor:<address>` in the vault.
-   A web interface given a certificate of somebody's own is trusted as a
-   browser would trust it when a public CA signed it (ACME), or by that
-   certificate's file when the file holds its own root; any other is refused
-   at setup, because reaching it would mean turning the chain check off.
+   cluster's CA. A web interface given a certificate of somebody's own is
+   trusted as a browser would trust it when a public CA signed it (ACME), or
+   by that certificate's file when the file holds its own root; any other is
+   refused at setup, because reaching it would mean turning the chain check
+   off.
 
 Its options: `--address`, `--storage`, `--bridge`, `--enable-firewall`,
 `--channel stable|rolling`, `--no-image`, `--rebuild-image`,
-`--expire-days`.
+`--expire-days`, `--line-file`.
 
 The snippets the image boots with, the privileges and the image pin are
 written in the script, which has no Fleetwright to import them from, and in
@@ -142,12 +189,12 @@ written in the script, which has no Fleetwright to import them from, and in
 Not built; this is the shape the next layer takes, written down so it is
 built to it and not to `AddHypervisorView`.
 
-**Add a hypervisor › Proxmox** is one screen with one field. It shows the
-command above with a Copy button, and a field for the line. A pasted line
-fills in what it carries (the address, the pool, "trusted by its own CA")
-before anything is sent, and Add keeps it. No probe of every box, no
-machine to pick, no fingerprint to compare, no password. Paste also works
-from the console page.
+**Add a hypervisor › Proxmox** is one screen: the node's address and its
+root password, and Set up. Then the host key, once, and the steps as they
+happen, the same on the Lock Screen. No probe of every box, no machine to
+pick, no key fingerprint of a fleet machine to compare, and nothing to copy
+between devices. Pasting a line made by hand is the other way in, on the
+same screen.
 
 **The cluster's page** is the component row from `manage.md`, read from the
 health entry, three sections and no form:
@@ -181,7 +228,8 @@ it answers `notHere`, and an `unreachable` from either is kept.
 
 ## Not built
 
-- The phone screens above, on both apps.
+- The phone screens above, on both apps, and the SSH client each needs for
+  "From the phone": neither app has one yet.
 - Labs and group networks (SDN VNets are the natural fit); `make` refuses
   both by name rather than make something else.
 - The pool page's actions on the cluster (`xolook`, `xoact` are Xen
