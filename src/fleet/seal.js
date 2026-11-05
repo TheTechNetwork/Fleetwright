@@ -248,6 +248,31 @@ export function xowatchdogAad(job, address) {
 }
 
 /**
+ * What a phone seals a Proxmox VE node's root password and its reply key
+ * under, for setup through a machine of the fleet (src/fleet/host/pve-setup.js).
+ * Its own name, so a root password sealed for this can never be opened as an
+ * install's or a watchdog's, which would do something else with it.
+ *
+ * @param {string} job
+ * @param {string} address  the node's, as the job was begun with
+ */
+export function pvesetupAad(job, address) {
+  return `fleetwright-pvesetup/v1:${job}:${address}`;
+}
+
+/**
+ * What the line is sealed under on its way back from that machine to the
+ * phone: the same job and address under its own name, so the password going
+ * one way and the line coming back can never be taken for each other.
+ *
+ * @param {string} job
+ * @param {string} address
+ */
+export function pvesetupHandoffAad(job, address) {
+  return `fleetwright-pvesetup-handoff/v1:${job}:${address}`;
+}
+
+/**
  * What a pool's page is sealed under on its way from the box that read it to
  * the phone away from home that asked (`xolook`): the address, so the answer
  * for one pool cannot be shown as another's. There is no job to bind to; the

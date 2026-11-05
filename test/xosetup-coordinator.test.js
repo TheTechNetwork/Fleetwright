@@ -15,7 +15,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ACTIVITY_FILL_EVERY_MS, CoordinatorCore, narrowProgress, narrowCertificate, SETUP_TEXT_MAX } from '../src/fleet/coordinator/core.js';
-import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XOWATCHDOG_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XOWATCHDOG_STEPS, PVESETUP_STEPS, XORECONNECT_STEPS } from '../src/fleet/protocol/intents.js';
 
 const JOB = 'a1b2c3d4e5f6';
 const admin = { email: 'eli@example.com', admin: true };
@@ -510,35 +510,42 @@ test('an install reaches the Lock Screen as one, through its own steps and onboa
   assert.equal(narrowProgress({ step: image, of, phase: 'image', state: 'running' }), null);
 });
 
-test('adding the watchdog is begun as an install is, and reaches the phone as its own job', async () => {
-  const ask = { verb: 'xosetup', params: { phase: 'watchdog', address: 'xcp1.lan', pin: KEY_HEX }, actor: `fleet:${admin.email}`, requester: admin };
-  const { core, sent, asked } = fleet(['deb14'], (_hostId, spec) =>
-    spec.params.phase === 'watchdog'
-      ? { ok: true, text: 'Ready for the root password.', xosetup: { job: JOB, state: 'waiting', key: 'k', keySig: 's', hostKey: 'h', can: ['watchdog'] } }
-      : machine(_hostId, spec));
-  await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
-  const begun = await core.dispatch(ask);
-  assert.equal(begun.ok, true, begun.text);
-  // Its job recorded, so the sealed root password goes to the same machine.
-  const run = await core.dispatch({ verb: 'xosetup', params: { phase: 'run', job: JOB, sealed: 'a.b.c' }, actor: `fleet:${admin.email}`, requester: admin });
-  assert.equal(run.ok, true, run.text);
-  assert.deepEqual(asked.map((a) => a.hostId), ['deb14', 'deb14']);
+// ADDING THE WATCHDOG and SETTING UP PROXMOX VE are each begun as an install
+// is, pinned to an SSH host key, and each reaches the phone as its own job.
+for (const c of [
+  { phase: 'watchdog', steps: XOWATCHDOG_STEPS, step: 'add', running: 'Adding the reconnect watchdog', done: 'Watchdog added', outdated: /deb14 is too old to add the reconnect watchdog/ },
+  { phase: 'pve', steps: PVESETUP_STEPS, step: 'image', running: 'Setting up Proxmox VE', done: 'Proxmox VE set up', outdated: /deb14 is too old to set up Proxmox VE/ },
+]) {
+  test(`${c.phase} is begun as an install is, and reaches the phone as its own job`, async () => {
+    const ask = { verb: 'xosetup', params: { phase: c.phase, address: 'xcp1.lan', pin: KEY_HEX }, actor: `fleet:${admin.email}`, requester: admin };
+    const { core, sent, asked } = fleet(['deb14'], (_hostId, spec) =>
+      spec.params.phase === c.phase
+        ? { ok: true, text: 'Ready for the root password.', xosetup: { job: JOB, state: 'waiting', key: 'k', keySig: 's', hostKey: 'h', can: [c.phase] } }
+        : machine(_hostId, spec));
+    await core.registerDevice({ platform: 'android', token: 'a'.repeat(64), actor: `fleet:${admin.email}` });
+    const begun = await core.dispatch(ask);
+    assert.equal(begun.ok, true, begun.text);
+    // Its job recorded, so the sealed root password goes to the same machine.
+    const run = await core.dispatch({ verb: 'xosetup', params: { phase: 'run', job: JOB, sealed: 'a.b.c' }, actor: `fleet:${admin.email}`, requester: admin });
+    assert.equal(run.ok, true, run.text);
+    assert.deepEqual(asked.map((a) => a.hostId), ['deb14', 'deb14']);
 
-  const of = XOWATCHDOG_STEPS.length;
-  const add = XOWATCHDOG_STEPS.indexOf('add');
-  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: add, of, phase: 'add', state: 'running', purpose: 'watchdog' });
-  assert.equal(sent.at(-1)?.message.title, 'Adding the reconnect watchdog');
-  assert.equal(sent.at(-1)?.message.data.purpose, 'watchdog');
-  await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: of, of, phase: 'done', state: 'done', purpose: 'watchdog' });
-  assert.equal(sent.at(-1)?.message.title, 'Watchdog added');
-  // Its own step from a host that did not say it is one is refused.
-  assert.equal(narrowProgress({ step: add, of, phase: 'add', state: 'running' }), null);
+    const of = c.steps.length;
+    const at = c.steps.indexOf(c.step);
+    await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: at, of, phase: c.step, state: 'running', purpose: c.phase });
+    assert.equal(sent.at(-1)?.message.title, c.running);
+    assert.equal(sent.at(-1)?.message.data.purpose, c.phase);
+    await core.onHostMessage('deb14', { kind: 'event', event: 'xosetup.progress', job: JOB, step: of, of, phase: 'done', state: 'done', purpose: c.phase });
+    assert.equal(sent.at(-1)?.message.title, c.done);
+    // Its own step from a host that did not say it is one is refused.
+    if (!XOSETUP_STEPS.includes(c.step)) assert.equal(narrowProgress({ step: at, of, phase: c.step, state: 'running' }), null);
 
-  const old = fleet(['deb14'], () => ({ ok: false, error: { code: 'bad_params' }, text: 'xosetup.phase must be one of begin, run, status, cancel, policy, deploy' }));
-  const refused = await old.core.dispatch(ask);
-  assert.equal(refused.error.code, 'host_outdated');
-  assert.match(refused.text, /deb14 is too old to add the reconnect watchdog/);
-});
+    const old = fleet(['deb14'], () => ({ ok: false, error: { code: 'bad_params' }, text: 'xosetup.phase must be one of begin, run, status, cancel, policy, deploy' }));
+    const refused = await old.core.dispatch(ask);
+    assert.equal(refused.error.code, 'host_outdated');
+    assert.match(refused.text, c.outdated);
+  });
+}
 
 test('a holder the job removed to make it again is retired, and only the owner’s own', async () => {
   // ASKED FOR: "Recreating holder didn't delete old one". The VM was gone;
