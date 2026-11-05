@@ -329,7 +329,7 @@ dependencies {
   // cut down, and ProxmoxSsh puts this one in its place). Pinned, like
   // everything else here.
   implementation("com.hierynomus:sshj:0.41.2")
-  implementation("org.bouncycastle:bcprov-jdk18on:1.84")
+  implementation("org.bouncycastle:bcprov-jdk18on:1.86")
 
   // FIREBASE CLOUD MESSAGING IS ABOVE NOW, and this said the opposite until
   // somebody went looking for why an app with no google-services.json crashes
