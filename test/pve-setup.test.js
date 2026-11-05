@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { XoSetups } from '../src/fleet/host/xo-setup.js';
 import { CONNECTION_PREFIX } from '../src/fleet/host/pve-pools.js';
+import { progressOf, partOf } from '../src/fleet/host/pve-setup.js';
 import { PVESETUP_STEPS } from '../src/fleet/protocol/intents.js';
 import { open, seal, newSealKey, pvesetupAad, pvesetupHandoffAad, xowatchdogAad } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
@@ -41,7 +42,7 @@ function hostKeyBlob() {
  * A node over SSH, with a run of the setup the scenario describes: the steps
  * it says, then an error, the line, or nothing yet (`hangs`).
  *
- * @param {{ steps?: string[], error?: string, hangs?: boolean }} scenario
+ * @param {{ steps?: string[], parts?: string[], error?: string, hangs?: boolean }} scenario
  */
 function node(scenario) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-pve-node-'));
@@ -55,7 +56,7 @@ function node(scenario) {
   const state = path.join(dir, 'state');
   const asked = path.join(dir, 'asked');
   const steps = (scenario.steps ?? ['pool', 'user', 'token', 'fence', 'networks', 'image', 'line', 'done']).map((s) => `fleetwright-step: ${s}`);
-  const end = scenario.error ? [`fleetwright-error: ${scenario.error}`] : [];
+  const end = [...(scenario.parts ?? []).map((l) => `fleetwright-part: ${l}`), ...(scenario.error ? [`fleetwright-error: ${scenario.error}`] : [])];
   const lineFile = `${root}/.fleetwright-pve-line`;
   const config = path.join(dir, 'config.json');
   writeFileSync(config, JSON.stringify({ keys: [{ type: 'ssh-ed25519', blob }], password: ROOT_PASSWORD, log: logPath, poolPath: bin, root }));
@@ -149,6 +150,25 @@ test('through a machine: the node is set up with the phones’ own command, and 
   assert.deepEqual([...new Set(m.events.filter((e) => e.state === 'running').map((e) => e.phase))], [...PVESETUP_STEPS]);
   assert.ok(m.events.every((e) => e.purpose === 'pve'));
   assert.ok(!n.sshLog().some((e) => e.password || String(e.script ?? '').includes(ROOT_PASSWORD)));
+});
+
+// THE IMAGE IS MOST OF THE WAIT, asked for in so many words: "Where is step
+// progress?" What the script says of how far into a step it is reaches the
+// phone as the step's words and, when it measured one, a bar.
+test('how far into the image the node is reaches the phone as words and a bar', async () => {
+  const n = node({ steps: ['pool', 'user', 'token', 'fence', 'networks', 'image'], parts: ['120 downloading: 50 of 416 MB', '432 downloading: 180 of 416 MB'], hangs: true });
+  const m = await machine();
+  const { job } = await setUp(m, n.pin);
+  const mid = await settled(m.setups, job, (s) => s.phase === 'image' && /180 of 416/.test(s.text));
+  assert.equal(mid.text, 'Building the machine image: downloading: 180 of 416 MB');
+  assert.equal(mid.part.fill, 432);
+  assert.ok(m.events.some((e) => e.phase === 'image' && e.fill === 432), 'the Lock Screen was not told how far');
+  await m.setups.cancel({ job, actor: ACTOR });
+  await settled(m.setups, job);
+  // Only the step it is on: once a later step has begun, its part is gone.
+  assert.equal(progressOf('fleetwright-step: image\nfleetwright-part: 432 x\nfleetwright-step: line\nstate=active').part, null);
+  assert.deepEqual(progressOf('fleetwright-step: image\nfleetwright-part: - VM 104 is building the image (3 min so far)').part, { fill: null, text: 'VM 104 is building the image (3 min so far)' });
+  assert.equal(partOf('fleetwright-part: lots of it'), null);
 });
 
 test('a setup the node stops is said in the node’s words, at the step it stopped', async () => {

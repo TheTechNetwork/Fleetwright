@@ -61,25 +61,42 @@ internal object ProxmoxSsh {
             "systemd-run --unit=$UNIT --collect /bin/bash -c '$run'"
     }
 
-    /** How far it has got: its step and error lines since `since`, whether it runs, and whether the line is there. */
+    /**
+     * How far it has got: its step and error lines since `since`, the last
+     * `fleetwright-part:` line of the step it is on, whether it runs, and
+     * whether the line is there.
+     */
     fun pollCommand(since: Long): String =
-        "journalctl -u $UNIT --since @$since -o cat --no-pager | grep -E '^fleetwright-(step|error):' | tail -n 40; " +
+        "journalctl -u $UNIT --since @$since -o cat --no-pager | " +
+            "awk '/^fleetwright-(step|error):/ {print} /^fleetwright-step:/ {p=0} /^fleetwright-part:/ {p=$0} END {if (p) print p}'; " +
             "echo \"state=$(systemctl is-active $UNIT)\"; test -f $LINE_FILE && echo line=ready"
 
     /** The line, read once and removed. */
     const val TAKE_LINE = "cat $LINE_FILE && rm -f $LINE_FILE"
 
-    /** What a poll said. */
-    data class Progress(val steps: List<String>, val error: String?, val running: Boolean, val lineReady: Boolean)
+    /** What a poll said; [part] is how far into the step it is on, null when it said nothing of this step. */
+    data class Progress(val steps: List<String>, val error: String?, val running: Boolean, val lineReady: Boolean, val part: Part? = null)
+
+    /** [fill] in thousandths, or null when the script measured nothing, and what it is doing. pve-setup.js, partOf, reads it the same way. */
+    data class Part(val fill: Int?, val text: String)
 
     fun progressOf(out: String): Progress {
         val lines = out.lines()
+        val afterStep = lines.indexOfLast { it.startsWith("fleetwright-step: ") } + 1
         return Progress(
             steps = lines.filter { it.startsWith("fleetwright-step: ") }.map { it.removePrefix("fleetwright-step: ").trim() },
             error = lines.lastOrNull { it.startsWith("fleetwright-error: ") }?.removePrefix("fleetwright-error: ")?.trim(),
             running = lines.any { it == "state=active" || it == "state=activating" },
             lineReady = lines.any { it == "line=ready" },
+            part = lines.drop(afterStep).lastOrNull { it.startsWith("fleetwright-part: ") }?.let(::partOf),
         )
+    }
+
+    /** One `fleetwright-part:` line, or null for one not shaped as the script writes it. */
+    fun partOf(line: String): Part? {
+        val m = Regex("^fleetwright-part: (-|\\d{1,4}) (.+)$").find(line.trim()) ?: return null
+        val text = m.groupValues[2].replace(Regex("[\\u0000-\\u001f\\u007f]+"), " ").trim().take(160)
+        return Part(if (m.groupValues[1] == "-") null else minOf(1000, m.groupValues[1].toInt()), text)
     }
 
     /** A step as the person reads it. */

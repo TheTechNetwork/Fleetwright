@@ -35,9 +35,12 @@ enum ProxmoxSSH {
             + "systemd-run --unit=\(unit) --collect /bin/bash -c '\(run)'"
     }
 
-    /// How far it has got: its step and error lines since `since`, whether it runs, and whether the line is there.
+    /// How far it has got: its step and error lines since `since`, the last
+    /// `fleetwright-part:` line of the step it is on, whether it runs, and
+    /// whether the line is there.
     static func pollCommand(since: Int) -> String {
-        "journalctl -u \(unit) --since @\(since) -o cat --no-pager | grep -E '^fleetwright-(step|error):' | tail -n 40; "
+        "journalctl -u \(unit) --since @\(since) -o cat --no-pager | "
+            + "awk '/^fleetwright-(step|error):/ {print} /^fleetwright-step:/ {p=0} /^fleetwright-part:/ {p=$0} END {if (p) print p}'; "
             + "echo \"state=$(systemctl is-active \(unit))\"; test -f \(lineFile) && echo line=ready"
     }
 
@@ -49,16 +52,40 @@ enum ProxmoxSSH {
         let error: String?
         let running: Bool
         let lineReady: Bool
+        /// How far into the step it is on, as the script said it: nil when it
+        /// said nothing of this step.
+        var part: Part? = nil
+    }
+
+    /// `fill` in thousandths, or nil when the script measured nothing, and
+    /// what it is doing. pve-setup.js, partOf, reads it the same way.
+    struct Part: Equatable {
+        let fill: Int?
+        let text: String
     }
 
     static func progress(of out: String) -> Progress {
         let lines = out.components(separatedBy: "\n")
+        let afterStep = lines.lastIndex { $0.hasPrefix("fleetwright-step: ") }.map { lines.index(after: $0) } ?? lines.startIndex
         return Progress(
             steps: lines.filter { $0.hasPrefix("fleetwright-step: ") }.map { String($0.dropFirst("fleetwright-step: ".count)).trimmingCharacters(in: .whitespaces) },
             error: lines.last { $0.hasPrefix("fleetwright-error: ") }.map { String($0.dropFirst("fleetwright-error: ".count)).trimmingCharacters(in: .whitespaces) },
             running: lines.contains("state=active") || lines.contains("state=activating"),
-            lineReady: lines.contains("line=ready")
+            lineReady: lines.contains("line=ready"),
+            part: lines[afterStep...].last { $0.hasPrefix("fleetwright-part: ") }.flatMap(part(of:))
         )
+    }
+
+    /// One `fleetwright-part:` line, or nil for one not shaped as the script writes it.
+    static func part(of line: String) -> Part? {
+        let rest = line.trimmingCharacters(in: .whitespaces).dropFirst("fleetwright-part: ".count)
+        guard let space = rest.firstIndex(of: " ") else { return nil }
+        let head = String(rest[..<space])
+        let text = rest[rest.index(after: space)...].trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty else { return nil }
+        if head == "-" { return Part(fill: nil, text: String(text.prefix(160))) }
+        guard head.count <= 4, head.allSatisfy(\.isASCII), let n = Int(head), n >= 0 else { return nil }
+        return Part(fill: min(1000, n), text: String(text.prefix(160)))
     }
 
     /// A step as the person reads it.

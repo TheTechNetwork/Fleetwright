@@ -945,17 +945,23 @@ export function pveVendorConfig() {
  * unjoined, nothing that makes two clones one machine, and powered off. A
  * build that fails stays running, which the script reports with the command
  * that shows its console. `@CHANNEL@` is the apt suite, put in by the script.
+ * Each stage writes `fleetwright-build: <stage>` to the serial console (up,
+ * fleetwright, off), which the script reads to say how far the build is.
  */
 export function pveBuildConfig() {
   return [
     '#cloud-config',
     '# Fleetwright: builds the machine image (install/fleetwright-pve-setup).',
     '# Powers off when it is done. Still running means it failed.',
+    '# Each stage is said on the serial console, where the setup reads it.',
+    'bootcmd:',
+    "  - [sh, -c, 'echo fleetwright-build: up >/dev/ttyS0 || true']",
     'package_update: true',
     'packages: [curl, ca-certificates, openssh-server, qemu-guest-agent, avahi-daemon, libnss-mdns]',
     'runcmd:',
     '  - |',
     '    set -eu',
+    '    echo fleetwright-build: fleetwright >/dev/ttyS0 || true',
     '    curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg',
     '    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network @CHANNEL@ main" >/etc/apt/sources.list.d/fleetwright.list',
     "    echo 'fleetwright fleetwright/user string fleetwright' | debconf-set-selections",
@@ -968,6 +974,7 @@ export function pveBuildConfig() {
     '    truncate -s 0 /etc/machine-id',
     '    rm -f /var/lib/dbus/machine-id /etc/ssh/ssh_host_*',
     '    cloud-init clean --logs',
+    '    echo fleetwright-build: off >/dev/ttyS0 || true',
     '    poweroff',
     '',
   ].join('\n');

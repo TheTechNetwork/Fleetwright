@@ -37,6 +37,8 @@
 #
 # Lines for the phone, beside the ones for a person:
 #   fleetwright-step: NAME     pool, user, token, fence, networks, image, line, done
+#   fleetwright-part: FILL TEXT  how far into the step it is: thousandths, or
+#                              `-` when it cannot tell, and what it is doing
 #   fleetwright-error: TEXT    the reason it stopped
 #
 # Safe to run again: everything it makes it finds first.
@@ -76,6 +78,9 @@ LINE_FILE=""
 say() { printf 'fleetwright: %s\n' "$*"; }
 step() { printf 'fleetwright-step: %s\n' "$1"; }
 die() { printf 'fleetwright: %s\nfleetwright-error: %s\n' "$*" "$*" >&2; exit 1; }
+# HOW FAR INTO A STEP, for the step that takes minutes: the phone draws it.
+# FILL is thousandths, or - when there is nothing measured to draw.
+part() { printf 'fleetwright-part: %s %s\n' "$1" "$2"; }
 
 # A COMMAND THAT FAILS IS SAID, in its own words. Under `set -e` a failing
 # pvesh ended the script with its complaint on stderr and no
@@ -350,11 +355,15 @@ cat <<'BUILD' | sed "s/@CHANNEL@/$CHANNEL/" >"$SNIPPET_DIR/fleetwright-pve-build
 #cloud-config
 # Fleetwright: builds the machine image (install/fleetwright-pve-setup).
 # Powers off when it is done. Still running means it failed.
+# Each stage is said on the serial console, where the setup reads it.
+bootcmd:
+  - [sh, -c, 'echo fleetwright-build: up >/dev/ttyS0 || true']
 package_update: true
 packages: [curl, ca-certificates, openssh-server, qemu-guest-agent, avahi-daemon, libnss-mdns]
 runcmd:
   - |
     set -eu
+    echo fleetwright-build: fleetwright >/dev/ttyS0 || true
     curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network @CHANNEL@ main" >/etc/apt/sources.list.d/fleetwright.list
     echo 'fleetwright fleetwright/user string fleetwright' | debconf-set-selections
@@ -367,6 +376,7 @@ runcmd:
     truncate -s 0 /etc/machine-id
     rm -f /var/lib/dbus/machine-id /etc/ssh/ssh_host_*
     cloud-init clean --logs
+    echo fleetwright-build: off >/dev/ttyS0 || true
     poweroff
 BUILD
 
@@ -379,7 +389,22 @@ else
   img="/var/tmp/$(basename "$IMAGE_URL")"
   if ! echo "$IMAGE_SHA512  $img" | sha512sum -c --status 2>/dev/null; then
     say "downloading Debian 13's cloud image"
-    curl -fL --retry 3 -o "$img.part" "$IMAGE_URL"
+    # THE DOWNLOAD, MEASURED: its size asked first, then the file watched
+    # grow. A size the server does not say is said as what has come so far.
+    total="$(curl -fsSLI "$IMAGE_URL" 2>/dev/null | awk 'tolower($1)=="content-length:" {n=$2+0} END {print n+0}')" || total=0
+    rm -f "$img.part"
+    curl -fsSL --retry 3 -o "$img.part" "$IMAGE_URL" &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+      sleep 5
+      have="$(stat -c %s "$img.part" 2>/dev/null)" || have=0
+      if [ "$total" -gt 0 ]; then
+        part "$(( have * 1000 / total ))" "downloading Debian 13's cloud image: $(( have / 1048576 )) of $(( total / 1048576 )) MB"
+      else
+        part - "downloading Debian 13's cloud image: $(( have / 1048576 )) MB so far"
+      fi
+    done
+    wait "$pid" || { rm -f "$img.part"; die "Debian 13's cloud image could not be downloaded from $IMAGE_URL; nothing was built"; }
     echo "$IMAGE_SHA512  $img.part" | sha512sum -c --status || { rm -f "$img.part"; die "the image did not match its published SHA-512; nothing was built"; }
     mv "$img.part" "$img"
   fi
@@ -392,10 +417,38 @@ else
   qm disk resize "$ID" scsi0 16G >/dev/null
   say "building the image in VM $ID; it powers itself off when Fleetwright is installed (a few minutes)"
   qm start "$ID"
+  # WHAT THE BUILD MACHINE IS DOING, in its own words: the build's
+  # cloud-config writes a marker to its serial console at each stage, and
+  # this reads the console's socket for them. Nothing heard is said as the
+  # minutes so far, never as a stage it has not reached. The reader is its
+  # own process, so nothing it meets can stop the setup.
+  heard="$(mktemp)"
+  (
+    trap - ERR EXIT
+    set +e
+    exec perl -MIO::Socket::UNIX -e '
+      my $s; for (1..30) { last if $s = IO::Socket::UNIX->new(Peer => $ARGV[0]); sleep 1 }
+      exit 0 unless $s;
+      open(my $o, ">>", $ARGV[1]) or exit 0; $o->autoflush(1);
+      while (my $l = <$s>) { print $o "$1\n" if $l =~ /fleetwright-build: ([a-z]+)/ }
+    ' "/var/run/qemu-server/$ID.serial0" "$heard"
+  ) &
+  started=$SECONDS
+  said=""
   for _ in $(seq 1 150); do
     [ "$(qm status "$ID" | awk '{print $2}')" = stopped ] && break
+    mins=$(( (SECONDS - started) / 60 ))
+    case "$(tail -n 1 "$heard" 2>/dev/null)" in
+      up) now="250 VM $ID started and is installing its packages ($mins min so far)" ;;
+      fleetwright) now="500 VM $ID is installing Fleetwright ($mins min so far)" ;;
+      off) now="900 VM $ID has finished and is powering off ($mins min so far)" ;;
+      *) now="- VM $ID is building the image ($mins min so far)" ;;
+    esac
+    [ "$now" = "$said" ] || part "${now%% *}" "${now#* }"
+    said="$now"
     sleep 10
   done
+  rm -f "$heard"
   [ "$(qm status "$ID" | awk '{print $2}')" = stopped ] ||
     die "VM $ID was still running after 25 minutes, so the install failed. Its console: qm terminal $ID. It is kept for you to look at; qm destroy $ID removes it."
   # A CLONE STARTS WITHOUT UPGRADING EVERYTHING: Fleetwright updates itself

@@ -64,4 +64,15 @@ class ProxmoxThroughTest {
         assertNull(ProxmoxThrough.openLine(handoff, job, "pve2.lan", reply))
         assertNull(ProxmoxThrough.openLine(handoff, job, "pve1.lan", Seal.newKey()))
     }
+
+    // HOW FAR INTO THE STEP, read as pve-setup.js's partOf reads it: only the
+    // step it is on, a bar only for what was measured.
+    @Test
+    fun aPartIsReadForTheStepItWasSaidIn() {
+        val mid = ProxmoxSsh.progressOf("fleetwright-step: image\nfleetwright-part: 432 downloading: 180 of 416 MB\nstate=active")
+        assertEquals(ProxmoxSsh.Part(432, "downloading: 180 of 416 MB"), mid.part)
+        assertEquals(ProxmoxSsh.Part(null, "VM 104 is building the image (3 min so far)"), ProxmoxSsh.partOf("fleetwright-part: - VM 104 is building the image (3 min so far)"))
+        assertNull(ProxmoxSsh.progressOf("fleetwright-step: image\nfleetwright-part: 432 x\nfleetwright-step: line").part)
+        assertNull(ProxmoxSsh.partOf("fleetwright-part: lots of it"))
+    }
 }

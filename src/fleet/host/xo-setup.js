@@ -1307,7 +1307,7 @@ export class XoSetups {
       rec.part = null;
       rec.text = [ctx.summary || (policy ? `${rec.address}: what the fleet may use is changed.` : `${rec.address} is in the fleet.`), ...ctx.notes].join(' ');
       if (watchdog) rec.text = ctx.summary;
-      if (pve) rec.text = `${rec.address} is set up for the fleet. The line came back to your phone, sealed; add it there and the fleet’s machines pick it up within ten minutes.`;
+      if (pve) rec.text = `${rec.address} is set up for the fleet. Its line is sealed to your phone, which keeps it in your vault when it next asks; the fleet’s machines pick it up within ten minutes of that.`;
       // A CANCEL THAT LANDED DURING THE LAST THING A POLICY JOB DID, which
       // took no signal (the pool's own machine) and finished: the job was
       // cancelled and says so, with what it had done. Not for a setup or an
@@ -1942,6 +1942,21 @@ export class XoSetups {
       coordinatorUrl: this.coordinatorUrl,
       sleep: this.sleep,
       now: this.now,
+      // HOW FAR INTO THE STEP, as an install's download is said: the words
+      // after the step's, and a bar when the script measured one. An event
+      // when the bar has moved a twentieth or the words have changed, and
+      // one every few minutes while the build is quiet.
+      say: (ctx, part) => {
+        const rec = ctx.rec;
+        if (rec.cancelled) return;
+        const text = `${PVE_STEP_WORDS[rec.phase] ?? 'Setting up'}: ${part.text}`.slice(0, 200);
+        const before = rec.part;
+        rec.part = part.fill === null ? null : { stage: 1, stages: 1, fill: part.fill };
+        const moved = rec.part && (!before || Math.floor(before.fill / 50) !== Math.floor(rec.part.fill / 50));
+        const changed = text.replace(/\(\d+ min so far\)$/, '') !== String(rec.text).replace(/\(\d+ min so far\)$/, '');
+        rec.text = text;
+        if (moved || changed || this.now() - (rec.reportedAt ?? 0) >= DEPLOY_HEARTBEAT_MS) this.#report(rec);
+      },
       open: async (ctx) => {
         ctx.dir = jobDir();
         ctx.root = { password: ctx.creds.root };
