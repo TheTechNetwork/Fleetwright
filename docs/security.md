@@ -1321,7 +1321,10 @@ SHOULD make safe mode reachable without editing host config.
 session offers "Permission prompts on" beside a "Box default" choice that
 sends no mode and is named from the box's own `permissions` health field, and
 never claims which way the default goes when the box has not said
-(`test/permission-mode-in-apps.test.js`).
+(`test/permission-mode-in-apps.test.js`). A start made in words (chat, a
+text, Siri) is answered with the mode it took, the box default named as
+such, and `/list` labels every session the same way
+(`test/permission-mode-said.test.js`).
 
 **SEC-INJECT-4** — An operator's `FLEETWRIGHT_SKIP_PERMISSIONS`, turned off, is
 a ceiling on the bypass flag for every start that arrives from the fleet.
