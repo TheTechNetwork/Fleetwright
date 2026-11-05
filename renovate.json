@@ -94,6 +94,13 @@
       ]
     },
     {
+      "description": "BouncyCastle moves classes between bcprov, bcpkix and bcutil from one release to the next, so two of them at different versions hold the same class twice and the Android build stops on checkDebugDuplicateClasses. bcprov 1.86 on its own beside sshj's bcutil 1.84 did exactly that (#1563). They move as one.",
+      "groupName": "bouncycastle",
+      "matchPackageNames": [
+        "org.bouncycastle:{/,}**"
+      ]
+    },
+    {
       "description": "compileSdk and minSdk are not dependencies. Raising them opts into platform behaviour and needs the matching SDK installed on every builder \u2014 including the one in android.yml. That is a coordinated change across three files, so it stays a person's job.",
       "matchDepNames": [
         "compileSdk",
