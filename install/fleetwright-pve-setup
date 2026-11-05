@@ -82,7 +82,7 @@ VMIDS=""
 
 say() { printf 'fleetwright: %s\n' "$*"; }
 step() { printf 'fleetwright-step: %s\n' "$1"; }
-die() { printf 'fleetwright: %s\nfleetwright-error: %s\n' "$*" "$*" >&2; exit 1; }
+die() { SAID=1; printf 'fleetwright: %s\nfleetwright-error: %s\n' "$*" "$*" >&2; exit 1; }
 # HOW FAR INTO A STEP, for the step that takes minutes: the phone draws it.
 # FILL is thousandths, or - when there is nothing measured to draw.
 part() { printf 'fleetwright-part: %s %s\n' "$1" "$2"; }
@@ -93,15 +93,29 @@ part() { printf 'fleetwright-part: %s %s\n' "$1" "$2"; }
 # "without saying why", which is what the first real run said. pvesh keeps
 # its last line of stderr where the trap can read it, from a subshell too.
 LAST_ERR="$(mktemp)"
-trap 'rm -f "$LAST_ERR"' EXIT
+# NO STOP GOES UNSAID. Whatever ends this script with a failure that die did
+# not word (an unset variable under `set -u`, which skips the ERR trap and
+# ends bash at once) still leaves a fleetwright-error line: the phone shows
+# "stopped without saying why" only when the node said nothing at all.
+SAID=""
+ended() {
+  local rc=$?
+  rm -f "$LAST_ERR" "$LAST_ERR.now"
+  if [ "$rc" != 0 ] && [ -z "$SAID" ]; then
+    printf 'fleetwright-error: the setup stopped unexpectedly (exit %s); journalctl -u fleetwright-pve-setup on the node has the rest\n' "$rc" >&2
+  fi
+}
+trap ended EXIT
+# pvesh's complaint to a file of its own, then to stderr as before: no
+# process substitution, whose PID bash does not always give as $! (the
+# first version waited on "$!", which is unset there, and under `set -u`
+# that ended the script on its first pvesh call, saying nothing).
 pvesh() {
   local rc=0
-  command pvesh "$@" 2> >(tee "$LAST_ERR" >&2) || rc=$?
-  # ITS OWN tee and nothing else: a bare `wait` would also wait on the
-  # download and the build's console reader, which run beside it.
-  wait "$!" 2>/dev/null || true
+  command pvesh "$@" 2>"$LAST_ERR.now" || rc=$?
+  cat "$LAST_ERR.now" >&2
   # Kept only while it is the latest word: a call that worked clears it.
-  [ "$rc" = 0 ] && : > "$LAST_ERR"
+  if [ "$rc" = 0 ]; then : > "$LAST_ERR"; else cp "$LAST_ERR.now" "$LAST_ERR"; fi
   return "$rc"
 }
 failed() {
@@ -444,11 +458,12 @@ else
     echo "$IMAGE_SHA512  $img.part" | sha512sum -c --status || { rm -f "$img.part"; die "the image did not match its published SHA-512; nothing was built"; }
     mv "$img.part" "$img"
   fi
-  ID="$(free_vmid)" || exit 1
+  # free_vmid's own die has said why, from its subshell.
+  ID="$(free_vmid)" || { SAID=1; exit 1; }
   # A BUILD THAT IS STOPPED IS REMOVED: a cancel from the phone stops this
   # unit, and a build left running would hold its number and its memory.
   BUILDING="$ID"
-  trap 'trap - TERM; [ -n "${BUILDING:-}" ] && { qm stop "$BUILDING" --skiplock 1 >/dev/null 2>&1; qm destroy "$BUILDING" --purge 1 >/dev/null 2>&1; }; exit 143' TERM
+  trap 'trap - TERM; [ -n "${BUILDING:-}" ] && { qm stop "$BUILDING" --skiplock 1 >/dev/null 2>&1; qm destroy "$BUILDING" --purge 1 >/dev/null 2>&1; }; SAID=1; exit 143' TERM
   qm create "$ID" --name "$IMAGE_NAME-build" --pool "$POOL" --memory 2048 --cores 2 --cpu host --ostype l26 \
     --net0 "virtio,bridge=$BRIDGE,firewall=1" --scsihw virtio-scsi-single \
     --scsi0 "$STORAGE:0,import-from=$img,discard=on" --ide2 "$STORAGE:cloudinit" --boot order=scsi0 \
