@@ -894,7 +894,8 @@ enum Manage {
         /// THE CONSOLE (VMConsoleView): offered for a running VM while this
         /// phone watches the pool itself. docs/manage.md, "The console".
         static let console = "Console"
-        static let consoleAway = "The console opens only from the pool’s own network. Away from it, this phone reads the page through one of your machines, and a screen cannot come that way."
+        static func consoleAwayVia(_ host: String) -> String { "Through \(host): this phone cannot reach the pool from here. The screen is encrypted from this phone to Xen Orchestra, so \(host) and the fleet carry it without being able to read it." }
+        static let consoleAwayOpening = "This phone cannot reach the pool from here, so it is opening the console through one of your machines…"
         static func consoleOpening(_ name: String) -> String { "Opening the console of \(name)…" }
         static let consoleShut = "Xen Orchestra closed the console before it showed anything. The pool’s limited user may not be allowed to operate this machine."
         static let consoleEnded = "The console closed."

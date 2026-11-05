@@ -870,7 +870,8 @@ internal object Manage {
             "pausing and suspending ask first; forcing a VM off or deleting one asks for its name typed back."
         /** THE CONSOLE (ConsolePage): offered for a running VM while this phone watches the pool itself. docs/manage.md, "The console". */
         const val console = "Console"
-        const val consoleAway = "The console opens only from the pool’s own network. Away from it, this phone reads the page through one of your machines, and a screen cannot come that way."
+        fun consoleAwayVia(host: String) = "Through $host: this phone cannot reach the pool from here. The screen is encrypted from this phone to Xen Orchestra, so $host and the fleet carry it without being able to read it."
+        const val consoleAwayOpening = "This phone cannot reach the pool from here, so it is opening the console through one of your machines…"
         fun consoleOpening(name: String) = "Opening the console of $name…"
         const val consoleShut = "Xen Orchestra closed the console before it showed anything. The pool’s limited user may not be allowed to operate this machine."
         const val consoleEnded = "The console closed."

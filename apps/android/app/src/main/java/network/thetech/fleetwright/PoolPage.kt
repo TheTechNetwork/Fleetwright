@@ -372,7 +372,7 @@ private fun ComponentPage(watch: PoolWatch, id: String, onDismiss: () -> Unit) {
     val c = watch.snapshot.components[id]
 
     if (console && c != null) {
-        ConsolePage(watch.settings, watch.address, c.id, c.name) { console = false }
+        ConsolePage(watch.settings, watch.address, c.id, c.name, away = watch.via != null) { console = false }
         return
     }
 
@@ -441,13 +441,11 @@ private fun ComponentPage(watch: PoolWatch, id: String, onDismiss: () -> Unit) {
         }
         Hint(watch.currentLine)
 
-        // THE CONSOLE, for a running VM, and only while this phone watches
-        // the pool itself (C-2): read through one of your machines there is
-        // no socket here to carry a screen, which is said rather than offered.
+        // THE CONSOLE, for a running VM. Read through one of your machines,
+        // it opens through one too (ConsoleTunnel), the TLS still this phone's.
         if (c.kind == Manage.Kind.VM && c.state == Manage.State.RUNNING && !c.holder && watch.phase == PoolWatch.Phase.Live) {
             Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
-                if (watch.via == null) OpenRow(Manage.Words.console) { console = true }
-                else Hint(Manage.Words.consoleAway)
+                OpenRow(Manage.Words.console) { console = true }
             }
         }
 

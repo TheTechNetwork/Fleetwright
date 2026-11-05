@@ -499,21 +499,16 @@ struct ComponentView: View {
 
     // MARK: Its screen
 
-    /// THE CONSOLE, for a running VM, and only while this phone watches the
-    /// pool itself (C-2): read through one of your machines there is no
-    /// socket here to carry a screen, which is said rather than offered.
+    /// THE CONSOLE, for a running VM. Read through one of your machines, it
+    /// opens through one too (ConsoleTunnel), the TLS still this phone's.
     @ViewBuilder
     private func consoleSection(_ c: Manage.Component) -> some View {
         if c.kind == .vm, c.state == .running, !c.holder, watch.phase == .live {
             Section {
-                if watch.via == nil {
-                    NavigationLink(Manage.Words.console) {
-                        VMConsoleView(address: watch.address, vm: c.id, name: c.name)
-                    }
-                    .frame(minHeight: 44)
-                } else {
-                    note(Manage.Words.consoleAway)
+                NavigationLink(Manage.Words.console) {
+                    VMConsoleView(address: watch.address, vm: c.id, name: c.name, settings: settings, away: watch.via != nil)
                 }
+                .frame(minHeight: 44)
             }
         }
     }

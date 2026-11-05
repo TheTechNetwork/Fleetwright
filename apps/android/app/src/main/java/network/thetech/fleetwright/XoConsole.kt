@@ -98,9 +98,9 @@ internal class XoConsole private constructor(private val socket: SSLSocket, priv
          * WRONG_CERTIFICATE for a server that answered with any other
          * certificate, having sent it nothing.
          */
-        suspend fun open(address: String, pin: String, token: String, vm: String): XoConsole {
+        suspend fun open(address: String, pin: String, token: String, vm: String, via: java.net.Socket? = null): XoConsole {
             val path = "/api/consoles/" + URLEncoder.encode(vm, "UTF-8").replace("+", "%20")
-            val (ssl, rest) = XoLink.handshake(address, pin, path, "token=$token")
+            val (ssl, rest) = XoLink.handshake(address, pin, path, "token=$token", via = via)
             return XoConsole(ssl, rest)
         }
     }

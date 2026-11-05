@@ -444,8 +444,16 @@ export const XOWATCHDOG_STEPS = Object.freeze([
 // one: dropped, it would start a machine on an image the person did not
 // choose, so the coordinator refuses rather than send it, as it does for
 // `repo`. docs/runner-central.md, "Choosing the image".
+//
+// v17, 5 Nov 2026: A VM'S CONSOLE FROM AWAY. A phone that cannot reach a pool
+// opens its console through a box holding that person's token for it: `tunnel`
+// frames carry one TCP connection the box makes to the pool's address, and the
+// phone opens TLS through it, held to the pool's pin, so the box and the
+// coordinator carry ciphertext (src/fleet/coordinator/tunnels.js). Frames, not
+// a verb, so an older box would drop them and the console would hang: the
+// coordinator opens a tunnel only through a box that speaks 17.
 /** @type {number} */
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 
 /**
  * The GitHub images each runner platform may run on, newest first, and the

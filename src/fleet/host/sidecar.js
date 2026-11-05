@@ -60,6 +60,7 @@ import { newSealKey, bindingFor, claudeBindingFor, seal, open, VAULT_BOX_AAD } f
 import { signingInput, fingerprint } from '../crypto.js';
 import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
+import { ConsoleTunnels } from './console-tunnel.js';
 import { XoPools } from './xo-pools.js';
 import { PvePools } from './pve-pools.js';
 import { Pools } from './pools.js';
@@ -543,6 +544,14 @@ export class Sidecar {
       send: (frame) => this.transport.send({ v: PROTOCOL_VERSION, kind: 'relay', hostId: this.hostId, ...frame }),
       log: this.log,
     });
+    // A VM'S CONSOLE FOR A PHONE AWAY FROM THE POOL (console-tunnel.js): one
+    // plain TCP connection to a pool this box holds for that person, carrying
+    // the TLS the phone opened through it.
+    this.tunnels = new ConsoleTunnels({
+      send: (frame) => this.transport.send({ v: PROTOCOL_VERSION, kind: 'tunnel', hostId: this.hostId, ...frame }),
+      where: (owner, address) => this.pools?.consoleAddress?.(owner, address) ?? null,
+      log: this.log,
+    });
     this.vaultIntervalMs = vaultIntervalMs;
     /** @type {any} */
     this.vaultTimer = null;
@@ -800,6 +809,11 @@ export class Sidecar {
     // intents and get no reply (xo-relay.js checks each).
     if (/** @type {any} */ (msg)?.kind === 'relay') {
       this.relays.onFrame(msg);
+      return { kind: 'none' };
+    }
+    // AND A CONSOLE'S, for the same reason: in order, and no reply.
+    if (/** @type {any} */ (msg)?.kind === 'tunnel') {
+      this.tunnels.onFrame(msg);
       return { kind: 'none' };
     }
     // CONFIG BEFORE INTENT, because it is not one. A config frame carries named

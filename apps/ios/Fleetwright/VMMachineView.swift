@@ -15,8 +15,8 @@ import SwiftUI
 /// phone without the token, so it offered only Xen Orchestra's own page in
 /// Safari, and said this phone never holds the token, which on the phone
 /// that set the pool up was not so. Without the token it is still Xen
-/// Orchestra's page, where you sign in. A screen does not travel through the
-/// fleet either way: the console opens from the pool's own network.
+/// Orchestra's page, where you sign in. Away from the pool, the console comes
+/// through one of your machines (ConsoleTunnel), the TLS still this phone's.
 ///
 /// THE ACTIONS ARE THE BOX'S: it holds the token and works the machine under
 /// your name, and only a machine tagged as made for you (xo-pools.js,
@@ -195,7 +195,7 @@ struct VMMachineView: View {
             // own page otherwise, where you sign in.
             if holdsHere, m.state == "Running", let vm = m.vm {
                 NavigationLink {
-                    VMConsoleView(address: m.address, vm: vm, name: m.name)
+                    VMConsoleView(address: m.address, vm: vm, name: m.name, settings: settings)
                 } label: {
                     Label(Manage.Words.console, systemImage: "rectangle.on.rectangle")
                         .frame(minHeight: 44)
@@ -217,7 +217,7 @@ struct VMMachineView: View {
     /// words as Android (VmMachinePage).
     private var consoleFooter: String {
         holdsHere
-            ? "The console opens in the app, from the pool’s own network, with the pool’s token this phone holds; the page that draws it never sees the token."
+            ? "The console opens in the app with the pool’s token this phone holds, on the pool’s own network or through one of your machines from away; the page that draws it never sees the token."
             : "The console is Xen Orchestra’s own page, which asks you to sign in there: this phone does not hold the pool’s token."
     }
 

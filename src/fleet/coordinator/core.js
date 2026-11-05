@@ -25,6 +25,7 @@ import { actorEmail, intentSigningInput, needsSignature, MCP_UNDELEGATED_VERBS }
 import { Delegations } from './delegations.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage, PIN_SENTENCES } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
+import { Tunnels, TUNNEL_MAX_BYTES, TUNNEL_TTL_MS } from './tunnels.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
 import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl, SIGNER_STATE_RE, signerReturnUrl, handBack, normaliseOrigin } from './oauth.js';
@@ -126,6 +127,8 @@ const POOL_PAGE_PROTOCOL = 13;
 const BOX_SECRETS_PROTOCOL = 14;
 /** The protocol a box speaks to make a whole Claude sign-in for a vault (`setuptoken` with `kind: login`, v15). */
 const VAULT_SIGNIN_PROTOCOL = 15;
+/** The protocol a box speaks to carry a VM's console to a phone away from the pool (`tunnel` frames, v17). */
+const TUNNEL_PROTOCOL = 17;
 /**
  * How long a machine's ticket lives: as long as the fleet waits for a machine
  * kept ready to enrol before it takes it to have failed (vm-standby.js), and
@@ -558,6 +561,21 @@ export class CoordinatorCore {
         if (host?.connected && typeof host.send === 'function') host.send({ v: PROTOCOL_VERSION, kind: 'relay', ...frame });
       },
     });
+    /**
+     * A VM's console for a phone away from the pool (tunnels.js): the
+     * phone's socket joined to one TCP connection a box holding the pool
+     * makes to it. Memory only, as a relay is.
+     */
+    this.tunnels = new Tunnels({
+      now,
+      setTimer,
+      clearTimer,
+      log: this.log,
+      toHost: (hostId, frame) => {
+        const host = this.registry.hosts.get(hostId);
+        if (host?.connected && typeof host.send === 'function') host.send({ v: PROTOCOL_VERSION, kind: 'tunnel', ...frame });
+      },
+    });
     // EACH PERSON'S OWN RUNNER REPOSITORY, when they set one — see
     // runner-repos.js for why a member may, and what bounds it.
     this.runnerRepos = new RunnerRepos({ now });
@@ -761,6 +779,7 @@ export class CoordinatorCore {
     // A RELAY TO A MACHINE THAT HAS GONE carries nothing, and the phone is
     // told so rather than left pumping bytes at a socket nobody reads.
     this.relays.closeForHost(hostId, `${hostId} left the fleet's socket, so nothing reaches it through this phone now.`);
+    this.tunnels.closeForHost(hostId, `${hostId} left the fleet, so the console it was carrying closed. Open it again.`);
     const ephemeral = this.registry.get(hostId)?.ephemeral === true;
     this.registry.disconnect(hostId, reason);
     this.log.warn(`coordinator: ${hostId} disconnected (${reason})`);
@@ -1029,6 +1048,8 @@ export class CoordinatorCore {
     // AND THE BOX RUNNING A SETUP THROUGH SOMEBODY'S PHONE, for its bytes:
     // TLS it opened itself, which only it and Xen Orchestra can read.
     if (msg.kind === 'relay') return this.relays.fromHost(hostId, msg);
+    // AND THE BOX CARRYING A CONSOLE TO A PHONE AWAY: TLS the phone opened.
+    if (msg.kind === 'tunnel') return this.tunnels.fromHost(hostId, msg);
 
     // THE HEARTBEAT. "Are you there" wants "yes" and nothing else: no state
     // moves, no event is recorded, no log line — twenty hosts ask three times a
@@ -2077,6 +2098,83 @@ export class CoordinatorCore {
       phone.send({ op: 'ready', ...ready, maxBytes: RELAY_MAX_BYTES });
     } catch { /* the socket is going; its close ends the relay */ }
     return ready;
+  }
+
+  /**
+   * A phone away from a pool opening its VM's console through a box that
+   * holds the pool (tunnels.js). docs/manage.md, "The console".
+   *
+   * WHO MAY is the pool's owner, from a phone signed in as them: the box
+   * dials only an address it holds THIS person's token for, and is chosen
+   * from the boxes that reported holding it, as the page's are (#poolPage).
+   * The answer is sent down the socket as well as returned.
+   *
+   * @param {{ email?: string|null }|null} requester
+   * @param {string|null} device
+   * @param {{ address?: unknown }} ask
+   * @param {{ send: (msg: Record<string, unknown>) => void, close: (code: number, reason: string) => void }} phone
+   * @returns {{ ok: true, tunnel: string, hostId: string } | { ok: false, error: { code: string }, text: string }}
+   */
+  openTunnel(requester, device, ask, phone) {
+    /** @param {{ ok: false, error: { code: string }, text: string }} r */
+    const refuse = (r) => {
+      try {
+        phone.send({ op: 'closed', error: r.error, text: r.text });
+        phone.close(1008, r.error.code);
+      } catch { /* the socket is already going */ }
+      return r;
+    };
+    const owner = requester?.email ? String(requester.email).toLowerCase() : null;
+    if (!owner || !device) {
+      return refuse({ ok: false, error: { code: 'not_signed_in' }, text: 'A console from away is opened by the phone of a signed-in person. Sign in on this phone first.' });
+    }
+    const address = typeof ask?.address === 'string' ? ask.address : '';
+    if (address.length > 260 || !XO_ADDRESS_RE.test(address)) {
+      return refuse({ ok: false, error: { code: 'bad_params' }, text: 'Say which pool: the address Xen Orchestra answers on.' });
+    }
+    /** @type {Array<{ host: any, reached: boolean }>} */
+    const holders = [];
+    let older = 0;
+    for (const host of this.registry.reachable()) {
+      if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
+      const entry = xoFor(host, owner).find((/** @type {any} */ e) => String(e?.address || '') === address);
+      if (!entry) continue;
+      if (Number(host.health?.protocol) < TUNNEL_PROTOCOL) {
+        older += 1;
+        continue;
+      }
+      holders.push({ host, reached: entry.reachable === true });
+    }
+    if (!holders.length) {
+      return refuse({
+        ok: false,
+        error: { code: older ? 'host_outdated' : 'no_hosts' },
+        text: older
+          ? `The machines holding your token for ${address} are too old to carry a console from away. Update one and open it again.`
+          : `No connected machine holds your token for ${address}, so no console can be carried from away. A machine you approved in your vault for it holds one once it is connected.`,
+      });
+    }
+    // THE ONE THAT LAST REACHED THE POOL, as the page asks first.
+    holders.sort((a, b) => Number(b.reached) - Number(a.reached) || a.host.hostId.localeCompare(b.host.hostId));
+    const hostId = holders[0].host.hostId;
+    const started = this.tunnels.start({ owner, device, hostId, address, toPhone: phone.send, closePhone: phone.close });
+    if (!started.ok) return refuse(started);
+    this.record({ event: 'console.away', actor: owner, hostId, text: `${owner} opened a console from away through ${hostId}` });
+    try {
+      phone.send({ op: 'ready', tunnel: started.tunnel.id, hostId, maxBytes: TUNNEL_MAX_BYTES, ttlMs: TUNNEL_TTL_MS });
+    } catch { /* the socket is going; its close ends the tunnel */ }
+    this.tunnels.dial(started.tunnel.id);
+    return { ok: true, tunnel: started.tunnel.id, hostId };
+  }
+
+  /** A message on a phone's console socket. @param {string} tunnel @param {unknown} raw */
+  tunnelFromPhone(tunnel, raw) {
+    this.tunnels.fromPhone(tunnel, raw);
+  }
+
+  /** A phone's console socket closed. @param {string} tunnel */
+  tunnelPhoneGone(tunnel) {
+    this.tunnels.phoneGone(tunnel);
   }
 
   /** A message on a phone's relay socket. @param {string} relay @param {unknown} raw */

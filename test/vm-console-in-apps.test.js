@@ -28,7 +28,7 @@ test('both apps send the token only as the console cookie, behind the pin', () =
   assert.match(swift, /request\.setValue\("token=\\\(token\)", forHTTPHeaderField: "Cookie"\)/);
   assert.match(swift, /if XOLink\.fingerprint\(of: trust\) == pin \{\s*completionHandler\(\.useCredential[\s\S]{0,200}?completionHandler\(\.cancelAuthenticationChallenge, nil\)/);
   const kt = read(`${KT}XoConsole.kt`);
-  assert.match(kt, /XoLink\.handshake\(address, pin, path, "token=\$token"\)/);
+  assert.match(kt, /XoLink\.handshake\(address, pin, path, "token=\$token", via = via\)/);
   // The handshake checks the pin before the upgrade, with its cookie, is written.
   const link = read(`${KT}XoLink.kt`);
   const shake = link.slice(link.indexOf('suspend fun handshake('), link.indexOf('private fun upgrade('));
@@ -39,9 +39,32 @@ test('both apps send the token only as the console cookie, behind the pin', () =
   }
 });
 
-test('both apps offer the console for a running VM only while watching the pool directly', () => {
-  assert.match(read(`${IOS}ManageView.swift`), /if c\.kind == \.vm, c\.state == \.running, !c\.holder, watch\.phase == \.live \{\s*Section \{\s*if watch\.via == nil \{\s*NavigationLink\(Manage\.Words\.console\)[\s\S]{0,200}?\} else \{\s*note\(Manage\.Words\.consoleAway\)/);
-  assert.match(read(`${KT}PoolPage.kt`), /if \(c\.kind == Manage\.Kind\.VM && c\.state == Manage\.State\.RUNNING && !c\.holder && watch\.phase == PoolWatch\.Phase\.Live\) \{[\s\S]{0,200}?if \(watch\.via == null\) OpenRow\(Manage\.Words\.console\) \{ console = true \}\s*else Hint\(Manage\.Words\.consoleAway\)/);
+test('both apps offer the console for a running VM, and a page read away opens it through a machine', () => {
+  assert.match(read(`${IOS}ManageView.swift`), /if c\.kind == \.vm, c\.state == \.running, !c\.holder, watch\.phase == \.live \{\s*Section \{\s*NavigationLink\(Manage\.Words\.console\) \{\s*VMConsoleView\(address: watch\.address, vm: c\.id, name: c\.name, settings: settings, away: watch\.via != nil\)/);
+  assert.match(read(`${KT}PoolPage.kt`), /if \(c\.kind == Manage\.Kind\.VM && c\.state == Manage\.State\.RUNNING && !c\.holder && watch\.phase == PoolWatch\.Phase\.Live\) \{[\s\S]{0,200}?OpenRow\(Manage\.Words\.console\) \{ console = true \}/);
+  assert.match(read(`${KT}PoolPage.kt`), /ConsolePage\(watch\.settings, watch\.address, c\.id, c\.name, away = watch\.via != null\)/);
+});
+
+// FROM AWAY THE PHONE STILL HOLDS THE TLS (src/fleet/coordinator/tunnels.js):
+// iOS points the console's own session at a loopback CONNECT proxy, so the
+// URL, the server name and the pin check are unchanged; Android layers the
+// same pinned TLS on a loopback socket with the pool's own host name. Both
+// open the fleet's socket with this device's credential, never in the clear.
+test('both apps carry the console from away inside their own pinned TLS', () => {
+  const ios = read(`${IOS}ConsoleTunnel.swift`);
+  const kt = read(`${KT}ConsoleTunnel.kt`);
+  for (const src of [ios, kt]) {
+    assert.ok(src.includes('/api/xoconsole/tunnel'), 'not the tunnel route');
+    assert.match(src, /Bearer \$?\\?\(?\{?settings\.credential/);
+    assert.match(src, /Refusing to send your credential over plain http/);
+  }
+  assert.match(read(`${IOS}XOConsole.swift`), /if let proxy \{ config\.proxyConfigurations = \[ProxyConfiguration\(httpCONNECTProxy: proxy\)\] \}/);
+  assert.match(ios, /requiredLocalEndpoint = \.hostPort\(host: "127\.0\.0\.1", port: \.any\)/);
+  assert.match(kt, /ServerSocket\(0, 1, InetAddress\.getLoopbackAddress\(\)\)/);
+  // The pin is checked over the tunnel exactly as on the pool's network.
+  const link = read(`${KT}XoLink.kt`);
+  assert.match(link, /val raw = via \?: Socket\(\)/);
+  assert.match(link, /context\.socketFactory\.createSocket\(raw, host, port, true\)/);
 });
 
 test('both apps hand the screen to the page in the order it arrived', () => {

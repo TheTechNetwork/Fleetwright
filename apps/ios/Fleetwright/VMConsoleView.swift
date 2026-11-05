@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import WebKit
+import Network
 
 /// A running VM's screen, in the app. docs/manage.md, "The console". Asked
 /// for: "we should be able to connect to vm console".
@@ -11,17 +12,19 @@ import WebKit
 /// runs noVNC on the bytes it is handed. The token never enters the web view,
 /// and the page may fetch nothing (its content security policy).
 ///
-/// OFFERED ONLY WHILE THIS PHONE WATCHES THE POOL ITSELF (ComponentView): a
-/// page read through one of your machines has no socket to the pool here.
+/// FROM AWAY, THROUGH ONE OF YOUR MACHINES (ConsoleTunnel): a page read
+/// through a machine opens it that way at once, and a console that cannot
+/// reach the pool from here tries that way once before saying so. The phone
+/// still holds the TLS and the pin; the machine carries ciphertext.
 struct VMConsoleView: View {
     let name: String
     @State private var model: ConsoleModel
     @State private var typing = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(address: String, vm: String, name: String) {
+    init(address: String, vm: String, name: String, settings: Settings, away: Bool = false) {
         self.name = name
-        _model = State(initialValue: ConsoleModel(address: address, vm: vm, name: name))
+        _model = State(initialValue: ConsoleModel(address: address, vm: vm, name: name, settings: settings, away: away))
     }
 
     var body: some View {
@@ -41,6 +44,15 @@ struct VMConsoleView: View {
                 .padding(Design.Space.inside)
                 .background(Design.Palette.card)
                 .transition(.opacity)
+            } else if let via = model.via {
+                // FROM AWAY, said once and quietly: how the screen got here.
+                Text(Manage.Words.consoleAwayVia(via))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Design.Space.inside)
+                    .background(Design.Palette.card)
+                    .transition(.opacity)
             }
             ZStack {
                 ConsoleWeb(model: model)
@@ -92,12 +104,24 @@ final class ConsoleModel {
     @ObservationIgnored weak var web: WKWebView?
     @ObservationIgnored private var socket: XOConsole?
     @ObservationIgnored private var pageReady = false
+    @ObservationIgnored private let settings: Settings
+    /// Through one of your machines, from the first try (a page read away)
+    /// or after this phone could not reach the pool itself.
+    @ObservationIgnored private var away: Bool
+    @ObservationIgnored private var tunnel: ConsoleTunnel?
+    /// The socket reached Xen Orchestra: a close after this is Xen
+    /// Orchestra's answer, not the network's.
+    @ObservationIgnored private var reached = false
+    /// The machine carrying it from away, said above the screen.
+    private(set) var via: String? = nil
 
-    init(address: String, vm: String, name: String) {
+    init(address: String, vm: String, name: String, settings: Settings, away: Bool = false) {
         self.address = address
         self.vm = vm
         self.name = name
-        line = Manage.Words.consoleOpening(name)
+        self.settings = settings
+        self.away = away
+        line = away ? Manage.Words.consoleAwayOpening : Manage.Words.consoleOpening(name)
     }
 
     /// The page said what it is doing.
@@ -129,6 +153,8 @@ final class ConsoleModel {
     func restart() {
         socket?.close()
         socket = nil
+        tunnel?.close()
+        tunnel = nil
         connected = false
         pageReady = false
         show(Manage.Words.consoleOpening(name))
@@ -138,6 +164,8 @@ final class ConsoleModel {
     func stop() {
         socket?.close()
         socket = nil
+        tunnel?.close()
+        tunnel = nil
     }
 
     func type(_ text: String) { call("fwConsole.type(\(Self.quoted(text)))") }
@@ -156,17 +184,60 @@ final class ConsoleModel {
         // The record the pool page connects with: the token, and the pin it
         // is only ever sent behind.
         guard let raw = Keychain.get(XOSetupHandoff.tokenAccount(address)),
-              let record = Manage.record(raw, address: address), !record.plain, let pin = record.pin,
-              let socket = XOConsole(address: address, vm: vm, token: record.token, pin: pin)
+              let record = Manage.record(raw, address: address), !record.plain, let pin = record.pin
         else {
             ended(Manage.Words.consoleShut)
             return
         }
+        guard away else {
+            connect(token: record.token, pin: pin, proxy: nil)
+            return
+        }
+        // FROM AWAY: the tunnel first, then the same socket through it.
+        let tunnel = ConsoleTunnel(address: address)
+        self.tunnel = tunnel
+        tunnel.onEnd = { [weak self] why in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.tunnelEnded(why) } }
+        }
+        show(Manage.Words.consoleAwayOpening)
+        Task { @MainActor in
+            do {
+                let (proxy, host) = try await tunnel.open(settings: settings)
+                guard self.tunnel === tunnel else { return }
+                via = host
+                connect(token: record.token, pin: pin, proxy: proxy)
+            } catch {
+                guard self.tunnel === tunnel else { return }
+                self.tunnel = nil
+                ended(error.localizedDescription)
+            }
+        }
+    }
+
+    private func tunnelEnded(_ why: String) {
+        tunnel = nil
+        socket?.close()
+        socket = nil
+        call("fwConsole.closed(\(Self.quoted(why)))")
+        ended(why)
+    }
+
+    private func connect(token: String, pin: String, proxy: NWEndpoint?) {
+        guard let socket = XOConsole(address: address, vm: vm, token: token, pin: pin, proxy: proxy) else {
+            ended(Manage.Words.consoleShut)
+            return
+        }
+        reached = false
         // IN ORDER, on the main queue: VNC is a stream, and a frame handed
         // over out of turn corrupts every one after it. A Task each would not
         // promise the order; the main queue does.
         socket.onOpen = { [weak self] in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.call("fwConsole.opened()") } }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.reached = true
+                    self?.call("fwConsole.opened()")
+                }
+            }
         }
         socket.onData = { [weak self] data in
             let b64 = data.base64EncodedString()
@@ -181,6 +252,13 @@ final class ConsoleModel {
 
     private func socketEnded(_ why: String, wrongCertificate: Bool) {
         socket = nil
+        // THIS PHONE COULD NOT REACH THE POOL: once, the same console through
+        // one of your machines, before anything is said.
+        if !reached, !wrongCertificate, !away {
+            away = true
+            open()
+            return
+        }
         call("fwConsole.closed(\(Self.quoted(why)))")
         if wrongCertificate {
             show(Manage.Words.wrongCertificate(address), troubled: true, retry: false)
