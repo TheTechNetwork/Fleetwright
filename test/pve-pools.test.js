@@ -23,6 +23,7 @@ import { poolRecord } from '../src/fleet/host/xo-pools.js';
 import { Pools } from '../src/fleet/host/pools.js';
 import { DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
+import * as pveSetup from '../src/fleet/host/pve-setup.js';
 
 const openssl = spawnSync('openssl', ['version']).status === 0;
 const skip = !openssl && 'needs openssl to make certificates for the stand-in';
@@ -498,6 +499,7 @@ test('both phones read the line the boxes read, and show the same command for th
   const iosRan = ran(ios, /static func setupCommand\(coordinator: String\) -> String \{\s*"([^"]+)"/);
   assert.equal(iosRan, ran(android, /fun setupCommand\(coordinator: String\): String = "([^"]+)"/));
   assert.ok(iosRan.endsWith('--coordinator https://fleet.example'), iosRan);
+  assert.equal(iosRan, pveSetup.setupCommand('https://fleet.example'));
 });
 
 // SETUP FROM THE PHONE runs the same commands on the node from either app,
@@ -527,6 +529,16 @@ test('both phones start, follow and take the setup on the node with the same com
     grab(android, /fun pollCommand\(since: Long\): String =\s*("[\s\S]*?")\n\n/),
   );
   assert.equal(norm(constant(ios, 'takeLine') ?? ''), norm(constant(android, 'TAKE_LINE') ?? ''));
+  // AND A MACHINE OF THE FLEET runs the same ones, for a phone that cannot
+  // reach the node (pve-setup.js): the phones' text, filled in, is what it sends.
+  const fill = (/** @type {string} */ t) => t.replace(/^"|"$/g, '')
+    .replaceAll('{unit}', pveSetup.UNIT).replaceAll('{lineFile}', pveSetup.LINE_FILE).replaceAll('{since}', '1700000000')
+    .replaceAll('{run}', `${pveSetup.setupCommand('https://fleet.example')} --line-file ${pveSetup.LINE_FILE}`);
+  assert.equal(constant(ios, 'unit'), pveSetup.UNIT);
+  assert.equal(constant(ios, 'lineFile'), pveSetup.LINE_FILE);
+  assert.equal(fill(grab(ios, /static func startCommand[\s\S]*?return ("[\s\S]*?")\n\s*\}/)).replace(/^let run = .*?\n/, ''), pveSetup.startCommand('https://fleet.example'));
+  assert.equal(fill(grab(ios, /static func pollCommand[\s\S]*?\{\s*("[\s\S]*?")\n\s*\}/)), pveSetup.pollCommand(1700000000));
+  assert.equal(fill(norm(constant(ios, 'takeLine') ?? '')), pveSetup.TAKE_LINE);
   // What they pass the script is what it takes, and the lines it prints are
   // the ones they read.
   assert.match(script, /--line-file\) LINE_FILE=/);
