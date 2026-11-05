@@ -45,7 +45,10 @@ struct FleetwrightApp: App {
                 // was away has its line kept now, not at the next launch.
                 .onChange(of: scenePhase) { _, phase in
                     guard phase == .active, settings.configured else { return }
-                    Task { await ProxmoxThroughHandoff.collectPending(fleet: Fleet(settings: settings)) }
+                    Task {
+            await ProxmoxThroughHandoff.collectPending(fleet: Fleet(settings: settings))
+            await ProxmoxDirectHandoff.collectPending(settings: settings)
+        }
                 }
                 // COMING BACK FROM A PROVIDER. The coordinator's OAuth callback
                 // redirects to fleetwright://connected when it has stored the
@@ -259,9 +262,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // And a token a finished setup handed back while the app was closed
         // is collected into the Keychain (XOSetupHandoff).
         Task { await XOSetupHandoff.collectPending(fleet: Fleet(settings: settings)) }
-        // And a Proxmox VE line a machine sealed back after its screen was
-        // closed is kept in the vault (ProxmoxThroughHandoff).
-        Task { await ProxmoxThroughHandoff.collectPending(fleet: Fleet(settings: settings)) }
+        // And a Proxmox VE line whose screen was closed is kept in the vault:
+        // sealed back by a machine (ProxmoxThroughHandoff), or left on the
+        // node by a run this phone started (ProxmoxDirectHandoff).
+        Task {
+            await ProxmoxThroughHandoff.collectPending(fleet: Fleet(settings: settings))
+            await ProxmoxDirectHandoff.collectPending(settings: settings)
+        }
         let granted = (try? await UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound, .badge])) ?? false
         guard granted else { return }

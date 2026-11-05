@@ -92,6 +92,11 @@ internal object ProxmoxThrough {
         else -> "Setting up Proxmox VE"
     }
 
+    /** Said when this phone tried the node and could not reach it. */
+    fun unreachable(node: String): String =
+        "This phone could not reach $node, so one of your machines that can sets it up: the same steps, run on the node over SSH. " +
+            "The root password is sealed on this phone to that machine alone."
+
     const val INTRO =
         "When this phone cannot reach the node, one of your machines that can does the setup for it: the same steps, run on the node " +
             "over SSH. The root password is sealed on this phone to that machine alone."
@@ -151,7 +156,15 @@ internal object ProxmoxThrough {
  * THE PASSWORD AND THE REPLY KEY ARE IN MEMORY ONLY, never saveable.
  */
 @Composable
-internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, kept: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun ProxmoxThroughSheet(
+    settings: Settings,
+    startNode: String,
+    password: String = "",
+    /** Opened because this phone could not reach the node: machines are asked at once, and the first that reached it is chosen. */
+    auto: Boolean = false,
+    kept: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val fleet = remember { Fleet(settings) }
 
@@ -161,7 +174,7 @@ internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, kept: (S
     var probeText by remember { mutableStateOf("") }
     var chosen by rememberSaveable { mutableStateOf<String?>(null) }
     var matched by rememberSaveable { mutableStateOf(false) }
-    var rootPassword by remember { mutableStateOf("") }
+    var rootPassword by remember { mutableStateOf(password) }
     var beginning by remember { mutableStateOf(false) }
     var refusal by remember { mutableStateOf("") }
     var unvouched by remember { mutableStateOf<Begun?>(null) }
@@ -190,12 +203,19 @@ internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, kept: (S
             val r = fleet.xoprobe(address.trim())
             if (r.ok && r.probes != null) {
                 probes = r.probes
-                r.probes.filter { XoDeploy.canInstall(it) }.singleOrNull()?.let { chosen = it.hostId }
+                // The first that reached it, when there is a choice to make for
+                // the person; any other is one tap away in the list.
+                val fit = r.probes.filter { XoDeploy.canInstall(it) }
+                (if (auto) fit.firstOrNull() else fit.singleOrNull())?.let { chosen = it.hostId }
             } else {
                 probeText = r.text.ifBlank { "The fleet did not try that address." }
             }
             probing = false
         }
+    }
+
+    LaunchedEffect(Unit) {
+        if (auto && probes == null && job == null && addressOk) probe()
     }
 
     suspend fun run(b: Begun) {
@@ -389,7 +409,7 @@ internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, kept: (S
                 }
             }
             else -> {
-                Hint(ProxmoxThrough.INTRO, color = Design.Palette.ink.now)
+                Hint(if (auto) ProxmoxThrough.unreachable(address.trim()) else ProxmoxThrough.INTRO, color = Design.Palette.ink.now)
                 SectionHead("The node")
                 OutlinedTextField(
                     value = address,

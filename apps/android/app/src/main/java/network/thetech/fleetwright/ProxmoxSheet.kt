@@ -33,11 +33,17 @@ import org.json.JSONObject
  * "From the phone" and "By hand". The same screen as iOS's AddProxmoxView,
  * in the same words.
  *
- * FROM THIS PHONE: the node's address and its root password. The phone
- * signs in over SSH (ProxmoxSsh), shows the node's key for the person to
- * check the first time, starts the setup as a unit of its own on the node,
- * follows it, and keeps the line it ends with. The password goes from this
- * phone to the node and nowhere else, and lives in this screen's memory.
+ * ONE WAY IN: the node's address and its root password, and Set it up.
+ * Asked for: "the route through a machine and main direct route can be
+ * combined". The phone tries the node itself first (ProxmoxSsh), so the
+ * password goes nowhere but the node: it shows the node's key for the person
+ * to check the first time, starts the setup as a unit of its own on the
+ * node, and follows it. When the phone cannot reach the node, one of the
+ * person's machines that can is asked instead, with the address and password
+ * already filled in ([ProxmoxThroughSheet], `auto`), and the password sealed
+ * to that machine alone. Either way the screen may close: the line is
+ * collected when the app is next open ([ProxmoxDirectHandoff],
+ * [ProxmoxThroughHandoff]).
  *
  * BY HAND: the same command in the node's own Shell, and the line it prints
  * pasted here. Either way the line is kept in the vault as
@@ -68,6 +74,8 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
     var progress by remember { mutableStateOf<ProxmoxSsh.Progress?>(null) }
     var sshText by remember { mutableStateOf("") }
     var sshBusy by remember { mutableStateOf(false) }
+    /** The phone could not reach the node: a machine that can does it. */
+    var through by rememberSaveable { mutableStateOf(false) }
     val coordinatorOk = Regex("^https://[A-Za-z0-9.:/_-]+$").matches(settings.coordinatorUrl)
 
     /** Keep a line, from either path, and say what happens next. */
@@ -91,58 +99,123 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
         busy = false
     }
 
-    // FOLLOWING THE JOB while the screen is open, every three seconds. A poll
-    // that fails (the phone slept, the network blinked) is said and retried;
-    // the job on the node does not depend on this phone being there.
-    LaunchedEffect(since, trusted) {
-        val start = since ?: return@LaunchedEffect
-        val key = trusted ?: return@LaunchedEffect
+    /** A line a run set up and this phone kept in the vault, said as a line kept by hand is. */
+    fun keptThrough(address: String) {
+        kept = true
+        failed = false
+        line = ""
+        result = "Kept in your vault. Your machines pick it up within ten minutes and check it against the cluster; " +
+            "it then shows under New session › Where, as Proxmox at $address."
+    }
+
+    // A RUN THIS PHONE STARTED and has not collected, followed again when
+    // the screen is opened.
+    LaunchedEffect(Unit) {
+        val run = ProxmoxDirectHandoff.pending(settings).firstOrNull()
+        if (node.isBlank() && since == null && run != null) {
+            node = run.address
+            trusted = run.fingerprint
+            since = run.since
+        }
+    }
+
+    // FOLLOWING THE RUN through the same look a launch takes
+    // (ProxmoxDirectHandoff), every three seconds, so the two never both
+    // take its line. A look that fails is said and tried again; the run on
+    // the node does not depend on this phone.
+    LaunchedEffect(since) {
+        if (since == null) return@LaunchedEffect
+        val at = node.trim()
         while (since != null && !kept) {
-            ProxmoxSsh.run(node, key, password, ProxmoxSsh.pollCommand(start)).fold(
-                onSuccess = { (_, out) ->
-                    val p = ProxmoxSsh.progressOf(out)
-                    progress = p
-                    sshText = ""
-                    if (p.lineReady) {
-                        ProxmoxSsh.run(node, key, password, ProxmoxSsh.TAKE_LINE).fold(
-                            onSuccess = { (_, got) ->
-                                val record = ProxmoxLine.parse(got)
-                                if (record == null) {
-                                    sshText = "The setup finished, and what it left for this phone is not a line it can keep."
-                                } else {
-                                    keep(record)
-                                }
-                            },
-                            onFailure = { sshText = "The setup finished, and the line could not be read: ${it.message}" },
-                        )
-                        since = null
-                    } else if (!p.running) {
-                        sshText = p.error ?: "The setup stopped without saying why. On the node: journalctl -u ${ProxmoxSsh.UNIT}"
-                        since = null
-                    }
-                },
-                onFailure = { sshText = "Lost the node for a moment (${it.message}); asking again." },
-            )
+            val looked = ProxmoxDirectHandoff.look(settings, at)
+            if (looked == null) {
+                if (!ProxmoxDirectHandoff.isPending(settings, at)) {
+                    since = null
+                    sshText = "This phone follows no setup on $at now. If it finished, its line is in your vault."
+                    break
+                }
+            } else {
+                looked.fold(
+                    onSuccess = { (p, outcome) ->
+                        if (p != null) progress = p
+                        sshText = ""
+                        when (outcome) {
+                            is ProxmoxDirectHandoff.Outcome.Kept -> { keptThrough(outcome.address); since = null }
+                            is ProxmoxDirectHandoff.Outcome.Failed -> { sshText = outcome.text; since = null }
+                            null -> {}
+                        }
+                    },
+                    onFailure = { sshText = "Lost the node for a moment (${it.message}); asking again." },
+                )
+            }
             if (since != null) delay(3_000)
         }
     }
 
-    // THROUGH ONE OF YOUR MACHINES, for a node this phone cannot reach: the
-    // same setup, run there by a machine that can (ProxmoxThrough). Drawn in
-    // this screen's place, and back to it when closed.
-    var through by rememberSaveable { mutableStateOf(false) }
+    /**
+     * PHONE FIRST: the node's key asked for, which is also whether this phone
+     * reaches it at all. A node it cannot reach goes to a machine that can. A
+     * key checked before goes straight on; any other key is shown to be
+     * checked, and nothing is sent until it is.
+     */
+    suspend fun start() {
+        sshBusy = true
+        sshText = ""
+        val at = node.trim()
+        if (trusted == null) {
+            val answered = ProxmoxSsh.hostKey(at).getOrElse { e ->
+                if (coordinatorOk) {
+                    through = true
+                } else {
+                    sshText = "This phone could not reach $at (${e.message}), and its fleet address is not one a machine can be told. Set it up by hand below."
+                }
+                sshBusy = false
+                return
+            }
+            val remembered = known.getString(at, null)
+            if (remembered == answered) {
+                trusted = answered
+            } else {
+                if (remembered != null) sshText = "The node answered with another key than the one checked before. Check it again before going on."
+                offered = answered
+                sshBusy = false
+                return
+            }
+        }
+        val key = trusted ?: run { sshBusy = false; return }
+        ProxmoxSsh.run(at, key, password, ProxmoxSsh.NOW).mapCatching { (_, out) -> out.trim().toLong() }.fold(
+            onSuccess = { now ->
+                ProxmoxSsh.run(at, key, password, ProxmoxSsh.startCommand(settings.coordinatorUrl)).fold(
+                    onSuccess = { (status, out) ->
+                        if (status == 0) {
+                            ProxmoxDirectHandoff.started(settings, at, key, now, password)
+                            since = now
+                        } else {
+                            sshText = "The node would not start the setup: ${out.trim().take(300)}"
+                        }
+                    },
+                    onFailure = { sshText = it.message ?: "The setup could not be started." },
+                )
+            },
+            onFailure = { sshText = signInWords(it) },
+        )
+        sshBusy = false
+    }
+
+    // WHEN THIS PHONE CANNOT REACH THE NODE, one of the person's machines
+    // that can does it (ProxmoxThrough), with what was typed here already
+    // filled in. Drawn in this screen's place, and back to it when closed.
     if (through) {
         ProxmoxThroughSheet(
             settings,
             node,
+            password = password,
+            auto = true,
             // KEPT BY THE MACHINE'S HAND-OFF (ProxmoxThroughHandoff), said
             // here as a line kept by hand is.
             kept = { address ->
-                kept = true
-                failed = false
-                line = ""
-                result = "Kept in your vault. Your machines pick it up within ten minutes and check it against the cluster; " +
-                    "it then shows under New session › Where, as Proxmox at $address."
+                keptThrough(address)
+                through = false
             },
             onDismiss = { through = false },
         )
@@ -150,7 +223,7 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
     }
 
     FullScreen(title = "Add Proxmox VE", onDismiss = { password = ""; onDismiss() }) {
-        SectionHead("From this phone")
+        SectionHead("Set it up")
         OutlinedTextField(
             value = node,
             onValueChange = { node = it; offered = null; trusted = null },
@@ -182,35 +255,14 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
                     known.edit().putString(node.trim(), waiting).apply()
                     trusted = waiting
                     offered = null
+                    scope.launch { start() }
                 }) { Text("It matches") }
             }
             since == null && !kept && node.isNotBlank() && password.isNotEmpty() -> OutlinedButton(
                 enabled = !sshBusy,
                 modifier = Modifier.heightIn(min = 48.dp),
-                onClick = {
-                    scope.launch {
-                        sshBusy = true
-                        sshText = ""
-                        val remembered = known.getString(node.trim(), null)
-                        val key = trusted ?: remembered
-                        if (key == null) {
-                            ProxmoxSsh.hostKey(node).fold(onSuccess = { offered = it }, onFailure = { sshText = it.message ?: "The node did not answer." })
-                        } else {
-                            trusted = key
-                            ProxmoxSsh.run(node, key, password, ProxmoxSsh.NOW).mapCatching { (_, out) -> out.trim().toLong() }.fold(
-                                onSuccess = { now ->
-                                    ProxmoxSsh.run(node, key, password, ProxmoxSsh.startCommand(settings.coordinatorUrl)).fold(
-                                        onSuccess = { (status, out) -> if (status == 0) since = now else sshText = "The node would not start the setup: ${out.trim().take(300)}" },
-                                        onFailure = { sshText = it.message ?: "The setup could not be started." },
-                                    )
-                                },
-                                onFailure = { sshText = signInWords(it) },
-                            )
-                        }
-                        sshBusy = false
-                    }
-                },
-            ) { Text(if (sshBusy) "Connecting…" else if (trusted != null || known.contains(node.trim())) "Set it up" else "Connect") }
+                onClick = { scope.launch { start() } },
+            ) { Text(if (sshBusy) "Reaching the node…" else "Set it up") }
         }
         progress?.let { p ->
             p.steps.forEach { Hint(ProxmoxSsh.stepWords(it), color = Design.Palette.ink.now) }
@@ -229,14 +281,14 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
                 }
                 Hint(part.text)
             }
-            if (since != null) Hint("Running on the node. It carries on if this phone locks; open this screen again to see it end.")
+            if (since != null) Hint("Running on the node, and you need not watch: it carries on if this screen closes, and this phone keeps its line in your vault when Fleetwright is next open.")
         }
         if (sshText.isNotBlank()) Hint(sshText, color = if (since != null) Design.Palette.inkDim.now else Design.Palette.bad.now)
-        Hint("Proxmox VE 9 or newer. The password goes from this phone to the node and nowhere else, and is forgotten when this screen closes.")
-        if (coordinatorOk && since == null && !kept) {
-            OpenRow("Through one of your machines") { password = ""; through = true }
-            Hint("When this phone cannot reach the node: a machine of your fleet that can runs the same setup there, with the root password sealed to it alone.")
-        }
+        Hint(
+            "Proxmox VE 9 or newer. This phone tries the node itself first, and the password goes to the node and nowhere else; " +
+                "it is kept on this phone only while the setup runs. When this phone cannot reach the node, one of your machines " +
+                "that can sets it up, with the password sealed to it alone.",
+        )
 
         SectionHead("Or by hand, on the node")
         // SELECTABLE, so a long press copies it whole.

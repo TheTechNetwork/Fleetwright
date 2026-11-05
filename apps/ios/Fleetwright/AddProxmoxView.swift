@@ -5,11 +5,17 @@ import UIKit
 /// "From the phone" and "By hand". The same screen as Android's
 /// ProxmoxSheet, in the same words.
 ///
-/// FROM THIS PHONE: the node's address and its root password. The phone
-/// signs in over SSH (ProxmoxSSH), shows the node's key for the person to
-/// check the first time, starts the setup as a unit of its own on the node,
-/// follows it, and keeps the line it ends with. The password goes from this
-/// phone to the node and nowhere else, and lives in this screen's memory.
+/// ONE WAY IN: the node's address and its root password, and Set it up.
+/// Asked for: "the route through a machine and main direct route can be
+/// combined". The phone tries the node itself first (ProxmoxSSH), so the
+/// password goes nowhere but the node: it shows the node's key for the
+/// person to check the first time, starts the setup as a unit of its own on
+/// the node, and follows it. When the phone cannot reach the node, one of
+/// the person's machines that can is asked instead, with the address and
+/// password already filled in (ProxmoxThroughMachineView, `auto`), and the
+/// password sealed to that machine alone. Either way the screen may close:
+/// the line is collected when the app is next open (ProxmoxDirectHandoff,
+/// ProxmoxThroughHandoff).
 ///
 /// BY HAND: the same command in the node's own Shell, and the line it prints
 /// pasted here. Either way the line is kept in the vault as
@@ -17,9 +23,6 @@ import UIKit
 /// this person approved pick it up within ten minutes
 /// (src/fleet/host/pve-pools.js).
 ///
-/// THROUGH ONE OF YOUR MACHINES, for a node this phone cannot reach: the
-/// same setup run there by a machine that can (ProxmoxThroughMachineView),
-/// with the root password sealed to that machine alone.
 struct AddProxmoxView: View {
     let settings: Settings
     @Environment(\.dismiss) private var dismiss
@@ -42,6 +45,8 @@ struct AddProxmoxView: View {
     @State private var progress: ProxmoxSSH.Progress?
     @State private var sshText = ""
     @State private var sshBusy = false
+    /// The phone could not reach the node: a machine that can does it.
+    @State private var through = false
     @AppStorage("proxmox-host-keys") private var knownKeys = "{}"
 
     /// What the pasted line carries, or nil while it is not one.
@@ -81,10 +86,11 @@ struct AddProxmoxView: View {
                         if let data = try? JSONEncoder().encode(k), let text = String(data: data, encoding: .utf8) { knownKeys = text }
                         trusted = waiting
                         offered = nil
+                        Task { await connectOrStart() }
                     }
                     .frame(minHeight: 44)
                 } else if since == nil && !kept && !nodeKey.isEmpty && !password.isEmpty {
-                    Button(sshBusy ? "Connecting…" : (trusted != nil || known[nodeKey] != nil ? "Set it up" : "Connect")) {
+                    Button(sshBusy ? "Reaching the node…" : "Set it up") {
                         Task { await connectOrStart() }
                     }
                     .disabled(sshBusy)
@@ -109,7 +115,7 @@ struct AddProxmoxView: View {
                             .contentTransition(.opacity)
                     }
                     if since != nil {
-                        Text("Running on the node. It carries on if this phone locks; open this screen again to see it end.")
+                        Text("Running on the node, and you need not watch: it carries on if this screen closes, and this phone keeps its line in your vault when Fleetwright is next open.")
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.inkDim)
                     }
@@ -120,27 +126,9 @@ struct AddProxmoxView: View {
                         .foregroundStyle(since != nil ? Design.Palette.inkDim : Design.Palette.bad)
                 }
             } header: {
-                sectionHead("From this phone")
+                sectionHead("Set it up")
             } footer: {
-                Text("Proxmox VE 9 or newer. The password goes from this phone to the node and nowhere else, and is forgotten when this screen closes.")
-            }
-
-            // WHEN THIS PHONE CANNOT REACH THE NODE, one of the person's
-            // machines that can does it, the way every other server this
-            // phone cannot reach is set up (ProxmoxThroughMachineView).
-            if coordinatorOk && since == nil && !kept {
-                Section {
-                    NavigationLink {
-                        ProxmoxThroughMachineView(settings: settings, node: nodeKey) { at in keptThrough(at) }
-                    } label: {
-                        Text("Through one of your machines")
-                            .fleetType(.bodyStrong)
-                            .foregroundStyle(Design.Palette.ink)
-                    }
-                    .frame(minHeight: 44)
-                } footer: {
-                    Text("When this phone cannot reach the node: a machine of your fleet that can runs the same setup there, with the root password sealed to it alone.")
-                }
+                Text("Proxmox VE 9 or newer. This phone tries the node itself first, and the password goes to the node and nowhere else; it is kept on this phone only while the setup runs. When this phone cannot reach the node, one of your machines that can sets it up, with the password sealed to it alone.")
             }
 
             Section {
@@ -201,19 +189,57 @@ struct AddProxmoxView: View {
         // poll that fails (the phone slept, the network blinked) is said and
         // retried; the job on the node does not depend on this phone.
         .task(id: since) { await follow() }
+        // A RUN THIS PHONE STARTED and has not collected, followed again
+        // when the screen is opened.
+        .task {
+            guard nodeKey.isEmpty, since == nil, let run = ProxmoxDirectHandoff.pending().first else { return }
+            node = run.address
+            trusted = run.fingerprint
+            since = run.since
+        }
+        // WHEN THIS PHONE CANNOT REACH THE NODE, one of the person's machines
+        // that can does it, with what was typed here already filled in.
+        .sheet(isPresented: $through) {
+            NavigationStack {
+                ProxmoxThroughMachineView(settings: settings, node: nodeKey, password: password, auto: true) { at in
+                    keptThrough(at)
+                    through = false
+                }
+            }
+        }
         .onDisappear { password = "" }
     }
 
+    /// PHONE FIRST: the node's key asked for, which is also whether this
+    /// phone reaches it at all. A node it cannot reach goes to a machine that
+    /// can. A key checked before goes straight on; any other key is shown to
+    /// be checked, and nothing is sent until it is.
     @MainActor
     private func connectOrStart() async {
         sshBusy = true
         defer { sshBusy = false }
         sshText = ""
-        guard let key = trusted ?? known[nodeKey] else {
-            do { offered = try await ProxmoxSSH.hostKey(nodeKey) } catch { sshText = error.localizedDescription }
-            return
+        if trusted == nil {
+            let answered: String
+            do {
+                answered = try await ProxmoxSSH.hostKey(nodeKey)
+            } catch {
+                guard coordinatorOk else {
+                    sshText = "This phone could not reach \(nodeKey) (\(error.localizedDescription)), and its fleet address is not one a machine can be told. Set it up by hand below."
+                    return
+                }
+                through = true
+                return
+            }
+            if known[nodeKey] == answered {
+                trusted = answered
+            } else {
+                if known[nodeKey] != nil { sshText = "The node answered with another key than the one checked before. Check it again before going on." }
+                offered = answered
+                return
+            }
         }
-        trusted = key
+        guard let key = trusted else { return }
         do {
             let (_, clock) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.now)
             guard let now = Int(clock.trimmingCharacters(in: .whitespacesAndNewlines)) else {
@@ -221,35 +247,48 @@ struct AddProxmoxView: View {
                 return
             }
             let (status, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.startCommand(coordinator: settings.coordinatorURL))
-            if status == 0 { since = now } else { sshText = "The node would not start the setup: \(String(out.prefix(300)))" }
+            if status == 0 {
+                ProxmoxDirectHandoff.started(address: nodeKey, fingerprint: key, since: now, password: password)
+                since = now
+            } else {
+                sshText = "The node would not start the setup: \(String(out.prefix(300)))"
+            }
         } catch {
             sshText = error.localizedDescription
         }
     }
 
+    /// FOLLOWING THE RUN through the same look a launch takes
+    /// (ProxmoxDirectHandoff), so the two never both take its line.
     @MainActor
     private func follow() async {
-        guard let start = since, let key = trusted else { return }
+        guard since != nil else { return }
         while since != nil && !kept && !Task.isCancelled {
             do {
-                let (_, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.pollCommand(since: start))
-                let p = ProxmoxSSH.progress(of: out)
-                progress = p
-                sshText = ""
-                if p.lineReady {
-                    let (_, got) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.takeLine)
-                    if let record = ProxmoxLine.parse(got) {
-                        await keep(record)
-                    } else {
-                        sshText = "The setup finished, and what it left for this phone is not a line it can keep."
+                guard let looked = try await ProxmoxDirectHandoff.look(nodeKey, settings: settings) else {
+                    // Collected from the front of the app, or no longer followed.
+                    if !ProxmoxDirectHandoff.isPending(nodeKey) {
+                        since = nil
+                        sshText = "This phone follows no setup on \(nodeKey) now. If it finished, its line is in your vault."
+                        return
                     }
-                    since = nil
-                    return
+                    try? await Task.sleep(for: .seconds(3))
+                    continue
                 }
-                if !p.running {
-                    sshText = p.error ?? "The setup stopped without saying why. On the node: journalctl -u \(ProxmoxSSH.unit)"
+                let (p, outcome) = looked
+                if let p { progress = p }
+                sshText = ""
+                switch outcome {
+                case let .kept(at)?:
+                    keptThrough(at)
                     since = nil
                     return
+                case let .failed(text)?:
+                    sshText = text
+                    since = nil
+                    return
+                case nil:
+                    break
                 }
             } catch {
                 sshText = "Lost the node for a moment (\(error.localizedDescription)); asking again."
@@ -276,8 +315,9 @@ struct AddProxmoxView: View {
         }
     }
 
-    /// A line a machine set up and this phone kept in the vault
-    /// (ProxmoxThroughHandoff), said here as a line kept by hand is.
+    /// A line a run set up and this phone kept in the vault
+    /// (ProxmoxDirectHandoff, ProxmoxThroughHandoff), said here as a line
+    /// kept by hand is.
     private func keptThrough(_ address: String) {
         kept = true
         failed = false
