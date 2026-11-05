@@ -356,14 +356,41 @@ Its content security policy lets it fetch nothing. Both apps load it under
 `https://console.fleetwright.invalid/`, an address that resolves nowhere,
 because noVNC expects a secure context.
 
-**Only on the pool's own network.** The row appears while this phone watches
-the pool itself. When the page is read through one of your machines, the row
-says the console opens only from the pool's own network. A screen does not
-travel through the fleet. A machine made for a session (Machines → On your
-hypervisor) has the same row on its page where this phone holds the pool's
-token (`hypervisors.md`, "Working a machine"); that page has no watch to
-know which network the phone is on, so the console says when it cannot
-reach the pool.
+**From away, through one of your machines.** Asked for: "Yes relayed as
+well", once the page and its actions went through a box and the console was
+the one thing left that worked only on the pool's own network. When the page
+is read through one of your machines, the Console row opens the console
+through one too; a machine made for a session (Machines → On your
+hypervisor), whose page has no watch to know which network the phone is on,
+tries the pool first and, when this phone cannot reach it, the same way once
+before saying so.
+
+```
+phone ──WebSocket──▶ coordinator ──frames──▶ box ──TCP──▶ Xen Orchestra
+```
+
+**The phone still opens the TLS**, held to the pool's pinned certificate, and
+sends the token inside it exactly as on the pool's own network. The box makes
+one plain TCP connection to the pool's address and pumps bytes; the
+coordinator joins its frames to the phone's socket
+(`GET /api/xoconsole/tunnel`, `src/fleet/coordinator/tunnels.js`). So what
+the box and the coordinator carry is TLS records: the token, the screen and
+every key typed are readable by the phone and Xen Orchestra alone. iOS points
+the console's own URLSession at a CONNECT proxy on the phone's loopback
+(`ConsoleTunnel.swift`), so the URL, the server name and the pin check do not
+change; Android layers the same pinned TLS on a loopback socket with the
+pool's own host name (`ConsoleTunnel.kt`).
+
+**What bounds it.** The pool's owner, from their own signed-in phone. A box
+that reported holding *that person's* token for *that* address, and the one
+that last reached it first, as the page's boxes are chosen; the box checks
+again and dials only the address of a pool it holds for them
+(`src/fleet/host/console-tunnel.js`), so a tunnel is never a way into the
+box's network to anywhere else, and never to a pool on plain HTTP, which has
+no pin to hold the TLS to. One connection, thirty minutes and 512 MiB, two
+open per person. A box that speaks protocol 17 or later, because the frames
+are new and an older one would drop them; one too old is said as that. The
+screen says which machine carried it.
 
 **Typing.** Keyboard raises the phone's keyboard, and each key goes to the
 machine as a key press. iOS catches keys in a native view, because it raises
