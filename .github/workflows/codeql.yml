@@ -339,10 +339,18 @@ jobs:
         # macOS 27, or Xcode 27 selected on macOS 26: the two cases the 2.27.3
         # changelog names. Failing here takes seconds and says which; the
         # build would fail twenty minutes in, on a spawn the kernel refuses.
+        #
+        # xcodebuild's output is read whole before it is looked at. Piped into
+        # an awk that exits after the first line, xcodebuild wrote its second
+        # line into a closed pipe, died of the broken pipe (an NSException,
+        # exit 134), and pipefail made that this step's answer: it refused a
+        # runner that was macOS 26 with Xcode 26 on the first two pushes after
+        # it landed.
         run: |
           set -euo pipefail
           os="$(sw_vers -productVersion)"
-          xc="$(xcodebuild -version | awk '/^Xcode / { print $2; exit }')"
+          version="$(xcodebuild -version)"
+          xc="$(printf '%s\n' "$version" | sed -n 's/^Xcode //p')"
           case "$os" in 26.*) ;; *) echo "::error::CodeQL cannot trace a build on macOS $os; this job needs macOS 26 (see the comment on runs-on)."; exit 1 ;; esac
           case "$xc" in 26.*) ;; *) echo "::error::CodeQL cannot trace a build with Xcode ${xc:-none}; this job needs Xcode 26 selected."; exit 1 ;; esac
           echo "macOS $os, Xcode $xc: CodeQL can trace this"
