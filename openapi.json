@@ -3254,6 +3254,35 @@
         }
       }
     },
+    "/api/xoconsole/tunnel": {
+      "get": {
+        "summary": "Open a VM's console from away, through a machine holding the pool",
+        "description": "A WebSocket. For a phone that cannot reach a Xen Orchestra pool itself: the coordinator picks a connected machine that reported holding this person's token for `address`, and that machine makes one plain TCP connection to the pool's address and pumps bytes. The phone opens TLS through those bytes itself, held to the pool's pinned certificate, and speaks the console's WebSocket inside it, so the machine and the coordinator carry ciphertext. The first message is `{op: \"ready\", tunnel, hostId, maxBytes, ttlMs}`, then `{op: \"open\"}` once the machine has connected, `data` (base64) both ways, and `closed` with a sentence when it ends; the phone sends `data` and `end`. A signed-in person's device credential; only for a pool that person holds; one connection, thirty minutes and 512 MiB at most. See docs/manage.md, \"The console\".",
+        "operationId": "openConsoleTunnel",
+        "parameters": [
+          {
+            "name": "address",
+            "in": "query",
+            "required": true,
+            "description": "Where the pool's Xen Orchestra answers, as this phone keeps the pool.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "The tunnel is open; the first message says which machine carries it, or why it was closed."
+          },
+          "403": {
+            "description": "Not a signed-in person\u2019s device."
+          },
+          "426": {
+            "description": "Not a WebSocket upgrade."
+          }
+        }
+      }
+    },
     "/api/xosetup/relay": {
       "get": {
         "summary": "Carry a relay through this phone, for a pool no machine reaches",

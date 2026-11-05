@@ -232,7 +232,8 @@ internal class PhoneRelay private constructor(val address: String, private val t
         /** The most one frame carries, the coordinator's bound (relays.js). */
         const val CHUNK = 48 * 1024
 
-        private val LOCAL = setOf("localhost", "127.0.0.1", "::1", "[::1]", "10.0.2.2")
+        /** Coordinators a credential may go to over plain http: this machine, and the emulator's host. ConsoleTunnel holds to it too. */
+        internal val LOCAL = setOf("localhost", "127.0.0.1", "::1", "[::1]", "10.0.2.2")
 
         /** One client for every relay: it holds the connection pool and the threads. */
         private val CLIENT: OkHttpClient by lazy {

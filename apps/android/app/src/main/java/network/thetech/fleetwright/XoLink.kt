@@ -226,13 +226,18 @@ internal class XoLink private constructor(private val socket: SSLSocket, private
          * a VM's console (XoConsole) share. Answers the socket and whatever
          * arrived after the upgrade's headers.
          */
-        internal suspend fun handshake(address: String, pin: String, path: String, cookie: String?, timeoutMs: Int = 15_000): Pair<SSLSocket, ByteArray> = withContext(Dispatchers.IO) {
+        /**
+         * [via], when given, is a socket already carried somewhere that ends at
+         * the pool (ConsoleTunnel, from away): TLS is layered on it with the
+         * pool's own host name and held to the same pin.
+         */
+        internal suspend fun handshake(address: String, pin: String, path: String, cookie: String?, timeoutMs: Int = 15_000, via: Socket? = null): Pair<SSLSocket, ByteArray> = withContext(Dispatchers.IO) {
             val (host, port) = splitAddress(address)
             val trust = PinTrust(pin.lowercase())
             val context = SSLContext.getInstance("TLS").apply { init(null, arrayOf<TrustManager>(trust), null) }
-            val raw = Socket()
+            val raw = via ?: Socket()
             try {
-                raw.connect(InetSocketAddress(host, port), timeoutMs)
+                if (via == null) raw.connect(InetSocketAddress(host, port), timeoutMs)
                 raw.soTimeout = timeoutMs
                 val ssl = context.socketFactory.createSocket(raw, host, port, true) as SSLSocket
                 try {

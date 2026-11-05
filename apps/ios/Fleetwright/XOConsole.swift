@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// One VM's screen from Xen Orchestra: VNC over a WebSocket at
 /// `/api/consoles/<vm id>`, over TLS held to the pool's pinned certificate.
@@ -17,6 +18,10 @@ final class XOConsole: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
 
     private let request: URLRequest
     private let pin: String
+    /// FROM AWAY, the loopback proxy ConsoleTunnel listens on: the same
+    /// request, the same pin and the same server name, its bytes carried
+    /// through one of your machines. Nil on the pool's own network.
+    private let proxy: NWEndpoint?
     private let lock = NSLock()
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
@@ -31,7 +36,7 @@ final class XOConsole: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
     var onEnd: (@Sendable (_ why: String, _ wrongCertificate: Bool) -> Void)?
 
     /// Nil for an address or an id that does not make a URL.
-    init?(address: String, vm: String, token: String, pin: String) {
+    init?(address: String, vm: String, token: String, pin: String, proxy: NWEndpoint? = nil) {
         guard let id = vm.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
               let url = URL(string: "wss://\(address)/api/consoles/\(id)") else { return nil }
         var request = URLRequest(url: url)
@@ -39,6 +44,7 @@ final class XOConsole: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
         request.httpShouldHandleCookies = false
         self.request = request
         self.pin = pin.lowercased()
+        self.proxy = proxy
         super.init()
     }
 
@@ -47,6 +53,7 @@ final class XOConsole: NSObject, URLSessionWebSocketDelegate, @unchecked Sendabl
         config.timeoutIntervalForRequest = 15
         config.waitsForConnectivity = false
         config.httpCookieStorage = nil
+        if let proxy { config.proxyConfigurations = [ProxyConfiguration(httpCONNECTProxy: proxy)] }
         let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
         let task = session.webSocketTask(with: request)
         task.maximumMessageSize = 16 * 1024 * 1024

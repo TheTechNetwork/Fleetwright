@@ -52,14 +52,16 @@ import org.json.JSONObject
  * enters the web view, the page may fetch nothing (its content security
  * policy), and the web view goes nowhere else: no navigation, no files.
  *
- * OFFERED ONLY WHILE THIS PHONE WATCHES THE POOL ITSELF (ComponentPage): a
- * page read through one of your machines has no socket to the pool here.
+ * FROM AWAY, THROUGH ONE OF YOUR MACHINES (ConsoleTunnel): a page read
+ * through a machine opens it that way at once, and a console that cannot
+ * reach the pool from here tries that way once before saying so. The phone
+ * still holds the TLS and the pin; the machine carries ciphertext.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ConsolePage(settings: Settings, address: String, vm: String, name: String, onDismiss: () -> Unit) {
+internal fun ConsolePage(settings: Settings, address: String, vm: String, name: String, away: Boolean = false, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
-    val console = remember(vm) { ConsoleBridge(settings, address, vm, name, scope) }
+    val console = remember(vm) { ConsoleBridge(settings, address, vm, name, scope, away) }
     DisposableEffect(console) { onDispose { console.stop() } }
 
     Dialog(
@@ -98,6 +100,14 @@ internal fun ConsolePage(settings: Settings, address: String, vm: String, name: 
                             TextButton(onClick = { console.restart() }, modifier = Modifier.heightIn(min = 48.dp)) { Text(Manage.Words.openAgain) }
                         }
                     }
+                } ?: console.via?.let { via ->
+                    // FROM AWAY, said once and quietly: how the screen got here.
+                    Text(
+                        Manage.Words.consoleAwayVia(via),
+                        style = Design.Style.label,
+                        color = Design.Palette.inkDim.now,
+                        modifier = Modifier.fillMaxWidth().background(Design.Palette.card.now).padding(Design.Space.inside),
+                    )
                 }
                 AndroidView(
                     factory = { context -> console.makeWeb(context) },
@@ -115,10 +125,16 @@ internal class ConsoleBridge(
     private val vm: String,
     private val name: String,
     private val scope: CoroutineScope,
+    /** Through one of your machines, from the first try (a page read away) or after this phone could not reach the pool. */
+    private var away: Boolean = false,
 ) {
     /** What the console is doing, said above it; null once the screen shows. */
-    var line by mutableStateOf<String?>(Manage.Words.consoleOpening(name))
+    var line by mutableStateOf<String?>(if (away) Manage.Words.consoleAwayOpening else Manage.Words.consoleOpening(name))
         private set
+    /** The machine carrying it from away, said above the screen. */
+    var via by mutableStateOf<String?>(null)
+        private set
+    private var tunnel: ConsoleTunnel? = null
     var troubled by mutableStateOf(false)
         private set
     var retry by mutableStateOf(false)
@@ -157,6 +173,8 @@ internal class ConsoleBridge(
     fun restart() {
         socket?.close()
         socket = null
+        tunnel?.close()
+        tunnel = null
         connected = false
         pageReady = false
         show(Manage.Words.consoleOpening(name))
@@ -166,6 +184,8 @@ internal class ConsoleBridge(
     fun stop() {
         socket?.close()
         socket = null
+        tunnel?.close()
+        tunnel = null
         web?.destroy()
         web = null
     }
@@ -215,14 +235,34 @@ internal class ConsoleBridge(
             return
         }
         scope.launch {
+            // FROM AWAY: the tunnel first, then the same TLS through it.
+            var through: java.net.Socket? = null
+            if (away) {
+                show(Manage.Words.consoleAwayOpening)
+                val t = ConsoleTunnel(address)
+                tunnel = t
+                t.onEnd = { why -> main.post { tunnelEnded(t, why) } }
+                try {
+                    val (s, host) = t.open(settings)
+                    through = s
+                    via = host
+                } catch (e: Exception) {
+                    if (tunnel === t) tunnel = null
+                    ended(e.message ?: Manage.Words.consoleShut)
+                    return@launch
+                }
+            }
             val opened = try {
-                XoConsole.open(address, pin, record.token, vm)
+                XoConsole.open(address, pin, record.token, vm, via = through)
             } catch (e: XoLink.Failure) {
                 if (e.kind == XoLink.Failure.Kind.WRONG_CERTIFICATE) show(Manage.Words.wrongCertificate(address), troubled = true, retry = false)
+                else if (e.kind == XoLink.Failure.Kind.SLOW) reachOtherwise()
                 else ended(Manage.Words.consoleShut)
                 return@launch
             } catch (e: Exception) {
-                ended(Manage.Words.consoleShut)
+                // THIS PHONE COULD NOT REACH THE POOL: once, the same console
+                // through one of your machines, before anything is said.
+                reachOtherwise()
                 return@launch
             }
             if (web == null) {
@@ -240,6 +280,27 @@ internal class ConsoleBridge(
             call("fwConsole.opened()")
             opened.start()
         }
+    }
+
+    /** Not reached from here: through one of your machines, once; then said. */
+    private fun reachOtherwise() {
+        if (away) {
+            tunnel?.close()
+            tunnel = null
+            ended(Manage.Words.consoleShut)
+            return
+        }
+        away = true
+        main.post { open() }
+    }
+
+    private fun tunnelEnded(t: ConsoleTunnel, why: String) {
+        if (tunnel !== t) return
+        tunnel = null
+        socket?.close()
+        socket = null
+        call("fwConsole.closed(${quoted(why)})")
+        ended(why)
     }
 
     private fun socketEnded(why: String) {

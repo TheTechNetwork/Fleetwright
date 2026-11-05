@@ -52,8 +52,8 @@ import kotlinx.coroutines.launch
  * phone without the token, so it offered only Xen Orchestra's own page in
  * the browser, and said this phone never holds the token, which on the phone
  * that set the pool up was not so. Without the token it is still Xen
- * Orchestra's page, where you sign in. A screen does not travel through the
- * fleet either way: the console opens from the pool's own network.
+ * Orchestra's page, where you sign in. Away from the pool, the console comes
+ * through one of your machines (ConsoleTunnel), the TLS still this phone's.
  *
  * THE ACTIONS ARE THE BOX'S: it holds the token and works the machine under
  * your name, and only a machine tagged as made for you (xo-pools.js,
@@ -223,7 +223,7 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                 }
                 Hint(
                     "SSH takes the public keys you keep under You › SSH keys, on machines made after you add them. " +
-                        if (holdsHere) "The console opens in the app, from the pool’s own network, with the pool’s token this phone holds; the page that draws it never sees the token."
+                        if (holdsHere) "The console opens in the app with the pool’s token this phone holds, on the pool’s own network or through one of your machines from away; the page that draws it never sees the token."
                         else "The console is Xen Orchestra’s own page, which asks you to sign in there: this phone does not hold the pool’s token.",
                 )
 

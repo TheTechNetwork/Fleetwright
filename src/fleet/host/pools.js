@@ -93,6 +93,11 @@ export class Pools {
     return this.#either(ask.owner, () => this.xo.control(ask), () => this.pve.control(ask));
   }
 
+  /** @param {string} owner @param {string} address */
+  consoleAddress(owner, address) {
+    return this.xo.consoleAddress(owner, address);
+  }
+
   /** @param {Parameters<XoPools['look']>[0]} ask */
   look(ask) {
     return this.xo.look(ask);

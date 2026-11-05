@@ -345,7 +345,7 @@ export class Coordinator {
       // A host's socket, and a phone's relay (see the Worker's copy of the
       // relay route): two sockets of different parties, each authorised its
       // own way before the upgrade completes.
-      path: ['/host/connect', '/api/xosetup/relay'],
+      path: ['/host/connect', '/api/xosetup/relay', '/api/xoconsole/tunnel'],
       // The same handshake the Worker makes, for the same reason: a host proves
       // it holds the enrolled private key by signing a nonce issued moments
       // ago. There is no shared host token to fall back to, not even on
@@ -355,7 +355,7 @@ export class Coordinator {
         const url = new URL(req.url || '/', 'http://placeholder');
         // A PHONE'S RELAY: its own device credential, as a person. Kept on the
         // request for onConnection, which opens the relay as that phone.
-        if (url.pathname === '/api/xosetup/relay') {
+        if (url.pathname === '/api/xosetup/relay' || url.pathname === '/api/xoconsole/tunnel') {
           const presented = credentialFrom(req.headers.authorization, url);
           const client = isClientCredential(presented) ? await this.core.clients.verify(presented) : null;
           if (!client?.email) return 'A relay is carried by the phone of a signed-in person.';
@@ -373,6 +373,7 @@ export class Coordinator {
       onConnection: (conn, req) => {
         const url = new URL(req.url || '/', 'http://placeholder');
         if (url.pathname === '/api/xosetup/relay') return this.#onRelay(conn, req, url);
+        if (url.pathname === '/api/xoconsole/tunnel') return this.#onTunnel(conn, req, url);
         return this.#onHost(conn, req);
       },
     });
@@ -489,6 +490,31 @@ export class Coordinator {
     conn.on('message', (text) => this.core.relayFromPhone(relay, text));
     conn.on('close', () => this.core.relayPhoneGone(relay));
     conn.on('error', () => this.core.relayPhoneGone(relay));
+  }
+
+  /**
+   * A phone's console socket, joined to the core, as the Worker's route does.
+   *
+   * @param {import('./ws-server.js').WsConnection} conn
+   * @param {import('node:http').IncomingMessage} req
+   * @param {URL} url
+   */
+  #onTunnel(conn, req, url) {
+    const client = /** @type {any} */ (req).fleetClient;
+    const opened = this.core.openTunnel(
+      requesterFor(client),
+      client?.id ?? null,
+      { address: url.searchParams.get('address') },
+      {
+        send: (msg) => conn.send(JSON.stringify(msg)),
+        close: (code, reason) => conn.close(code, reason),
+      },
+    );
+    if (!opened.ok) return;
+    const tunnel = opened.tunnel;
+    conn.on('message', (text) => this.core.tunnelFromPhone(tunnel, text));
+    conn.on('close', () => this.core.tunnelPhoneGone(tunnel));
+    conn.on('error', () => this.core.tunnelPhoneGone(tunnel));
   }
 
   /** @param {string} hostId */
@@ -1299,6 +1325,14 @@ export class Coordinator {
         return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'A relay is carried by the phone of a signed-in person.' });
       }
       return json(res, 426, { ok: false, error: { code: 'upgrade_required' }, text: 'A relay is a WebSocket: ask for an upgrade.' });
+    }
+
+    // A console from away is a WebSocket too, answered by the upgrade handler.
+    if (p === '/api/xoconsole/tunnel' && req.method === 'GET') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'A console from away is opened by the phone of a signed-in person.' });
+      }
+      return json(res, 426, { ok: false, error: { code: 'upgrade_required' }, text: 'A console from away is a WebSocket: ask for an upgrade.' });
     }
 
     // A Live Activity for a hypervisor setup — see the Worker's copy.

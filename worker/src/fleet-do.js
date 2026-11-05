@@ -1169,6 +1169,38 @@ export class Fleet {
       return new Response(null, { status: 101, webSocket: phoneEnd });
     }
 
+    // A VM'S CONSOLE FROM AWAY: this phone's socket, joined to one TCP
+    // connection a box holding the pool makes to it (tunnels.js). The phone
+    // opens TLS through it to the pool, so this object carries ciphertext.
+    // Accepted without hibernation, for the reason a relay is.
+    if (url.pathname === '/api/xoconsole/tunnel' && request.method === 'GET') {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'A console from away is opened by the phone of a signed-in person.' }, 403);
+      }
+      if (request.headers.get('upgrade') !== 'websocket') {
+        return json({ ok: false, error: { code: 'upgrade_required' }, text: 'A console from away is a WebSocket: ask for an upgrade.' }, 426);
+      }
+      const pair = new WebSocketPair();
+      const [phoneEnd, server] = Object.values(pair);
+      server.accept();
+      const opened = this.core.openTunnel(
+        requesterFor(client),
+        client.id ?? null,
+        { address: url.searchParams.get('address') },
+        {
+          send: (msg) => server.send(JSON.stringify(msg)),
+          close: (code, reason) => server.close(code, reason),
+        },
+      );
+      if (opened.ok) {
+        const tunnel = opened.tunnel;
+        server.addEventListener('message', (ev) => this.core.tunnelFromPhone(tunnel, typeof ev.data === 'string' ? ev.data : ''));
+        server.addEventListener('close', () => this.core.tunnelPhoneGone(tunnel));
+        server.addEventListener('error', () => this.core.tunnelPhoneGone(tunnel));
+      }
+      return new Response(null, { status: 101, webSocket: phoneEnd });
+    }
+
     if (url.pathname === '/api/runner-tokens' && request.method === 'POST') {
       if (!client?.email) {
         return json({ ok: false, text: 'Sign in first — a runner token belongs to a person.' }, 403);

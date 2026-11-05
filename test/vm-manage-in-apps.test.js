@@ -44,7 +44,7 @@ const SHARED = [
   'No address reported yet. Its guest agent says it once it has booted.',
   'Open its console in Xen Orchestra',
   'The console is Xen Orchestra’s own page, which asks you to sign in there: this phone does not hold the pool’s token.',
-  'The console opens in the app, from the pool’s own network, with the pool’s token this phone holds; the page that draws it never sees the token.',
+  'The console opens in the app with the pool’s token this phone holds, on the pool’s own network or through one of your machines from away; the page that draws it never sees the token.',
   'Give it longer',
   'Restart with this size',
   'End it now',
@@ -79,7 +79,7 @@ test('iOS: a machine’s page opens the console in the app where this phone hold
   // the machine, and for a machine that is running (C-2). Asked for: "Why not
   // open in web view". Otherwise Xen Orchestra's own page, as before.
   assert.match(I_PAGE, /holdsHere = found\.map \{ XOSetupHandoff\.held\(\)\.contains\(\$0\.address\) \} \?\? false/);
-  assert.match(I_PAGE, /if holdsHere, m\.state == "Running", let vm = m\.vm \{\s*NavigationLink \{\s*VMConsoleView\(address: m\.address, vm: vm, name: m\.name\)[\s\S]{0,200}\} else if let console = m\.consoleURL \{/);
+  assert.match(I_PAGE, /if holdsHere, m\.state == "Running", let vm = m\.vm \{\s*NavigationLink \{\s*VMConsoleView\(address: m\.address, vm: vm, name: m\.name, settings: settings\)[\s\S]{0,200}\} else if let console = m\.consoleURL \{/);
   assert.match(I_PAGE, /Label\(Manage\.Words\.console, systemImage: "rectangle\.on\.rectangle"\)/);
   assert.match(I_FLEET, /return URL\(string: "https:\/\/\\\(address\)\/#\/vms\/\\\(vm\)\/console"\)/);
   assert.match(I_FLEET, /var sshCommand: String\? \{ ip\.map \{ "ssh fleetwright@\\\(\$0\)" \} \}/);

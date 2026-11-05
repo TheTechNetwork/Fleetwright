@@ -42,7 +42,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resource } from '../../core/resources.js';
-import { connectXo, connectXoPlain } from './xo-ws.js';
+import { connectXo, connectXoPlain, splitAddress } from './xo-ws.js';
 import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, labsEachOf, wanAddressOf } from './edge-router.js';
 import { JOIN_RUNCMD, VM_IMAGE } from './vm-image.js';
 import { HOLDER } from './xo-holder.js';
@@ -1199,6 +1199,23 @@ export class XoPools {
         /* closing */
       }
     }
+  }
+
+  /**
+   * WHERE A CONSOLE FROM AWAY MAY GO (console-tunnel.js): the host and port
+   * of a pool this box holds THIS person's token for, at exactly this
+   * address, or null. Never a pool on plain HTTP: the phone opens TLS to it
+   * through the tunnel and holds it to the pin, and without one there is
+   * nothing to hold it to.
+   *
+   * @param {string} owner @param {string} address
+   * @returns {{ host: string, port: number }|null}
+   */
+  consoleAddress(owner, address) {
+    const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
+    if (!held || held.record.plain || !held.record.pin) return null;
+    const { host, port } = splitAddress(String(held.record.address));
+    return Number.isInteger(port) && port > 0 && port < 65536 ? { host, port } : null;
   }
 
   /**
