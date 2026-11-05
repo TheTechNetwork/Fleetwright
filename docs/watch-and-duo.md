@@ -62,7 +62,7 @@ is meant literally.
 1. **The SDK, pinned, on the image that has it.** `macos-latest` carried Xcode 26
    alone, so every build before this round was the letterboxed one. The macOS
    jobs run on GitHub's `xcode-27` image, and `scripts/select-xcode.sh` picks an
-   exact build or fails: **TestFlight ships on Xcode 27.2** (27B48, the
+   exact build or fails: **TestFlight ships on Xcode 27.2** (27B52, the
    release that brought Pencil to the Duo) and the store submits that upload.
    **The next Xcode is built beside it from its first beta** on GitHub's
    image, so a change in it is seen before it is what ships; the script prints
