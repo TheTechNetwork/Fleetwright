@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -131,7 +132,20 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
     // this screen's place, and back to it when closed.
     var through by rememberSaveable { mutableStateOf(false) }
     if (through) {
-        ProxmoxThroughSheet(settings, node, keep = { keep(it) }, onDismiss = { through = false })
+        ProxmoxThroughSheet(
+            settings,
+            node,
+            // KEPT BY THE MACHINE'S HAND-OFF (ProxmoxThroughHandoff), said
+            // here as a line kept by hand is.
+            kept = { address ->
+                kept = true
+                failed = false
+                line = ""
+                result = "Kept in your vault. Your machines pick it up within ten minutes and check it against the cluster; " +
+                    "it then shows under New session › Where, as Proxmox at $address."
+            },
+            onDismiss = { through = false },
+        )
         return
     }
 
@@ -200,6 +214,21 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
         }
         progress?.let { p ->
             p.steps.forEach { Hint(ProxmoxSsh.stepWords(it), color = Design.Palette.ink.now) }
+            // HOW FAR INTO THE STEP IT IS ON, when the script says: the
+            // image's download and build are most of the wait. A bar only
+            // for what it measured.
+            val part = p.part
+            if (part != null && p.running) {
+                part.fill?.let { fill ->
+                    LinearProgressIndicator(
+                        progress = { fill / 1000f },
+                        color = Design.Palette.active.now,
+                        trackColor = Design.Palette.track.now,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Hint(part.text)
+            }
             if (since != null) Hint("Running on the node. It carries on if this phone locks; open this screen again to see it end.")
         }
         if (sshText.isNotBlank()) Hint(sshText, color = if (since != null) Design.Palette.inkDim.now else Design.Palette.bad.now)

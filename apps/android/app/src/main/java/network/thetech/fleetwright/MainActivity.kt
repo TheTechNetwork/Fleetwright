@@ -41,6 +41,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.FirebaseApp
 import com.google.firebase.installations.FirebaseInstallations
@@ -576,6 +579,19 @@ fun FleetScreen(
         }
     }
 
+    // BACK IN FRONT: a Proxmox VE setup that ended while the app was away has
+    // its line kept now, not at the next launch (ProxmoxThroughHandoff).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var resumes by remember { mutableStateOf(0) }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) resumes++ }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(resumes) {
+        if (resumes > 1 && signedIn) ProxmoxThroughHandoff.collectPending(settings, fleet)
+    }
+
     // FLUSHED ON EVERY SIGN-IN AND LAUNCH, which is the moment we learn the
     // fleet answers. Not on a timer: a timer retries into an outage.
     LaunchedEffect(signedIn, viewAsMember) {
@@ -600,6 +616,9 @@ fun FleetScreen(
         // A token a finished hypervisor setup handed back while the app was
         // closed is collected now (XoHandoff).
         XoHandoff.collectPending(settings, fleet)
+        // And a Proxmox VE line a machine sealed back after its screen was
+        // closed is kept in the vault (ProxmoxThroughHandoff).
+        ProxmoxThroughHandoff.collectPending(settings, fleet)
     }
 
     if (showStart) {

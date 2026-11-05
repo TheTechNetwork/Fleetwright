@@ -51,8 +51,9 @@ import org.json.JSONObject
  *      (`pvesetup-key`), which this checks ([signingInput]): no other job's
  *      key passes, so a key made for another can never be sent this password.
  *   3. The root password is sealed under this job's own binding ([aad]), with
- *      a key this screen holds in memory for the line to come back to, which
- *      it does sealed under its own name ([handoffAad]).
+ *      a key for the line to come back to, which it does sealed under its own
+ *      name ([handoffAad]). The key is kept until the line is in the vault,
+ *      so the screen may be closed while it runs ([ProxmoxThroughHandoff]).
  */
 internal object ProxmoxThrough {
 
@@ -95,9 +96,9 @@ internal object ProxmoxThrough {
         "When this phone cannot reach the node, one of your machines that can does the setup for it: the same steps, run on the node " +
             "over SSH. The root password is sealed on this phone to that machine alone."
 
-    const val KEEP_OPEN =
-        "Keep this screen open until it ends, which with the machine image is several minutes: the line comes back to this screen, " +
-            "and closing it leaves the node set up with a line nobody holds. The phone may lock."
+    const val MAY_CLOSE =
+        "With the machine image this takes several minutes, and you need not watch: the setup goes on on the node, " +
+            "and the line comes back sealed to this phone, which keeps it in your vault when Fleetwright is next open."
 
     fun passwordFooter(host: String): String =
         "It signs in to the node over SSH once, and $host forgets it as soon as it has. The line comes back sealed to this phone, and " +
@@ -150,7 +151,7 @@ internal object ProxmoxThrough {
  * THE PASSWORD AND THE REPLY KEY ARE IN MEMORY ONLY, never saveable.
  */
 @Composable
-internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, keep: suspend (ProxmoxLine.Record) -> Unit, onDismiss: () -> Unit) {
+internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, kept: (String) -> Unit, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val fleet = remember { Fleet(settings) }
 
@@ -171,8 +172,9 @@ internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, keep: su
     var progress by remember { mutableStateOf<Fleet.Setup?>(null) }
     var cancelling by remember { mutableStateOf(false) }
     var cancelAccepted by remember { mutableStateOf(false) }
-    var reply by remember { mutableStateOf<Seal.OneUseKey?>(null) }
-    var kept by remember { mutableStateOf(false) }
+    var lineKept by remember { mutableStateOf(false) }
+    var keepAgain by remember { mutableStateOf(false) }
+    var keeping by remember { mutableStateOf(false) }
 
     val addressOk = XoSetup.ADDRESS_RE.matches(address.trim())
     val able = probes.orEmpty().filter { XoDeploy.canInstall(it) }
@@ -198,15 +200,17 @@ internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, keep: su
 
     suspend fun run(b: Begun) {
         val key = b.setup.key ?: return
-        val back = Seal.newKey()
+        // THE KEY THE LINE COMES BACK TO OUTLIVES THIS SCREEN: kept under the
+        // job until the line is in the vault (ProxmoxThroughHandoff).
+        val back = ProxmoxThroughHandoff.newKey(settings, b.setup.job, b.where)
         val sealed = ProxmoxThrough.sealRoot(key, b.setup.job, b.where, rootPassword, back.publicKey)
         rootPassword = ""
         val r = fleet.xosetup("run", job = b.setup.job, sealed = sealed)
         if (!r.ok) {
+            ProxmoxThroughHandoff.forget(settings, b.setup.job)
             refusal = r.text.ifBlank { "${b.hostId} did not take the root password." }
             return
         }
-        reply = back
         job = b.setup.job
         jobAddress = b.where
         runningOn = r.hostId ?: b.hostId
@@ -267,14 +271,39 @@ internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, keep: su
     fun startAgain() {
         job = null
         progress = null
-        reply = null
+        lineKept = false
+        keepAgain = false
         refusal = ""
         matched = false
         cancelAccepted = false
     }
 
-    // THE POLL, ONLY WHILE THIS IS ON SCREEN; once it is done, the line is
-    // opened with this screen's key, kept, and the key dropped.
+    // ONCE IT IS DONE, the line opened with the kept key and put in the
+    // vault, and the key dropped; a job that ended otherwise drops its key.
+    suspend fun keepLine(id: String, done: Fleet.Setup) {
+        keeping = true
+        when (val got = ProxmoxThroughHandoff.collect(settings, fleet, id, done)) {
+            is ProxmoxThroughHandoff.Outcome.Kept -> {
+                lineKept = true
+                keepAgain = false
+                kept(got.address)
+            }
+            is ProxmoxThroughHandoff.Outcome.Failed -> {
+                keepAgain = got.again
+                refusal = got.text
+            }
+            // Gone from the list: kept already, from the front of the app.
+            null -> if (ProxmoxThroughHandoff.pending(settings).none { it.job == id }) {
+                lineKept = true
+                kept(jobAddress)
+            } else {
+                keepAgain = true
+            }
+        }
+        keeping = false
+    }
+
+    // THE POLL, ONLY WHILE THIS IS ON SCREEN; the job goes on without it.
     LaunchedEffect(job) {
         val id = job ?: return@LaunchedEffect
         var unanswered = 0
@@ -295,17 +324,8 @@ internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, keep: su
             if (r.code == "unknown_job" || unanswered >= 5) break
         }
         val done = progress
-        val key = reply
-        if (done?.state == "done" && key != null && !kept) {
-            val record = done.handoff?.let { ProxmoxThrough.openLine(it, id, jobAddress, key) }
-            reply = null
-            if (record == null) {
-                refusal = "$runningOn finished, and what it handed back is not a line this phone can open. Run the setup again; it finds what it made."
-            } else {
-                keep(record)
-                kept = true
-            }
-        }
+        if (done?.state == "failed" || done?.state == "cancelled") ProxmoxThroughHandoff.forget(settings, id)
+        if (done?.state == "done" && !lineKept) keepLine(id, done)
     }
 
     FullScreen(title = "Through a machine", onDismiss = { rootPassword = ""; onDismiss() }) {
@@ -315,10 +335,9 @@ internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, keep: su
             job != null -> {
                 SectionHead("Setting it up")
                 if (runningOn.isNotBlank()) Hint("On $runningOn, for the node at $jobAddress", color = Design.Palette.ink.now)
-                // THE LINE COMES BACK TO THIS SCREEN AND NOTHING ELSE: the key
-                // it is sealed to is in this screen's memory. Said while it
-                // runs, so the person does not close it expecting otherwise.
-                if (!kept) Hint(ProxmoxThrough.KEEP_OPEN)
+                // THE SCREEN MAY BE CLOSED: said while it runs, so nobody
+                // waits on it for minutes thinking they must.
+                if (!lineKept) Hint(ProxmoxThrough.MAY_CLOSE)
                 if (setup == null) {
                     Hint("Asking where it has got to…")
                 } else {
@@ -334,8 +353,14 @@ internal fun ProxmoxThroughSheet(settings: Settings, startNode: String, keep: su
                                 cancelling = false
                             }
                         }, modifier = Modifier.heightIn(min = 48.dp)) { Text(if (cancelling) "Cancelling…" else "Cancel") }
-                    setup != null && setup.state == "done" && kept ->
+                    setup != null && setup.state == "done" && lineKept ->
                         TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) { Text("Done") }
+                    setup != null && setup.state == "done" && keepAgain ->
+                        TextButton(
+                            enabled = !keeping,
+                            onClick = { scope.launch { keepLine(setup.job, setup) } },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text(if (keeping) "Keeping…" else "Keep the line") }
                     setup != null && setup.state != "running" && setup.state != "waiting" ->
                         // A new begin, because the key was for the job that ended.
                         TextButton(onClick = { startAgain() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Try again") }

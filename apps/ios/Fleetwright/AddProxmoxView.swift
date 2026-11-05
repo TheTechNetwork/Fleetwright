@@ -94,6 +94,20 @@ struct AddProxmoxView: View {
                     ForEach(Array(progress.steps.enumerated()), id: \.offset) { _, step in
                         Text(ProxmoxSSH.stepWords(step)).fleetType(.label)
                     }
+                    // HOW FAR INTO THE STEP IT IS ON, when the script says:
+                    // the image's download and build are most of the wait.
+                    // A bar only for what it measured.
+                    if let part = progress.part, progress.running {
+                        if let fill = part.fill {
+                            ProgressView(value: Double(fill), total: 1000)
+                                .tint(Design.Palette.active)
+                                .animation(Design.Motion.change, value: fill)
+                        }
+                        Text(part.text)
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                            .contentTransition(.opacity)
+                    }
                     if since != nil {
                         Text("Running on the node. It carries on if this phone locks; open this screen again to see it end.")
                             .fleetType(.label)
@@ -117,7 +131,7 @@ struct AddProxmoxView: View {
             if coordinatorOk && since == nil && !kept {
                 Section {
                     NavigationLink {
-                        ProxmoxThroughMachineView(settings: settings, node: nodeKey) { record in await keep(record) }
+                        ProxmoxThroughMachineView(settings: settings, node: nodeKey) { at in keptThrough(at) }
                     } label: {
                         Text("Through one of your machines")
                             .fleetType(.bodyStrong)
@@ -260,6 +274,15 @@ struct AddProxmoxView: View {
             failed = true
             result = error.localizedDescription
         }
+    }
+
+    /// A line a machine set up and this phone kept in the vault
+    /// (ProxmoxThroughHandoff), said here as a line kept by hand is.
+    private func keptThrough(_ address: String) {
+        kept = true
+        failed = false
+        line = ""
+        result = "Kept in your vault. Your machines pick it up within ten minutes and check it against the cluster; it then shows under New session › Where, as Proxmox at \(address)."
     }
 
     private func sectionHead(_ text: String) -> some View {

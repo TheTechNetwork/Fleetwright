@@ -17,6 +17,7 @@ extension Notification.Name {
 struct FleetwrightApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var settings = Settings()
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         // A SCREENSHOT RUN STARTS ON THE DEMO, so the pictures show a fleet
@@ -40,6 +41,12 @@ struct FleetwrightApp: App {
                 // appearance would leave a phone that signed in on its first
                 // launch unregistered until its second.
                 .task(id: settings.credential) { await delegate.registerForPush(settings: settings) }
+                // BACK IN FRONT: a Proxmox VE setup that ended while the app
+                // was away has its line kept now, not at the next launch.
+                .onChange(of: scenePhase) { _, phase in
+                    guard phase == .active, settings.configured else { return }
+                    Task { await ProxmoxThroughHandoff.collectPending(fleet: Fleet(settings: settings)) }
+                }
                 // COMING BACK FROM A PROVIDER. The coordinator's OAuth callback
                 // redirects to fleetwright://connected when it has stored the
                 // token, so the browser hands control back instead of leaving
@@ -252,6 +259,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // And a token a finished setup handed back while the app was closed
         // is collected into the Keychain (XOSetupHandoff).
         Task { await XOSetupHandoff.collectPending(fleet: Fleet(settings: settings)) }
+        // And a Proxmox VE line a machine sealed back after its screen was
+        // closed is kept in the vault (ProxmoxThroughHandoff).
+        Task { await ProxmoxThroughHandoff.collectPending(fleet: Fleet(settings: settings)) }
         let granted = (try? await UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound, .badge])) ?? false
         guard granted else { return }

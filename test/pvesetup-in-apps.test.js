@@ -73,3 +73,32 @@ test('both phones say each step in the host’s words, and the end in the coordi
   assert.ok(IOS_WORDS.includes(`static let pveRunning = "${said.running}"`), 'iOS says it runs otherwise');
   assert.match(ANDROID_NOTICE, /pve -> ProxmoxThrough\.stepWords\(data\["phase"\], step, of\)/);
 });
+
+// THE SCREEN MAY BE CLOSED, asked for in so many words: "Why no background
+// processing why do I need to wait there". Both phones keep the key the line
+// comes back to under the job until the line is in the vault, collect it at
+// launch and when the app is back in front, and say so rather than asking
+// the person to wait.
+test('both phones keep the line’s key past the screen, collect it when back in front, and say the screen may close', () => {
+  const iosHandoff = read('apps/ios/Fleetwright/ProxmoxThroughHandoff.swift');
+  const androidHandoff = read('apps/android/app/src/main/java/network/thetech/fleetwright/ProxmoxThroughHandoff.kt');
+  const iosApp = read('apps/ios/Fleetwright/FleetwrightApp.swift');
+  const androidMain = read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt');
+  // The same name for the kept key, distinct from a hypervisor setup's.
+  assert.match(iosHandoff, /replyAccount\(_ job: String\) -> String \{ "pvesetup-reply\.\\\(job\)" \}/);
+  assert.match(androidHandoff, /replyName\(job: String\) = "pvesetup-reply\.\$job"/);
+  // The screens make the key there, not in memory.
+  assert.match(IOS, /let back = ProxmoxThroughHandoff\.newKey\(job: begun\.job, address: begun\.address\)/);
+  assert.match(ANDROID, /val back = ProxmoxThroughHandoff\.newKey\(settings, b\.setup\.job, b\.where\)/);
+  assert.ok(!/Seal\.newKey\(\)/.test(IOS) && !/Seal\.newKey\(\)/.test(ANDROID), 'a screen still holds the key in memory');
+  // Collected at launch and when back in front.
+  assert.match(iosApp, /ProxmoxThroughHandoff\.collectPending[\s\S]*?ProxmoxThroughHandoff\.collectPending/);
+  assert.match(iosApp, /onChange\(of: scenePhase\)/);
+  assert.equal(androidMain.match(/ProxmoxThroughHandoff\.collectPending\(settings, fleet\)/g)?.length, 2);
+  assert.match(androidMain, /Lifecycle\.Event\.ON_RESUME/);
+  // Said the same on both, and the old warning is gone.
+  const iosWords = /static let mayClose = ("[\s\S]*?")\n\n/.exec(IOS)?.[1].replace(/"\s*\+\s*"/g, '');
+  const androidWords = /const val MAY_CLOSE =\s*("[\s\S]*?")\n/.exec(ANDROID)?.[1].replace(/"\s*\+\s*"/g, '');
+  assert.ok(iosWords && iosWords === androidWords, `the phones say it differently:\n${iosWords}\n${androidWords}`);
+  assert.ok(!IOS.includes('Keep this screen open') && !ANDROID.includes('Keep this screen open'));
+});
