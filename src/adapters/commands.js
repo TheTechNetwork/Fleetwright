@@ -430,14 +430,21 @@ function effectiveSkip(ctx, s) {
 }
 
 /**
- * Mark only the sessions that DIFFER from the global default, so the common
- * case stays quiet and an unusual one stands out.
+ * Name the mode every session is in, the box default included.
+ *
+ * This used to mark only the sessions that differed from the box, so the
+ * common case stayed quiet. The common case is bypassed, out of the box: a
+ * list of sessions all running commands without asking read as a list that
+ * had not said. SEC-INJECT-3 in docs/security.md asks for the mode to be
+ * legible, and the phones' start sheets already label the box default; this
+ * is the same thing for anyone who asks in chat, by text or through Siri.
  * @param {Ctx} ctx
  * @param {import('../core/registry.js').SessionRecord} s
  */
 function modeSuffix(ctx, s) {
-  if (s.skipPermissions === null || s.skipPermissions === ctx.cfg.skipPermissions) return '';
-  return s.skipPermissions ? '  (permissions bypassed)' : '  (safe mode)';
+  const word = effectiveSkip(ctx, s) ? 'permissions bypassed' : 'permission prompts on';
+  const isDefault = s.skipPermissions === null || s.skipPermissions === ctx.cfg.skipPermissions;
+  return `  (${word}${isDefault ? ', box default' : ''})`;
 }
 
 /**
@@ -969,9 +976,19 @@ export const COMMANDS = {
       });
       let text = r.message;
       if (r.ok && archive) text += `\nIt is pushed to ${archive}, on a branch of its own, before it stops and every ten minutes while it runs.`;
-      if (r.ok && skipPermissions === false) text += '\nPermission prompts are ON for this session.';
-      if (r.ok && skipPermissions === true && !ctx.cfg.skipPermissions) {
-        text += '\nPermission checks are BYPASSED for this session.';
+      // SAID EITHER WAY, the box default included. A start that took the
+      // default used to add nothing, and the default is bypassed unless the
+      // operator turned it off, so the start that said least was the one that
+      // runs commands without asking. Siri, chat and text starts send no mode
+      // unless one is chosen, so for them this sentence is the only place it
+      // is said.
+      if (r.ok) {
+        const skip = skipPermissions === null ? ctx.cfg.skipPermissions : skipPermissions;
+        const isDefault = skipPermissions === null || skipPermissions === ctx.cfg.skipPermissions;
+        text += skip
+          ? '\nPermission checks are BYPASSED for this session: it runs commands without asking.'
+          : '\nPermission prompts are ON for this session: it stops and asks before it runs a command.';
+        if (isDefault) text += ' That is this box\'s default.';
       }
       // SAID EITHER WAY, because the two outcomes need different sentences and
       // the silent one is the one that cost two beta reports. A session with a
