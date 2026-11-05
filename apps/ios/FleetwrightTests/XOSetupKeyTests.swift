@@ -93,4 +93,17 @@ final class XOSetupKeyTests: XCTestCase {
         let other = String(repeating: "cd", count: 32)
         XCTAssertFalse(XOSetupKey.isSignedForWatchdog(key: jobKey, keySig: sig, hostKey: machine.publicKey, address: address, job: job, pin: other))
     }
+
+    /// SETTING UP PROXMOX VE THROUGH A MACHINE is signed under its own
+    /// context (`signingInput('pvesetup-key', ...)` in xo-setup.js): the
+    /// watchdog's key does not pass for it, nor its key for the watchdog's.
+    func testProxmoxSetupsKeyIsSignedUnderItsOwnContext() throws {
+        let machine = Machine()
+        let body = "{\"address\":\"\(address)\",\"job\":\"\(job)\",\"key\":\"\(jobKey)\",\"pin\":\"\(somePin)\"}"
+        let sig = try machine.sign(XOSetupKey.pveSigningPrefix + body)
+        XCTAssertTrue(XOSetupKey.isSignedForPve(key: jobKey, keySig: sig, hostKey: machine.publicKey, address: address, job: job, pin: somePin))
+        XCTAssertFalse(XOSetupKey.isSignedForWatchdog(key: jobKey, keySig: sig, hostKey: machine.publicKey, address: address, job: job, pin: somePin))
+        let asWatchdog = try machine.sign(XOSetupKey.watchdogSigningPrefix + body)
+        XCTAssertFalse(XOSetupKey.isSignedForPve(key: jobKey, keySig: asWatchdog, hostKey: machine.publicKey, address: address, job: job, pin: somePin))
+    }
 }

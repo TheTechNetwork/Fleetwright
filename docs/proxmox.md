@@ -8,9 +8,10 @@ the protocol did not change. Machines may be in a group or alone in an open
 or closed lab ("Labs and groups"). The cluster is set up by one script run
 as root on a node (`install/fleetwright-pve-setup`): a person runs it from
 the command both phones show under Add Proxmox VE and pastes the line it
-prints ("By hand"), or the phone runs it itself over SSH ("From the
-phone"). **Not built:** the setup's steps on the Lock Screen, and the pool
-page's own actions. **Not yet run:** the script on a real node, and a
+prints ("By hand"), the phone runs it itself over SSH ("From the
+phone"), or, for a node the phone cannot reach, one of the person's machines
+that can runs it for the phone ("Through a machine"). **Not built:** the
+direct path's steps on the Lock Screen, and the pool page's own actions. **Not yet run:** the script on a real node, and a
 machine made on a real cluster. The tests run the driver against a stand-in
 Proxmox over real TLS (`test/pve-pools.test.js`).
 
@@ -139,6 +140,51 @@ the end, with the address and password typed again.
 the usual one (Citadel) now takes its SSH layer from a personal fork, and
 what this sends is a root password. On Android it is sshj on the full
 BouncyCastle.
+
+### Through a machine
+
+**Built in both apps**: Add Proxmox VE › Through one of your machines, for a
+node the phone cannot reach itself, which is the usual case away from home.
+Asked for in those words: *"If phone can not ssh directly why not ssh
+through one of the nodes that it can reach? Same as all the other things we
+did?"* So it is the same as the others (adding the reconnect watchdog is the
+one it is modelled on, `docs/hypervisors.md`), with nothing new in how a
+secret crosses the fleet:
+
+1. **`xoprobe`** asks every permanent machine whether it reaches the node,
+   and its `ssh` says which answered SSH and with which host key. Machines
+   that can work there are offered; one is chosen.
+2. **The host key** that machine saw is shown with the command that prints
+   it in the node's own Shell, and the person says it matches. That is the
+   pin; a node answering with any other key is never sent the password.
+3. **`xosetup pve`**: the machine makes a key for this job alone and signs
+   it under `pvesetup-key`, over the node's address, the job and the pin.
+   The phone checks it before anything is sealed, and compares the machine's
+   fingerprint when its vault has not vouched for it, as an install does.
+4. **`run`**: the root password and a key of the phone's for the line to come
+   back to, sealed under `pvesetupAad`, so the coordinator relays what it
+   cannot read. The machine opens the SSH connection an install opens
+   (`openPool` in `xo-deploy.js`: the host key held to the pin, the password
+   answered once through its askpass and wiped) and runs on the node exactly
+   what the phone runs from "From the phone", which `test/pve-pools.test.js`
+   holds equal across the host and both apps (`src/fleet/host/pve-setup.js`).
+5. **Progress** is `PVESETUP_STEPS`: `node` (the connection and the start),
+   then the script's own steps as it says them in the journal. It reaches
+   the screen, the Lock Screen on iOS and the ongoing notification on
+   Android, under its own titles.
+6. **The line** is read from the root-only file once, removed, checked as
+   the boxes check it, and sealed back to the phone's key under
+   `pvesetupHandoffAad`. The machine keeps no copy; the screen opens it and
+   keeps it in the vault as a pasted line is.
+
+**A cancel or a failure stops the unit on the node**, which the script is
+written to be run again after: it finds what it made first.
+
+**Said plainly: the key the line comes back to lives in the screen's
+memory.** The screen says to stay open until it ends; closing it leaves a
+node that is set up with a line nobody holds, and running the setup again
+makes a new token and replaces it. Keeping that key in the Keychain, as a
+Xen Orchestra setup's is, is not built.
 
 ### By hand
 
@@ -278,7 +324,8 @@ and Set up. Then the host key, once, and the steps as they happen, on the
 screen (not yet on the Lock Screen). No probe of every box, no machine to
 pick, no key fingerprint of a fleet machine to compare, and nothing to copy
 between devices. Pasting a line made by hand is the other way in, on the
-same screen.
+same screen, and Through one of your machines is the third, for a node the
+phone cannot reach: that one does ask which machine, because it has to.
 
 **The cluster's page** is the component row from `manage.md`, read from the
 health entry, three sections and no form:
@@ -312,8 +359,9 @@ it answers `notHere`, and an `unreachable` from either is kept.
 
 ## Not built
 
-- The setup's steps on the Lock Screen and in Android's ongoing
-  notification, as Xen Orchestra's are.
+- The direct path's steps on the Lock Screen and in Android's ongoing
+  notification. Through a machine has them; from the phone itself does not.
+- The line's key kept past the screen, for setup through a machine.
 - The cluster's page described above: its fence, its token's width and its
   machines are in the health entry, and no screen draws them yet.
 - The pool page's actions on the cluster (`xolook`, `xoact` are Xen

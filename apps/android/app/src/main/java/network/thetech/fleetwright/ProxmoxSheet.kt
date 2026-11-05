@@ -126,6 +126,15 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
         }
     }
 
+    // THROUGH ONE OF YOUR MACHINES, for a node this phone cannot reach: the
+    // same setup, run there by a machine that can (ProxmoxThrough). Drawn in
+    // this screen's place, and back to it when closed.
+    var through by rememberSaveable { mutableStateOf(false) }
+    if (through) {
+        ProxmoxThroughSheet(settings, node, keep = { keep(it) }, onDismiss = { through = false })
+        return
+    }
+
     FullScreen(title = "Add Proxmox VE", onDismiss = { password = ""; onDismiss() }) {
         SectionHead("From this phone")
         OutlinedTextField(
@@ -195,6 +204,10 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
         }
         if (sshText.isNotBlank()) Hint(sshText, color = if (since != null) Design.Palette.inkDim.now else Design.Palette.bad.now)
         Hint("Proxmox VE 9 or newer. The password goes from this phone to the node and nowhere else, and is forgotten when this screen closes.")
+        if (coordinatorOk && since == null && !kept) {
+            OpenRow("Through one of your machines") { password = ""; through = true }
+            Hint("When this phone cannot reach the node: a machine of your fleet that can runs the same setup there, with the root password sealed to it alone.")
+        }
 
         SectionHead("Or by hand, on the node")
         // SELECTABLE, so a long press copies it whole.

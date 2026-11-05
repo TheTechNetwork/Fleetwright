@@ -77,6 +77,14 @@ enum Seal {
     /// (xowatchdogAad in src/fleet/seal.js).
     static func xowatchdogAAD(job: String, address: String) -> String { "fleetwright-xowatchdog/v1:\(job):\(address)" }
 
+    /// What a Proxmox VE node's root password and the reply key are sealed
+    /// under for setup through a machine of the fleet, and what the line is
+    /// sealed under on its way back: the job and the node's address, each
+    /// under a name of its own (pvesetupAad and pvesetupHandoffAad in
+    /// src/fleet/seal.js).
+    static func pvesetupAAD(job: String, address: String) -> String { "fleetwright-pvesetup/v1:\(job):\(address)" }
+    static func pvesetupHandoffAAD(job: String, address: String) -> String { "fleetwright-pvesetup-handoff/v1:\(job):\(address)" }
+
     /// A pool's page read by one of your machines for this phone away from
     /// it, on its way back to the key made here for that one look: bound to
     /// the address, so one pool's page cannot be shown as another's

@@ -754,6 +754,11 @@ export class Sidecar {
         // an install is (xo-watchdog.js).
         if (!p.address) return { ok: false, text: 'Say where the pool master answers.' };
         return this.xoSetups.beginWatchdog({ address: String(p.address), pin: p.pin ? String(p.pin) : null, relay: p.relay ? String(p.relay) : null, actor });
+      case 'pve':
+        // A begin for setting up a Proxmox VE node for a phone that cannot
+        // reach it, pinned to the node's SSH host key (pve-setup.js).
+        if (!p.address) return { ok: false, text: 'Say where the node answers SSH.' };
+        return this.xoSetups.beginPve({ address: String(p.address), pin: p.pin ? String(p.pin) : null, relay: p.relay ? String(p.relay) : null, actor });
       case 'run':
         return this.xoSetups.run({ job: String(p.job || ''), sealed: String(p.sealed || ''), actor });
       case 'status':
