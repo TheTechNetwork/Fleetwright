@@ -8,9 +8,10 @@ the protocol did not change. Machines may be in a group or alone in an open
 or closed lab ("Labs and groups"). The cluster is set up by one script run
 as root on a node (`install/fleetwright-pve-setup`): a person runs it from
 the command both phones show under Add Proxmox VE and pastes the line it
-prints ("By hand"), the phone runs it itself over SSH ("From the
-phone"), or, for a node the phone cannot reach, one of the person's machines
-that can runs it for the phone ("Through a machine"). **Not built:** the
+prints ("By hand"), or presses Set it up ("One way in"): the phone runs it
+itself over SSH ("From the phone"), or, for a node the phone cannot reach,
+one of the person's machines that can runs it for the phone ("Through a
+machine"). **Not built:** the
 direct path's steps on the Lock Screen, and the pool page's own actions. **Run on a real node** through a machine as far as
 building the image; a run seen to its end, and a machine made on a real cluster, are not yet. The tests run the driver against a stand-in
 Proxmox over real TLS (`test/pve-pools.test.js`).
@@ -100,15 +101,46 @@ saying which version it found. A cluster on an older one is upgraded first.
 
 ## Setting it up
 
+### One way in
+
+**Built in both apps**: Machines › Add Proxmox VE, the node's address and
+its root password, and **Set it up**. Asked for: *"the route through a
+machine and main direct route can be combined"*, and when both can reach
+the node, **the phone goes first**, so the password goes to the node and
+nowhere else:
+
+1. The phone asks the node for its host key, which is also whether it
+   reaches the node at all.
+2. **It reaches it**: the direct route below, with the host key checked once.
+3. **It does not**: the machine route below opens with the address and
+   password already in it, asks the machines at once and chooses the first
+   that reached the node; any other is one tap away. The host key that
+   machine saw is checked there, and the password is sealed to it alone.
+
+There is no separate row for the machine route any more. **Either way the
+screen may be closed** while it runs, and the line is kept in the vault
+when the app is next in front or launched:
+
+- **Through a machine**, the key the line comes back sealed to is kept on
+  the phone (`ProxmoxThroughHandoff`, below).
+- **From the phone**, the run on the node goes on by itself, and what
+  needed the screen was reaching the node again to read the line, which
+  takes the root password. **So while a run is going, the password is kept
+  on the phone**: in the Keychain on iOS (this device only), in the app's
+  encrypted store on Android, beside the checked host key and the node's
+  clock (`ProxmoxDirectHandoff` in both apps). It is wiped when the line is
+  in the vault, when the run fails, or after six hours, and it still goes
+  nowhere but the node. A line read and not yet kept is held the same way,
+  because reading it removes it from the node.
+
+Opening the screen again follows a run it left.
+
 ### From the phone
 
-**Built in both apps**: Machines › Add Proxmox VE › From this phone. The
-node's address and its root password, and the phone does the rest, with no
-machine of the fleet in the path, so the password goes from the phone to the
-node and nowhere else and lives in the screen's memory
-(`ProxmoxSSH.swift`, `ProxmoxSsh.kt`):
+When the phone reaches the node, it does the rest itself, with no machine
+of the fleet in the path (`ProxmoxSSH.swift`, `ProxmoxSsh.kt`):
 
-1. **Connect** reads the node's host key and sends nothing. The phone shows
+1. **The host key** is read and nothing is sent. The phone shows
    its fingerprint, as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`
    prints it on the node's console, and the person says it matches. It is
    kept for that address; a later run goes straight through, and a node
@@ -134,8 +166,8 @@ same `curl … main` the by-hand path does, rather than writing a copy of the
 script from its own bundle: one source for both, and no second copy in two
 app bundles to keep in step. And **the steps are on the screen only**, not
 yet on the Lock Screen or in Android's ongoing notification as Xen
-Orchestra's setup is: a person who leaves the screen opens it again to see
-the end, with the address and password typed again.
+Orchestra's setup is: a person who leaves the screen sees the end by
+opening it again, or finds the cluster in their vault.
 
 **On iOS it is Apple's own swift-nio-ssh**, and not a client built on it:
 the usual one (Citadel) now takes its SSH layer from a personal fork, and
@@ -144,8 +176,8 @@ BouncyCastle.
 
 ### Through a machine
 
-**Built in both apps**: Add Proxmox VE › Through one of your machines, for a
-node the phone cannot reach itself, which is the usual case away from home.
+**Built in both apps**, as where Set it up goes for a node the phone cannot
+reach itself, which is the usual case away from home.
 Asked for in those words: *"If phone can not ssh directly why not ssh
 through one of the nodes that it can reach? Same as all the other things we
 did?"* So it is the same as the others (adding the reconnect watchdog is the
@@ -356,12 +388,12 @@ behind the cluster's firewall, not behind an edge router.
 `AddHypervisorView`; the cluster's page below is not built yet.
 
 **Add Proxmox VE** is one screen: the node's address and its root password,
-and Set up. Then the host key, once, and the steps as they happen, on the
-screen (not yet on the Lock Screen). No probe of every box, no machine to
-pick, no key fingerprint of a fleet machine to compare, and nothing to copy
-between devices. Pasting a line made by hand is the other way in, on the
-same screen, and Through one of your machines is the third, for a node the
-phone cannot reach: that one does ask which machine, because it has to.
+and Set it up. Then the host key, once, and the steps as they happen. When
+the phone reaches the node there is no probe of every box, no machine to
+pick and no fleet machine's fingerprint to compare. When it does not, the
+same press goes to a machine, chosen for the person and changeable, and
+that machine's key is the one thing added. Pasting a line made by hand is
+the other way in, on the same screen.
 
 **The cluster's page** is the component row from `manage.md`, read from the
 health entry, three sections and no form:
