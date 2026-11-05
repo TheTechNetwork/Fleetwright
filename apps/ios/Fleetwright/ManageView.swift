@@ -339,7 +339,7 @@ struct PoolManageView: View {
                 .fleetRow()
             ForEach(rows) { c in
                 NavigationLink {
-                    ComponentView(watch: watch, id: c.id)
+                    ComponentView(watch: watch, id: c.id, settings: settings)
                 } label: {
                     row(c)
                 }
@@ -402,6 +402,8 @@ func manageTone(_ state: Manage.State?) -> Color {
 struct ComponentView: View {
     let watch: PoolWatch
     let id: String
+    /// For the console from away, which opens the fleet's socket as this phone.
+    let settings: Settings
 
     @State private var busy = false
     @State private var message = ""
