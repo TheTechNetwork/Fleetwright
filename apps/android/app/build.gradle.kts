@@ -229,6 +229,18 @@ android {
     // For GOOGLE_WEB_CLIENT_ID above. Off by default since AGP 8.
     buildConfig = true
   }
+
+  // ONE COPY OF BOUNCYCASTLE'S LICENCE. From 1.86 each of bcprov, bcpkix and
+  // bcutil carries META-INF/LICENSE.md, the same text in all three, and two
+  // files at one path stop mergeDebugJavaResource. pickFirst rather than
+  // exclude: the licence asks to travel with the code, so one copy stays in
+  // the app. The other paths the three share (their signature files and
+  // manifests) were already shared in 1.84 and AGP drops those by default.
+  packaging {
+    resources {
+      pickFirsts += "META-INF/LICENSE.md"
+    }
+  }
   // No composeOptions block: the Compose compiler comes from the Kotlin plugin
   // above, at the Kotlin version, so there is nothing to keep in step.
 }
