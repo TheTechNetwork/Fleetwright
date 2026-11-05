@@ -67,6 +67,16 @@ enum XOSetupKey {
         isSignedOverHostKey(watchdogSigningPrefix, key: key, keySig: keySig, hostKey: hostKey, address: address, job: job, pin: pin)
     }
 
+    static let pveSigningPrefix = "agent-fleet/v1/pvesetup-key\n"
+
+    /// And for setting up a Proxmox VE node through a machine of the fleet,
+    /// signed the same way under its own context (`pvesetup-key`), over the
+    /// node's SSH host key: no other job's key passes for it, nor its for
+    /// theirs (src/fleet/host/pve-setup.js).
+    static func isSignedForPve(key: String, keySig: String, hostKey: Fleet.Host.PublicKey, address: String, job: String, pin: String) -> Bool {
+        isSignedOverHostKey(pveSigningPrefix, key: key, keySig: keySig, hostKey: hostKey, address: address, job: job, pin: pin)
+    }
+
     /// The check both jobs through a pool master share: only the context
     /// differs, and the pin is always a host key's digest, never empty,
     /// because there is no plain SSH for a person to accept.
