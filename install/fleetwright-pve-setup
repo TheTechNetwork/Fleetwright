@@ -17,7 +17,7 @@
 #      other VM, no node, no user, no permission.
 #   3. A token for that user, which is what the line carries. Running this
 #      again makes a new one and the old one stops working.
-#   4. A firewall group, `fleetwright-isolate`, that holds a machine to the
+#   4. A firewall group, `fleetwright-fence`, that holds a machine to the
 #      internet and nothing private. The box that clones a machine puts it
 #      behind the group, on the bridge, out of the guest's reach. It does
 #      nothing while the datacenter's firewall is off, and the app says so.
@@ -40,12 +40,14 @@
 #   fleetwright-error: TEXT    the reason it stopped
 #
 # Safe to run again: everything it makes it finds first.
-set -euo pipefail
+set -Eeuo pipefail
 
 POOL=fleetwright
 USER_ID=fleetwright@pve
 TOKEN_NAME=fleet
-FENCE=fleetwright-isolate
+# NO LONGER THAN 18: Proxmox's limit on a security group's name. The first
+# name, fleetwright-isolate, was 19, and the first real run stopped on it.
+FENCE=fleetwright-fence
 IMAGE_NAME=fleetwright-debian-13
 # The image, pinned (src/fleet/host/vm-image.js, DEBIAN_IMAGE; the test holds them equal).
 IMAGE_URL=https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2
@@ -74,6 +76,28 @@ LINE_FILE=""
 say() { printf 'fleetwright: %s\n' "$*"; }
 step() { printf 'fleetwright-step: %s\n' "$1"; }
 die() { printf 'fleetwright: %s\nfleetwright-error: %s\n' "$*" "$*" >&2; exit 1; }
+
+# A COMMAND THAT FAILS IS SAID, in its own words. Under `set -e` a failing
+# pvesh ended the script with its complaint on stderr and no
+# fleetwright-error line, so the phone could say only that the setup stopped
+# "without saying why", which is what the first real run said. pvesh keeps
+# its last line of stderr where the trap can read it, from a subshell too.
+LAST_ERR="$(mktemp)"
+trap 'rm -f "$LAST_ERR"' EXIT
+pvesh() {
+  local rc=0
+  command pvesh "$@" 2> >(tee "$LAST_ERR" >&2) || rc=$?
+  wait
+  # Kept only while it is the latest word: a call that worked clears it.
+  [ "$rc" = 0 ] && : > "$LAST_ERR"
+  return "$rc"
+}
+failed() {
+  local why
+  why="$(grep -v '^[[:space:]]*$' "$LAST_ERR" 2>/dev/null | tail -n 1)"
+  die "${why:-$1 failed} (line $2)"
+}
+trap 'failed "$BASH_COMMAND" "$LINENO"' ERR
 
 while [ $# -gt 0 ]; do
   case "$1" in

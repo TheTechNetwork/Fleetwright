@@ -17,7 +17,7 @@ import path from 'node:path';
 import { PveApi } from '../src/fleet/host/pve-api.js';
 import {
   PvePools, parseConnection, pveRecord, markOf, markText, wideOf, pveIdOf, pveVendorConfig, pveBuildConfig,
-  CONNECTION_PREFIX, PVE_FENCE_GROUP, PVE_ROLE_PRIVS, PVE_STORAGE_PRIVS, PVE_NET_PRIVS, PVE_ROOT_PRIVS,
+  CONNECTION_PREFIX, PVE_FENCE_GROUP, PVE_GROUP_ZONE, PVE_LAB_ZONE, PVE_ALLOW_SET, PVE_ROLE_PRIVS, PVE_STORAGE_PRIVS, PVE_NET_PRIVS, PVE_ROOT_PRIVS,
 } from '../src/fleet/host/pve-pools.js';
 import { poolRecord } from '../src/fleet/host/xo-pools.js';
 import { Pools } from '../src/fleet/host/pools.js';
@@ -467,6 +467,14 @@ test('the setup script embeds the snippets, privileges and image the driver expe
   assert.equal(spawnSync('bash', ['-n', fileURLToPathSafe('../install/fleetwright-pve-setup')]).status, 0);
   // A CLOSED LAB'S NAMES are the sandbox's required hosts, as the edge router's are.
   assert.deepEqual(/^REQUIRED="([^"]+)"/m.exec(script)?.[1].split(' '), [...REQUIRED_HOSTS]);
+  // NAMES PROXMOX TAKES, within its own limits: a security group's at most 18
+  // characters, an SDN zone's and a VNet's at most 8 (fwgrp4, fwlab8 the
+  // longest the options allow). The first real run stopped on a group name of
+  // 19, which the stand-in above accepted, so the limits are held here.
+  assert.ok(lines.includes(`FENCE=${PVE_FENCE_GROUP}`), 'the script makes another firewall group than the boxes put machines behind');
+  assert.match(PVE_FENCE_GROUP, /^[A-Za-z][A-Za-z0-9_-]{1,17}$/);
+  for (const zone of [PVE_GROUP_ZONE, PVE_LAB_ZONE]) assert.ok(`${zone}8`.length <= 8, `${zone} leaves no room for a VNet number`);
+  assert.ok(PVE_ALLOW_SET.length <= 64);
 });
 
 /** @param {string} rel */
