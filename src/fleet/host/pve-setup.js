@@ -55,13 +55,15 @@ export function startCommand(coordinator) {
 }
 
 /**
- * How far it has got: its step and error lines since `since`, whether it
- * runs, and whether the line is there.
+ * How far it has got: its step and error lines since `since`, the last
+ * `fleetwright-part:` line of the step it is on (none once a later step has
+ * begun), whether it runs, and whether the line is there.
  *
  * @param {number} since
  */
 export function pollCommand(since) {
-  return `journalctl -u ${UNIT} --since @${since} -o cat --no-pager | grep -E '^fleetwright-(step|error):' | tail -n 40; ` +
+  return `journalctl -u ${UNIT} --since @${since} -o cat --no-pager | ` +
+    `awk '/^fleetwright-(step|error):/ {print} /^fleetwright-step:/ {p=0} /^fleetwright-part:/ {p=$0} END {if (p) print p}'; ` +
     `echo "state=$(systemctl is-active ${UNIT})"; test -f ${LINE_FILE} && echo line=ready`;
 }
 
@@ -72,20 +74,42 @@ export const TAKE_LINE = `cat ${LINE_FILE} && rm -f ${LINE_FILE}`;
 export const STOP = `systemctl stop ${UNIT} 2>/dev/null; rm -f ${LINE_FILE}`;
 
 /**
- * What a poll said.
+ * What a poll said. `part` is how far into its step the script is: `fill` in
+ * thousandths, or null when it measured nothing, and what it is doing; null
+ * when it has said nothing of the step it is on.
  *
  * @param {string} out
- * @returns {{ steps: string[], error: string|null, running: boolean, lineReady: boolean }}
+ * @returns {{ steps: string[], error: string|null, running: boolean, lineReady: boolean, part: { fill: number|null, text: string }|null }}
  */
 export function progressOf(out) {
   const lines = String(out || '').split('\n');
   const error = lines.filter((l) => l.startsWith('fleetwright-error: ')).pop();
+  // Only after the last step line: a part belongs to the step it was said in.
+  let after = 0;
+  lines.forEach((l, i) => {
+    if (l.startsWith('fleetwright-step: ')) after = i + 1;
+  });
   return {
     steps: lines.filter((l) => l.startsWith('fleetwright-step: ')).map((l) => l.slice('fleetwright-step: '.length).trim()),
     error: error ? error.slice('fleetwright-error: '.length).trim() : null,
     running: lines.includes('state=active') || lines.includes('state=activating'),
     lineReady: lines.includes('line=ready'),
+    part: partOf(lines.slice(after).filter((l) => l.startsWith('fleetwright-part: ')).pop()),
   };
+}
+
+/**
+ * One `fleetwright-part:` line, or null for none or one that is not shaped
+ * as the script writes it.
+ *
+ * @param {string|undefined} line
+ * @returns {{ fill: number|null, text: string }|null}
+ */
+export function partOf(line) {
+  const m = /^fleetwright-part: (-|\d{1,4}) (.+)$/.exec(String(line ?? '').trim());
+  if (!m) return null;
+  const fill = m[1] === '-' ? null : Math.min(1000, Number(m[1]));
+  return { fill, text: m[2].replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 160) };
 }
 
 /** The script's own steps, in the order it says them, after `node`. */
@@ -95,13 +119,15 @@ const SCRIPT_STEPS = PVESETUP_STEPS.slice(1);
  * The job's steps, in PVESETUP_STEPS order: `node` opens the connection,
  * starts the script and reads the clock; each later step waits until the
  * script has said the step after it (or `done`), so a step is drawn as
- * running while the script runs it. `line` reads the line, checks it is one
- * and seals it to the phone.
+ * running while the script runs it, and what the script says of how far into
+ * it it is goes to `say`. `line` reads the line, checks it is one and seals
+ * it to the phone.
  *
  * @param {{
  *   open: (ctx: any) => Promise<{ remote: (script: string, opts?: { timeoutMs?: number }) => Promise<{ code: number|null, stdout: string, stderr: string }> }>,
  *   coordinatorUrl: string|null,
  *   sealLine: (ctx: any, line: string) => Promise<void>,
+ *   say?: (ctx: any, part: { fill: number|null, text: string }) => void,
  *   sleep: (ms: number) => Promise<void>,
  *   now: () => number,
  *   pollMs?: number,
@@ -109,7 +135,7 @@ const SCRIPT_STEPS = PVESETUP_STEPS.slice(1);
  * }} deps
  * @returns {Array<(ctx: any) => Promise<any>>}
  */
-export function pveSteps({ open, coordinatorUrl, sealLine, sleep, now, pollMs = 5_000, limitMs = 45 * 60_000 }) {
+export function pveSteps({ open, coordinatorUrl, sealLine, say = () => {}, sleep, now, pollMs = 5_000, limitMs = 45 * 60_000 }) {
   /**
    * Wait until the script has said a step after `key`, or ended.
    *
@@ -126,6 +152,9 @@ export function pveSteps({ open, coordinatorUrl, sealLine, sleep, now, pollMs = 
       if (r.code === null) throw new Error('the node stopped answering over SSH while the setup ran. It may still be running there.');
       ctx.last = progressOf(r.stdout);
       if (after.some((s) => ctx.last.steps.includes(s))) return;
+      // HOW FAR INTO THIS STEP, said while it is still this step's: the
+      // image's download and build are most of the wait.
+      if (ctx.last.part && ctx.last.steps.at(-1) === key) say(ctx, ctx.last.part);
       if (ctx.last.error) throw new Error(`the node said: ${ctx.last.error}`);
       if (!ctx.last.running) throw new Error(`the setup on the node stopped without saying why. journalctl -u ${UNIT} on the node has its output.`);
       await sleep(pollMs);
