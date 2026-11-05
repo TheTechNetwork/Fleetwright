@@ -36,7 +36,7 @@ test('both phones begin `pve`, check the key under `pvesetup-key`, and seal unde
   // The context, as signingInput writes it.
   const prefix = signingInput('pvesetup-key', {}).replace(/\{\}$/, '');
   assert.equal(JSON.parse(`"${/static let pveSigningPrefix = "([^"]+)"/.exec(IOS_KEY)?.[1]}"`), prefix);
-  assert.ok(ANDROID.includes(`"${prefix.replace('\n', '\\n')}{`), 'Android signs under another context');
+  assert.ok(ANDROID.includes(`"${prefix.replaceAll('\n', '\\n')}{`), 'Android signs under another context');
   // The names, with each language's interpolation filled in.
   const [job, at] = ['0123456789ab', 'pve1.lan'];
   const swift = (/** @type {string} */ name) => (new RegExp(`static func ${name}\\(job: String, address: String\\) -> String \\{ "([^"]+)" \\}`).exec(IOS_SEAL)?.[1] ?? '')
