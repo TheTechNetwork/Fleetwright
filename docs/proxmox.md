@@ -250,6 +250,19 @@ draws a bar only for a measured `FILL` (C-5):
   stage it has not heard. The reader is a process of its own, so nothing
   it meets stops the setup.
 
+**A build that fails says why, and is removed.** The first real run waited
+25 minutes on a build VM that never powered off, and said only that. Now
+the reader keeps every line the build machine's console prints, the build's
+own script writes `fleetwright-build: failed` when any command in it stops,
+and the setup stops waiting the moment it hears that. Its error is the
+console's last line that reads as one ("E: …", "error", "could not…"), or
+its last line, and the build VM is then destroyed, since it can be used for
+nothing and holds its number and memory. **Leftovers go too**: the image
+step begins by removing any VM in the pool tagged `fleetwright-build` that
+is not a template, which only this script makes, so a run that was stopped
+or failed before this change is cleaned up by the next. A cancel removes
+the build it interrupted.
+
 Through a machine, the words go after the step's ("Building the machine
 image: downloading…") and the bar is the job's `fill`, which the Lock Screen
 and Android's notification already draw for an install's download.
@@ -294,11 +307,24 @@ Finding each first, so it is safe to run again:
 
 Its options: `--address`, `--storage`, `--bridge`, `--enable-firewall`,
 `--channel stable|rolling`, `--no-image`, `--rebuild-image`,
-`--expire-days`, `--line-file`.
+`--expire-days`, `--line-file`, `--coordinator`, `--vmids FROM-TO`.
 
 The snippets the image boots with, the privileges and the image pin are
 written in the script, which has no Fleetwright to import them from, and in
 `pve-pools.js`; `test/pve-pools.test.js` holds the two equal.
+
+### Machine numbers
+
+Asked for: *"vmid range user deserves a choice"*. Add Proxmox VE takes an
+optional **Machine numbers**, such as `9000-9099`, kept for the next time;
+by hand it is `--vmids 9000-9099`. The image is built at the first free
+number in it, and the line carries it (`vmids: { from, to }`), so every
+machine a box clones takes the first number in it the cluster says is free
+(`/cluster/nextid?vmid=N`, at most 64 asked per machine). A full range is
+said, with nothing made. Left empty, numbers are the cluster's next free
+ones, as before. The machine running the setup for a phone checks it is
+digits and a dash before it goes into a command (`VMIDS_RE`), and the script
+and the boxes hold it to Proxmox's bounds again.
 
 ## How a machine is made
 
