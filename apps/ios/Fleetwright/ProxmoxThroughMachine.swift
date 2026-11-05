@@ -11,19 +11,22 @@ import SwiftUI
 /// password is sealed to that key, so the fleet relays what it cannot read.
 /// The machine then runs on the node exactly what this phone runs when it
 /// reaches it (ProxmoxSSH), and the line comes back sealed to a key this
-/// screen holds in memory, under its own name (Seal.pvesetupHandoffAAD).
+/// phone keeps in the Keychain until the line is in the vault, under its own
+/// name (Seal.pvesetupHandoffAAD). The screen may be closed while it runs:
+/// the line is collected when the app is next in front (ProxmoxThroughHandoff).
 ///
 /// The same Form, rows and single asking card as adding the watchdog
 /// (AddWatchdogView), which is the job it is modelled on: the host key is the
 /// one question, and spends the emphasis.
 struct ProxmoxThroughMachineView: View {
     let settings: Settings
-    /// Keeps the line once it has come back: the screen this was opened from.
-    let keep: (ProxmoxLine.Record) async -> Void
+    /// Told once the line is kept in the vault, with the cluster's address:
+    /// the screen this was opened from says it.
+    let kept: (String) -> Void
 
-    init(settings: Settings, node: String, keep: @escaping (ProxmoxLine.Record) async -> Void) {
+    init(settings: Settings, node: String, kept: @escaping (String) -> Void) {
         self.settings = settings
-        self.keep = keep
+        self.kept = kept
         _address = State(initialValue: node)
     }
 
@@ -44,9 +47,10 @@ struct ProxmoxThroughMachineView: View {
     @State private var hostId = ""
     @State private var progress: Fleet.SetupState?
     @State private var cancelRequested = false
-    /// What the line comes back sealed to, in this screen's memory alone.
-    @State private var reply: Seal.OneUseKey?
-    @State private var kept = false
+    /// The line is in the vault.
+    @State private var lineKept = false
+    /// The vault did not take it yet; asked again by the button or later.
+    @State private var keepAgain = false
 
     private struct Begun {
         let job: String
@@ -270,8 +274,8 @@ struct ProxmoxThroughMachineView: View {
                         .foregroundStyle(Design.Palette.inkDim)
                         .contentTransition(.opacity)
                 }
-                if !kept {
-                    Text(ProxmoxThroughWords.keepOpen)
+                if !lineKept {
+                    Text(ProxmoxThroughWords.mayClose)
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
@@ -291,8 +295,12 @@ struct ProxmoxThroughMachineView: View {
                     .frame(minHeight: 44)
             } else if running {
                 EmptyView()
-            } else if progress?.state == "done", kept {
+            } else if progress?.state == "done", lineKept {
                 Button("Done") { dismiss() }
+                    .frame(minHeight: 44)
+            } else if progress?.state == "done", keepAgain, let state = progress {
+                Button("Keep the line") { Task { await apply(state) } }
+                    .disabled(busy)
                     .frame(minHeight: 44)
             } else {
                 // A new begin, because the key was for the job that ended.
@@ -411,7 +419,9 @@ struct ProxmoxThroughMachineView: View {
         guard let begun else { return }
         busy = true
         defer { busy = false }
-        let back = Seal.newKey()
+        // THE KEY THE LINE COMES BACK TO OUTLIVES THIS SCREEN: kept in the
+        // Keychain under the job until the line is in the vault.
+        let back = ProxmoxThroughHandoff.newKey(job: begun.job, address: begun.address)
         let sealed: [String: String]
         do {
             sealed = try Seal.seal(
@@ -420,6 +430,7 @@ struct ProxmoxThroughMachineView: View {
                 payload: ["v": 1, "purpose": "pve", "root": ["password": rootPassword], "reply": back.publicKey]
             )
         } catch {
+            ProxmoxThroughHandoff.forget(job: begun.job)
             refuse(error.localizedDescription)
             return
         }
@@ -429,10 +440,10 @@ struct ProxmoxThroughMachineView: View {
         do {
             let answer = try await fleet.runSetup(job: begun.job, sealed: joined)
             guard answer.ok != false else {
+                ProxmoxThroughHandoff.forget(job: begun.job)
                 refuse(answer.text ?? "\(begun.hostId) did not take the root password.")
                 return
             }
-            reply = back
             hostId = begun.hostId
             jobAddress = begun.address
             progress = answer.xosetup
@@ -442,6 +453,7 @@ struct ProxmoxThroughMachineView: View {
                                     progress: answer.xosetup, purpose: "pve",
                                     otherwise: XOSetupAttributes.ContentState(step: 0, of: 0, phase: "node", state: "running", since: Date()))
         } catch {
+            ProxmoxThroughHandoff.forget(job: begun.job)
             refuse(error.localizedDescription)
         }
     }
@@ -488,28 +500,43 @@ struct ProxmoxThroughMachineView: View {
     }
 
     /// The state, on the screen and on the Lock Screen; once it is done, the
-    /// line opened with this screen's key and kept, and the key dropped.
+    /// line opened with the kept key and put in the vault, and the key
+    /// dropped. A job that ended otherwise drops its key too.
     @MainActor
     private func apply(_ state: Fleet.SetupState) async {
         progress = state
         guard let job else { return }
         await XOSetupActivities.apply(job: job, progress: state)
-        guard state.state == "done", !kept, let key = reply else { return }
-        guard let handoff = state.handoff, let record = ProxmoxThroughWords.open(handoff, job: job, address: jobAddress, key: key) else {
-            refuse("\(hostId) finished, and what it handed back is not a line this phone can open. Run the setup again; it finds what it made.")
-            reply = nil
-            return
+        if state.state == "failed" || state.state == "cancelled" { ProxmoxThroughHandoff.forget(job: job) }
+        guard state.state == "done", !lineKept else { return }
+        busy = true
+        defer { busy = false }
+        switch await ProxmoxThroughHandoff.collect(job: job, state: state, settings: settings) {
+        case let .kept(at):
+            lineKept = true
+            keepAgain = false
+            kept(at)
+        case let .failed(text, again):
+            keepAgain = again
+            refuse(text)
+        case nil:
+            // BEING COLLECTED from the front of the app this moment: the
+            // button asks again. Gone from the list: kept there already.
+            if ProxmoxThroughHandoff.pending().contains(where: { $0.job == job }) {
+                keepAgain = true
+                return
+            }
+            lineKept = true
+            kept(jobAddress)
         }
-        reply = nil
-        await keep(record)
-        kept = true
     }
 
     private func reset() {
         job = nil
         progress = nil
         begun = nil
-        reply = nil
+        lineKept = false
+        keepAgain = false
         cancelRequested = false
         toCompare = nil
         matched = false
@@ -536,8 +563,8 @@ enum ProxmoxThroughWords {
     static let intro = "When this phone cannot reach the node, one of your machines that can does the setup for it: "
         + "the same steps, run on the node over SSH. The root password is sealed on this phone to that machine alone."
 
-    static let keepOpen = "Keep this screen open until it ends, which with the machine image is several minutes: the line comes back to this screen, "
-        + "and closing it leaves the node set up with a line nobody holds. The phone may lock."
+    static let mayClose = "With the machine image this takes several minutes, and you need not watch: the setup goes on on the node, "
+        + "and the line comes back sealed to this phone, which keeps it in your vault when Fleetwright is next open."
 
     static func passwordFooter(_ host: String) -> String {
         "It signs in to the node over SSH once, and \(host) forgets it as soon as it has. "

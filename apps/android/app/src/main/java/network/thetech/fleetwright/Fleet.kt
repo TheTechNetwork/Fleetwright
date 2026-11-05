@@ -3772,6 +3772,11 @@ class Settings(context: Context) {
         get() = prefs.getString("xoPending", "") ?: ""
         set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoPending") else putString("xoPending", value) }.apply()
 
+    /** The Proxmox VE setups still owed a line, as ProxmoxThroughHandoff writes them. Not a secret. */
+    var pvePending: String
+        get() = prefs.getString("pvePending", "") ?: ""
+        set(value) = prefs.edit().apply { if (value.isEmpty()) remove("pvePending") else putString("pvePending", value) }.apply()
+
     /**
      * The machine that last got through to each Xen Orchestra address, as
      * XoSaved writes it: a JSON object of address to host. Not a secret.
