@@ -57,11 +57,12 @@ test('iOS: the screen asks every machine first, then runs one job on one machine
   // NEVER HELD: each carries an idempotency key, which keeps a send that could
   // not reach the fleet out of the outbox and off the disk.
   const sends = IOS.match(/intent\("(?:xoprobe|xosetup)"[^\n]*\n?[^\n]*idempotencyKey: "app-\\\(UUID\(\)\.uuidString\)"/g) ?? [];
-  // Nine: the probe, the probe through this phone, and begin, run, status,
+  // Ten: the probe, the probe through this phone, and begin, run, status,
   // cancel and policy (test/xopolicy-ios-in-apps.test.js has the last), an
-  // install's deploy (test/xodeploy-in-apps.test.js), and adding the
-  // watchdog (test/xowatchdog-ios-in-apps.test.js).
-  assert.equal(sends.length, 9, 'every probe and phase is sent with an idempotency key');
+  // install's deploy (test/xodeploy-in-apps.test.js), adding the watchdog
+  // (test/xowatchdog-ios-in-apps.test.js), and setting up Proxmox VE through
+  // a machine (test/pvesetup-in-apps.test.js).
+  assert.equal(sends.length, 10, 'every probe and phase is sent with an idempotency key');
 });
 
 test('iOS: a machine that reached the address is offered, HTTPS with a certificate first, and the alternatives are said plainly', () => {

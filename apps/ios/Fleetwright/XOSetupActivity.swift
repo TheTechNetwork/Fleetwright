@@ -209,6 +209,7 @@ enum XOSetupWords {
         if purpose == "deploy", let end = deployEnd(s.state) { return end }
         if purpose == "reconnect", let end = reconnectEnd(s.state) { return end }
         if purpose == "watchdog", let end = watchdogEnd(s.state) { return end }
+        if purpose == "pve" { return pveEnd(s.state) ?? pvePhrase(phase: s.phase, step: s.step, of: s.of) }
         switch s.state {
         case "done": return "Hypervisor added"
         case "failed": return "Hypervisor setup stopped"
@@ -275,6 +276,40 @@ enum XOSetupWords {
         case "cancelled": return "Adding the watchdog cancelled"
         case "waiting": return "Waiting for the root password"
         default: return nil
+        }
+    }
+
+    /// What setting up Proxmox VE is, while it runs and before a step has
+    /// been reported, in the words the coordinator's banner uses for it
+    /// (PVE_TITLES in core.js).
+    static let pveRunning = "Setting up Proxmox VE"
+
+    /// How setting up Proxmox VE through a machine ended, in the banner's
+    /// words (PVE_TITLES), or nil while it has not.
+    static func pveEnd(_ state: String) -> String? {
+        switch state {
+        case "done": return "Proxmox VE set up"
+        case "failed": return "Proxmox VE was not set up"
+        case "cancelled": return "Setting up Proxmox VE cancelled"
+        case "waiting": return "Waiting for the root password"
+        default: return nil
+        }
+    }
+
+    /// Its steps (PVESETUP_STEPS), in the words the host leaves on the job
+    /// (PVE_STEP_WORDS in xo-setup.js). Its own, because `user`, `token` and
+    /// `image` name other things in a Xen Orchestra job.
+    static func pvePhrase(phase: String, step: Int, of: Int) -> String {
+        switch phase {
+        case "node": return "Reaching the node"
+        case "pool": return "Making the pool"
+        case "user": return "Making the user and its roles"
+        case "token": return "Making its token"
+        case "fence": return "Making the firewall group"
+        case "networks": return "Making lab and group networks"
+        case "image": return "Building the machine image"
+        case "line": return "Handing over the line"
+        default: return "Step \(min(step + 1, max(of, 1))) of \(max(of, 1))"
         }
     }
 

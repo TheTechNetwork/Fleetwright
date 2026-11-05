@@ -1402,6 +1402,15 @@ struct Fleet {
     /// under the watchdog's own context (XOSetupKey.isSignedForWatchdog), and
     /// every later phase is a setup's. A host older than the phase answers
     /// `host_outdated`, with words that say so.
+    /// Begin setting up a Proxmox VE node on ONE chosen machine that reaches
+    /// it over SSH, pinned to the host key the person compared
+    /// (src/fleet/host/pve-setup.js). The reply carries the key to seal the
+    /// root password to, signed by the machine under `pvesetup-key`.
+    func beginPve(address: String, pin: String, host: String) async throws -> Reply {
+        try await intent("xosetup", params: ["phase": "pve", "address": address, "pin": pin], host: host,
+                         idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
     func beginWatchdog(address: String, pin: String, host: String) async throws -> Reply {
         try await intent("xosetup", params: ["phase": "watchdog", "address": address, "pin": pin], host: host,
                          idempotencyKey: "app-\(UUID().uuidString)")

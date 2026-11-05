@@ -15,8 +15,11 @@ import UIKit
 /// pasted here. Either way the line is kept in the vault as
 /// `hypervisor:<address>`, as a Xen Orchestra pool's token is, and the boxes
 /// this person approved pick it up within ten minutes
-/// (src/fleet/host/pve-pools.js). No probe, no machine to pick, no key of a
-/// fleet machine to compare: no admin credential crosses the fleet.
+/// (src/fleet/host/pve-pools.js).
+///
+/// THROUGH ONE OF YOUR MACHINES, for a node this phone cannot reach: the
+/// same setup run there by a machine that can (ProxmoxThroughMachineView),
+/// with the root password sealed to that machine alone.
 struct AddProxmoxView: View {
     let settings: Settings
     @Environment(\.dismiss) private var dismiss
@@ -106,6 +109,24 @@ struct AddProxmoxView: View {
                 sectionHead("From this phone")
             } footer: {
                 Text("Proxmox VE 9 or newer. The password goes from this phone to the node and nowhere else, and is forgotten when this screen closes.")
+            }
+
+            // WHEN THIS PHONE CANNOT REACH THE NODE, one of the person's
+            // machines that can does it, the way every other server this
+            // phone cannot reach is set up (ProxmoxThroughMachineView).
+            if coordinatorOk && since == nil && !kept {
+                Section {
+                    NavigationLink {
+                        ProxmoxThroughMachineView(settings: settings, node: nodeKey) { record in await keep(record) }
+                    } label: {
+                        Text("Through one of your machines")
+                            .fleetType(.bodyStrong)
+                            .foregroundStyle(Design.Palette.ink)
+                    }
+                    .frame(minHeight: 44)
+                } footer: {
+                    Text("When this phone cannot reach the node: a machine of your fleet that can runs the same setup there, with the root password sealed to it alone.")
+                }
             }
 
             Section {

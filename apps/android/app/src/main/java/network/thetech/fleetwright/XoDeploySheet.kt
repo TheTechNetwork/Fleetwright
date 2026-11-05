@@ -431,7 +431,9 @@ internal class Begun(val setup: Fleet.Setup, val hostId: String, val where: Stri
  * root password.
  */
 @Composable
-internal fun HostKeyAsk(hostId: String, address: String, key: Fleet.SshKey, matched: Boolean, enabled: Boolean, onMatched: (Boolean) -> Unit) {
+internal fun HostKeyAsk(hostId: String, address: String, key: Fleet.SshKey, matched: Boolean, enabled: Boolean, onMatched: (Boolean) -> Unit, node: Boolean = false) {
+    // A PROXMOX VE NODE ([node]) is asked about in its own words: where its
+    // console is, and what it is called.
     SectionHead("Its SSH host key")
     Column(
         Modifier
@@ -440,8 +442,8 @@ internal fun HostKeyAsk(hostId: String, address: String, key: Fleet.SshKey, matc
             .padding(Design.Space.groupTight),
         verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
     ) {
-        Text("Check this key on the pool master", style = Design.Style.bodyStrong, color = Design.Palette.attention.now)
-        Text("On the pool master’s console, open Local Command Shell and run:", style = Design.Style.bodySmall, color = Design.Palette.ink.now)
+        Text(if (node) "Check this key on the node" else "Check this key on the pool master", style = Design.Style.bodyStrong, color = Design.Palette.attention.now)
+        Text(if (node) "In Proxmox's web interface, open the node's Shell and run:" else "On the pool master’s console, open Local Command Shell and run:", style = Design.Style.bodySmall, color = Design.Palette.ink.now)
         SelectionContainer { Text(XoDeploy.keygenCommand(key.type), style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now) }
         Text(
             "It prints this fingerprint, as $hostId saw it. If it prints another, something else answered at $address.",
@@ -458,7 +460,7 @@ internal fun HostKeyAsk(hostId: String, address: String, key: Fleet.SshKey, matc
         ) {
             Checkbox(checked = matched, onCheckedChange = null, enabled = enabled)
             Spacer(Modifier.width(Design.Space.insideTight))
-            Text("It matches the pool master’s", style = Design.Style.body, color = Design.Palette.ink.now)
+            Text(if (node) "It matches the node’s" else "It matches the pool master’s", style = Design.Style.body, color = Design.Palette.ink.now)
         }
     }
     Hint("The root password goes only to a server that answers with this key.")
