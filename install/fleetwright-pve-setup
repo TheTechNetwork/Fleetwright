@@ -396,6 +396,12 @@ cat <<'BUILD' | sed "s/@CHANNEL@/$CHANNEL/" >"$SNIPPET_DIR/fleetwright-pve-build
 #cloud-config
 # Fleetwright: builds the machine image (install/fleetwright-pve-setup).
 # Powers off when it is done. Still running means it failed.
+# The account Fleetwright runs as, which the package is told to use.
+users:
+  - default
+  - name: fleetwright
+    shell: /bin/bash
+    lock_passwd: true
 # Each stage is said on the serial console, where the setup reads it.
 bootcmd:
   - [sh, -c, 'echo fleetwright-build: up >/dev/ttyS0 || true']
@@ -491,10 +497,14 @@ else
   ) &
   reader=$!
   # WHY A BUILD FAILED, from its console: the last line that reads as an
-  # error, or else its last line, for the person to act on.
+  # error, or else its last line, for the person to act on. Not systemd's
+  # "[FAILED] Failed to start cloud-final.service", which only says a stage
+  # failed and came after the line that said why (the installer's own
+  # "FAIL could not read a version ..." on the first real build).
   console_said() {
     local why
-    why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -E 'E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | cut -c1-240)"
+    why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -v '^[[:space:]]*\[' | grep -E 'FAIL |E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | sed 's/^[[:space:]]*//' | cut -c1-240)"
+    [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -E 'FAIL |E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | cut -c1-240)"
     [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | tail -n 1 | cut -c1-240)"
     printf '%s' "$why"
   }

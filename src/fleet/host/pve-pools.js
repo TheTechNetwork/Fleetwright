@@ -993,6 +993,13 @@ export function pveVendorConfig() {
  * unjoined, nothing that makes two clones one machine, and powered off. A
  * build that fails stays running, which the script reports with the command
  * that shows its console. `@CHANNEL@` is the apt suite, put in by the script.
+ * THE RUN USER IS MADE HERE, as the Xen Orchestra image makes it
+ * (vm-image.js): the package is preseeded to run as `fleetwright`, and its
+ * installer will not run the node it ships as root for a user that does not
+ * exist, so without the account its postinst stopped with "could not read a
+ * version from .../node", cloud-init's final stage failed, and the first real
+ * build never finished.
+ *
  * Each stage writes `fleetwright-build: <stage>` to the serial console (up,
  * fleetwright, off, or `failed` when the install stops), which the script
  * reads to say how far the build is, and to stop waiting on one that failed.
@@ -1002,6 +1009,12 @@ export function pveBuildConfig() {
     '#cloud-config',
     '# Fleetwright: builds the machine image (install/fleetwright-pve-setup).',
     '# Powers off when it is done. Still running means it failed.',
+    '# The account Fleetwright runs as, which the package is told to use.',
+    'users:',
+    '  - default',
+    '  - name: fleetwright',
+    '    shell: /bin/bash',
+    '    lock_passwd: true',
     '# Each stage is said on the serial console, where the setup reads it.',
     'bootcmd:',
     "  - [sh, -c, 'echo fleetwright-build: up >/dev/ttyS0 || true']",
