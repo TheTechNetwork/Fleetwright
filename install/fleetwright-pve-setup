@@ -25,14 +25,15 @@
 #      published SHA-512, with Fleetwright installed and not joined, as a
 #      template in the pool.
 #   6. The line: `fleetwright-pve:1:` and the address, the token, the pool,
-#      and how to trust this cluster: its own CA, read from
+#      the numbers its machines take when --vmids gave them, and how to trust
+#      this cluster: its own CA, read from
 #      /etc/pve/pve-root-ca.pem, which signs every node's certificate.
 #
 # Usage:
 #   fleetwright-pve-setup [--address HOST[:PORT]] [--storage ID] [--bridge NAME]
 #                         [--enable-firewall] [--channel stable|rolling]
 #                         [--no-image] [--rebuild-image] [--expire-days N]
-#                         [--line-file PATH] [--coordinator URL]
+#                         [--line-file PATH] [--coordinator URL] [--vmids FROM-TO]
 #                         [--groups 0-4] [--labs-open 0-4] [--labs-closed 0-4]
 #
 # Lines for the phone, beside the ones for a person:
@@ -74,6 +75,10 @@ IMAGE=1
 REBUILD=0
 EXPIRE_DAYS=365
 LINE_FILE=""
+# THE NUMBERS THE FLEET'S MACHINES TAKE: empty for whatever is next free,
+# FROM-TO to keep them apart from the cluster's own. The image is built in
+# it, and the line carries it, so every machine a box clones takes one too.
+VMIDS=""
 
 say() { printf 'fleetwright: %s\n' "$*"; }
 step() { printf 'fleetwright-step: %s\n' "$1"; }
@@ -92,7 +97,9 @@ trap 'rm -f "$LAST_ERR"' EXIT
 pvesh() {
   local rc=0
   command pvesh "$@" 2> >(tee "$LAST_ERR" >&2) || rc=$?
-  wait
+  # ITS OWN tee and nothing else: a bare `wait` would also wait on the
+  # download and the build's console reader, which run beside it.
+  wait "$!" 2>/dev/null || true
   # Kept only while it is the latest word: a call that worked clears it.
   [ "$rc" = 0 ] && : > "$LAST_ERR"
   return "$rc"
@@ -119,6 +126,7 @@ while [ $# -gt 0 ]; do
     --rebuild-image) REBUILD=1; shift ;;
     --expire-days) EXPIRE_DAYS="${2:?--expire-days needs a number}"; shift 2 ;;
     --line-file) LINE_FILE="${2:?--line-file needs a path}"; shift 2 ;;
+    --vmids) VMIDS="${2:?--vmids needs FROM-TO}"; shift 2 ;;
     # Read from stdin there is no file to print the head of.
     -h | --help) if [ -f "$0" ]; then sed -n '2,40p' "$0"; else echo "see docs/proxmox.md, \"Setting it up\""; fi; exit 0 ;;
     *) die "unknown option $1 (--help says what there is)" ;;
@@ -166,6 +174,25 @@ pvesm status --storage "$STORAGE" >/dev/null 2>&1 || die "storage $STORAGE is no
 ip link show "$BRIDGE" >/dev/null 2>&1 || die "bridge $BRIDGE is not on this node; pass --bridge"
 
 # --- 1. the pool ---------------------------------------------------------------
+if [ -n "$VMIDS" ]; then
+  [[ "$VMIDS" =~ ^([0-9]{3,9})-([0-9]{3,9})$ ]] || die "--vmids is two numbers, FROM-TO, such as 9000-9099"
+  VMID_FROM=$((10#${BASH_REMATCH[1]})); VMID_TO=$((10#${BASH_REMATCH[2]}))
+  [ "$VMID_FROM" -ge 100 ] && [ "$VMID_TO" -le 999999999 ] && [ "$VMID_FROM" -le "$VMID_TO" ] ||
+    die "--vmids $VMIDS is not a range Proxmox numbers machines in: from 100 up to 999999999, the first no larger than the last"
+fi
+
+# A NUMBER FOR A NEW MACHINE: the next free one, or the first free one in
+# --vmids, asked of the cluster so a number another of its machines holds is
+# never taken.
+free_vmid() {
+  if [ -z "$VMIDS" ]; then pvesh get /cluster/nextid; return; fi
+  local n
+  for ((n = VMID_FROM; n <= VMID_TO; n++)); do
+    if command pvesh get /cluster/nextid --vmid "$n" >/dev/null 2>&1; then echo "$n"; return; fi
+  done
+  die "every number in --vmids $VMIDS is taken; give a wider range"
+}
+
 step pool
 pveum pool list --output-format json | json 'join "\n", map { $_->{poolid} } @$d' | grep -qx "$POOL" ||
   pveum pool add "$POOL" --comment "Fleetwright: everything the fleet may touch. Its machines and its images live here."
@@ -363,6 +390,7 @@ packages: [curl, ca-certificates, openssh-server, qemu-guest-agent, avahi-daemon
 runcmd:
   - |
     set -eu
+    trap 'rc=$?; [ "$rc" = 0 ] || echo "fleetwright-build: failed $rc" >/dev/ttyS0' EXIT
     echo fleetwright-build: fleetwright >/dev/ttyS0 || true
     curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network @CHANNEL@ main" >/etc/apt/sources.list.d/fleetwright.list
@@ -379,6 +407,14 @@ runcmd:
     echo fleetwright-build: off >/dev/ttyS0 || true
     poweroff
 BUILD
+
+# AN EARLIER BUILD THAT DID NOT FINISH is removed first: one that failed,
+# or a run that was stopped. Only this pool's, and only what is tagged as a
+# build and is not a template, which nothing but this script makes.
+for old in $(pvesh get "/pools/$POOL" --output-format json | json 'join "\n", map { $_->{vmid} } grep { ($_->{template} // 0) != 1 && ($_->{tags} // "") =~ /(^|[;, ])fleetwright-build($|[;, ])/ } @{$d->{members}}'); do
+  qm stop "$old" --skiplock 1 >/dev/null 2>&1 || true
+  qm destroy "$old" --purge 1 >/dev/null 2>&1 && say "removed VM $old, an earlier build that did not finish" || say "could not remove VM $old, an earlier build that did not finish"
+done
 
 existing="$(pvesh get "/pools/$POOL" --output-format json | json 'join "\n", map { $_->{vmid} } grep { ($_->{template} // 0) == 1 && ($_->{tags} // "") =~ /(^|[;, ])fleetwright-image($|[;, ])/ } @{$d->{members}}')"
 if [ "$IMAGE" = 0 ]; then
@@ -408,7 +444,11 @@ else
     echo "$IMAGE_SHA512  $img.part" | sha512sum -c --status || { rm -f "$img.part"; die "the image did not match its published SHA-512; nothing was built"; }
     mv "$img.part" "$img"
   fi
-  ID="$(pvesh get /cluster/nextid)"
+  ID="$(free_vmid)" || exit 1
+  # A BUILD THAT IS STOPPED IS REMOVED: a cancel from the phone stops this
+  # unit, and a build left running would hold its number and its memory.
+  BUILDING="$ID"
+  trap 'trap - TERM; [ -n "${BUILDING:-}" ] && { qm stop "$BUILDING" --skiplock 1 >/dev/null 2>&1; qm destroy "$BUILDING" --purge 1 >/dev/null 2>&1; }; exit 143' TERM
   qm create "$ID" --name "$IMAGE_NAME-build" --pool "$POOL" --memory 2048 --cores 2 --cpu host --ostype l26 \
     --net0 "virtio,bridge=$BRIDGE,firewall=1" --scsihw virtio-scsi-single \
     --scsi0 "$STORAGE:0,import-from=$img,discard=on" --ide2 "$STORAGE:cloudinit" --boot order=scsi0 \
@@ -419,38 +459,64 @@ else
   qm start "$ID"
   # WHAT THE BUILD MACHINE IS DOING, in its own words: the build's
   # cloud-config writes a marker to its serial console at each stage, and
-  # this reads the console's socket for them. Nothing heard is said as the
-  # minutes so far, never as a stage it has not reached. The reader is its
-  # own process, so nothing it meets can stop the setup.
-  heard="$(mktemp)"
+  # this reads the console's socket, keeping every line it prints, cleaned
+  # of escape codes. Nothing heard is said as the minutes so far, never as a
+  # stage it has not reached. The reader is its own process, so nothing it
+  # meets can stop the setup.
+  console="$(mktemp)"
   (
-    trap - ERR EXIT
+    trap - ERR EXIT TERM
     set +e
     exec perl -MIO::Socket::UNIX -e '
       my $s; for (1..30) { last if $s = IO::Socket::UNIX->new(Peer => $ARGV[0]); sleep 1 }
       exit 0 unless $s;
       open(my $o, ">>", $ARGV[1]) or exit 0; $o->autoflush(1);
-      while (my $l = <$s>) { print $o "$1\n" if $l =~ /fleetwright-build: ([a-z]+)/ }
-    ' "/var/run/qemu-server/$ID.serial0" "$heard"
+      while (my $l = <$s>) { $l =~ s/\e\[[0-9;?]*[A-Za-z]//g; $l =~ s/[\x00-\x08\x0b-\x1f\x7f]//g; print $o "$l" if $l =~ /\S/ }
+    ' "/var/run/qemu-server/$ID.serial0" "$console"
   ) &
+  reader=$!
+  # WHY A BUILD FAILED, from its console: the last line that reads as an
+  # error, or else its last line, for the person to act on.
+  console_said() {
+    local why
+    why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -E 'E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | cut -c1-240)"
+    [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | tail -n 1 | cut -c1-240)"
+    printf '%s' "$why"
+  }
+  # A FAILED BUILD IS REMOVED once its console has been read: it says why,
+  # and a VM that cannot be used would hold its number and its memory.
+  build_failed() {
+    local why
+    why="$(console_said)"
+    qm stop "$ID" --skiplock 1 >/dev/null 2>&1 || true
+    qm destroy "$ID" --purge 1 >/dev/null 2>&1 || true
+    BUILDING=""
+    kill "$reader" 2>/dev/null || true
+    rm -f "$console"
+    die "$1${why:+ Its console said: $why} VM $ID was removed; running this again builds it afresh."
+  }
   started=$SECONDS
   said=""
   for _ in $(seq 1 150); do
     [ "$(qm status "$ID" | awk '{print $2}')" = stopped ] && break
     mins=$(( (SECONDS - started) / 60 ))
-    case "$(tail -n 1 "$heard" 2>/dev/null)" in
-      up) now="250 VM $ID started and is installing its packages ($mins min so far)" ;;
-      fleetwright) now="500 VM $ID is installing Fleetwright ($mins min so far)" ;;
-      off) now="900 VM $ID has finished and is powering off ($mins min so far)" ;;
+    case "$(grep -o 'fleetwright-build: [a-z]*' "$console" 2>/dev/null | tail -n 1)" in
+      *": up") now="250 VM $ID started and is installing its packages ($mins min so far)" ;;
+      *": fleetwright") now="500 VM $ID is installing Fleetwright ($mins min so far)" ;;
+      *": off") now="900 VM $ID has finished and is powering off ($mins min so far)" ;;
+      # THE BUILD SAID IT FAILED: no waiting out the clock.
+      *": failed") build_failed "the image's build stopped inside VM $ID." ;;
       *) now="- VM $ID is building the image ($mins min so far)" ;;
     esac
     [ "$now" = "$said" ] || part "${now%% *}" "${now#* }"
     said="$now"
     sleep 10
   done
-  rm -f "$heard"
   [ "$(qm status "$ID" | awk '{print $2}')" = stopped ] ||
-    die "VM $ID was still running after 25 minutes, so the install failed. Its console: qm terminal $ID. It is kept for you to look at; qm destroy $ID removes it."
+    build_failed "VM $ID was still building after 25 minutes, so the install did not finish."
+  kill "$reader" 2>/dev/null || true
+  rm -f "$console"
+  BUILDING=""
   # A CLONE STARTS WITHOUT UPGRADING EVERYTHING: Fleetwright updates itself
   # where its owner lets it (src/core/grants.js), and a person is waiting.
   qm set "$ID" --delete cicustom >/dev/null
@@ -480,8 +546,9 @@ if [ -f "$CUSTOM" ] && ! openssl verify -CAfile "$CA" "$CUSTOM" >/dev/null 2>&1;
     die "the web interface's certificate ($CUSTOM) is signed by a CA this node does not hold, so the fleet could not check it. Put the CA's certificate after it in that file, or use an ACME certificate, and run this again."
   fi
 fi
-LINE="$(KIND=proxmox ADDRESS="$ADDRESS" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POOL="$POOL" TRUST="$TRUST" CA_FILE="$CA" perl -MJSON::PP -MMIME::Base64 -e '
+LINE="$(KIND=proxmox ADDRESS="$ADDRESS" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POOL="$POOL" TRUST="$TRUST" CA_FILE="$CA" VMID_FROM="${VMID_FROM:-}" VMID_TO="${VMID_TO:-}" perl -MJSON::PP -MMIME::Base64 -e '
   my %r = (kind => $ENV{KIND}, address => $ENV{ADDRESS}, token => $ENV{TOKEN}, pool => $ENV{POOL});
+  $r{vmids} = { from => $ENV{VMID_FROM} + 0, to => $ENV{VMID_TO} + 0 } if length $ENV{VMID_FROM};
   if ($ENV{TRUST} eq "ca") { local $/; open my $f, "<", $ENV{CA_FILE} or die; $r{ca} = <$f>; }
   else { $r{trust} = "public"; }
   my $b = encode_base64(JSON::PP->new->canonical->encode(\%r), "");

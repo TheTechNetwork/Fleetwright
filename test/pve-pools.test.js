@@ -16,7 +16,7 @@ import path from 'node:path';
 
 import { PveApi } from '../src/fleet/host/pve-api.js';
 import {
-  PvePools, parseConnection, pveRecord, markOf, markText, wideOf, pveIdOf, pveVendorConfig, pveBuildConfig,
+  PvePools, parseConnection, pveRecord, markOf, markText, wideOf, pveIdOf, pveVendorConfig, pveBuildConfig, vmidsOf,
   CONNECTION_PREFIX, PVE_FENCE_GROUP, PVE_GROUP_ZONE, PVE_LAB_ZONE, PVE_ALLOW_SET, PVE_ROLE_PRIVS, PVE_STORAGE_PRIVS, PVE_NET_PRIVS, PVE_ROOT_PRIVS,
 } from '../src/fleet/host/pve-pools.js';
 import { poolRecord } from '../src/fleet/host/xo-pools.js';
@@ -99,6 +99,12 @@ async function standIn({ cert, firewall = true, perms = null, version = '9.0.3' 
       if (p === '/pools/fleetwright') return ok({ members: [...state.vms.values()].map((v) => ({ type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, tags: v.tags, status: v.status })) });
       if (p === '/cluster/firewall/options') return ok({ enable: state.firewall ? 1 : 0 });
       if (p === '/cluster/firewall/groups') return ok([{ group: PVE_FENCE_GROUP }]);
+      // A NUMBER ASKED ABOUT is free or a parameter error, as Proxmox answers.
+      if (p === '/cluster/nextid' && params.vmid) {
+        return state.vms.has(Number(params.vmid))
+          ? res.writeHead(400, 'Parameter verification failed.', { 'content-type': 'application/json' }).end(JSON.stringify({ data: null, errors: { vmid: `VM ${params.vmid} already exists` } }))
+          : ok(String(params.vmid));
+      }
       if (p === '/cluster/nextid') return ok(String(state.nextid++));
       if (p === '/cluster/sdn/vnets') return ok(state.vnets);
       const subnets = /^\/cluster\/sdn\/vnets\/fwlab(\d)\/subnets$/.exec(p);
@@ -216,6 +222,35 @@ test('a machine is cloned into the pool with its join in its SMBIOS, put behind 
   } finally {
     await pve.close();
   }
+});
+
+// THE PERSON'S RANGE, asked for: "vmid range user deserves a choice". A
+// cluster set up with --vmids has its machines numbered in it, the first
+// free one from the bottom; a full range is said, and nothing is made.
+test('a machine takes the first free number in the range the cluster was given, and a full range is said', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf });
+  try {
+    // The template is 100; 9000 is somebody else's machine.
+    pve.state.vms.set(9000, { vmid: 9000, node: 'pve1', name: 'theirs', template: 0, tags: '', status: 'running', config: {} });
+    const pools = new PvePools({ now: () => NOW, ...fast });
+    pools.adopt(vaultWith({ ...recordFor(pve.address, certs.ca), vmids: { from: 9000, to: 9001 } }));
+    await pools.refresh();
+    const [seen] = pools.report();
+    const first = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: TICKET, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(first.ok, true, first.text);
+    assert.ok(pve.state.vms.get(9001)?.name.startsWith('vm-'), 'the machine was not numbered in the range');
+    assert.ok(!pve.state.vms.has(200), 'the cluster’s next free number was taken instead');
+    const full = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: TICKET, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(full.ok, false);
+    assert.match(full.text, /Every number from 9000 to 9001 .* is taken/);
+  } finally {
+    await pve.close();
+  }
+  // A range Proxmox does not number in is no range.
+  assert.equal(vmidsOf({ from: 99, to: 200 }), null);
+  assert.equal(vmidsOf({ from: 300, to: 200 }), null);
+  assert.deepEqual(vmidsOf({ from: 9000, to: 9099 }), { from: 9000, to: 9099 });
 });
 
 test('with the datacenter firewall off, no machine is made where it would reach the person’s network unasked', { skip }, async () => {

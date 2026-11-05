@@ -33,23 +33,32 @@ export const SCRIPT_URL = 'https://raw.githubusercontent.com/TheTechNetwork/Flee
 export const NOW = 'date +%s';
 
 /**
- * The command a person runs by hand, and the one both phones show: the
- * script fetched and run, naming the fleet a closed lab answers names for.
- *
- * @param {string} coordinator
+ * A range of machine numbers as the person gives it, FROM-TO: what goes into
+ * a command, so it is checked to be digits and a dash before it does. The
+ * script and the boxes hold it to Proxmox's own bounds again (vmidsOf).
  */
-export function setupCommand(coordinator) {
-  return `curl -fsSLo /root/fleetwright-pve-setup ${SCRIPT_URL} && bash /root/fleetwright-pve-setup --coordinator ${coordinator}`;
+export const VMIDS_RE = /^(?:[1-9]\d{2,8})-(?:[1-9]\d{2,8})$/;
+
+/**
+ * The command a person runs by hand, and the one both phones show: the
+ * script fetched and run, naming the fleet a closed lab answers names for,
+ * and the range its machines take when the person gave one.
+ *
+ * @param {string} coordinator @param {string|null} [vmids]
+ */
+export function setupCommand(coordinator, vmids = null) {
+  return `curl -fsSLo /root/fleetwright-pve-setup ${SCRIPT_URL} && bash /root/fleetwright-pve-setup --coordinator ${coordinator}` +
+    (vmids && VMIDS_RE.test(vmids) ? ` --vmids ${vmids}` : '');
 }
 
 /**
  * Start the setup as a unit of its own, with the line to a file. A run
  * already going is stopped first: the person asked again.
  *
- * @param {string} coordinator
+ * @param {string} coordinator @param {string|null} [vmids]
  */
-export function startCommand(coordinator) {
-  const run = `${setupCommand(coordinator)} --line-file ${LINE_FILE}`;
+export function startCommand(coordinator, vmids = null) {
+  const run = `${setupCommand(coordinator, vmids)} --line-file ${LINE_FILE}`;
   return `systemctl stop ${UNIT} 2>/dev/null; systemctl reset-failed ${UNIT} 2>/dev/null; rm -f ${LINE_FILE}; ` +
     `systemd-run --unit=${UNIT} --collect /bin/bash -c '${run}'`;
 }
@@ -171,7 +180,7 @@ export function pveSteps({ open, coordinatorUrl, sealLine, say = () => {}, sleep
       const since = Number.parseInt(String(clock.stdout).trim(), 10);
       if (clock.code !== 0 || !Number.isInteger(since)) throw new Error('the node did not say what time it is, so its setup could not be followed. Nothing was started.');
       ctx.since = since;
-      const started = await ctx.pool.remote(startCommand(coordinatorUrl), { timeoutMs: 60_000 });
+      const started = await ctx.pool.remote(startCommand(coordinatorUrl, ctx.rec?.vmids ?? null), { timeoutMs: 60_000 });
       if (started.code !== 0) throw new Error(`the node would not start the setup: ${lastLine(started.stderr || started.stdout) || `systemd-run said ${started.code}`}.`);
       ctx.started = true;
       ctx.deadline = now() + limitMs;

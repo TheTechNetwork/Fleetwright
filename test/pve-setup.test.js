@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { XoSetups } from '../src/fleet/host/xo-setup.js';
 import { CONNECTION_PREFIX } from '../src/fleet/host/pve-pools.js';
-import { progressOf, partOf } from '../src/fleet/host/pve-setup.js';
+import { progressOf, partOf, setupCommand } from '../src/fleet/host/pve-setup.js';
 import { PVESETUP_STEPS } from '../src/fleet/protocol/intents.js';
 import { open, seal, newSealKey, pvesetupAad, pvesetupHandoffAad, xowatchdogAad } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, verify, signingInput, fingerprint } from '../src/fleet/crypto.js';
@@ -99,11 +99,11 @@ async function machine({ coordinatorUrl = /** @type {string|null} */ (FLEET) } =
 }
 
 /** The phone's half: check the key is this machine's for this node, and seal the root password with a key to hand the line back to. */
-async function phone(/** @type {any} */ begun, /** @type {string} */ pin, { aad = pvesetupAad } = {}) {
+async function phone(/** @type {any} */ begun, /** @type {string} */ pin, { aad = pvesetupAad, vmids = /** @type {string|undefined} */ (undefined) } = {}) {
   const { job, key, keySig, hostKey } = begun.xosetup;
   const signed = await verify(hostKey, keySig, signingInput('pvesetup-key', { address: NODE, job, key, pin }));
   const reply = await newSealKey();
-  const box = await seal({ to: key, aad: aad(job, NODE), payload: { v: 1, purpose: 'pve', root: { password: ROOT_PASSWORD }, reply: reply.publicKey } });
+  const box = await seal({ to: key, aad: aad(job, NODE), payload: { v: 1, purpose: 'pve', root: { password: ROOT_PASSWORD }, reply: reply.publicKey, ...(vmids === undefined ? {} : { vmids }) } });
   return { signed, reply, sealed: `${box.epk}.${box.iv}.${box.ct}` };
 }
 
@@ -169,6 +169,27 @@ test('how far into the image the node is reaches the phone as words and a bar', 
   assert.equal(progressOf('fleetwright-step: image\nfleetwright-part: 432 x\nfleetwright-step: line\nstate=active').part, null);
   assert.deepEqual(progressOf('fleetwright-step: image\nfleetwright-part: - VM 104 is building the image (3 min so far)').part, { fill: null, text: 'VM 104 is building the image (3 min so far)' });
   assert.equal(partOf('fleetwright-part: lots of it'), null);
+});
+
+// THE PERSON'S RANGE OF MACHINE NUMBERS reaches the script on the node, and
+// only as digits and a dash: it goes into a command.
+test('a range of machine numbers from the phone is passed to the script, and anything else refuses the job', async () => {
+  const n = node({});
+  const m = await machine();
+  const begun = await m.setups.beginPve({ address: NODE, pin: n.pin, actor: ACTOR });
+  const p = await phone(begun, n.pin, { vmids: '9000-9099' });
+  const ran = await m.setups.run({ job: begun.xosetup.job, sealed: p.sealed, actor: ACTOR });
+  assert.equal(ran.ok, true, ran.text);
+  assert.equal((await settled(m.setups, begun.xosetup.job)).state, 'done');
+  assert.ok(n.asked().some((l) => l.startsWith('systemd-run') && l.includes(' --vmids 9000-9099 --line-file ')), n.asked().join('\n'));
+  for (const bad of ['9000-9099; rm -rf /', '12-40', 'nine-ten']) {
+    const again = await m.setups.beginPve({ address: NODE, pin: n.pin, actor: ACTOR });
+    const q = await phone(again, n.pin, { vmids: bad });
+    const refused = await m.setups.run({ job: again.xosetup.job, sealed: q.sealed, actor: ACTOR });
+    assert.equal(refused.ok, false, bad);
+    assert.match(refused.text, /range of machine numbers/);
+  }
+  assert.equal(setupCommand('https://f.example', '9000-9099; x'), setupCommand('https://f.example'));
 });
 
 test('a setup the node stops is said in the node’s words, at the step it stopped', async () => {

@@ -126,7 +126,7 @@ export const PVE_MIN_MAJOR = 9;
 const MAX_MACHINES = 200;
 
 /**
- * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', grants?: any }} PveRecord
+ * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', grants?: any, vmids?: { from: number, to: number } }} PveRecord
  * @typedef {{ id: string, name: string, node: string, vmid: number, pool: string|null, poolName: string|null, bridge: string|null }} PveImage
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string, lab?: 'open'|'closed', gateway?: string|null, taken?: boolean|null }} PveNetwork
  */
@@ -169,8 +169,27 @@ function recordOf(r, address) {
   const trust = ca ? 'ca' : r.trust === 'public' ? 'public' : null;
   if (!trust) return null;
   const grants = machineGrantsOf(r.grants);
-  return { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(grants ? { grants } : {}) };
+  const vmids = vmidsOf(r.vmids);
+  return { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(grants ? { grants } : {}), ...(vmids ? { vmids } : {}) };
 }
+
+/**
+ * THE NUMBERS THE FLEET'S MACHINES TAKE, when the person gave a range at
+ * setup (`--vmids`): from 100, as Proxmox numbers machines, the first no
+ * larger than the last. Anything else is no range, and the cluster's next
+ * free number is taken, as before there was one.
+ *
+ * @param {any} v @returns {{ from: number, to: number }|null}
+ */
+export function vmidsOf(v) {
+  const from = Number(v?.from);
+  const to = Number(v?.to);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 100 || to > 999_999_999 || from > to) return null;
+  return { from, to };
+}
+
+/** How many numbers in a range one make looks at before it says the range is full. */
+const VMID_LOOKS = 64;
 
 /**
  * The line the setup script prints, as the record it carries. What the phone
@@ -629,11 +648,20 @@ export class PvePools {
     try {
       // A NUMBER OF ITS OWN: another box may take the same one in the same
       // moment, and Proxmox refuses the second clone; ask again.
+      // IN THE PERSON'S RANGE when they gave one: the first number in it
+      // the cluster says is free, asked one at a time from the bottom.
       let lastError = null;
+      let from = record.vmids?.from ?? 0;
       for (let attempt = 0; attempt < 3 && vmid === null; attempt++) {
         let next;
         try {
-          next = Number(await api.get('/cluster/nextid'));
+          if (record.vmids) {
+            next = await this.#freeIn(api, from, record.vmids.to);
+            if (next === null) return { ok: false, text: `Every number from ${record.vmids.from} to ${record.vmids.to} on ${record.address} is taken, which is the range this cluster's machines were given. End a machine there, or set the cluster up again with a wider range.` };
+            from = next + 1;
+          } else {
+            next = Number(await api.get('/cluster/nextid'));
+          }
         } catch (e) {
           return { ok: false, unreachable: true, text: `${record.address} could not be reached from here: ${/** @type {Error} */ (e).message}` };
         }
@@ -776,6 +804,26 @@ export class PvePools {
       if (mk?.lab === labName) out.push({ name: String(v.name), made: mk.made });
     }
     return out;
+  }
+
+  /**
+   * The first number from `from` to `to` the cluster says is free, or null
+   * when none is within VMID_LOOKS of the bottom. A number in use answers
+   * with an error; one that cannot be reached throws as any call does.
+   *
+   * @param {any} api @param {number} from @param {number} to @returns {Promise<number|null>}
+   */
+  async #freeIn(api, from, to) {
+    for (let n = from, looked = 0; n <= to && looked < VMID_LOOKS; n++, looked++) {
+      try {
+        return Number(await api.get('/cluster/nextid', { vmid: n }));
+      } catch (e) {
+        // TAKEN is a parameter error ("vmid: VM 101 already exists");
+        // anything else is the cluster not answering, said as that.
+        if (/** @type {any} */ (e)?.status !== 400 && !/already exists/i.test(String(/** @type {Error} */ (e).message))) throw e;
+      }
+    }
+    return null;
   }
 
   /** @param {string} name @param {{ vmid: number, node: string, owner: string, at: number }} made */
@@ -946,7 +994,8 @@ export function pveVendorConfig() {
  * build that fails stays running, which the script reports with the command
  * that shows its console. `@CHANNEL@` is the apt suite, put in by the script.
  * Each stage writes `fleetwright-build: <stage>` to the serial console (up,
- * fleetwright, off), which the script reads to say how far the build is.
+ * fleetwright, off, or `failed` when the install stops), which the script
+ * reads to say how far the build is, and to stop waiting on one that failed.
  */
 export function pveBuildConfig() {
   return [
@@ -961,6 +1010,7 @@ export function pveBuildConfig() {
     'runcmd:',
     '  - |',
     '    set -eu',
+    `    trap 'rc=$?; [ "$rc" = 0 ] || echo "fleetwright-build: failed $rc" >/dev/ttyS0' EXIT`,
     '    echo fleetwright-build: fleetwright >/dev/ttyS0 || true',
     '    curl -fsSL https://fleet-apt.thetech.network/fleetwright.gpg -o /usr/share/keyrings/fleetwright.gpg',
     '    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/fleetwright.gpg] https://fleet-apt.thetech.network @CHANNEL@ main" >/etc/apt/sources.list.d/fleetwright.list',
