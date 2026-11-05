@@ -328,8 +328,19 @@ dependencies {
   // long-standing SSH client, on the full BouncyCastle (Android's own "BC" is
   // cut down, and ProxmoxSsh puts this one in its place). Pinned, like
   // everything else here.
+  //
+  // ALL THREE BOUNCYCASTLE JARS, AT ONE VERSION. sshj asks for bcprov and
+  // bcpkix, and bcpkix brings bcutil, all at the release sshj was built
+  // against. BouncyCastle moves classes between those jars from one release
+  // to the next, so bcprov at one version beside bcutil at another holds the
+  // same class twice and checkDebugDuplicateClasses stops the build: that is
+  // what bcprov 1.86 beside sshj's bcutil 1.84 did (#1563). Naming all three
+  // here makes Gradle resolve every one to this version, and Renovate moves
+  // them as one group ("bouncycastle" in renovate.json).
   implementation("com.hierynomus:sshj:0.41.2")
-  implementation("org.bouncycastle:bcprov-jdk18on:1.84")
+  implementation("org.bouncycastle:bcprov-jdk18on:1.86")
+  implementation("org.bouncycastle:bcpkix-jdk18on:1.86")
+  implementation("org.bouncycastle:bcutil-jdk18on:1.86")
 
   // FIREBASE CLOUD MESSAGING IS ABOVE NOW, and this said the opposite until
   // somebody went looking for why an app with no google-services.json crashes
