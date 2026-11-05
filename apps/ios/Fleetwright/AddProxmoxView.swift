@@ -37,6 +37,10 @@ struct AddProxmoxView: View {
     // FROM THIS PHONE. The password is in this view's state alone.
     @State private var node = ""
     @State private var password = ""
+    /// The VM IDs the fleet's image and machines take, FROM-TO, or empty
+    /// for the cluster's next free ones. Asked for: "vmid range user
+    /// deserves a choice".
+    @AppStorage("proxmox-vmids") private var vmids = ""
     /// The key the node answered with, waiting on the person's word.
     @State private var offered: String?
     /// The key the person checked, which every connection holds the node to.
@@ -51,7 +55,9 @@ struct AddProxmoxView: View {
 
     /// What the pasted line carries, or nil while it is not one.
     private var parsed: ProxmoxLine.Record? { ProxmoxLine.parse(line) }
-    private var command: String { ProxmoxLine.setupCommand(coordinator: settings.coordinatorURL) }
+    private var command: String { ProxmoxLine.setupCommand(coordinator: settings.coordinatorURL, vmids: trimmedVmids) }
+    private var trimmedVmids: String { vmids.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "–", with: "-") }
+    private var vmidsOk: Bool { trimmedVmids.isEmpty || ProxmoxLine.isVmids(trimmedVmids) }
     private var coordinatorOk: Bool {
         settings.coordinatorURL.range(of: "^https://[A-Za-z0-9.:/_-]+$", options: .regularExpression) != nil
     }
@@ -71,6 +77,16 @@ struct AddProxmoxView: View {
                     .onChange(of: node) { _, _ in offered = nil; trusted = nil }
                 SecureField("Its root password", text: $password)
                     .disabled(since != nil || kept)
+                TextField("Machine numbers, such as 9000-9099 (optional)", text: $vmids)
+                    .keyboardType(.numbersAndPunctuation)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .disabled(since != nil || kept)
+                if !vmidsOk {
+                    Text("Two numbers from 100 up with a dash between, the first no larger, such as 9000-9099.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.bad)
+                }
                 if !coordinatorOk {
                     Text("This phone's fleet address is not one the setup can be told, so set it up by hand below.")
                         .fleetType(.label)
@@ -89,7 +105,7 @@ struct AddProxmoxView: View {
                         Task { await connectOrStart() }
                     }
                     .frame(minHeight: 44)
-                } else if since == nil && !kept && !nodeKey.isEmpty && !password.isEmpty {
+                } else if since == nil && !kept && !nodeKey.isEmpty && !password.isEmpty && vmidsOk {
                     Button(sshBusy ? "Reaching the node…" : "Set it up") {
                         Task { await connectOrStart() }
                     }
@@ -128,7 +144,7 @@ struct AddProxmoxView: View {
             } header: {
                 sectionHead("Set it up")
             } footer: {
-                Text("Proxmox VE 9 or newer. This phone tries the node itself first, and the password goes to the node and nowhere else; it is kept on this phone only while the setup runs. When this phone cannot reach the node, one of your machines that can sets it up, with the password sealed to it alone.")
+                Text("Proxmox VE 9 or newer. This phone tries the node itself first, and the password goes to the node and nowhere else; it is kept on this phone only while the setup runs. When this phone cannot reach the node, one of your machines that can sets it up, with the password sealed to it alone. Machine numbers are the VM IDs the fleet's image and machines take; left empty, they take the cluster's next free ones.")
             }
 
             Section {
@@ -201,7 +217,7 @@ struct AddProxmoxView: View {
         // that can does it, with what was typed here already filled in.
         .sheet(isPresented: $through) {
             NavigationStack {
-                ProxmoxThroughMachineView(settings: settings, node: nodeKey, password: password, auto: true) { at in
+                ProxmoxThroughMachineView(settings: settings, node: nodeKey, password: password, vmids: trimmedVmids, auto: true) { at in
                     keptThrough(at)
                     through = false
                 }
@@ -246,7 +262,7 @@ struct AddProxmoxView: View {
                 sshText = "The node did not say what time it is, so its setup could not be followed."
                 return
             }
-            let (status, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.startCommand(coordinator: settings.coordinatorURL))
+            let (status, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.startCommand(coordinator: settings.coordinatorURL, vmids: trimmedVmids))
             if status == 0 {
                 ProxmoxDirectHandoff.started(address: nodeKey, fingerprint: key, since: now, password: password)
                 since = now
@@ -341,6 +357,21 @@ enum ProxmoxLine {
     /// lab answers names for and lets HTTPS reach (docs/proxmox.md, "Labs").
     static func setupCommand(coordinator: String) -> String {
         "curl -fsSLo /root/fleetwright-pve-setup \(scriptURL) && bash /root/fleetwright-pve-setup --coordinator \(coordinator)"
+    }
+
+    /// The same, with the range of machine numbers the person gave, when it
+    /// is one (`--vmids`, pve-setup.js VMIDS_RE).
+    static func setupCommand(coordinator: String, vmids: String) -> String {
+        setupCommand(coordinator: coordinator) + (isVmids(vmids) ? " --vmids \(vmids)" : "")
+    }
+
+    /// FROM-TO, two numbers Proxmox numbers machines with, the first no larger.
+    static func isVmids(_ s: String) -> Bool {
+        let parts = s.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2, let from = Int(parts[0]), let to = Int(parts[1]),
+              parts.allSatisfy({ $0.count >= 3 && $0.count <= 9 && $0.allSatisfy(\.isASCII) && $0.first != "0" })
+        else { return false }
+        return from >= 100 && from <= to
     }
 
     struct Record {

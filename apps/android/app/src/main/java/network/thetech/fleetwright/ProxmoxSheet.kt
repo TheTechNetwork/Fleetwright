@@ -65,6 +65,12 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
     // FROM THIS PHONE. The password is never saveable: it goes when the
     // screen does.
     var node by rememberSaveable { mutableStateOf("") }
+    // THE VM IDS the fleet's image and machines take, FROM-TO, or empty for
+    // the cluster's next free ones, remembered for next time. Asked for:
+    // "vmid range user deserves a choice".
+    var vmids by remember { mutableStateOf(known.getString("vmids", "") ?: "") }
+    val trimmedVmids = vmids.trim().replace('–', '-')
+    val vmidsOk = trimmedVmids.isEmpty() || ProxmoxLine.isVmids(trimmedVmids)
     var password by remember { mutableStateOf("") }
     /** The key the node answered with, waiting on the person's word, or null. */
     var offered by remember { mutableStateOf<String?>(null) }
@@ -185,7 +191,7 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
         val key = trusted ?: run { sshBusy = false; return }
         ProxmoxSsh.run(at, key, password, ProxmoxSsh.NOW).mapCatching { (_, out) -> out.trim().toLong() }.fold(
             onSuccess = { now ->
-                ProxmoxSsh.run(at, key, password, ProxmoxSsh.startCommand(settings.coordinatorUrl)).fold(
+                ProxmoxSsh.run(at, key, password, ProxmoxSsh.startCommand(settings.coordinatorUrl, trimmedVmids)).fold(
                     onSuccess = { (status, out) ->
                         if (status == 0) {
                             ProxmoxDirectHandoff.started(settings, at, key, now, password)
@@ -210,6 +216,7 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
             settings,
             node,
             password = password,
+            vmids = trimmedVmids,
             auto = true,
             // KEPT BY THE MACHINE'S HAND-OFF (ProxmoxThroughHandoff), said
             // here as a line kept by hand is.
@@ -244,6 +251,18 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
             keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password),
             modifier = Modifier.fillMaxWidth(),
         )
+        OutlinedTextField(
+            value = vmids,
+            onValueChange = { vmids = it; known.edit().putString("vmids", it.trim()).apply() },
+            enabled = since == null && !kept,
+            label = { Text("Machine numbers (optional)") },
+            placeholder = { Text("9000-9099") },
+            singleLine = true,
+            isError = !vmidsOk,
+            keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (!vmidsOk) Hint("Two numbers from 100 up with a dash between, the first no larger, such as 9000-9099.", color = Design.Palette.bad.now)
         val waiting = offered
         when {
             !coordinatorOk -> Hint("This phone's fleet address is not one the setup can be told, so set it up by hand below.", color = Design.Palette.bad.now)
@@ -258,7 +277,7 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
                     scope.launch { start() }
                 }) { Text("It matches") }
             }
-            since == null && !kept && node.isNotBlank() && password.isNotEmpty() -> OutlinedButton(
+            since == null && !kept && node.isNotBlank() && password.isNotEmpty() && vmidsOk -> OutlinedButton(
                 enabled = !sshBusy,
                 modifier = Modifier.heightIn(min = 48.dp),
                 onClick = { scope.launch { start() } },
@@ -287,13 +306,14 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
         Hint(
             "Proxmox VE 9 or newer. This phone tries the node itself first, and the password goes to the node and nowhere else; " +
                 "it is kept on this phone only while the setup runs. When this phone cannot reach the node, one of your machines " +
-                "that can sets it up, with the password sealed to it alone.",
+                "that can sets it up, with the password sealed to it alone. Machine numbers are the VM IDs the fleet's image and " +
+                "machines take; left empty, they take the cluster's next free ones.",
         )
 
         SectionHead("Or by hand, on the node")
         // SELECTABLE, so a long press copies it whole.
         SelectionContainer {
-            Text(ProxmoxLine.setupCommand(settings.coordinatorUrl), style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
+            Text(ProxmoxLine.setupCommand(settings.coordinatorUrl, trimmedVmids), style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
         }
         Hint(
             "In Proxmox's web interface: Datacenter › the node › Shell. It makes a pool, a user with no password, " +
@@ -354,6 +374,15 @@ internal object ProxmoxLine {
     const val SCRIPT_URL = "https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/fleetwright-pve-setup"
     /** The command for the node, naming this phone's fleet, which a closed lab answers names for and lets HTTPS reach. */
     fun setupCommand(coordinator: String): String = "curl -fsSLo /root/fleetwright-pve-setup $SCRIPT_URL && bash /root/fleetwright-pve-setup --coordinator $coordinator"
+
+    /** The same, with the range of machine numbers the person gave, when it is one (`--vmids`, pve-setup.js VMIDS_RE). */
+    fun setupCommand(coordinator: String, vmids: String): String = setupCommand(coordinator) + if (isVmids(vmids)) " --vmids $vmids" else ""
+
+    /** FROM-TO, two numbers Proxmox numbers machines with, the first no larger. */
+    fun isVmids(s: String): Boolean {
+        val m = Regex("^([1-9][0-9]{2,8})-([1-9][0-9]{2,8})$").find(s) ?: return false
+        return m.groupValues[1].toLong() <= m.groupValues[2].toLong()
+    }
 
     data class Record(val address: String, val pool: String, val trust: String, val json: String) {
         val trustWords: String get() = if (trust == "public") "trusted by its public certificate" else "trusted by its own CA"

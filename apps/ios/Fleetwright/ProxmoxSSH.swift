@@ -29,8 +29,8 @@ enum ProxmoxSSH {
     /// Start the setup as a unit of its own, with the command the phone shows
     /// for running it by hand, and the line to a file. A run already going is
     /// stopped first: the person asked again.
-    static func startCommand(coordinator: String) -> String {
-        let run = ProxmoxLine.setupCommand(coordinator: coordinator) + " --line-file \(lineFile)"
+    static func startCommand(coordinator: String, vmids: String = "") -> String {
+        let run = ProxmoxLine.setupCommand(coordinator: coordinator, vmids: vmids) + " --line-file \(lineFile)"
         return "systemctl stop \(unit) 2>/dev/null; systemctl reset-failed \(unit) 2>/dev/null; rm -f \(lineFile); "
             + "systemd-run --unit=\(unit) --collect /bin/bash -c '\(run)'"
     }

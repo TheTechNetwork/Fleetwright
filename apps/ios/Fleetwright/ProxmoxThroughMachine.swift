@@ -28,10 +28,14 @@ struct ProxmoxThroughMachineView: View {
     /// machines are asked at once, and the first that reached it is chosen.
     let auto: Bool
 
-    init(settings: Settings, node: String, password: String = "", auto: Bool = false, kept: @escaping (String) -> Void) {
+    /// The range of machine numbers the person gave, or empty (AddProxmoxView).
+    let vmids: String
+
+    init(settings: Settings, node: String, password: String = "", vmids: String = "", auto: Bool = false, kept: @escaping (String) -> Void) {
         self.settings = settings
         self.kept = kept
         self.auto = auto
+        self.vmids = ProxmoxLine.isVmids(vmids) ? vmids : ""
         _address = State(initialValue: node)
         _rootPassword = State(initialValue: password)
     }
@@ -438,7 +442,7 @@ struct ProxmoxThroughMachineView: View {
             sealed = try Seal.seal(
                 to: begun.key,
                 aad: Seal.pvesetupAAD(job: begun.job, address: begun.address),
-                payload: ["v": 1, "purpose": "pve", "root": ["password": rootPassword], "reply": back.publicKey]
+                payload: ["v": 1, "purpose": "pve", "root": ["password": rootPassword], "reply": back.publicKey, "vmids": vmids]
             )
         } catch {
             ProxmoxThroughHandoff.forget(job: begun.job)
