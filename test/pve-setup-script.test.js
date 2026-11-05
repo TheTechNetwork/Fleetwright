@@ -117,3 +117,23 @@ test('every way the script stops says why, even one that skips the ERR trap', { 
   assert.equal(said.length, 1, silent.out);
   assert.match(said[0], /stopped unexpectedly \(exit \d+\)/);
 });
+
+// A GREP THAT FINDS NOTHING IS NOT AN ERROR. Every "$(grep ...)" the script
+// reads a file with, run as the script runs it (set -Eeuo pipefail, its ERR
+// trap) against files with nothing in them yet: the image step's console
+// before the build's first marker. Each printed "fleetwright-error: tail -n
+// 1 failed" on a real run that then succeeded; the route through a machine
+// ends the setup on any error line, so that run would have failed there.
+test('the script reading a file that does not say anything yet is not an error', () => {
+  const lines = readFileSync(SCRIPT, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l) && l.includes('"$(grep'));
+  assert.ok(lines.length >= 5, `found ${lines.length} of the script's greps`);
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-pve-grep-'));
+  const empty = path.join(dir, 'empty');
+  writeFileSync(empty, '');
+  for (const line of lines) {
+    const from = line.indexOf('"$(grep') + 1;
+    const sub = line.slice(from, line.lastIndexOf(')"') + 1);
+    const r = spawnSync('bash', ['-c', `set -Eeuo pipefail; trap 'echo "ERR at $BASH_COMMAND"' ERR; console=${empty}; LAST_ERR=${empty}; v="${sub}"; echo "ok[$v]"`], { encoding: 'utf8' });
+    assert.equal(r.stdout, 'ok[]\n', `${sub}\n${r.stdout}${r.stderr}`);
+  }
+});

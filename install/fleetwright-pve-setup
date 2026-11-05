@@ -120,7 +120,7 @@ pvesh() {
 }
 failed() {
   local why
-  why="$(grep -v '^[[:space:]]*$' "$LAST_ERR" 2>/dev/null | tail -n 1)"
+  why="$(grep -v '^[[:space:]]*$' "$LAST_ERR" 2>/dev/null | tail -n 1 || true)"
   die "${why:-$1 failed} (line $2)"
 }
 trap 'failed "$BASH_COMMAND" "$LINENO"' ERR
@@ -503,9 +503,9 @@ else
   # "FAIL could not read a version ..." on the first real build).
   console_said() {
     local why
-    why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -v '^[[:space:]]*\[' | grep -E 'FAIL |E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | sed 's/^[[:space:]]*//' | cut -c1-240)"
-    [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -E 'FAIL |E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | cut -c1-240)"
-    [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | tail -n 1 | cut -c1-240)"
+    why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -v '^[[:space:]]*\[' | grep -E 'FAIL |E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | sed 's/^[[:space:]]*//' | cut -c1-240 || true)"
+    [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -E 'FAIL |E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | cut -c1-240 || true)"
+    [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | tail -n 1 | cut -c1-240 || true)"
     printf '%s' "$why"
   }
   # A FAILED BUILD IS REMOVED once its console has been read: it says why,
@@ -522,10 +522,16 @@ else
   }
   started=$SECONDS
   said=""
+  # EVERY "$(grep ...)" HERE ENDS IN "|| true": grep finding nothing is
+  # exit 1, which under pipefail is the pipeline's, and set -E carries the
+  # ERR trap into the substitution. Before the console had a marker that
+  # printed "fleetwright-error: tail -n 1 failed" on a run that then went
+  # on to succeed, and the route through a machine treats any error line
+  # as the end of the setup. test/pve-setup-script.test.js holds it.
   for _ in $(seq 1 150); do
     [ "$(qm status "$ID" | awk '{print $2}')" = stopped ] && break
     mins=$(( (SECONDS - started) / 60 ))
-    case "$(grep -o 'fleetwright-build: [a-z]*' "$console" 2>/dev/null | tail -n 1)" in
+    case "$(grep -o 'fleetwright-build: [a-z]*' "$console" 2>/dev/null | tail -n 1 || true)" in
       *": up") now="250 VM $ID started and is installing its packages ($mins min so far)" ;;
       *": fleetwright") now="500 VM $ID is installing Fleetwright ($mins min so far)" ;;
       *": off") now="900 VM $ID has finished and is powering off ($mins min so far)" ;;
