@@ -33,9 +33,10 @@ set -euo pipefail
 # SDK that draws the Duo edge to edge, until 27.2 shipped.
 #
 # 27.2 is the release that brought Apple Pencil to the Duo. 27B52 is the
-# build the image carries, which replaced the release candidate 27B48 on
-# GitHub's image on 5 November; a different 27.2 on the image is an error
-# here by design, and this line moves with it.
+# build GitHub's image moved to on 5 November, from the release candidate
+# 27B48. An image rolls out over hours, so a run lands on either: both are
+# named until every runner carries 27B52, when 27B48 comes out of the list.
+# Any other 27.2 on the image is an error here by design.
 SHIPS="27.2"
 XCODE="${1:-$SHIPS}"
 SDK_PREFIX="$XCODE"
@@ -45,7 +46,7 @@ SDK_PREFIX="$XCODE"
 # matches is not yet the one meant. The next beta is added here with its
 # build when it joins ios.yml's matrix.
 case "$XCODE" in
-  27.2) BUILD="27B52" ;;
+  27.2) BUILDS="27B52 27B48" ;;
   *) echo "::error::no build is recorded for Xcode $XCODE in this script"; exit 1 ;;
 esac
 
@@ -73,8 +74,8 @@ case "$sdk" in
 esac
 
 got="$(xcodebuild -version | awk '/Build version/ {print $3}')"
-if [ "$got" != "$BUILD" ]; then
-  echo "::error::$app is build $got, not $BUILD"
+if [[ " $BUILDS " != *" $got "* ]]; then
+  echo "::error::$app is build $got, not one of $BUILDS"
   exit 1
 fi
 
