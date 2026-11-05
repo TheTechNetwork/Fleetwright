@@ -589,7 +589,10 @@ fun FleetScreen(
         onDispose { lifecycle.removeObserver(observer) }
     }
     LaunchedEffect(resumes) {
-        if (resumes > 1 && signedIn) ProxmoxThroughHandoff.collectPending(settings, fleet)
+        if (resumes > 1 && signedIn) {
+            ProxmoxThroughHandoff.collectPending(settings, fleet)
+            ProxmoxDirectHandoff.collectPending(settings)
+        }
     }
 
     // FLUSHED ON EVERY SIGN-IN AND LAUNCH, which is the moment we learn the
@@ -616,9 +619,11 @@ fun FleetScreen(
         // A token a finished hypervisor setup handed back while the app was
         // closed is collected now (XoHandoff).
         XoHandoff.collectPending(settings, fleet)
-        // And a Proxmox VE line a machine sealed back after its screen was
-        // closed is kept in the vault (ProxmoxThroughHandoff).
+        // And a Proxmox VE line whose screen was closed is kept in the vault:
+        // sealed back by a machine (ProxmoxThroughHandoff), or left on the
+        // node by a run this phone started (ProxmoxDirectHandoff).
         ProxmoxThroughHandoff.collectPending(settings, fleet)
+        ProxmoxDirectHandoff.collectPending(settings)
     }
 
     if (showStart) {

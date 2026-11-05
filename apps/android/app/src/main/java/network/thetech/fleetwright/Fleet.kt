@@ -3772,6 +3772,11 @@ class Settings(context: Context) {
         get() = prefs.getString("xoPending", "") ?: ""
         set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoPending") else putString("xoPending", value) }.apply()
 
+    /** The Proxmox VE runs this phone started on a node and still follows, as ProxmoxDirectHandoff writes them. Not a secret. */
+    var pveDirectPending: String
+        get() = prefs.getString("pveDirectPending", "") ?: ""
+        set(value) = prefs.edit().apply { if (value.isEmpty()) remove("pveDirectPending") else putString("pveDirectPending", value) }.apply()
+
     /** The Proxmox VE setups still owed a line, as ProxmoxThroughHandoff writes them. Not a secret. */
     var pvePending: String
         get() = prefs.getString("pvePending", "") ?: ""

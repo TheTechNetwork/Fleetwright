@@ -24,10 +24,16 @@ struct ProxmoxThroughMachineView: View {
     /// the screen this was opened from says it.
     let kept: (String) -> Void
 
-    init(settings: Settings, node: String, kept: @escaping (String) -> Void) {
+    /// Opened because this phone could not reach the node (AddProxmoxView):
+    /// machines are asked at once, and the first that reached it is chosen.
+    let auto: Bool
+
+    init(settings: Settings, node: String, password: String = "", auto: Bool = false, kept: @escaping (String) -> Void) {
         self.settings = settings
         self.kept = kept
+        self.auto = auto
         _address = State(initialValue: node)
+        _rootPassword = State(initialValue: password)
     }
 
     @State private var address = ""
@@ -71,7 +77,7 @@ struct ProxmoxThroughMachineView: View {
     var body: some View {
         Form {
             Section {
-                Text(ProxmoxThroughWords.intro)
+                Text(auto ? ProxmoxThroughWords.unreachable(trimmedAddress) : ProxmoxThroughWords.intro)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.ink)
             }
@@ -97,6 +103,9 @@ struct ProxmoxThroughMachineView: View {
         .navigationTitle(ProxmoxThroughWords.title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: job) { await follow() }
+        .task {
+            if auto, probes == nil, job == nil, XOSetupKey.isAddress(trimmedAddress) { await probe() }
+        }
         .onDisappear { rootPassword = "" }
     }
 
@@ -346,7 +355,9 @@ struct ProxmoxThroughMachineView: View {
                 return
             }
             probes = found
-            if able.count == 1 { chosen = able.first }
+            // The first that reached it, when there is a choice to make for
+            // the person; any other is one tap away in the list.
+            if able.count == 1 || (auto && chosen == nil) { chosen = able.first }
         } catch {
             probeText = error.localizedDescription
         }
@@ -562,6 +573,12 @@ enum ProxmoxThroughWords {
 
     static let intro = "When this phone cannot reach the node, one of your machines that can does the setup for it: "
         + "the same steps, run on the node over SSH. The root password is sealed on this phone to that machine alone."
+
+    /// Said when this phone tried the node and could not reach it.
+    static func unreachable(_ node: String) -> String {
+        "This phone could not reach \(node), so one of your machines that can sets it up: the same steps, run on the node over SSH. "
+            + "The root password is sealed on this phone to that machine alone."
+    }
 
     static let mayClose = "With the machine image this takes several minutes, and you need not watch: the setup goes on on the node, "
         + "and the line comes back sealed to this phone, which keeps it in your vault when Fleetwright is next open."

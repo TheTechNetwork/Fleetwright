@@ -102,3 +102,39 @@ test('both phones keep the line’s key past the screen, collect it when back in
   assert.ok(iosWords && iosWords === androidWords, `the phones say it differently:\n${iosWords}\n${androidWords}`);
   assert.ok(!IOS.includes('Keep this screen open') && !ANDROID.includes('Keep this screen open'));
 });
+
+// ONE WAY IN, asked for: "the route through a machine and main direct route
+// can be combined". Both phones try the node themselves first, and only a
+// node they cannot reach goes to a machine, with what was typed carried over
+// and the machines asked at once. A run started from the phone is followed
+// after its screen closes too, with its password kept on the phone alone.
+test('both phones set up a node one way: the phone first, a machine when it cannot reach it, and either may be left', () => {
+  const iosAdd = read('apps/ios/Fleetwright/AddProxmoxView.swift');
+  const androidAdd = read('apps/android/app/src/main/java/network/thetech/fleetwright/ProxmoxSheet.kt');
+  const iosDirect = read('apps/ios/Fleetwright/ProxmoxDirectHandoff.swift');
+  const androidDirect = read('apps/android/app/src/main/java/network/thetech/fleetwright/ProxmoxDirectHandoff.kt');
+  const iosApp = read('apps/ios/Fleetwright/FleetwrightApp.swift');
+  const androidMain = read('apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt');
+  // No second entry: the separate row is gone from both.
+  for (const s of [iosAdd, androidAdd]) assert.ok(!s.includes('"Through one of your machines"'), 'a phone still offers the machine route as its own row');
+  // The phone's own reach is asked first; a node it cannot reach goes to a machine.
+  assert.match(iosAdd, /answered = try await ProxmoxSSH\.hostKey\(nodeKey\)[\s\S]*?catch \{[\s\S]*?through = true/);
+  assert.match(androidAdd, /ProxmoxSsh\.hostKey\(at\)\.getOrElse \{[\s\S]*?through = true/);
+  // With the address and password carried over, and the machines asked at once.
+  assert.match(iosAdd, /ProxmoxThroughMachineView\(settings: settings, node: nodeKey, password: password, auto: true\)/);
+  assert.match(androidAdd, /ProxmoxThroughSheet\(\s*settings,\s*node,\s*password = password,\s*auto = true,/);
+  assert.match(IOS, /if auto, probes == nil, job == nil, XOSetupKey\.isAddress\(trimmedAddress\) \{ await probe\(\) \}/);
+  assert.match(ANDROID, /if \(auto && probes == null && job == null && addressOk\) probe\(\)/);
+  // A direct run is registered when it starts, followed through the same look
+  // a launch takes, and collected at launch and when back in front.
+  assert.match(iosAdd, /ProxmoxDirectHandoff\.started\(address: nodeKey, fingerprint: key, since: now, password: password\)/);
+  assert.match(androidAdd, /ProxmoxDirectHandoff\.started\(settings, at, key, now, password\)/);
+  assert.match(iosAdd, /ProxmoxDirectHandoff\.look\(nodeKey, settings: settings\)/);
+  assert.match(androidAdd, /ProxmoxDirectHandoff\.look\(settings, at\)/);
+  assert.equal(iosApp.match(/ProxmoxDirectHandoff\.collectPending\(settings: settings\)/g)?.length, 2);
+  assert.equal(androidMain.match(/ProxmoxDirectHandoff\.collectPending\(settings\)/g)?.length, 2);
+  // The same names for what is kept, and the password wiped with the run.
+  assert.match(iosDirect, /"pvedirect-password\.\\\(address\)"/);
+  assert.match(androidDirect, /"pvedirect-password\.\$address"/);
+  for (const s of [iosDirect, androidDirect]) assert.match(s, /forget/);
+});
