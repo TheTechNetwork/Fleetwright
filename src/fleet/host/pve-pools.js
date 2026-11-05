@@ -32,7 +32,7 @@
 //
 //   THE FENCE IS OUTSIDE THE GUEST. A machine is held to "the internet and
 //   nothing private" by Proxmox's firewall, a cluster security group the
-//   script made (`fleetwright-isolate`), on the bridge, where nothing inside
+//   script made (`fleetwright-fence`), on the bridge, where nothing inside
 //   the VM can reach it. Xen Orchestra's machines fenced themselves with
 //   nftables from inside, which root in the guest can undo. And when the
 //   datacenter's firewall is off, the look says so (`fenced: false`): the
@@ -68,7 +68,8 @@ export const PVE_KIND = 'proxmox';
 export const PVE_IMAGE_TAG = 'fleetwright-image';
 export const PVE_SESSION_TAG = 'fleetwright-session';
 /** The cluster security group the setup script makes and every machine is put behind. */
-export const PVE_FENCE_GROUP = 'fleetwright-isolate';
+/** No longer than 18 characters, Proxmox's limit on a security group's name (the setup script says so too). */
+export const PVE_FENCE_GROUP = 'fleetwright-fence';
 /**
  * THE NETWORKS THE SETUP MAKES for labs and groups (install/fleetwright-pve-setup),
  * as SDN zones of their own: a group network is a VNet in `fwgrp`, a lab a

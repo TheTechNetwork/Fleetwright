@@ -52,7 +52,7 @@ sealed once it has joined; the clock on the machine, swept by any box.
   on a network the person chose for it (`make`). The script turns it on only
   when asked (`--enable-firewall`), because it is the person's datacenter.
 - **The firewall isolates; it does not show anything.** A machine behind
-  `fleetwright-isolate` cannot reach your network, and nothing records what
+  `fleetwright-fence` cannot reach your network, and nothing records what
   it did reach. Inspecting traffic needs it to pass through something that
   looks: a router VM in front of it, which is what XCP-ng's edge router is,
   or a mirror of its interface on the node (Open vSwitch's port mirroring,
@@ -213,7 +213,7 @@ Finding each first, so it is safe to run again:
    whether the firewall is on;
 3. a token, which lasts a year by default; running the script again makes a
    new one and the old one stops working;
-4. the firewall group `fleetwright-isolate`: SSH in, DHCP and DNS out, then
+4. the firewall group `fleetwright-fence`: SSH in, DHCP and DNS out, then
    nothing private out (RFC 1918, CGNAT, link-local, IPv6 ULA);
 5. the machine image: Debian 13's cloud image, pinned and checked, booted once
    to install Fleetwright from apt, left unjoined and turned into a template;
@@ -244,7 +244,7 @@ written in the script, which has no Fleetwright to import them from, and in
    clone's SMBIOS serial, keeping the clone's own UUID; your SSH keys through
    Proxmox's own cloud-init; and the interface on the image's bridge, or the
    one you chose, with the firewall on.
-4. On the default network, the machine goes behind `fleetwright-isolate`:
+4. On the default network, the machine goes behind `fleetwright-fence`:
    inbound dropped but SSH, outbound to the internet and nothing private.
 5. It starts. The template's vendor snippet copies the serial, as root, where
    `fleetwright-vm-join` takes it from, and the join is the one Xen
