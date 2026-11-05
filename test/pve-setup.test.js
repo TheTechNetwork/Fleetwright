@@ -142,7 +142,9 @@ test('through a machine: the node is set up with the phones’ own command, and 
   assert.equal(n.lineLeft(), false);
   assert.ok(!JSON.stringify(m.events).includes(LINE.slice(CONNECTION_PREFIX.length, CONNECTION_PREFIX.length + 40)));
   // THE COMMAND BOTH PHONES RUN, naming this machine's fleet.
-  assert.match(n.asked().find((a) => a.startsWith('systemd-run')) ?? '', new RegExp(`--unit=fleetwright-pve-setup --collect /bin/bash -c .*--coordinator ${FLEET} --line-file `));
+  const started = n.asked().find((a) => a.startsWith('systemd-run')) ?? '';
+  assert.ok(started.startsWith('systemd-run --unit=fleetwright-pve-setup --collect /bin/bash -c '), started);
+  assert.ok(started.includes(` --coordinator ${FLEET} --line-file `), started);
   // EVERY STEP, reported as Proxmox's, and the password only through askpass.
   assert.deepEqual([...new Set(m.events.filter((e) => e.state === 'running').map((e) => e.phase))], [...PVESETUP_STEPS]);
   assert.ok(m.events.every((e) => e.purpose === 'pve'));
