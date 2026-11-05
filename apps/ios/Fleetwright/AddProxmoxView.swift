@@ -29,17 +29,18 @@ struct AddProxmoxView: View {
     @State private var kept = false
     @State private var copied = false
 
+    private var command: String { ProxmoxLine.setupCommand(coordinator: settings.coordinatorURL) }
     /// What the pasted line carries, or nil while it is not one.
     private var parsed: ProxmoxLine.Record? { ProxmoxLine.parse(line) }
 
     var body: some View {
         Form {
             Section {
-                Text(ProxmoxLine.setupCommand)
+                Text(command)
                     .fleetType(.microMono)
                     .textSelection(.enabled)
                 Button(copied ? "Copied" : "Copy the command") {
-                    UIPasteboard.general.string = ProxmoxLine.setupCommand
+                    UIPasteboard.general.string = command
                     copied = true
                 }
                 .frame(minHeight: 44)
@@ -128,7 +129,11 @@ struct AddProxmoxView: View {
 enum ProxmoxLine {
     static let prefix = "fleetwright-pve:1:"
     static let scriptURL = "https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/fleetwright-pve-setup"
-    static let setupCommand = "curl -fsSLo /root/fleetwright-pve-setup \(scriptURL) && bash /root/fleetwright-pve-setup"
+    /// The command for the node, naming this phone's fleet, which a closed
+    /// lab answers names for and lets HTTPS reach (docs/proxmox.md, "Labs").
+    static func setupCommand(coordinator: String) -> String {
+        "curl -fsSLo /root/fleetwright-pve-setup \(scriptURL) && bash /root/fleetwright-pve-setup --coordinator \(coordinator)"
+    }
 
     struct Record {
         let address: String

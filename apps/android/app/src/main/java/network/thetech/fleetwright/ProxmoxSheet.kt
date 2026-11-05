@@ -49,7 +49,7 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
         SectionHead("1. On the node, as root")
         // SELECTABLE, so a long press copies it whole.
         SelectionContainer {
-            Text(ProxmoxLine.SETUP_COMMAND, style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
+            Text(ProxmoxLine.setupCommand(settings.coordinatorUrl), style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
         }
         Hint(
             "In Proxmox's web interface: Datacenter › the node › Shell. It makes a pool, a user with no password, " +
@@ -123,7 +123,8 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
 internal object ProxmoxLine {
     const val PREFIX = "fleetwright-pve:1:"
     const val SCRIPT_URL = "https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/fleetwright-pve-setup"
-    const val SETUP_COMMAND = "curl -fsSLo /root/fleetwright-pve-setup $SCRIPT_URL && bash /root/fleetwright-pve-setup"
+    /** The command for the node, naming this phone's fleet, which a closed lab answers names for and lets HTTPS reach. */
+    fun setupCommand(coordinator: String): String = "curl -fsSLo /root/fleetwright-pve-setup $SCRIPT_URL && bash /root/fleetwright-pve-setup --coordinator $coordinator"
 
     data class Record(val address: String, val pool: String, val trust: String, val json: String) {
         val trustWords: String get() = if (trust == "public") "trusted by its public certificate" else "trusted by its own CA"

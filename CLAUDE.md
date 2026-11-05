@@ -72,6 +72,18 @@ the rule set noise.
 If you want them gone, it is a mechanical change and this paragraph is what
 should be deleted with it.
 
+## A feature ships whole, or not at all
+
+**Never build a feature and leave a component of it unshipped.** Asked for
+in so many words, after Proxmox's host half merged with no screen on either
+phone that could add a cluster: *"Don't build a feature and not ship all
+components ever again."* A feature is done when every layer a person needs
+to use it is in the same round: the coordinator, the host, iOS, Android and
+the docs, as the stack `CONTRIBUTING.md` describes. Layers still go in their
+own pull requests, opened together; what changed is that none of them is
+"next". A layer a round cannot build is a reason to say the feature is not
+ready, never a reason to merge the others as if it were.
+
 ## Everything else
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — one pull request per layer, and why.

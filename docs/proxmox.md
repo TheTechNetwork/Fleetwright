@@ -1,16 +1,16 @@
 # Proxmox VE
 
-**Status: the host half is built; the phones are next, and nothing has run
-against a real cluster.** A box that holds a Proxmox token looks at the
-cluster, sweeps what is done, and makes, hands the login to, restarts,
-extends, resizes and ends machines on it, behind the same seam as Xen
-Orchestra (`src/fleet/host/pools.js`), so the coordinator and the protocol
-did not change. The cluster is set up by one script run as root on a node
-(`install/fleetwright-pve-setup`), which the phone is to run itself over
-SSH ("From the phone"; the phone half is not built) or a person runs by
-hand. **Not built:**
-the phone screens below, labs, machines that work together, and the pool
-page's own actions. **Not yet run:** the script on a real node, and a
+**Status: built on the boxes and both phones; not yet run on a real cluster.**
+A box that holds a Proxmox token looks at the cluster, sweeps what is done,
+and makes, hands the login to, restarts, extends, resizes and ends machines
+on it, behind the same seam as Xen Orchestra (`src/fleet/host/pools.js`), so
+the protocol did not change. Machines may be in a group or alone in an open
+or closed lab ("Labs and groups"). The cluster is set up by one script run
+as root on a node (`install/fleetwright-pve-setup`): a person runs it from
+the command both phones show under Add Proxmox VE and pastes the line it
+prints ("By hand"), or, next, the phone runs it itself over SSH ("From the
+phone", not built). **Not built:** setup over SSH from the phone, and the
+pool page's own actions. **Not yet run:** the script on a real node, and a
 machine made on a real cluster. The tests run the driver against a stand-in
 Proxmox over real TLS (`test/pve-pools.test.js`).
 
@@ -196,6 +196,69 @@ written in the script, which has no Fleetwright to import them from, and in
    Orchestra's machines run.
 6. Anything that fails after the clone removes the clone.
 
+## Labs and groups
+
+The same three things Xen Orchestra's pools offer (`hypervisors.md`,
+"Machines that work together" and "Labs"), promising the same and no more,
+held by the cluster's own firewall instead of an edge router.
+
+**The networks are the setup's**, because only root can make an SDN
+network and the fleet's token may use one, never make one: the reason Xen
+Orchestra's policy job made them with the admin sign-in. `--groups`,
+`--labs-open` and `--labs-closed` (two, one and one by default; four labs at
+most) make, in two simple SDN zones:
+
+- **group networks** `fwgrp1` to `fwgrp4` in `fwgrp`: no address of the
+  node's on them, so nothing reaches them but their machines;
+- **labs** `fwlab1` to `fwlab4` in `fwlab`, each `10.250.<n>.0/24` with the
+  node at `.1` doing NAT, its kind in the VNet's alias
+  (`fleetwright-lab:open` or `:closed`), and dnsmasq on the node handing out
+  addresses from `.100` and answering names: for the open labs from the
+  node's own resolver, for the closed ones only the fleet's coordinator and
+  the hosts Claude cannot work without (`REQUIRED_HOSTS` in
+  `src/core/egress.js`, the list the edge router uses), and the names under
+  each. Every other name a closed lab asks is refused. A datacenter rule lets
+  the labs ask the node for names and addresses when its firewall is on.
+
+The token is given `SDN.Use` and `SDN.Audit` on each, and the box finds them
+by those grants and the VNet's alias; a lab VNet whose alias names no kind is
+not offered, since what it reaches could not be promised.
+
+**A machine in a group** gets a second interface on the group network, with
+a MAC and an address in `10.200.0.0/16` from its ticket's id, moved past any
+other machine in the group has (`groupPlace`, shared with Xen Orchestra), set
+by Proxmox's own cloud-init (`ipconfig1`) before anything inside listens.
+Its firewall lets everything in and out on that interface and then puts it
+behind the fence as usual, so it reaches the others in its group and is
+still closed to every other machine. Names over mDNS need avahi, which
+images built from this change carry; an image built before has addresses
+and no names until it is built again (`--rebuild-image`). A group network in
+a simple zone is local to one node, and a cluster's machines are made on the
+node their image is on, so a group's machines meet there.
+
+**A machine in a lab** is alone on it: the box takes only a lab it saw
+empty, and looks again once the machine is up, removing its own if another
+box made one there first. Its firewall, outside its reach:
+
+- **open**: names from the lab's gateway alone, then the fence, so the
+  internet and nothing private;
+- **closed**: names from the lab's gateway alone (which answers only the
+  fleet's and Claude's), DHCP, HTTPS to an address set on the machine
+  (`fwallow`) and nothing else in or out. The box fills the set with what
+  those names resolve to before it makes the machine, refusing when none
+  resolves, and adds to it on every look, never taking away.
+
+**Where it is weaker than the edge router**, said plainly: no Suricata
+watches a lab, and nothing records what a machine reached; a closed lab's
+HTTPS goes to addresses, so a name of Claude's that moves to an address the
+box has not resolved yet is unreachable until the next look. The scoped
+ipset name the rule uses (`+guest/fwallow`) and the SDN pieces are written
+from Proxmox VE 9's documentation and have not met a real node.
+
+**The phones say which.** `vmImages` carries `kind`, and both phones word a
+lab on Proxmox as a network on the cluster, and the default network as
+behind the cluster's firewall, not behind an edge router.
+
 ## The phones: one screen per thing, no wizard
 
 Not built; this is the shape the next layer takes, written down so it is
@@ -242,8 +305,6 @@ it answers `notHere`, and an `unreachable` from either is kept.
 
 - The phone screens above, on both apps, and the SSH client each needs for
   "From the phone": neither app has one yet.
-- Labs and group networks (SDN VNets are the natural fit); `make` refuses
-  both by name rather than make something else.
 - The pool page's actions on the cluster (`xolook`, `xoact` are Xen
   Orchestra's).
 - Machines kept ready (`vmStandby`), which have not been tried against a

@@ -492,6 +492,10 @@ test('both phones read the line the boxes read, and show the same command for th
   const url = (/static let scriptURL = "([^"]+)"/.exec(ios) ?? [])[1];
   assert.equal((/const val SCRIPT_URL = "([^"]+)"/.exec(android) ?? [])[1], url);
   assert.ok(url?.endsWith('/install/fleetwright-pve-setup'), 'the command fetches something other than the setup script');
-  const ran = (/** @type {string} */ s, /** @type {RegExp} */ re) => (re.exec(s)?.[1] ?? '').replace(/\\\(scriptURL\)|\$SCRIPT_URL/, url ?? '');
-  assert.equal(ran(ios, /static let setupCommand = "([^"]+)"/), ran(android, /const val SETUP_COMMAND = "([^"]+)"/));
+  // The same command with the fleet's address after it, which closed labs need.
+  const ran = (/** @type {string} */ s, /** @type {RegExp} */ re) =>
+    (re.exec(s)?.[1] ?? '').replace(/\\\(scriptURL\)|\$SCRIPT_URL/, url ?? '').replace(/\\\(coordinator\)|\$coordinator/, 'https://fleet.example');
+  const iosRan = ran(ios, /static func setupCommand\(coordinator: String\) -> String \{\s*"([^"]+)"/);
+  assert.equal(iosRan, ran(android, /fun setupCommand\(coordinator: String\): String = "([^"]+)"/));
+  assert.ok(iosRan.endsWith('--coordinator https://fleet.example'), iosRan);
 });
