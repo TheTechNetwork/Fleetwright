@@ -130,6 +130,17 @@ function ssh() {
     fail('this fake has no way to ask for a password outside a master');
   }
   const command = rest.slice(1).join(' ');
+  // ITS OWN /root, somewhere a test may write (`root`): the script it is sent
+  // on stdin is read and run with /root/ meaning that directory, as a node's
+  // root-only files are its own and not the test machine's.
+  if (config.root) {
+    const script = readFileSync(0, 'utf8').replaceAll('/root/', `${config.root}/`);
+    log({ script });
+    const ran = spawnSync('bash', ['-c', command], { input: script, encoding: 'utf8', env: { ...process.env, PATH: `${config.poolPath}:${process.env.PATH}` } });
+    process.stdout.write(ran.stdout ?? '');
+    process.stderr.write(ran.stderr ?? '');
+    process.exit(ran.status ?? 1);
+  }
   const child = spawn('bash', ['-c', command], {
     stdio: 'inherit',
     env: { ...process.env, PATH: `${config.poolPath}:${process.env.PATH}` },

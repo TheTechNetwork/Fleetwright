@@ -114,8 +114,8 @@ import { randomBytes } from 'node:crypto';
 import { rmSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 
-import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, XO_ADDRESS_RE, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
-import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xowatchdogAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupPolicySigninAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../seal.js';
+import { XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, PVESETUP_STEPS, XO_ADDRESS_RE, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, CERT_PIN_RE } from '../protocol/intents.js';
+import { SEAL_KEY_RE, newSealKey, open as openSealed, seal, xodeployAad, xowatchdogAad, pvesetupAad, pvesetupHandoffAad, xosetupAad, xosetupHandoffAad, xosetupInventoryAad, xosetupPolicyAad, xosetupReconnectAad, xosetupPolicySigninAad, xosetupReconnectSigninAad, xosetupWatchAad } from '../seal.js';
 import { signingInput } from '../crypto.js';
 import { certSha256, splitAddress, connectXo, connectXoPlain, describeCertificate, CERT_PROBLEM_WORDS } from './xo-ws.js';
 import { machineGrantsOf } from '../../core/grants.js';
@@ -127,6 +127,7 @@ import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { clearExposed, exposedOn, keptFor, newWatch, watchOf } from './edge-credentials.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
 import { addToDisk, findXoVm, startXoVm, stopXoVm, waitForXo } from './xo-watchdog.js';
+import { pveSteps, stopOnNode } from './pve-setup.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -763,6 +764,61 @@ export class XoSetups {
   }
 
   /**
+   * Setting up a Proxmox VE node for a phone that cannot reach it (phase
+   * `pve`, PVESETUP_STEPS): begun as adding the watchdog is, against the node
+   * itself, pinned to the SSH host key the person compared, and the job's key
+   * signed under its own context (`pvesetup-key`). pve-setup.js says why.
+   *
+   * @param {{ address: string, pin?: string|null, relay?: string|null, actor: string|null }} args
+   */
+  async beginPve({ address, pin, relay = null, actor }) {
+    this.#prune();
+    if (!actor) return { ok: false, text: 'Setting up Proxmox VE has to be asked for by a signed-in person.' };
+    if (!this.signer) {
+      return {
+        ok: false,
+        text: 'This machine has no enrolment key to sign a job key with, so a phone could not tell the key was this machine’s. Enrol it with a pin first.',
+      };
+    }
+    if (relay !== null) {
+      return { ok: false, text: 'Setting up Proxmox VE through a machine needs one that reaches the node itself. Choose another, or run the command on the node by hand.' };
+    }
+    if (!pin || !CERT_PIN_RE.test(pin)) return { ok: false, text: 'Setting up Proxmox VE needs the node’s SSH host key you compared. Find a machine that can reach it from the app first.' };
+    if (!this.coordinatorUrl) return { ok: false, text: 'This machine does not know its fleet’s address, which the setup names for closed labs. Update it, or choose another.' };
+    if ([...this.jobs.values()].filter((j) => j.state === 'waiting' || j.state === 'running' || j.state === 'choosing').length >= 3) {
+      return { ok: false, text: 'This machine is already running three setups. Wait for one to finish.' };
+    }
+    const signer = /** @type {NonNullable<typeof this.signer>} */ (this.signer);
+    const job = randomBytes(6).toString('hex');
+    const key = await newSealKey();
+    const keySig = await signer.sign(signingInput('pvesetup-key', { address, job, key: key.publicKey, pin }));
+    const hostKey = { kty: 'EC', crv: 'P-256', x: signer.publicJwk.x, y: signer.publicJwk.y };
+    this.jobs.set(job, {
+      job,
+      address,
+      hostKeyPin: pin,
+      purpose: 'pve',
+      pin: null,
+      plain: false,
+      trust: null,
+      actor,
+      key,
+      state: 'waiting',
+      step: 0,
+      of: PVESETUP_STEPS.length,
+      phase: PVESETUP_STEPS[0],
+      text: 'Waiting for the root password.',
+      at: this.now(),
+      cancelled: false,
+    });
+    return {
+      ok: true,
+      text: 'Ready for the root password. Check the key is this machine’s, then send it sealed.',
+      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['pve'] },
+    };
+  }
+
+  /**
    * @param {{ job: string, sealed: string, actor: string|null }} args
    */
   async run({ job, sealed, actor }) {
@@ -775,6 +831,7 @@ export class XoSetups {
     let inside;
     const deploy = rec.purpose === 'deploy';
     const watchdog = rec.purpose === 'watchdog';
+    const pve = rec.purpose === 'pve';
     const box = { epk: parts[0], iv: parts[1], ct: parts[2] };
     // UNDER THE SETUP'S NAME, OR A RECONNECT'S OR A POLICY CHANGE'S OWN: a
     // phone that knows this machine lists `reconnect-signin` and
@@ -813,8 +870,9 @@ export class XoSetups {
     /** @param {string} aad */
     const tryOpen = (aad) => openSealed({ privateKey: jobKey.privateKey, publicKey: jobKey.publicKey, aad, sealed: box });
     try {
-      inside = await tryOpen(deploy ? xodeployAad(job, rec.address) : watchdog ? xowatchdogAad(job, rec.address) : xosetupAad(job, rec.address));
+      inside = await tryOpen(deploy ? xodeployAad(job, rec.address) : watchdog ? xowatchdogAad(job, rec.address) : pve ? pvesetupAad(job, rec.address) : xosetupAad(job, rec.address));
     } catch {
+      if (pve) return notOpened('The root password did not open with this job’s key. Start again from the app.');
       if (deploy) return notOpened('The passwords did not open with this job’s key. Start again from the app.');
       if (watchdog) return notOpened('The root password did not open with this job’s key. Start again from the app.');
       for (const [name, aad] of /** @type {const} */ ([['reconnect', xosetupReconnectSigninAad(job, rec.address)], ['policy', xosetupPolicySigninAad(job, rec.address)]])) {
@@ -852,6 +910,24 @@ export class XoSetups {
       rec.text = 'Starting.';
       void this.#execute(rec, { root });
       return { ok: true, text: `Adding the reconnect watchdog to Xen Orchestra at ${target}, through the pool master at ${rec.address}.`, xosetup: status(rec) };
+    }
+    // SETTING UP PROXMOX VE: the node's root password and the key the line
+    // goes back to, both checked before anything is asked of the node.
+    if (pve) {
+      const root = inside?.v === 1 && inside.purpose === 'pve' && typeof inside.root?.password === 'string' ? inside.root.password : '';
+      if (!root || root.length > 1024 || !SEAL_KEY_RE.test(String(inside?.reply || ''))) {
+        rec.state = 'failed';
+        rec.text = !root
+          ? 'The sealed message had no root password for the node in it, so nothing was started.'
+          : 'The app gave no key to hand the line back to, so nothing was started. Update the app and try again.';
+        this.#ended(rec);
+        return { ok: false, text: rec.text, xosetup: status(rec) };
+      }
+      rec.reply = String(inside.reply);
+      rec.state = 'running';
+      rec.text = 'Starting.';
+      void this.#execute(rec, { root });
+      return { ok: true, text: `Setting up Proxmox VE on the node at ${rec.address}.`, xosetup: status(rec) };
     }
     const allowed = under === 'setup' ? [undefined, 'policy', 'reconnect'] : [under];
     if (!deploy && !allowed.includes(inside?.purpose)) {
@@ -1121,7 +1197,7 @@ export class XoSetups {
         phase: rec.phase,
         state: rec.state,
         text: rec.text,
-        ...(policy ? { purpose: 'policy' } : rec.purpose === 'deploy' ? { purpose: 'deploy' } : rec.purpose === 'watchdog' ? { purpose: 'watchdog' } : reconnect ? { purpose: 'reconnect' } : {}),
+        ...(policy ? { purpose: 'policy' } : rec.purpose === 'deploy' ? { purpose: 'deploy' } : rec.purpose === 'watchdog' ? { purpose: 'watchdog' } : rec.purpose === 'pve' ? { purpose: 'pve' } : reconnect ? { purpose: 'reconnect' } : {}),
         // WHAT THE JOB LEARNED ABOUT THE RECONNECT WATCHDOG, with the address
         // it is about, which the coordinator keeps past the job and words the
         // lost-pool push from (core.js #learnWatchdog). Once learned and not
@@ -1162,8 +1238,9 @@ export class XoSetups {
     const deploy = rec.purpose === 'deploy';
     const reconnect = rec.purpose === 'reconnect';
     const watchdog = rec.purpose === 'watchdog';
-    const steps = policy ? this.#policySteps() : deploy ? this.#deploySteps() : watchdog ? this.#watchdogSteps() : reconnect ? this.#reconnectSteps() : this.#steps();
-    const keys = policy ? XOPOLICY_STEPS : deploy ? XODEPLOY_STEPS : watchdog ? XOWATCHDOG_STEPS : reconnect ? XORECONNECT_STEPS : XOSETUP_STEPS;
+    const pve = rec.purpose === 'pve';
+    const steps = policy ? this.#policySteps() : deploy ? this.#deploySteps() : watchdog ? this.#watchdogSteps() : pve ? this.#pveSteps() : reconnect ? this.#reconnectSteps() : this.#steps();
+    const keys = policy ? XOPOLICY_STEPS : deploy ? XODEPLOY_STEPS : watchdog ? XOWATCHDOG_STEPS : pve ? PVESETUP_STEPS : reconnect ? XORECONNECT_STEPS : XOSETUP_STEPS;
     // TEN MINUTES SIGNED IN AS AN ADMIN, and no more, for a reconnect: read
     // by its steps on `now` between looks, and held by a timer too, which
     // closes the session under whatever call is waiting when the time is up,
@@ -1191,6 +1268,7 @@ export class XoSetups {
         if (!steps[i]) continue;
         if (rec.cancelled) {
           if (reconnect) await this.#sealReconnect(ctx);
+          const pveSaid = pve ? await pveCancelled(ctx) : null;
           rec.state = 'cancelled';
           // AN INSTALL SAYS WHAT IS ON THE POOL, not which step was next:
           // "Cancelled before Reaching Xen Orchestra" after the installer had
@@ -1203,13 +1281,14 @@ export class XoSetups {
             await this.#restoreXoVm(ctx);
             rec.text = `${rec.text} ${ctx.vmState ?? 'Xen Orchestra’s VM was not touched.'}`;
           }
+          if (pveSaid) rec.text = pveSaid;
           this.#report(rec);
           return;
         }
         rec.step = i;
         rec.phase = keys[i];
         rec.part = null;
-        rec.text = `${STEP_WORDS[rec.phase]}.`;
+        rec.text = `${(pve ? PVE_STEP_WORDS : STEP_WORDS)[rec.phase]}.`;
         this.#report(rec);
         const said = await /** @type {(ctx: any) => Promise<any>} */ (steps[i])(ctx);
         // What a step found, kept for the summary rather than reported on its
@@ -1228,6 +1307,7 @@ export class XoSetups {
       rec.part = null;
       rec.text = [ctx.summary || (policy ? `${rec.address}: what the fleet may use is changed.` : `${rec.address} is in the fleet.`), ...ctx.notes].join(' ');
       if (watchdog) rec.text = ctx.summary;
+      if (pve) rec.text = `${rec.address} is set up for the fleet. The line came back to your phone, sealed; add it there and the fleet’s machines pick it up within ten minutes.`;
       // A CANCEL THAT LANDED DURING THE LAST THING A POLICY JOB DID, which
       // took no signal (the pool's own machine) and finished: the job was
       // cancelled and says so, with what it had done. Not for a setup or an
@@ -1257,6 +1337,16 @@ export class XoSetups {
         rec.state = rec.cancelled ? 'cancelled' : 'failed';
         const why = rec.cancelled ? `Cancelled before ${STEP_WORDS[rec.phase]?.toLowerCase() ?? 'the next step'}.` : `${STEP_WORDS[rec.phase] ?? 'Adding the watchdog'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets)}`;
         rec.text = `${why} ${ctx.vmState ?? 'Xen Orchestra’s VM was not touched.'}`.slice(0, 600);
+      } else if (pve) {
+        // A RUN STOPPED ON THE NODE, cancelled or failed, is stopped there
+        // too: the script finds what it made first when it is run again.
+        // THE WORDS FIRST, then the state: a status read between the two
+        // would otherwise show the job ended with the last step's words.
+        const said = rec.cancelled
+          ? await pveCancelled(ctx)
+          : `${PVE_STEP_WORDS[rec.phase] ?? 'Setting up Proxmox VE'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets).replace(/the pool master/g, 'the node')}${(await stopOnNode(ctx)) ? ' The setup on the node was stopped; running it again finds what it made.' : ''}`.slice(0, 600);
+        rec.text = said;
+        rec.state = rec.cancelled ? 'cancelled' : 'failed';
       } else if (reconnect && rec.cancelled) {
         rec.state = 'cancelled';
         rec.text = ctx.outcomes
@@ -1838,6 +1928,35 @@ export class XoSetups {
           : `The reconnect watchdog is on ${name}’s disk, and ${name} was started again, but nothing answered on Xen Orchestra’s port at ${rec.xoAddress} after five minutes. Look at it in the pool; it may still be starting.`;
       },
     ];
+  }
+
+  /**
+   * Setting up Proxmox VE's steps, in PVESETUP_STEPS order (pve-setup.js).
+   * The connection is an install's (openPool), without the job's abort
+   * signal, so that a cancel can still stop the run on the node over it.
+   *
+   * @returns {Array<(ctx: any) => Promise<any>>}
+   */
+  #pveSteps() {
+    return pveSteps({
+      coordinatorUrl: this.coordinatorUrl,
+      sleep: this.sleep,
+      now: this.now,
+      open: async (ctx) => {
+        ctx.dir = jobDir();
+        ctx.root = { password: ctx.creds.root };
+        ctx.creds.root = undefined;
+        try {
+          return await openPool({ address: ctx.rec.address, hostKey: ctx.rec.hostKeyPin, secret: ctx.root, dir: ctx.dir });
+        } catch (e) {
+          throw new Error(String(/** @type {Error} */ (e).message).replace(/the pool master/g, 'the node'));
+        }
+      },
+      sealLine: async (ctx, line) => {
+        const box = await seal({ to: ctx.rec.reply, aad: pvesetupHandoffAad(ctx.rec.job, ctx.rec.address), payload: { v: 1, line } });
+        ctx.rec.handoff = `${box.epk}.${box.iv}.${box.ct}`;
+      },
+    });
   }
 
   /**
@@ -2557,6 +2676,32 @@ export const STEP_WORDS = Object.freeze(/** @type {Record<string, string>} */ ({
   add: 'Adding the watchdog to its disk',
   start: 'Starting it again',
 }));
+
+/** Setting up Proxmox VE's steps in a person's words (PVESETUP_STEPS); the phones say the same. */
+export const PVE_STEP_WORDS = Object.freeze(/** @type {Record<string, string>} */ ({
+  node: 'Reaching the node',
+  pool: 'Making the pool',
+  user: 'Making the user and its roles',
+  token: 'Making its token',
+  fence: 'Making the firewall group',
+  networks: 'Making lab and group networks',
+  image: 'Building the machine image',
+  line: 'Handing over the line',
+}));
+
+/**
+ * How a cancelled Proxmox setup ended: stopped on the node if it had started
+ * there, which the script is written for.
+ *
+ * @param {any} ctx
+ */
+async function pveCancelled(ctx) {
+  const before = PVE_STEP_WORDS[ctx.rec.phase]?.toLowerCase() ?? 'the next step';
+  if (!ctx.started) return `Cancelled before ${before}. Nothing was started on the node.`;
+  return (await stopOnNode(ctx))
+    ? `Cancelled during ${before}. The setup on the node was stopped; what it made by then stays, and running it again finds it.`
+    : `Cancelled during ${before}, but the node did not confirm the setup stopped. journalctl -u fleetwright-pve-setup on the node says where it is.`;
+}
 
 /**
  * How a cancelled install ended, in what is known of the pool by then. Before

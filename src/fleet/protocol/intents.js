@@ -306,6 +306,23 @@ export const XOWATCHDOG_STEPS = Object.freeze([
   'start', // started again if it was running, and waited for until Xen Orchestra answers
 ]);
 
+// SETTING UP PROXMOX VE THROUGH A MACHINE, for a phone that cannot reach the
+// node (src/fleet/host/pve-setup.js). `node` is the machine's own: SSH to the
+// node, held to the host key the person compared, and the script started.
+// The rest are the script's own steps (install/fleetwright-pve-setup), which
+// both phones already follow when they reach the node themselves; `line` ends
+// with the line sealed back to the phone.
+export const PVESETUP_STEPS = Object.freeze([
+  'node',
+  'pool',
+  'user',
+  'token',
+  'fence',
+  'networks',
+  'image',
+  'line',
+]);
+
 // v3, 2 Sep 2026: `start` gained `profile`, and `profiles` was added beside it.
 //
 // A VERSION BUMP IS A FLAG DAY, and this is the second one. Adding a VERB is
@@ -2022,6 +2039,15 @@ export const VERBS = Object.freeze({
   //           machine runs XOWATCHDOG_STEPS, reporting as `purpose: watchdog`.
   //           Nothing is handed back. A phase for the reason `deploy` is one.
   //
+  //   pve     `begin` for setting up a Proxmox VE node for a phone that
+  //           cannot reach it (src/fleet/host/pve-setup.js): `address` is the
+  //           node's SSH address and `pin` the SHA-256 of its SSH host key the
+  //           person compared, in hex, signed under `pvesetup-key`. The sealed
+  //           `run` carries the node's root password and the key the line is
+  //           sealed back to; the machine runs PVESETUP_STEPS, reporting as
+  //           `purpose: pve`, and `status` carries the line sealed once done.
+  //           A phase for the reason `deploy` is one.
+  //
   //   A RECONNECT is a `begin` and a `run` like any setup's, whose sealed
   //           sign-in says `purpose: 'reconnect'`, as a policy job's says its
   //           own: the machine reconnects Xen Orchestra's servers for a pool
@@ -2039,7 +2065,7 @@ export const VERBS = Object.freeze({
   // answers `unknown_verb` and strands nothing.
   xosetup: {
     params: {
-      phase: { type: 'enum', required: true, values: ['begin', 'run', 'status', 'cancel', 'policy', 'deploy', 'watchdog'] },
+      phase: { type: 'enum', required: true, values: ['begin', 'run', 'status', 'cancel', 'policy', 'deploy', 'watchdog', 'pve'] },
       job: {
         type: 'text',
         required: false,
