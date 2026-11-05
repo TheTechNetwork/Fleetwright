@@ -11,8 +11,8 @@ the command both phones show under Add Proxmox VE and pastes the line it
 prints ("By hand"), the phone runs it itself over SSH ("From the
 phone"), or, for a node the phone cannot reach, one of the person's machines
 that can runs it for the phone ("Through a machine"). **Not built:** the
-direct path's steps on the Lock Screen, and the pool page's own actions. **Not yet run:** the script on a real node, and a
-machine made on a real cluster. The tests run the driver against a stand-in
+direct path's steps on the Lock Screen, and the pool page's own actions. **Run on a real node** through a machine as far as
+building the image; a run seen to its end, and a machine made on a real cluster, are not yet. The tests run the driver against a stand-in
 Proxmox over real TLS (`test/pve-pools.test.js`).
 
 ## What XCP-ng taught
@@ -118,7 +118,8 @@ node and nowhere else and lives in the screen's memory
    `systemd-run --unit=fleetwright-pve-setup`, so a locked phone does not
    kill the image build. A run already going is stopped first.
 3. **It follows the job** every three seconds while the screen is open: the
-   `fleetwright-step:` lines since that clock, read from the journal, and
+   `fleetwright-step:` lines since that clock, read from the journal, the
+   last `fleetwright-part:` line of the step it is on (below), and
    `fleetwright-error:` as the sentence when it stops. A poll that fails is
    said and tried again; the job does not depend on the phone.
 4. **The line**, which is the token, is read from the file only root reads,
@@ -169,22 +170,57 @@ secret crosses the fleet:
    what the phone runs from "From the phone", which `test/pve-pools.test.js`
    holds equal across the host and both apps (`src/fleet/host/pve-setup.js`).
 5. **Progress** is `PVESETUP_STEPS`: `node` (the connection and the start),
-   then the script's own steps as it says them in the journal. It reaches
-   the screen, the Lock Screen on iOS and the ongoing notification on
-   Android, under its own titles.
+   then the script's own steps as it says them in the journal, with how far
+   into the step it is (below). It reaches the screen, the Lock Screen on
+   iOS and the ongoing notification on Android, under its own titles.
 6. **The line** is read from the root-only file once, removed, checked as
    the boxes check it, and sealed back to the phone's key under
-   `pvesetupHandoffAad`. The machine keeps no copy; the screen opens it and
-   keeps it in the vault as a pasted line is.
+   `pvesetupHandoffAad`. The machine keeps no copy, and holds the sealed
+   copy six hours, as every finished setup job is held.
 
 **A cancel or a failure stops the unit on the node**, which the script is
 written to be run again after: it finds what it made first.
 
-**Said plainly: the key the line comes back to lives in the screen's
-memory.** The screen says to stay open until it ends; closing it leaves a
-node that is set up with a line nobody holds, and running the setup again
-makes a new token and replaces it. Keeping that key in the Keychain, as a
-Xen Orchestra setup's is, is not built.
+**The screen may be closed while it runs.** Asked for, from a phone held on
+"Step 7 of 8" for ten minutes: *"Why no background processing why do I need
+to wait there"*. The key the line comes back to is kept on the phone under
+the job (the Keychain on iOS, the app's encrypted store on Android), as a
+Xen Orchestra setup's is, until the line is in the vault
+(`ProxmoxThroughHandoff` in both apps). Whichever comes first collects it:
+the screen seeing the job end, the app coming back to the front, or a
+launch. A keep the vault refused is tried again at the next of those for as
+long as the machine holds the copy; after six hours the key is dropped,
+because there is nothing left for it to open.
+
+### How far into a step
+
+Asked for in the same breath: *"Where is step progress?"* The image is most
+of the wait, and "Step 7 of 8" said nothing for ten minutes. The script now
+prints, beside its step lines,
+
+```
+fleetwright-part: FILL TEXT
+```
+
+where `FILL` is thousandths, or `-` when nothing was measured, and `TEXT` is
+what it is doing. The poll keeps only the last one of the step it is on
+(`pollCommand` in `pve-setup.js`, the same text in both apps), and the phone
+draws a bar only for a measured `FILL` (C-5):
+
+- **The download**: the image's size asked first, then the file watched
+  grow, as "180 of 416 MB". A server that does not say the size is said as
+  what has come so far, with no bar.
+- **The build**: its cloud-config writes `fleetwright-build: up`,
+  `fleetwright` and `off` to the build machine's serial console as it
+  reaches each stage, and the script reads the console's socket for them:
+  installing packages, installing Fleetwright, powering off, with the
+  minutes so far. Until the first marker it says only the minutes, never a
+  stage it has not heard. The reader is a process of its own, so nothing
+  it meets stops the setup.
+
+Through a machine, the words go after the step's ("Building the machine
+image: downloading…") and the bar is the job's `fill`, which the Lock Screen
+and Android's notification already draw for an install's download.
 
 ### By hand
 
@@ -361,7 +397,6 @@ it answers `notHere`, and an `unreachable` from either is kept.
 
 - The direct path's steps on the Lock Screen and in Android's ongoing
   notification. Through a machine has them; from the phone itself does not.
-- The line's key kept past the screen, for setup through a machine.
 - The cluster's page described above: its fence, its token's width and its
   machines are in the health entry, and no screen draws them yet.
 - The pool page's actions on the cluster (`xolook`, `xoact` are Xen
