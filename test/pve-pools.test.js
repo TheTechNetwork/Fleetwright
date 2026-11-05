@@ -489,6 +489,12 @@ test('the setup script embeds the snippets, privileges and image the driver expe
   };
   assert.equal(heredoc('VENDOR'), pveVendorConfig());
   assert.equal(heredoc('BUILD'), pveBuildConfig());
+  // THE ACCOUNT THE PACKAGE IS TOLD TO RUN AS IS MADE: without it the
+  // installer will not run its own node, and the first real build failed in
+  // cloud-init's final stage. Held to the user the debconf line names.
+  const preseeded = /fleetwright\/user string (\S+)'/.exec(pveBuildConfig())?.[1];
+  assert.ok(preseeded, 'the build no longer preseeds a run user');
+  assert.match(pveBuildConfig(), new RegExp(`^users:\\n  - default\\n  - name: ${preseeded}\\n    shell: /bin/bash\\n    lock_passwd: true$`, 'm'));
   const privs = (/** @type {string} */ v) => /** @type {string} */ (new RegExp(`^${v}="([^"]+)"`, 'm').exec(script)?.[1]).split(' ');
   assert.deepEqual(privs('ROLE_PRIVS'), [...PVE_ROLE_PRIVS]);
   assert.deepEqual(privs('STORAGE_PRIVS'), [...PVE_STORAGE_PRIVS]);
