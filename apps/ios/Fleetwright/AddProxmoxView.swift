@@ -1,23 +1,22 @@
 import SwiftUI
 import UIKit
 
-/// Add a Proxmox VE cluster: run the setup on a node, paste the line it
-/// prints. docs/proxmox.md, "By hand".
+/// Add a Proxmox VE cluster, from this phone or by hand. docs/proxmox.md,
+/// "From the phone" and "By hand". The same screen as Android's
+/// ProxmoxSheet, in the same words.
 ///
-/// ONE SCREEN, TWO STEPS, AND NO PASSWORD. The setup script runs as root on
-/// the node itself (Datacenter › the node › Shell, in Proxmox's own web
-/// interface), makes a limited user, its token, a firewall group and the
-/// machine image, and prints one line. That line is the whole of what this
-/// phone needs, and nothing it carries is a password: the token was born
-/// limited, and the cluster's CA comes with it so the boxes can hold the
-/// cluster to it. This phone keeps it in the vault as `hypervisor:<address>`,
-/// as it keeps a Xen Orchestra pool's token, and the boxes this person
-/// approved pick it up within ten minutes (src/fleet/host/pve-pools.js).
+/// FROM THIS PHONE: the node's address and its root password. The phone
+/// signs in over SSH (ProxmoxSSH), shows the node's key for the person to
+/// check the first time, starts the setup as a unit of its own on the node,
+/// follows it, and keeps the line it ends with. The password goes from this
+/// phone to the node and nowhere else, and lives in this screen's memory.
 ///
-/// NOT THE XEN ORCHESTRA FLOW. No probe of every box, no machine to pick, no
-/// key to compare and no admin sign-in, because no admin credential ever
-/// crosses the fleet for Proxmox. Running the setup from this phone over
-/// SSH, with the steps on the Lock Screen, is next ("From the phone").
+/// BY HAND: the same command in the node's own Shell, and the line it prints
+/// pasted here. Either way the line is kept in the vault as
+/// `hypervisor:<address>`, as a Xen Orchestra pool's token is, and the boxes
+/// this person approved pick it up within ten minutes
+/// (src/fleet/host/pve-pools.js). No probe, no machine to pick, no key of a
+/// fleet machine to compare: no admin credential crosses the fleet.
 struct AddProxmoxView: View {
     let settings: Settings
     @Environment(\.dismiss) private var dismiss
@@ -29,12 +28,86 @@ struct AddProxmoxView: View {
     @State private var kept = false
     @State private var copied = false
 
-    private var command: String { ProxmoxLine.setupCommand(coordinator: settings.coordinatorURL) }
+    // FROM THIS PHONE. The password is in this view's state alone.
+    @State private var node = ""
+    @State private var password = ""
+    /// The key the node answered with, waiting on the person's word.
+    @State private var offered: String?
+    /// The key the person checked, which every connection holds the node to.
+    @State private var trusted: String?
+    @State private var since: Int?
+    @State private var progress: ProxmoxSSH.Progress?
+    @State private var sshText = ""
+    @State private var sshBusy = false
+    @AppStorage("proxmox-host-keys") private var knownKeys = "{}"
+
     /// What the pasted line carries, or nil while it is not one.
     private var parsed: ProxmoxLine.Record? { ProxmoxLine.parse(line) }
+    private var command: String { ProxmoxLine.setupCommand(coordinator: settings.coordinatorURL) }
+    private var coordinatorOk: Bool {
+        settings.coordinatorURL.range(of: "^https://[A-Za-z0-9.:/_-]+$", options: .regularExpression) != nil
+    }
+    private var nodeKey: String { node.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var known: [String: String] {
+        (try? JSONDecoder().decode([String: String].self, from: Data(knownKeys.utf8))) ?? [:]
+    }
 
     var body: some View {
         Form {
+            Section {
+                TextField("The node's address", text: $node)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .disabled(since != nil || kept)
+                    .onChange(of: node) { _, _ in offered = nil; trusted = nil }
+                SecureField("Its root password", text: $password)
+                    .disabled(since != nil || kept)
+                if !coordinatorOk {
+                    Text("This phone's fleet address is not one the setup can be told, so set it up by hand below.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.bad)
+                } else if let waiting = offered {
+                    // THE ONE THING TO CHECK, said once and plainly.
+                    Text("The node answered with this key. On its console: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub")
+                        .fleetType(.label)
+                    Text(waiting).fleetType(.microMono).textSelection(.enabled)
+                    Button("It matches") {
+                        var k = known
+                        k[nodeKey] = waiting
+                        if let data = try? JSONEncoder().encode(k), let text = String(data: data, encoding: .utf8) { knownKeys = text }
+                        trusted = waiting
+                        offered = nil
+                    }
+                    .frame(minHeight: 44)
+                } else if since == nil && !kept && !nodeKey.isEmpty && !password.isEmpty {
+                    Button(sshBusy ? "Connecting…" : (trusted != nil || known[nodeKey] != nil ? "Set it up" : "Connect")) {
+                        Task { await connectOrStart() }
+                    }
+                    .disabled(sshBusy)
+                    .frame(minHeight: 44)
+                }
+                if let progress {
+                    ForEach(Array(progress.steps.enumerated()), id: \.offset) { _, step in
+                        Text(ProxmoxSSH.stepWords(step)).fleetType(.label)
+                    }
+                    if since != nil {
+                        Text("Running on the node. It carries on if this phone locks; open this screen again to see it end.")
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                    }
+                }
+                if !sshText.isBlank {
+                    Text(sshText)
+                        .fleetType(.label)
+                        .foregroundStyle(since != nil ? Design.Palette.inkDim : Design.Palette.bad)
+                }
+            } header: {
+                sectionHead("From this phone")
+            } footer: {
+                Text("Proxmox VE 9 or newer. The password goes from this phone to the node and nowhere else, and is forgotten when this screen closes.")
+            }
+
             Section {
                 Text(command)
                     .fleetType(.microMono)
@@ -44,13 +117,6 @@ struct AddProxmoxView: View {
                     copied = true
                 }
                 .frame(minHeight: 44)
-            } header: {
-                sectionHead("1. On the node, as root")
-            } footer: {
-                Text("In Proxmox's web interface: Datacenter › the node › Shell. It makes a pool, a user with no password, its token, a firewall group and the machine image, which takes a few minutes, and prints one line. Proxmox VE 9 or newer.")
-            }
-
-            Section {
                 TextField("fleetwright-pve:1:…", text: $line, axis: .vertical)
                     .fleetType(.microMono)
                     .textInputAutocapitalization(.never)
@@ -71,15 +137,15 @@ struct AddProxmoxView: View {
                         .foregroundStyle(Design.Palette.bad)
                 }
                 // DRAWN ONLY WHEN THERE IS A LINE TO KEEP (C-2).
-                if parsed != nil && !kept {
-                    Button(busy ? "Adding…" : "Add the cluster") { Task { await keep() } }
+                if let record = parsed, !kept {
+                    Button(busy ? "Adding…" : "Add the cluster") { Task { await keep(record) } }
                         .disabled(busy)
                         .frame(minHeight: 44)
                 }
             } header: {
-                sectionHead("2. The line it printed")
+                sectionHead("Or by hand, on the node")
             } footer: {
-                Text("The line is the cluster's token. It is kept in your vault and handed only to the machines you approved, which hold it in memory.")
+                Text("In Proxmox's web interface: Datacenter › the node › Shell. It makes a pool, a user with no password, its token, a firewall group, the lab and group networks and the machine image, which takes a few minutes, and prints one line. The line is the cluster's token, kept in your vault and handed only to the machines you approved.")
             }
 
             if !result.isBlank {
@@ -88,7 +154,7 @@ struct AddProxmoxView: View {
                         .fleetType(.label)
                         .foregroundStyle(failed ? Design.Palette.bad : Design.Palette.ink)
                         .textSelection(.enabled)
-                    if kept { Button("Done") { dismiss() }.frame(minHeight: 44) }
+                    if kept { Button("Done") { password = ""; dismiss() }.frame(minHeight: 44) }
                 }
             }
         }
@@ -96,11 +162,69 @@ struct AddProxmoxView: View {
         .background(Design.Palette.bg)
         .listRowBackground(Design.Palette.card)
         .navigationTitle("Add Proxmox VE")
+        // FOLLOWING THE JOB while the screen is open, every three seconds. A
+        // poll that fails (the phone slept, the network blinked) is said and
+        // retried; the job on the node does not depend on this phone.
+        .task(id: since) { await follow() }
+        .onDisappear { password = "" }
     }
 
     @MainActor
-    private func keep() async {
-        guard let record = parsed else { return }
+    private func connectOrStart() async {
+        sshBusy = true
+        defer { sshBusy = false }
+        sshText = ""
+        guard let key = trusted ?? known[nodeKey] else {
+            do { offered = try await ProxmoxSSH.hostKey(nodeKey) } catch { sshText = error.localizedDescription }
+            return
+        }
+        trusted = key
+        do {
+            let (_, clock) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.now)
+            guard let now = Int(clock.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                sshText = "The node did not say what time it is, so its setup could not be followed."
+                return
+            }
+            let (status, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.startCommand(coordinator: settings.coordinatorURL))
+            if status == 0 { since = now } else { sshText = "The node would not start the setup: \(String(out.prefix(300)))" }
+        } catch {
+            sshText = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func follow() async {
+        guard let start = since, let key = trusted else { return }
+        while since != nil && !kept && !Task.isCancelled {
+            do {
+                let (_, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.pollCommand(since: start))
+                let p = ProxmoxSSH.progress(of: out)
+                progress = p
+                sshText = ""
+                if p.lineReady {
+                    let (_, got) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.takeLine)
+                    if let record = ProxmoxLine.parse(got) {
+                        await keep(record)
+                    } else {
+                        sshText = "The setup finished, and what it left for this phone is not a line it can keep."
+                    }
+                    since = nil
+                    return
+                }
+                if !p.running {
+                    sshText = p.error ?? "The setup stopped without saying why. On the node: journalctl -u \(ProxmoxSSH.unit)"
+                    since = nil
+                    return
+                }
+            } catch {
+                sshText = "Lost the node for a moment (\(error.localizedDescription)); asking again."
+            }
+            try? await Task.sleep(for: .seconds(3))
+        }
+    }
+
+    @MainActor
+    private func keep(_ record: ProxmoxLine.Record) async {
         busy = true
         defer { busy = false }
         do {

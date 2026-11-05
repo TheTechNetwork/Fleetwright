@@ -69,7 +69,14 @@ test('every `# renovate:` comment in a workflow is read by a manager', () => {
 });
 
 test('the iOS app’s Swift packages and the sandbox’s Node line are read where they are written', () => {
-  assert.deepEqual(found('apps/ios/project.yml'), [{ datasource: 'github-releases', depName: 'getsentry/sentry-cocoa', currentValue: /exactVersion: (\S+)/.exec(read('apps/ios/project.yml'))?.[1] }]);
+  // EVERY PINNED PACKAGE IS ONE RENOVATE SEES: as many found as there are
+  // exactVersion lines, each with its own version, so a package added without
+  // its `# renovate:` comment is a failure here rather than a pin nothing moves.
+  const project = read('apps/ios/project.yml');
+  const pins = [...project.matchAll(/exactVersion: (\S+)/g)].map((m) => m[1]);
+  const seen = found('apps/ios/project.yml');
+  assert.deepEqual(seen.map((d) => d.currentValue), pins);
+  assert.ok(seen.some((d) => d.depName === 'getsentry/sentry-cocoa' && d.datasource === 'github-releases'));
   const node = found('sandbox/Containerfile').filter((d) => d.depName === 'node-major');
   assert.deepEqual(node, [{ datasource: 'node-version', depName: 'node-major', currentValue: /ARG NODE_MAJOR=(\d+)/.exec(read('sandbox/Containerfile'))?.[1] }]);
   const rule = config.packageRules.find((/** @type {any} */ r) => r.matchDepNames?.includes('node-major'));

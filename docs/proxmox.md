@@ -8,9 +8,9 @@ the protocol did not change. Machines may be in a group or alone in an open
 or closed lab ("Labs and groups"). The cluster is set up by one script run
 as root on a node (`install/fleetwright-pve-setup`): a person runs it from
 the command both phones show under Add Proxmox VE and pastes the line it
-prints ("By hand"), or, next, the phone runs it itself over SSH ("From the
-phone", not built). **Not built:** setup over SSH from the phone, and the
-pool page's own actions. **Not yet run:** the script on a real node, and a
+prints ("By hand"), or the phone runs it itself over SSH ("From the
+phone"). **Not built:** the setup's steps on the Lock Screen, and the pool
+page's own actions. **Not yet run:** the script on a real node, and a
 machine made on a real cluster. The tests run the driver against a stand-in
 Proxmox over real TLS (`test/pve-pools.test.js`).
 
@@ -101,35 +101,44 @@ saying which version it found. A cluster on an older one is upgraded first.
 
 ### From the phone
 
-**This is how it is meant to be done, and the phone half is not built yet.**
-Machines › Add a hypervisor › Proxmox asks for the node's address and its
-root password (or uses an SSH key the phone keeps), and does the rest itself.
-No machine of the fleet is involved, so the password goes from the phone to
-the node and nowhere else:
+**Built in both apps**: Machines › Add Proxmox VE › From this phone. The
+node's address and its root password, and the phone does the rest, with no
+machine of the fleet in the path, so the password goes from the phone to the
+node and nowhere else and lives in the screen's memory
+(`ProxmoxSSH.swift`, `ProxmoxSsh.kt`):
 
-1. **The phone connects over SSH.** The first time, it shows the node's host
-   key fingerprint, to compare with `ssh-keygen -lf
-   /etc/ssh/ssh_host_ed25519_key.pub` on the node's console, and remembers it
-   for that address; a different key later is refused and said.
-2. **It writes the script from its own bundle**, the copy that shipped with
-   the app, to `/root/fleetwright-pve-setup`, so nothing is downloaded from
-   GitHub to run as root.
-3. **It starts it detached**: `systemd-run --unit=fleetwright-pve-setup
-   --collect /root/fleetwright-pve-setup --line-file
-   /root/.fleetwright-pve-line`. The image takes a few minutes to build and
-   a phone locks, so the job must not die with the SSH session.
-4. **It follows the job** with `journalctl -fu fleetwright-pve-setup -o cat`:
-   the `fleetwright-step:` lines move the Live Activity on iOS and the ongoing
-   notification on Android, and `fleetwright-error:` is the sentence shown if
-   it stops. Opened again, it reconnects and carries on reading.
-5. **It reads the line from the file and removes it.** The line is the token,
-   so it is never printed where the journal would keep it. The phone keeps it
-   in the vault as `hypervisor:<address>`, then checks it: one look over HTTPS
-   with the token, trusting the CA the line carries, before it calls the
-   cluster added.
+1. **Connect** reads the node's host key and sends nothing. The phone shows
+   its fingerprint, as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`
+   prints it on the node's console, and the person says it matches. It is
+   kept for that address; a later run goes straight through, and a node
+   answering with another key is refused and said, with nothing sent.
+2. **Set it up** signs in as root, reads the node's clock, and starts the
+   same command the by-hand path shows, with `--line-file`, as
+   `systemd-run --unit=fleetwright-pve-setup`, so a locked phone does not
+   kill the image build. A run already going is stopped first.
+3. **It follows the job** every three seconds while the screen is open: the
+   `fleetwright-step:` lines since that clock, read from the journal, and
+   `fleetwright-error:` as the sentence when it stops. A poll that fails is
+   said and tried again; the job does not depend on the phone.
+4. **The line**, which is the token, is read from the file only root reads,
+   removed, checked as the boxes check it, and kept in the vault as
+   `hypervisor:<address>`.
 
-The root password is used for that session and dropped, or kept behind Face
-ID or a fingerprint when the person asks, as Xen Orchestra's sign-in is.
+Both apps send the same commands, which `test/pve-pools.test.js` holds
+equal, along with the options and lines the script must have for them.
+
+**Two departures from the first plan**, said plainly. The phone runs the
+same `curl … main` the by-hand path does, rather than writing a copy of the
+script from its own bundle: one source for both, and no second copy in two
+app bundles to keep in step. And **the steps are on the screen only**, not
+yet on the Lock Screen or in Android's ongoing notification as Xen
+Orchestra's setup is: a person who leaves the screen opens it again to see
+the end, with the address and password typed again.
+
+**On iOS it is Apple's own swift-nio-ssh**, and not a client built on it:
+the usual one (Citadel) now takes its SSH layer from a personal fork, and
+what this sends is a root password. On Android it is sshj on the full
+BouncyCastle.
 
 ### By hand
 
@@ -261,12 +270,12 @@ behind the cluster's firewall, not behind an edge router.
 
 ## The phones: one screen per thing, no wizard
 
-Not built; this is the shape the next layer takes, written down so it is
-built to it and not to `AddHypervisorView`.
+**Add Proxmox VE is built to this shape on both phones**, and not to
+`AddHypervisorView`; the cluster's page below is not built yet.
 
-**Add a hypervisor › Proxmox** is one screen: the node's address and its
-root password, and Set up. Then the host key, once, and the steps as they
-happen, the same on the Lock Screen. No probe of every box, no machine to
+**Add Proxmox VE** is one screen: the node's address and its root password,
+and Set up. Then the host key, once, and the steps as they happen, on the
+screen (not yet on the Lock Screen). No probe of every box, no machine to
 pick, no key fingerprint of a fleet machine to compare, and nothing to copy
 between devices. Pasting a line made by hand is the other way in, on the
 same screen.
@@ -303,8 +312,10 @@ it answers `notHere`, and an `unreachable` from either is kept.
 
 ## Not built
 
-- The phone screens above, on both apps, and the SSH client each needs for
-  "From the phone": neither app has one yet.
+- The setup's steps on the Lock Screen and in Android's ongoing
+  notification, as Xen Orchestra's are.
+- The cluster's page described above: its fence, its token's width and its
+  machines are in the health entry, and no screen draws them yet.
 - The pool page's actions on the cluster (`xolook`, `xoact` are Xen
   Orchestra's).
 - Machines kept ready (`vmStandby`), which have not been tried against a

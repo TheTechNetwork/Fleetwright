@@ -15,3 +15,14 @@
 # in a file called SourceFile.
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
+
+# SSH for a Proxmox node's setup (ProxmoxSsh.kt): sshj and BouncyCastle find
+# their ciphers, key exchanges and signatures by name at run time, which R8
+# cannot see, so a shrunk release would sign in to nothing.
+-keep class net.schmizz.sshj.** { *; }
+-keep class com.hierynomus.sshj.** { *; }
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.slf4j.**
+-dontwarn javax.naming.**
+-dontwarn org.bouncycastle.**
+-dontwarn net.schmizz.sshj.**

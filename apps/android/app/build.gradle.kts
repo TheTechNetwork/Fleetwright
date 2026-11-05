@@ -322,6 +322,15 @@ dependencies {
   // Android's own HTTP stack grew out of. Pinned, like everything else here.
   implementation("com.squareup.okhttp3:okhttp:5.5.1")
 
+  // SSH, for one thing: setting up a Proxmox VE node from this phone, as root,
+  // with the password going from the phone to the node and nowhere else
+  // (ProxmoxSsh.kt, docs/proxmox.md "From the phone"). sshj is the JVM's
+  // long-standing SSH client, on the full BouncyCastle (Android's own "BC" is
+  // cut down, and ProxmoxSsh puts this one in its place). Pinned, like
+  // everything else here.
+  implementation("com.hierynomus:sshj:0.41.2")
+  implementation("org.bouncycastle:bcprov-jdk18on:1.84")
+
   // FIREBASE CLOUD MESSAGING IS ABOVE NOW, and this said the opposite until
   // somebody went looking for why an app with no google-services.json crashes
   // at sign-in: "deliberately NOT here yet ... adding it now would mean nobody
