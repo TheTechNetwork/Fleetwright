@@ -26,7 +26,14 @@
 //           address is most often an IP the certificate may not list, and roots
 //           that exist only on this cluster already say which servers it is.
 //   public  A PUBLICLY TRUSTED CERTIFICATE (ACME, which Proxmox renews every
-//           sixty days, or a tunnel's), checked as a browser checks it.
+//           sixty days, or a tunnel's), checked as a browser checks it. When
+//           the address is an IP, the record also names the host the
+//           certificate was issued to (`name`), and the certificate is held
+//           to that name while the IP is dialled: what a hosts-file entry
+//           does, for this one connection, with no DNS and no system file.
+//           Checked against the IP, as it was, every box refused a cluster
+//           with a valid certificate. A name the certificate does not cover
+//           is refused exactly as a browser would refuse it.
 
 import https from 'node:https';
 import tls from 'node:tls';
@@ -39,7 +46,7 @@ export const PVE_PORT = 8006;
 export const MAX_ANSWER_BYTES = 4 * 1024 * 1024;
 
 /**
- * @typedef {{ ca?: string|null, trust?: 'ca'|'public' }} Trust
+ * @typedef {{ ca?: string|null, trust?: 'ca'|'public', name?: string|null }} Trust
  */
 
 export class PveError extends Error {
@@ -53,19 +60,30 @@ export class PveError extends Error {
 /**
  * Open TLS to the server, held to the record's trust, or refuse.
  *
- * @param {{ host: string, port: number, trust: Trust, timeoutMs?: number }} opts
+ * `roots` stands in for the system's roots, for the tests alone: a public
+ * certificate cannot be made for one.
+ *
+ * @param {{ host: string, port: number, trust: Trust, timeoutMs?: number, roots?: string[] }} opts
  * @returns {Promise<tls.TLSSocket>}
  */
-export function connectTrusted({ host, port, trust, timeoutMs = 15_000 }) {
+export function connectTrusted({ host, port, trust, timeoutMs = 15_000, roots }) {
   const kind = trust.ca ? 'ca' : 'public';
+  const name = kind === 'public' && typeof trust.name === 'string' && trust.name ? trust.name : null;
   return new Promise((resolve, reject) => {
     const socket = tls.connect({
       host,
       port,
-      ...(net.isIP(host) ? {} : { servername: host }),
+      // THE NAME TO HOLD IT TO: the record's, for a public certificate at an
+      // IP; else the address itself when it is a name.
+      ...(name ? { servername: name } : net.isIP(host) ? {} : { servername: host }),
       ALPNProtocols: ['http/1.1'],
       rejectUnauthorized: true,
-      ...(kind === 'ca' ? { ca: [String(trust.ca)], checkServerIdentity: () => undefined } : {}),
+      ...(kind === 'ca'
+        ? { ca: [String(trust.ca)], checkServerIdentity: () => undefined }
+        : {
+            ...(roots ? { ca: roots } : {}),
+            ...(name ? { checkServerIdentity: (/** @type {string} */ _host, /** @type {any} */ cert) => tls.checkServerIdentity(name, cert) } : {}),
+          }),
     });
     const timer = setTimeout(() => {
       socket.destroy();
