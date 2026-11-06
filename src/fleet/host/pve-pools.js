@@ -126,13 +126,15 @@ export const PVE_MIN_MAJOR = 9;
 const MAX_MACHINES = 200;
 
 /**
- * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', grants?: any, vmids?: { from: number, to: number } }} PveRecord
+ * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', name?: string, grants?: any, vmids?: { from: number, to: number } }} PveRecord
  * @typedef {{ id: string, name: string, node: string, vmid: number, pool: string|null, poolName: string|null, bridge: string|null }} PveImage
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string, lab?: 'open'|'closed', gateway?: string|null, taken?: boolean|null }} PveNetwork
  */
 
 const TOKEN_RE = /^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,64}![A-Za-z0-9._-]{1,64}=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const POOL_RE = /^[A-Za-z0-9_-]{1,40}$/;
+/** A DNS name, as a certificate names a host: labels of letters, digits and hyphens, at least two. */
+const HOST_NAME_RE = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 /** One certificate block, where it sits in a file; its body is base64 alone, so a match never runs into the next. */
 const PEM_BLOCK_RE = /-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]{100,8000}?)\r?\n-----END CERTIFICATE-----/g;
 /** As many certificates as a CA file, or a leaf with its chain and root, holds. */
@@ -226,9 +228,14 @@ function checked(r, address) {
   /** @type {'ca'|'public'|null} */
   const trust = ca ? 'ca' : r.trust === 'public' ? 'public' : null;
   if (!trust) return no('it says neither which certificate to trust nor that the web interface has a publicly trusted one');
+  // THE NAME A PUBLIC CERTIFICATE IS HELD TO, when the address is an IP
+  // (pve-api.js). Only for public trust: a cluster's own CA is checked
+  // without a name, and a name there would mean nothing.
+  if (r.name !== undefined && r.name !== null && (typeof r.name !== 'string' || !HOST_NAME_RE.test(r.name))) return no('the host name its certificate is checked as is not a host name');
+  const name = trust === 'public' && typeof r.name === 'string' ? r.name.toLowerCase() : null;
   const grants = machineGrantsOf(r.grants);
   const vmids = vmidsOf(r.vmids);
-  return { record: { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(grants ? { grants } : {}), ...(vmids ? { vmids } : {}) }, problem: null };
+  return { record: { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(name ? { name } : {}), ...(grants ? { grants } : {}), ...(vmids ? { vmids } : {}) }, problem: null };
 }
 
 /**
@@ -457,7 +464,7 @@ export function smbiosWith(current, join) {
 export class PvePools {
   /**
    * @param {{
-   *   api?: (opts: { address: string, token: string, trust: { ca?: string|null, trust?: 'ca'|'public' } }) => any,
+   *   api?: (opts: { address: string, token: string, trust: { ca?: string|null, trust?: 'ca'|'public', name?: string|null } }) => any,
    *   now?: () => number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
    *   sleep?: (ms: number) => Promise<void>,
@@ -493,7 +500,7 @@ export class PvePools {
 
   /** @param {PveRecord} record */
   #client(record) {
-    return this.api({ address: record.address, token: record.token, trust: { ca: record.ca, trust: record.trust } });
+    return this.api({ address: record.address, token: record.token, trust: { ca: record.ca, trust: record.trust, name: record.name ?? null } });
   }
 
   /**
