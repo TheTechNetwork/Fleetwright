@@ -1600,6 +1600,83 @@ test('a reconnect whose account cannot be sealed, or whose listener throws, stil
   await letGo(xo);
 });
 
+// ASKED FOR, over a policy change that stopped at "this Xen Orchestra has no
+// pool connected to it yet": "Run a reconnect if something fails." Setup and
+// a policy change are signed in as the admin a reconnect needs, so a Xen
+// Orchestra that answers and shows no pool has its servers reconnected by
+// the job itself, and the pool is read again before anything is decided.
+
+test('a setup that finds no pool reconnects Xen Orchestra’s servers itself and goes on', { skip }, async (t) => {
+  // Nothing connected: the pool master restarted, and one server is stuck.
+  const xo = await standIn(t, { servers: [xenServer('a', { status: 'disconnected' }), xenServer('b', { status: 'connecting', linger: 1 })] });
+  const c = clock();
+  const { setups, events } = await machine({ now: c.now, sleep: c.sleep });
+  const actor = 'eli@example.com';
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  const { sealed, reply } = await phone(begun, xo.address, xo.pin);
+  await setups.run({ job: begun.xosetup.job, sealed, actor });
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.deepEqual(asked(xo, 'server.enable'), ['a', 'b']);
+  assert.deepEqual(asked(xo, 'server.disable'), ['b']);
+  assert.match(end.text, /the admin sign-in was not kept either\. Xen Orchestra showed no pool, so 2 servers were reconnected and it shows 2 pools\. Found 2 pools and 1 host\./);
+  // AND THEN THE SETUP, against the pools that came back.
+  assert.deepEqual(events.filter((e) => e.state === 'running').map((e) => e.phase).filter((p, i, all) => all.indexOf(p) === i), [...XOSETUP_STEPS]);
+  assert.equal((await collect(end, reply, xo.address)).token, 'tok-limited-123');
+  // COUNTS, never a server's name or a pool master's address.
+  const relayed = JSON.stringify({ events, end: { ...end, handoff: undefined } });
+  for (const secret of ['Rack ', '10.0.0.', 'Pool A', PASSWORD]) assert.ok(!relayed.includes(secret), secret);
+  assert.equal(end.result, undefined, 'a setup has no reconnect account to seal');
+});
+
+test('a policy change that finds no pool reconnects the servers and then offers the choice', { skip }, async (t) => {
+  // The screen this was asked from: "What the fleet may use", stopped at
+  // "Reading the pool stopped: this Xen Orchestra has no pool connected to
+  // it yet."
+  const xo = await standIn(t, { sets: [chosenBefore()], servers: [xenServer('a', { status: 'disconnected' })] });
+  const c = clock();
+  const { setups } = await machine({ now: c.now, sleep: c.sleep });
+  const actor = 'eli@example.com';
+  const { begun, state } = await choosing(xo, setups, actor);
+  setups.cancel({ job: begun.xosetup.job, actor });
+  await finished(setups, begun.xosetup.job, actor);
+  assert.equal(state.state, 'choosing', state.text);
+  assert.deepEqual(asked(xo, 'server.enable'), ['a']);
+  assert.ok(state.inventory, 'the pool that came back is what the phone chooses from');
+});
+
+test('a setup that finds no pool says what reconnecting did when the pool does not come back', { skip }, async (t) => {
+  const actor = 'eli@example.com';
+  for (const [servers, said, enabled] of /** @type {const} */ ([
+    // Connected already, and no pool behind them: nothing to reconnect.
+    [[xenServer('a', { poolId: null })], 'this Xen Orchestra shows no pool, and its 1 server was already connected, so there was nothing to reconnect. Look at its servers in Xen Orchestra.', []],
+    // The pool master refuses Xen Orchestra's sign-in: tried once, said.
+    [[xenServer('f', { status: 'disconnected', refuse: 'auth' }), xenServer('e', { status: 'disconnected', enabled: false })], 'this Xen Orchestra showed no pool, so its servers were reconnected, and it still shows none: 0 of 2 servers connected. One server is turned off in Xen Orchestra and was left that way. One could not be reconnected; Reconnect its servers, on the pool’s page, says which and why.', ['f']],
+    // None at all: nobody ever added a pool.
+    [[], 'this Xen Orchestra has no pool connected to it yet. Add one in Xen Orchestra first.', []],
+  ])) {
+    const xo = await standIn(t, { servers: [...servers] });
+    const c = clock();
+    const { setups, events } = await machine({ now: c.now, sleep: c.sleep });
+    const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+    await setups.run({ job: begun.xosetup.job, sealed: (await phone(begun, xo.address, xo.pin)).sealed, actor });
+    const end = await finished(setups, begun.xosetup.job, actor);
+    assert.equal(end.state, 'failed', end.text);
+    assert.equal(end.phase, 'inventory');
+    assert.equal(end.text, `Reading the pool stopped: ${said}`);
+    assert.deepEqual(asked(xo, 'server.enable'), enabled);
+    assert.ok(!xo.calls.some((/** @type {any} */ x) => /^(user|token|resourceSet)\./.test(x.method)), 'nothing of the fleet’s was made');
+    assert.ok(!JSON.stringify(events).includes('Rack '), 'no server named to the coordinator');
+  }
+  // A Xen Orchestra that cannot reconnect from here says so, unchanged.
+  const xo = await standIn(t, { servers: [xenServer('b', { status: 'disconnected' })], drop: ['server.enable'] });
+  const { setups } = await machine();
+  const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
+  await setups.run({ job: begun.xosetup.job, sealed: (await phone(begun, xo.address, xo.pin)).sealed, actor });
+  const end = await finished(setups, begun.xosetup.job, actor);
+  assert.equal(end.text, 'Reading the pool stopped: this Xen Orchestra shows no pool, and does not offer server.enable, so its servers could not be reconnected from here. Nothing was changed.');
+});
+
 test('a reconnect is refused before anything changes where Xen Orchestra cannot, has no servers, or the account is not an admin', { skip }, async (t) => {
   const actor = 'eli@example.com';
   for (const [opts, phase, words, reported] of /** @type {Array<[any, string, RegExp, boolean]>} */ ([
