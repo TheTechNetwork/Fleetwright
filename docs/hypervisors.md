@@ -1797,8 +1797,15 @@ that lists every hypervisor of yours, of either kind:
   machines. A Proxmox VE cluster offers **Set it up again**.
 - **The attention ring** marks a row no machine can use, or a cluster older
   than Proxmox VE 9. A row not looked at yet is not trouble.
-- **One Add a hypervisor** at the foot asks which kind, and opens that kind's
-  own setup: they ask for nothing alike.
+- **One Add a hypervisor** at the foot takes the address and finds the kind,
+  and does not ask. Asked for: *"Instead of ask which kind detect don't ask
+  question you can find the answer to"*. The fleet's machines look (`xoprobe`
+  also reports `pve`: true when the server on Proxmox VE's port says it is
+  `pve-api-daemon`, false when something else answered, null when nothing
+  did). This phone checks too, with a TCP connection to that port that sends
+  nothing, because a node is often on a network only the phone reaches. The
+  setup for what was found opens with the address filled in. Only when
+  nothing answers as either is the person asked which it is.
 
 The list is the coordinator's `hypervisors` field of `/api/hosts`. It has one
 row per address and kind, each listing every box holding it with `reachable`,
