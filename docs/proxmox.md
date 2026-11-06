@@ -305,6 +305,20 @@ Finding each first, so it is safe to run again:
    refused at setup, because reaching it would mean turning the chain check
    off.
 
+   A publicly trusted certificate at an IP is checked as the name it was
+   issued to. The line gives the address as an IP, and the certificate names
+   a host, so a browser's check against the IP refused it on every box. Asked
+   for, as *"use the IP or host file resolution or something like that to its
+   dns name"*. The script reads the name from the certificate: the node's own
+   name when it is covered, else the first name the certificate lists, else
+   the node's name under a wildcard for its domain. The line carries it as
+   `name`. A box dials the IP and holds the certificate to that name, which
+   is what a hosts-file entry does, but for that one connection, with no DNS
+   and no system file changed. It is exactly as strict as a browser opening
+   `https://name`. A self-signed certificate is never accepted as such: the
+   setup trusts the cluster's own CA, or a file that holds its own root,
+   and nothing else.
+
    The line carries the certificate blocks alone, with plain line ends,
    whatever else the file around them held. A box reads any certificate
    field the same way. One that still cannot use a line says which part was

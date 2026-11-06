@@ -170,3 +170,37 @@ test('the script finds its templates and its builds by tag, in its own pool only
   assert.deepEqual(ask('0 fleetwright-build'), ['9002']);
   assert.deepEqual(ask('1 fleetwright-session'), []);
 });
+
+// THE NAME A PUBLIC CERTIFICATE IS CHECKED AS, picked by the script's own
+// lines from the certificate the web interface has: the node's own name when
+// it is covered, else the first name the certificate was issued to, else the
+// node's name under a wildcard for its domain. None when the address already
+// is a name, because then the address is what the certificate is held to.
+test('the script names the host a public certificate is checked as, from the certificate', { skip }, () => {
+  const text = readFileSync(SCRIPT, 'utf8');
+  const start = text.indexOf('NAME=""\nhost_part=');
+  const end = text.indexOf('\nLINE="$(KIND=proxmox');
+  assert.ok(start > 0 && end > start, 'the script has no name block');
+  const block = text.slice(start, end);
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-pve-name-'));
+  const certWith = (/** @type {string} */ san) => {
+    const run = (/** @type {string[]} */ args) => assert.equal(spawnSync('openssl', args, { cwd: dir, encoding: 'utf8' }).status, 0);
+    run(['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', 'k.pem', '-out', 'c.pem', '-days', '1', '-subj', '/CN=x', '-addext', `subjectAltName=${san}`]);
+    return path.join(dir, 'c.pem');
+  };
+  writeFileSync(path.join(dir, 'hostname'), '#!/bin/bash\n[ "$1" = -f ] && echo "$FQDN"\n');
+  chmodSync(path.join(dir, 'hostname'), 0o755);
+  const pick = (/** @type {string} */ san, /** @type {string} */ address, fqdn = 'pve01.example.test') => {
+    const custom = certWith(san);
+    const r = spawnSync('bash', ['-c', `set -Eeuo pipefail; say() { :; }; die() { echo "DIED: $*"; exit 1; }; TRUST=public; CUSTOM='${custom}'; ADDRESS='${address}'\n${block}\necho "NAME=$NAME"`], {
+      encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, FQDN: fqdn },
+    });
+    return `${r.stdout}${r.stderr}`.trim();
+  };
+  assert.equal(pick('DNS:other.example.test,DNS:pve01.example.test', '10.69.10.10:8006'), 'NAME=pve01.example.test');
+  assert.equal(pick('DNS:*.example.test,DNS:pve.example.test', '10.69.10.10:8006'), 'NAME=pve.example.test');
+  assert.equal(pick('DNS:*.example.test', '10.69.10.10:8006'), 'NAME=pve01.example.test');
+  assert.match(pick('DNS:*.elsewhere.test', '10.69.10.10:8006'), /^DIED: .*names no host/);
+  assert.equal(pick('DNS:pve01.example.test', 'pve01.example.test:8006'), 'NAME=', 'an address that is a name is what the certificate is held to');
+  assert.equal(pick('DNS:pve01.example.test', '[fd00::10]:8006'), 'NAME=pve01.example.test');
+});
