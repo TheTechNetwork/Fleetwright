@@ -23,7 +23,7 @@
 // stopped in: it finds what it made first when run again.
 
 import { PVESETUP_STEPS } from '../protocol/intents.js';
-import { parseConnection } from './pve-pools.js';
+import { connectionOf } from './pve-pools.js';
 
 export const UNIT = 'fleetwright-pve-setup';
 export const LINE_FILE = '/root/.fleetwright-pve-line';
@@ -198,7 +198,9 @@ export function pveSteps({ open, coordinatorUrl, sealLine, say = () => {}, sleep
       if (!ctx.last.lineReady) throw new Error(`the setup finished but left no line in ${LINE_FILE}. Run it again from the app.`);
       const taken = await ctx.pool.remote(TAKE_LINE, { timeoutMs: 30_000 });
       const line = String(taken.stdout).trim();
-      if (taken.code !== 0 || !parseConnection(line)) throw new Error('the line the node wrote is not one the fleet reads. Run the setup again.');
+      if (taken.code !== 0) throw new Error(`the line the node wrote could not be read from ${LINE_FILE}. Run the setup again.`);
+      const read = connectionOf(line);
+      if (!read.record) throw new Error(`the line the node wrote is not one the fleet reads: ${read.problem}. Run the setup again.`);
       await sealLine(ctx, line);
       ctx.started = false;
     },

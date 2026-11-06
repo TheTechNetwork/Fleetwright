@@ -611,7 +611,15 @@ fi
 LINE="$(KIND=proxmox ADDRESS="$ADDRESS" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POOL="$POOL" TRUST="$TRUST" CA_FILE="$CA" VMID_FROM="${VMID_FROM:-}" VMID_TO="${VMID_TO:-}" perl -MJSON::PP -MMIME::Base64 -e '
   my %r = (kind => $ENV{KIND}, address => $ENV{ADDRESS}, token => $ENV{TOKEN}, pool => $ENV{POOL});
   $r{vmids} = { from => $ENV{VMID_FROM} + 0, to => $ENV{VMID_TO} + 0 } if length $ENV{VMID_FROM};
-  if ($ENV{TRUST} eq "ca") { local $/; open my $f, "<", $ENV{CA_FILE} or die; $r{ca} = <$f>; }
+  # THE CERTIFICATE BLOCKS ALONE, with plain line ends: a file a tool wrote
+  # may carry Windows line ends or subject= lines between them, which
+  # OpenSSL reads and the fleet once refused (pve-pools.js, certsOf).
+  if ($ENV{TRUST} eq "ca") {
+    local $/; open my $f, "<", $ENV{CA_FILE} or die; my $pem = <$f>; $pem =~ s/\r//g;
+    my @c = $pem =~ /(-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+\/=\n]+?\n-----END CERTIFICATE-----)/g;
+    die "no certificate in $ENV{CA_FILE}\n" unless @c;
+    $r{ca} = join("", map { "$_\n" } @c);
+  }
   else { $r{trust} = "public"; }
   my $b = encode_base64(JSON::PP->new->canonical->encode(\%r), "");
   $b =~ tr{+/}{-_}; $b =~ s/=+$//;

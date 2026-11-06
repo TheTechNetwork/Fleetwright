@@ -16,7 +16,7 @@ import path from 'node:path';
 
 import { PveApi } from '../src/fleet/host/pve-api.js';
 import {
-  PvePools, parseConnection, pveRecord, markOf, markText, wideOf, pveIdOf, pveVendorConfig, pveBuildConfig, vmidsOf,
+  PvePools, parseConnection, connectionOf, pveProblem, certsOf, pveRecord, markOf, markText, wideOf, pveIdOf, pveVendorConfig, pveBuildConfig, vmidsOf,
   CONNECTION_PREFIX, PVE_FENCE_GROUP, PVE_GROUP_ZONE, PVE_LAB_ZONE, PVE_ALLOW_SET, PVE_ROLE_PRIVS, PVE_STORAGE_PRIVS, PVE_NET_PRIVS, PVE_ROOT_PRIVS,
 } from '../src/fleet/host/pve-pools.js';
 import { poolRecord } from '../src/fleet/host/xo-pools.js';
@@ -192,6 +192,66 @@ test('the line the setup prints is a record the vault keeps; one that says no wa
   assert.equal(parseConnection(CONNECTION_PREFIX + Buffer.from(JSON.stringify({ ...untrusted, pin: 'a'.repeat(64) })).toString('base64url')), null);
   // XEN ORCHESTRA'S DRIVER passes over it, rather than dial a WebSocket at Proxmox.
   assert.equal(poolRecord('hypervisor:pve.lan:8006', JSON.stringify({ ...rec, pin: 'a'.repeat(64) })), null);
+});
+
+// A CERTIFICATE FILE AS TOOLS WRITE THEM: Windows line ends, and subject= or
+// Bag Attributes lines around each block. OpenSSL reads them, so the script's
+// check passed and the phone kept the line, and every box refused it in
+// silence. The first real node's cluster never appeared anywhere.
+test('a certificate file with text around its blocks or Windows line ends is read for its certificates', () => {
+  const body = 'MIIB' + 'A'.repeat(116);
+  const block = `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`;
+  const messy = `Bag Attributes\r\n    friendlyName: pve\r\nsubject=/CN=pve\r\n${block.replace(/\n/g, '\r\n')}issuer=/CN=root\n${block}`;
+  assert.equal(certsOf(messy), block + block);
+  assert.equal(certsOf(block), block);
+  assert.equal(certsOf('subject=/CN=pve\n'), null);
+  assert.equal(certsOf(block.repeat(9)), null, 'more certificates than a chain holds');
+  const rec = recordFor('pve.lan:8006', messy);
+  const line = CONNECTION_PREFIX + Buffer.from(JSON.stringify(rec)).toString('base64url');
+  assert.equal(parseConnection(line)?.ca, block + block);
+  assert.equal(pveRecord('hypervisor:pve.lan:8006', JSON.stringify(rec))?.ca, block + block);
+});
+
+// WHY A LINE IS REFUSED, in words, and never with the token in them: a hand-
+// over that stopped said only "not one the fleet reads".
+test('a line that is not one says which part, without the token', () => {
+  const ca = '-----BEGIN CERTIFICATE-----\n' + 'A'.repeat(120) + '\n-----END CERTIFICATE-----\n';
+  const rec = recordFor('pve.lan:8006', ca);
+  const lineOf = (/** @type {any} */ r) => CONNECTION_PREFIX + Buffer.from(JSON.stringify(r)).toString('base64url');
+  assert.equal(connectionOf(lineOf(rec)).problem, null);
+  const said = [
+    connectionOf(''),
+    connectionOf('something else'),
+    connectionOf(lineOf(rec).slice(0, 60)),
+    connectionOf(lineOf({ ...rec, token: `${rec.token}x` })),
+    connectionOf(lineOf({ ...rec, ca: 'subject=/CN=pve\n' })),
+    connectionOf(lineOf({ ...rec, ca: undefined })),
+  ].map((r) => r.problem);
+  assert.match(said[0] ?? '', /empty/);
+  assert.match(said[1] ?? '', /does not start/);
+  assert.match(said[2] ?? '', /does not decode|cut/);
+  assert.match(said[3] ?? '', /token/);
+  assert.match(said[4] ?? '', /certificate/);
+  assert.match(said[5] ?? '', /trust/);
+  for (const w of said) assert.ok(!String(w).includes(rec.token.split('=')[1]), 'the token was in the words');
+  // FROM THE VAULT: a Proxmox record the box passes over is said; a Xen
+  // Orchestra pool's, which is not this driver's, is not.
+  assert.match(pveProblem('hypervisor:pve.lan:8006', JSON.stringify({ ...rec, ca: 'x' })) ?? '', /certificate/);
+  assert.equal(pveProblem('hypervisor:pve.lan:8006', JSON.stringify(rec)), null);
+  assert.equal(pveProblem('hypervisor:xo.lan', JSON.stringify({ address: 'xo.lan', token: 't' })), null);
+});
+
+test('a Proxmox record the box cannot use is said in its journal, once while it stays so', () => {
+  /** @type {string[]} */
+  const warned = [];
+  const pools = new PvePools({ log: { info() {}, warn: (/** @type {string} */ m) => warned.push(m) } });
+  const bad = { ...recordFor('pve.lan:8006', '-----BEGIN CERTIFICATE-----\n' + 'A'.repeat(120) + '\n-----END CERTIFICATE-----\n'), token: 'not-a-token' };
+  const accounts = [{ email: 'a@x.example', items: [{ name: 'hypervisor:pve.lan:8006', value: JSON.stringify(bad) }] }];
+  pools.adopt(accounts);
+  pools.adopt(accounts);
+  assert.equal(warned.length, 1, warned.join('\n'));
+  assert.match(warned[0], /pve\.lan:8006 in a@x\.example's vault: its token/);
+  assert.equal(pools.held.size, 0);
 });
 
 test('a machine is cloned into the pool with its join in its SMBIOS, put behind the fence, and started', { skip }, async () => {

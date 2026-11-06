@@ -133,8 +133,31 @@ const MAX_MACHINES = 200;
 
 const TOKEN_RE = /^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,64}![A-Za-z0-9._-]{1,64}=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const POOL_RE = /^[A-Za-z0-9_-]{1,40}$/;
-/** One certificate, or a file of them: the cluster's CA, or a certificate of somebody's own with its root. */
-const PEM_RE = /^(?:-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]{100,8000}\n-----END CERTIFICATE-----\n?){1,4}$/;
+/** One certificate block, where it sits in a file; its body is base64 alone, so a match never runs into the next. */
+const PEM_BLOCK_RE = /-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]{100,8000}?)\r?\n-----END CERTIFICATE-----/g;
+/** As many certificates as a CA file, or a leaf with its chain and root, holds. */
+const MAX_CERTS = 8;
+
+/**
+ * THE CERTIFICATES IN A PEM FILE, and nothing else of it: each block, with
+ * plain line ends, one after another. Null when it holds none, or more than
+ * a chain does.
+ *
+ * Text around the blocks is left out rather than refused. A certificate a
+ * person put on the web interface is often a file some tool wrote, with
+ * Windows line ends or `subject=`/`Bag Attributes` lines between the blocks.
+ * OpenSSL reads those files, the script's own check passes, and the phone
+ * kept the line. Then every box refused it without a word, because this
+ * required the field to be bare blocks. That is what the first real node
+ * did: its cluster never appeared anywhere.
+ *
+ * @param {unknown} text @returns {string|null}
+ */
+export function certsOf(text) {
+  if (typeof text !== 'string' || text.length > 64_000) return null;
+  const blocks = [...text.matchAll(PEM_BLOCK_RE)].map((m) => `-----BEGIN CERTIFICATE-----\n${m[1].replace(/\r/g, '')}\n-----END CERTIFICATE-----\n`);
+  return blocks.length && blocks.length <= MAX_CERTS ? blocks.join('') : null;
+}
 
 /**
  * A Proxmox record as the vault handed it, or null for anything that is not
@@ -155,22 +178,57 @@ export function pveRecord(name, value) {
   return recordOf(r, name.slice(HYPERVISOR_ITEM.length));
 }
 
+/**
+ * Why a vault item that says it is a Proxmox VE record is not one this box
+ * can use, or null when it is one, or is not a Proxmox record at all (a Xen
+ * Orchestra pool's, which xo-pools.js reads). For the journal: a record the
+ * box passed over in silence is how a set-up cluster stayed out of sight.
+ *
+ * @param {string} name @param {unknown} value @returns {string|null}
+ */
+export function pveProblem(name, value) {
+  if (!name.startsWith(HYPERVISOR_ITEM) || typeof value !== 'string') return null;
+  /** @type {any} */
+  let r;
+  try {
+    r = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (r?.kind !== PVE_KIND) return null;
+  return checked(r, name.slice(HYPERVISOR_ITEM.length)).problem;
+}
+
 /** @param {any} r @param {string|null} address  null takes the record's own @returns {PveRecord|null} */
 function recordOf(r, address) {
-  if (!r || typeof r !== 'object' || r.kind !== PVE_KIND) return null;
-  if (typeof r.address !== 'string' || (address !== null && r.address !== address)) return null;
-  if (typeof r.token !== 'string' || !TOKEN_RE.test(r.token)) return null;
-  if (typeof r.pool !== 'string' || !POOL_RE.test(r.pool)) return null;
-  const ca = typeof r.ca === 'string' && PEM_RE.test(r.ca) ? r.ca : null;
+  return checked(r, address).record;
+}
+
+/**
+ * The record, or what is wrong with it in words a person can act on. Never
+ * the token itself: the words go to a phone and into a journal.
+ *
+ * @param {any} r @param {string|null} address
+ * @returns {{ record: PveRecord, problem: null }|{ record: null, problem: string }}
+ */
+function checked(r, address) {
+  const no = (/** @type {string} */ problem) => ({ record: null, problem });
+  if (!r || typeof r !== 'object' || r.kind !== PVE_KIND) return no('it is not a Proxmox VE record');
+  if (typeof r.address !== 'string' || !r.address) return no('it names no address');
+  if (address !== null && r.address !== address) return no(`it names ${String(r.address).slice(0, 80)}, not ${address}`);
+  if (typeof r.token !== 'string' || !TOKEN_RE.test(r.token)) return no('its token is not in the shape Proxmox VE makes one, user@realm!name=secret');
+  if (typeof r.pool !== 'string' || !POOL_RE.test(r.pool)) return no('its pool name is not one Proxmox VE takes');
   // A RECORD SAYS HOW TO TRUST THE SERVER, and one that cannot is no record:
   // there is no plain HTTP here, because Proxmox has none, and no pin to a
   // certificate with the chain check turned off (pve-api.js).
+  const ca = certsOf(r.ca);
+  if (typeof r.ca === 'string' && r.ca && !ca) return no(`the certificate it carries holds no certificate block, or more than ${MAX_CERTS}`);
   /** @type {'ca'|'public'|null} */
   const trust = ca ? 'ca' : r.trust === 'public' ? 'public' : null;
-  if (!trust) return null;
+  if (!trust) return no('it says neither which certificate to trust nor that the web interface has a publicly trusted one');
   const grants = machineGrantsOf(r.grants);
   const vmids = vmidsOf(r.vmids);
-  return { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(grants ? { grants } : {}), ...(vmids ? { vmids } : {}) };
+  return { record: { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(grants ? { grants } : {}), ...(vmids ? { vmids } : {}) }, problem: null };
 }
 
 /**
@@ -199,13 +257,29 @@ const VMID_LOOKS = 64;
  * @param {string} line @returns {PveRecord|null}
  */
 export function parseConnection(line) {
+  return connectionOf(line).record;
+}
+
+/**
+ * The same, with what is wrong with a line that is not one: for the words
+ * that say why a setup's hand-over stopped, which said only "not one the
+ * fleet reads" and left nobody able to tell which part.
+ *
+ * @param {string} line
+ * @returns {{ record: PveRecord, problem: null }|{ record: null, problem: string }}
+ */
+export function connectionOf(line) {
   const s = String(line || '').trim();
-  if (!s.startsWith(CONNECTION_PREFIX)) return null;
+  if (!s) return { record: null, problem: 'the node left an empty line' };
+  if (!s.startsWith(CONNECTION_PREFIX)) return { record: null, problem: `it does not start ${CONNECTION_PREFIX}` };
+  /** @type {any} */
+  let r;
   try {
-    return recordOf(JSON.parse(Buffer.from(s.slice(CONNECTION_PREFIX.length), 'base64url').toString('utf8')), null);
+    r = JSON.parse(Buffer.from(s.slice(CONNECTION_PREFIX.length), 'base64url').toString('utf8'));
   } catch {
-    return null;
+    return { record: null, problem: `what follows ${CONNECTION_PREFIX} does not decode, so the line was cut or changed on the way` };
   }
+  return checked(r, null);
 }
 
 /**
@@ -413,6 +487,8 @@ export class PvePools {
     this.handed = new Set();
     /** @type {Set<string>} */
     this.handing = new Set();
+    /** Records passed over, and why, so each is said once. @type {Map<string, string>} */
+    this.refused = new Map();
   }
 
   /** @param {PveRecord} record */
@@ -434,6 +510,8 @@ export class PvePools {
     const claude = new Map();
     /** @type {Map<string, string[]>} */
     const ssh = new Map();
+    /** @type {Map<string, string>} */
+    const refused = new Map();
     for (const a of Array.isArray(accounts) ? accounts : []) {
       const owner = String(a?.email || '').toLowerCase();
       if (!owner) continue;
@@ -442,8 +520,13 @@ export class PvePools {
         if (i?.name === SSH_KEYS_ITEM) ssh.set(owner, sshKeys(i.value));
         const record = pveRecord(String(i?.name || ''), i?.value);
         if (record) held.set(`${owner} ${record.address}`, { owner, record });
+        const problem = record ? null : pveProblem(String(i?.name || ''), i?.value);
+        if (problem) refused.set(`${owner} ${String(i.name).slice(HYPERVISOR_ITEM.length)}`, problem);
       }
     }
+    // SAID ONCE, while it stays wrong: every ten minutes would bury the rest.
+    for (const [k, why] of refused) if (this.refused.get(k) !== why) this.log.warn(`sidecar: not using the Proxmox record for ${k.split(' ')[1]} in ${k.split(' ')[0]}'s vault: ${why}. Running the setup again from the app makes a new one.`);
+    this.refused = refused;
     for (const k of [...this.seen.keys()]) if (!held.has(k)) this.seen.delete(k);
     const added = [...held.keys()].filter((k) => !this.held.has(k));
     this.held = held;
