@@ -1800,10 +1800,11 @@ that lists every hypervisor of yours, of either kind:
 - **One Add a hypervisor** at the foot takes the address and finds the kind,
   and does not ask. Asked for: *"Instead of ask which kind detect don't ask
   question you can find the answer to"*. The fleet's machines look (`xoprobe`
-  also reports `pve`: true when the server on Proxmox VE's port says it is
-  `pve-api-daemon`, false when something else answered, null when nothing
-  did). This phone checks too, with a TCP connection to that port that sends
-  nothing, because a node is often on a network only the phone reaches. The
+  also reports `pve`: true when Proxmox VE's port, 8006, takes a connection,
+  null when nothing answered). This phone looks the same way, because a node
+  is often on a network only the phone reaches. Both looks are a TCP
+  connection that sends nothing and is closed as soon as it opens, so no
+  certificate check is skipped to find out. The
   setup for what was found opens with the address filled in. Only when
   nothing answers as either is the person asked which it is.
 
