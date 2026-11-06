@@ -182,6 +182,7 @@ struct MachinesView: View {
         ForEach(poolMachines) { machine in
             NavigationLink {
                 VMMachineView(settings: settings, name: machine.name)
+                    .id(machine.name)
             } label: {
                 poolMachineCard(machine)
             }
@@ -240,6 +241,7 @@ struct MachinesView: View {
             AddHypervisorView(settings: settings, reconnectFor: ask.address, via: ask.via)
         } else if let pool = hypervisors.first(where: { $0.address == ask.address }) {
             PoolManageView(settings: settings, pool: pool)
+                .id(ask.address)
         }
     }
 
@@ -264,6 +266,12 @@ struct MachinesView: View {
             mayAdminister: reporting?.mayAdminister ?? true,
             onChange: { await loadHosts() },
         )
+        // A NEW PAGE FOR A NEW MACHINE. Beside the list, opening another
+        // machine put its page where the last one was, and SwiftUI kept the
+        // last one's state and did not ask again: the page loads once, so it
+        // went on showing the first machine. Keyed on the machine, it is
+        // built, and asked for, afresh. The same on Sessions (FleetView).
+        .id(id)
     }
 
     private func reportingCard(_ host: Fleet.FleetHost) -> some View {

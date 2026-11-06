@@ -448,6 +448,8 @@ struct FleetView: View {
             .navigationDestination(item: $opened) { session in
                 SessionView(fleet: fleet, initial: session, resumeKept: resumeKept(session),
                             onChange: { await refresh(keepStatus: true) })
+                    // A NEW PAGE FOR A NEW SESSION: see the row's link below.
+                    .id(session.id)
             }
         }
     }
@@ -718,6 +720,14 @@ private struct SessionRow: View {
             // the place to act on what is asking; the page is where to look.
             NavigationLink {
                 SessionView(fleet: fleet, initial: session, resumeKept: resumeKept, onChange: changed)
+                    // A NEW PAGE FOR A NEW SESSION. Beside the list (an iPad,
+                    // an unfolded Duo) tapping another row put the other
+                    // session's page where the first one was, and SwiftUI kept
+                    // the first one's state there: the page copies its session
+                    // in once, so it went on showing the session opened first
+                    // and every other row looked as if it did not take the tap.
+                    // Keyed on the session, the page is built afresh for each.
+                    .id(session.id)
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
                     Text(session.label)
