@@ -1850,8 +1850,13 @@ struct Fleet {
         /// The first free lab of that kind, or nil when none is.
         func freeLab(open: Bool) -> Lab? { labs?.first { $0.open == open && $0.free } }
 
-        /// "New machine from Fleetwright Debian 13 on rack", for a picker.
-        var label: String { "New machine from \(name)" + (poolName.map { " on \($0)" } ?? "") }
+        /// "New machine from Fleetwright Ubuntu 24.04 on Proxmox", or "… on
+        /// XCP-ng", for a picker. Asked: "Is it on proxmox or on xcp where is
+        /// it going to go?" A Proxmox VE pool is always `fleetwright`, so its
+        /// name told nothing, and the kind alone is enough: "if we need sub
+        /// pickers from there we can do it". The coordinator says it the same
+        /// way (core.js, imageWhere).
+        var label: String { "New machine from \(name) on \(onProxmox ? "Proxmox" : "XCP-ng")" }
     }
 
     /// One of your hypervisors, of either kind, as the boxes holding its

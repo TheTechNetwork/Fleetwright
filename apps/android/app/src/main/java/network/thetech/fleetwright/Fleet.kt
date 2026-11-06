@@ -2160,8 +2160,15 @@ class Fleet(
         /** Which hypervisor it is on: `proxmox`, or `xo`; null from a coordinator older than Proxmox, which is Xen Orchestra. */
         val kind: String? = null,
     ) {
-        /** "New machine from Fleetwright Debian 13 on rack", for a picker. */
-        val label: String get() = "New machine from $name" + (poolName?.let { " on $it" } ?: "")
+        /**
+         * "New machine from Fleetwright Ubuntu 24.04 on Proxmox", or "… on
+         * XCP-ng", for a picker. Asked: "Is it on proxmox or on xcp where is it
+         * going to go?" A Proxmox VE pool is always `fleetwright`, so its name
+         * told nothing, and the kind alone is enough: "if we need sub pickers
+         * from there we can do it". The coordinator says it the same way
+         * (core.js, imageWhere).
+         */
+        val label: String get() = "New machine from $name on ${if (onProxmox) "Proxmox" else "XCP-ng"}"
 
         /** The first free lab of that kind, or null when none is. */
         fun freeLab(open: Boolean): VmLab? = labs?.firstOrNull { it.open == open && it.free }
