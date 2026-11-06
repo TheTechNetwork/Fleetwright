@@ -121,6 +121,9 @@ test('the probe asks every permanent machine and says which reached it, never a 
       names: ['xo.lan'],
     },
     version: '5.170',
+    // A MACHINE FROM BEFORE THE PROXMOX VE LOOK, as this stand-in answers:
+    // it did not look, and the phone is told so rather than "nothing there".
+    pveLooked: false,
   });
   assert.equal(r.probes.find((/** @type {any} */ p) => p.hostId === 'rpi-7550').reachable, false);
 });

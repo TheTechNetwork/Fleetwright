@@ -9086,6 +9086,11 @@ export function narrowProbe(p) {
     // WHETHER PROXMOX VE ANSWERED on its API port, so the phone tells the
     // kind without asking. Only when the box said: an older one did not look.
     ...(typeof p.pve === 'boolean' ? { pve: p.pve } : {}),
+    // WHETHER IT LOOKED AT ALL: a box that knows the Proxmox VE look always
+    // answers with the field, null for nothing there; one from before it
+    // leaves it out. Without this the phone said the fleet's machines found
+    // no Proxmox VE when the only machine had never looked.
+    pveLooked: 'pve' in p && (p.pve === null || typeof p.pve === 'boolean'),
     // ONLY WHEN THE HOST ANSWERED THE SSH QUESTION. A host too old to know
     // it probed for Xen Orchestra instead and said nothing about SSH, and an
     // `ssh` entry built here for it would be a claim nobody made.
