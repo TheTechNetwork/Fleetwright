@@ -105,6 +105,9 @@ fun MachinesScreen(
     // THE ONE HYPERVISORS PAGE (HypervisorsScreen): every pool and cluster,
     // and the one way to add another.
     var listingHypervisors by rememberSaveable { mutableStateOf(false) }
+    // Where Add a hypervisor found what it found, for the setup it opens.
+    var hypervisorAt by rememberSaveable { mutableStateOf<String?>(null) }
+    var proxmoxAt by rememberSaveable { mutableStateOf("") }
     var hypervisorJob by rememberSaveable { mutableStateOf<String?>(null) }
     // A pool whose policy is being changed, by address. Saveable for the same
     // reason; the job itself starts over after a rotation (HypervisorSheet).
@@ -213,18 +216,18 @@ fun MachinesScreen(
             settings,
             held = held,
             onOpenPool = { listingHypervisors = false; managing = it },
-            onAddXo = { listingHypervisors = false; hypervisorJob = null; addingHypervisor = true },
-            onAddProxmox = { listingHypervisors = false; addingProxmox = true },
+            onAddXo = { listingHypervisors = false; hypervisorJob = null; hypervisorAt = it; addingHypervisor = true },
+            onAddProxmox = { listingHypervisors = false; proxmoxAt = it; addingProxmox = true },
             onDismiss = { listingHypervisors = false },
         )
     }
-    if (addingProxmox) ProxmoxSheet(settings, onDismiss = { addingProxmox = false })
+    if (addingProxmox) ProxmoxSheet(settings, startNode = proxmoxAt, onDismiss = { addingProxmox = false; proxmoxAt = "" })
     if (addingHypervisor) {
         // KEYED ON THE JOB: a second notification, tapped while the sheet is
         // already open on another job, retargets it rather than leaving the
         // first job's state in a sheet whose argument quietly changed.
         key(hypervisorJob) {
-            HypervisorSheet(settings, resumeJob = hypervisorJob, onDismiss = { addingHypervisor = false; hypervisorJob = null })
+            HypervisorSheet(settings, resumeJob = hypervisorJob, startAt = hypervisorAt.takeIf { hypervisorJob == null }, onDismiss = { addingHypervisor = false; hypervisorJob = null; hypervisorAt = null })
         }
     }
     managing?.let { address ->

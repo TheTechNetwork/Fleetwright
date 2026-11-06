@@ -110,14 +110,19 @@ struct AddHypervisorView: View {
     let makeHolderAgain: Bool
     @Environment(\.dismiss) private var dismiss
 
-    init(settings: Settings, policyFor address: String? = nil, reconnectFor pool: String? = nil, via machine: String? = nil, makeHolderAgain: Bool = false) {
+    init(settings: Settings, policyFor address: String? = nil, reconnectFor pool: String? = nil, via machine: String? = nil, makeHolderAgain: Bool = false, startAt found: String? = nil) {
         self.settings = settings
         self.policyFor = address
         self.reconnectFor = address == nil ? pool : nil
         self.preferred = machine.flatMap { $0.isEmpty ? nil : $0 }
         self.makeHolderAgain = address != nil && makeHolderAgain
-        _address = State(initialValue: address ?? pool ?? "")
+        self.startAt = address == nil && pool == nil ? found.flatMap { $0.isEmpty ? nil : $0 } : nil
+        _address = State(initialValue: address ?? pool ?? found ?? "")
     }
+
+    /// The address Add a hypervisor found Xen Orchestra at: filled in, and
+    /// the machines asked at once, because that question was just answered.
+    let startAt: String?
 
     @State private var address = ""
     @State private var probing = false
@@ -352,6 +357,10 @@ struct AddHypervisorView: View {
         // The address is already known, so the first question is asked for
         // the person, starting from the machine that got through last time.
         .task {
+            if startAt != nil, probes == nil, !probing {
+                await probe()
+                return
+            }
             guard isPolicy || isReconnect, probes == nil, !probing else { return }
             // A RECONNECT FOR AN ADDRESS THIS PHONE DOES NOT KNOW IS ASKED
             // FOR BY NAME FIRST. A pool-lost push carries an address one of

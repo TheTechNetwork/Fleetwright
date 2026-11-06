@@ -29,8 +29,12 @@ test('Android: Add a hypervisor is on the Hypervisors page, reached from Machine
   // There, one Add, which asks which kind and opens that kind's own setup.
   const page = file('HypervisorsScreen.kt');
   assert.ok(page.includes('OpenRow("Add a hypervisor") { choosing = true }'));
-  assert.ok(page.includes('ChoiceRow("Xen Orchestra", HypervisorWords.XO_CHOICE) { choosing = false; onAddXo() }'));
-  assert.match(machines, /onAddXo = \{ listingHypervisors = false; hypervisorJob = null; addingHypervisor = true \}/);
+  // WHICH KIND IS FOUND, not asked: the fleet's probe or this phone's look
+  // at Proxmox VE's port; asked only when nothing answered as either.
+  assert.match(page, /probes\.any \{ it\.xo == true \} -> \{ choosing = false; onAddXo\(at\) \}/);
+  assert.match(page, /probes\.any \{ it\.pve == true \} \|\| phoneSees -> \{ choosing = false; onAddProxmox\(HypervisorAddress\.node\(at\)\) \}/);
+  assert.ok(page.includes('ChoiceRow("Xen Orchestra", HypervisorWords.XO_CHOICE) { choosing = false; onAddXo(adding.trim()) }'));
+  assert.match(machines, /onAddXo = \{ listingHypervisors = false; hypervisorJob = null; hypervisorAt = it; addingHypervisor = true \}/);
 });
 
 test('Android: the screen asks the address, probes, then begins, runs, polls and cancels, in that order', () => {

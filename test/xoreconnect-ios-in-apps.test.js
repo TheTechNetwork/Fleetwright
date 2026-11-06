@@ -124,7 +124,10 @@ test('iOS: a reconnect starts where it was asked from: the address named, the ma
   // The one way in for a reconnect, beside the policy change's; what comes
   // after `via` is the policy change's own (Make it again from a holder's
   // page, test/holder-sessions-in-apps.test.js) and a reconnect never sets it.
-  assert.match(SCREEN, /init\(settings: Settings, policyFor address: String\? = nil, reconnectFor pool: String\? = nil, via machine: String\? = nil(, [a-zA-Z]+: Bool = false)?\)/);
+  // `startAt` is Add a hypervisor's, for an address it found Xen Orchestra
+  // at, and is ignored beside a reconnect's.
+  assert.match(SCREEN, /init\(settings: Settings, policyFor address: String\? = nil, reconnectFor pool: String\? = nil, via machine: String\? = nil(, [a-zA-Z]+: Bool = false)?(, startAt found: String\? = nil)?\)/);
+  assert.match(SCREEN, /self\.startAt = address == nil && pool == nil \? found/);
   assert.match(SCREEN, /guard isPolicy \|\| isReconnect, probes == nil, !probing else \{ return \}[\s\S]*?await openRemembered\(\)\s*\}/);
   // Never offered through this phone, and never an install: it is for a Xen
   // Orchestra the fleet already reaches.

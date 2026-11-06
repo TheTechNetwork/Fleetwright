@@ -172,6 +172,8 @@ internal fun HypervisorSheet(
     reconnectFor: String? = null,
     via: String? = null,
     makeHolderAgain: Boolean = false,
+    /** The address Add a hypervisor found Xen Orchestra at: filled in, and the machines asked at once. */
+    startAt: String? = null,
     onDismiss: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -181,7 +183,7 @@ internal fun HypervisorSheet(
     // its start from memory and its machine that reaches the pool.
     val reconnect = !policy && reconnectFor != null
 
-    var address by rememberSaveable { mutableStateOf(policyFor ?: reconnectFor ?: "") }
+    var address by rememberSaveable { mutableStateOf(policyFor ?: reconnectFor ?: startAt ?: "") }
     var probing by remember { mutableStateOf(false) }
     var proxmox by rememberSaveable { mutableStateOf(false) }
     // NULL IS NOT ASKED. An empty list is a fleet with nothing permanent to ask.
@@ -952,6 +954,13 @@ internal fun HypervisorSheet(
     // A POOL THIS PHONE HOLDS opens on the machine that got through last
     // time, once per screen: a rotation does not put the prompt up again.
     LaunchedEffect(Unit) {
+        // FOUND BY ADD A HYPERVISOR: that question was just answered, so the
+        // machines are asked at once, once per screen.
+        if (!policy && !reconnect && startAt != null && job == null && !openedOnce) {
+            openedOnce = true
+            probe()
+            return@LaunchedEffect
+        }
         if ((policy || reconnect) && job == null && !openedOnce) {
             openedOnce = true
             // Not for an address this phone does not know: a pool-lost push

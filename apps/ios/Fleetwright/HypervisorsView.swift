@@ -1,3 +1,4 @@
+import Network
 import SwiftUI
 
 /// Every hypervisor of yours, of either kind, on one page, and the one way to
@@ -214,34 +215,151 @@ struct HypervisorPageView: View {
     }
 }
 
-/// Add a hypervisor: which kind, then that kind's own setup, which asks for
-/// none of what the other does.
+/// Add a hypervisor: its address, and the kind found from what answers there.
+/// Asked for: "Instead of ask which kind detect don't ask question you can
+/// find the answer to". The fleet's machines look (`xoprobe`, which says both
+/// whether Xen Orchestra answered and whether Proxmox VE's API did), and so
+/// does this phone, at Proxmox VE's port, because a node is often on a
+/// network only the phone reaches. The setup for what was found opens with
+/// the address filled in. Only when nothing answers as either is the person
+/// asked which it is, and then it is a fact nobody here could find.
 struct AddHypervisorChoiceView: View {
     let settings: Settings
+
+    @State private var address = ""
+    @State private var finding = false
+    @State private var found: Found?
+    /// Nothing answered as either: said, and both setups offered.
+    @State private var unknown: String?
+
+    enum Found: Hashable {
+        case xo(String)
+        case pve(String)
+    }
+
+    private var trimmed: String { address.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         List {
             Section {
-                NavigationLink { AddHypervisorView(settings: settings) } label: {
-                    VStack(alignment: .leading, spacing: Design.Space.hair) {
-                        Text("Xen Orchestra").fleetType(.bodyStrong)
-                        Text(HypervisorWords.xoChoice).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                TextField("Host name or address", text: $address)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .submitLabel(.go)
+                    .onSubmit { Task { await find() } }
+                    .frame(minHeight: 44)
+                Button(finding ? "Looking…" : "Find it") { Task { await find() } }
+                    .disabled(trimmed.isEmpty || finding)
+                    .frame(minHeight: 44)
+            } footer: {
+                Text(HypervisorWords.findFooter)
+            }
+            if let unknown {
+                Section {
+                    Text(unknown).fleetType(.label).foregroundStyle(Design.Palette.attention)
+                    NavigationLink { AddHypervisorView(settings: settings, startAt: trimmed) } label: {
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            Text("Xen Orchestra").fleetType(.bodyStrong)
+                            Text(HypervisorWords.xoChoice).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        }
+                        .frame(minHeight: 44, alignment: .leading)
                     }
-                    .frame(minHeight: 44, alignment: .leading)
-                }
-                NavigationLink { AddProxmoxView(settings: settings) } label: {
-                    VStack(alignment: .leading, spacing: Design.Space.hair) {
-                        Text("Proxmox VE").fleetType(.bodyStrong)
-                        Text(HypervisorWords.pveChoice).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                    NavigationLink { AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(trimmed)) } label: {
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            Text("Proxmox VE").fleetType(.bodyStrong)
+                            Text(HypervisorWords.pveChoice).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        }
+                        .frame(minHeight: 44, alignment: .leading)
                     }
-                    .frame(minHeight: 44, alignment: .leading)
+                } header: {
+                    Text("Which hypervisor is it")
                 }
-            } header: {
-                Text("Which hypervisor is it")
             }
         }
         .navigationTitle("Add a hypervisor")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $found) { what in
+            switch what {
+            case .xo(let at): AddHypervisorView(settings: settings, startAt: at)
+            case .pve(let at): AddProxmoxView(settings: settings, startNode: at)
+            }
+        }
+    }
+
+    @MainActor
+    private func find() async {
+        let at = trimmed
+        guard !at.isEmpty, !finding else { return }
+        finding = true
+        unknown = nil
+        defer { finding = false }
+        let fleet = Fleet(settings: settings)
+        async let asked = try? fleet.xoprobe(address: at)
+        async let opens = HypervisorAddress.pveAnswers(at)
+        let probes = (await asked)?.probes ?? []
+        let phoneSees = await opens
+        if probes.contains(where: { $0.xo == true }) {
+            found = .xo(at)
+        } else if probes.contains(where: { $0.pve == true }) || phoneSees {
+            found = .pve(HypervisorAddress.node(at))
+        } else {
+            unknown = HypervisorWords.notFound(at)
+        }
+    }
+}
+
+/// An address as Add a hypervisor reads it.
+enum HypervisorAddress {
+    /// The host, without a port, as the Proxmox VE setup takes it (it is
+    /// what SSH is pointed at).
+    static func node(_ address: String) -> String {
+        split(address).host
+    }
+
+    static func split(_ address: String) -> (host: String, port: UInt16?) {
+        if address.hasPrefix("["), let close = address.firstIndex(of: "]") {
+            let host = String(address[address.index(after: address.startIndex)..<close])
+            let rest = address[address.index(after: close)...]
+            return (host, rest.hasPrefix(":") ? UInt16(rest.dropFirst()) : nil)
+        }
+        let parts = address.split(separator: ":", omittingEmptySubsequences: false)
+        if parts.count == 2, let port = UInt16(parts[1]) { return (String(parts[0]), port) }
+        return (address, nil)
+    }
+
+    /// WHETHER PROXMOX VE'S PORT TAKES A CONNECTION from this phone: a TCP
+    /// connection to 8006 (or the port the address names, unless it is 443,
+    /// Xen Orchestra's), closed as soon as it opens. Nothing is sent, so no
+    /// certificate is involved; the setup checks the node itself over SSH.
+    static func pveAnswers(_ address: String) async -> Bool {
+        let (host, named) = split(address)
+        let port = named.flatMap { $0 == 443 ? nil : $0 } ?? 8006
+        guard !host.isEmpty, let p = NWEndpoint.Port(rawValue: port) else { return false }
+        let queue = DispatchQueue(label: "network.thetech.fleetwright.pve-port")
+        let once = Once()
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: p, using: .tcp)
+        return await withCheckedContinuation { continuation in
+            let end: @Sendable (Bool) -> Void = { open in
+                guard !once.done else { return }
+                once.done = true
+                connection.cancel()
+                continuation.resume(returning: open)
+            }
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready: end(true)
+                case .failed, .waiting, .cancelled: end(false)
+                default: break
+                }
+            }
+            connection.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + 3) { end(false) }
+        }
+    }
+
+    private final class Once: @unchecked Sendable {
+        var done = false
     }
 }
 
@@ -257,6 +375,12 @@ enum HypervisorWords {
     static let xoElsewhere = "Its page opens on the phone that set it up, which holds its token."
     static let xoChoice = "A pool of XCP-ng hosts, through the Xen Orchestra in front of it."
     static let pveChoice = "A Proxmox VE 9 node or cluster, set up over SSH as root."
+    static let findFooter = "The fleet's machines and this phone look at what answers there, and the setup for it opens."
+
+    /// Nothing answered as either kind: the one question the page asks.
+    static func notFound(_ address: String) -> String {
+        "Nothing at \(address) answered as Xen Orchestra or as Proxmox VE, from the fleet's machines or from this phone. Which is it?"
+    }
 
     static func reach(_ reachable: Bool?) -> String {
         switch reachable {

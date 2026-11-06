@@ -19,6 +19,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Every hypervisor of yours, of either kind, on one page, and the one way to
@@ -37,8 +50,10 @@ internal fun HypervisorsScreen(
     /** This phone's own pools: their pages read them phone-direct. */
     held: List<XoHandoff.Held>,
     onOpenPool: (String) -> Unit,
-    onAddXo: () -> Unit,
-    onAddProxmox: () -> Unit,
+    /** Xen Orchestra's setup, with the address it was found at, if any. */
+    onAddXo: (String?) -> Unit,
+    /** Proxmox VE's setup, with the node it was found at, if any. */
+    onAddProxmox: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var fleet by remember { mutableStateOf<List<Fleet.Hypervisor>?>(null) }
@@ -46,6 +61,37 @@ internal fun HypervisorsScreen(
     var failed by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf<HypervisorRow?>(null) }
     var choosing by remember { mutableStateOf(false) }
+    var adding by remember { mutableStateOf("") }
+    var finding by remember { mutableStateOf(false) }
+    // Nothing answered as either: said, and both setups offered.
+    var unknown by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    // WHICH KIND, FOUND RATHER THAN ASKED. Asked for: "Instead of ask which
+    // kind detect don't ask question you can find the answer to". The fleet's
+    // machines look (`xoprobe`, which says whether Xen Orchestra answered and
+    // whether Proxmox VE's API did), and so does this phone, at Proxmox VE's
+    // port, because a node is often on a network only the phone reaches.
+    // Only when nothing answers as either is the person asked. Same as iOS.
+    fun find() {
+        val at = adding.trim()
+        if (at.isEmpty() || finding) return
+        finding = true
+        unknown = null
+        scope.launch {
+            val (probes, phoneSees) = coroutineScope {
+                val asked = async { runCatching { Fleet(settings).xoprobe(at).probes }.getOrNull() ?: emptyList() }
+                val opens = async { HypervisorAddress.pveAnswers(at) }
+                asked.await() to opens.await()
+            }
+            finding = false
+            when {
+                probes.any { it.xo == true } -> { choosing = false; onAddXo(at) }
+                probes.any { it.pve == true } || phoneSees -> { choosing = false; onAddProxmox(HypervisorAddress.node(at)) }
+                else -> unknown = HypervisorWords.notFound(at)
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         // A FAILED ASK IS NOT "NONE": what was listed stays, and the page says
@@ -59,15 +105,32 @@ internal fun HypervisorsScreen(
     val rows = hypervisorRows(fleet, held)
 
     open?.let { row ->
-        HypervisorPage(row, onSetUpAgain = { open = null; onAddProxmox() }, onDismiss = { open = null })
+        HypervisorPage(row, onSetUpAgain = { open = null; onAddProxmox(HypervisorAddress.node(row.address)) }, onDismiss = { open = null })
         return
     }
     if (choosing) {
         FullScreen(title = "Add a hypervisor", onDismiss = { choosing = false }) {
-            SectionHead("Which hypervisor is it")
-            Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
-                ChoiceRow("Xen Orchestra", HypervisorWords.XO_CHOICE) { choosing = false; onAddXo() }
-                ChoiceRow("Proxmox VE", HypervisorWords.PVE_CHOICE) { choosing = false; onAddProxmox() }
+            OutlinedTextField(
+                value = adding,
+                onValueChange = { adding = it; unknown = null },
+                enabled = !finding,
+                label = { Text("Host name or address") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { find() }),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedButton(enabled = adding.isNotBlank() && !finding, modifier = Modifier.heightIn(min = 48.dp), onClick = { find() }) {
+                Text(if (finding) "Looking…" else "Find it")
+            }
+            Hint(HypervisorWords.FIND_FOOTER)
+            unknown?.let { said ->
+                Hint(said, Design.Palette.attention.now)
+                SectionHead("Which hypervisor is it")
+                Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
+                    ChoiceRow("Xen Orchestra", HypervisorWords.XO_CHOICE) { choosing = false; onAddXo(adding.trim()) }
+                    ChoiceRow("Proxmox VE", HypervisorWords.PVE_CHOICE) { choosing = false; onAddProxmox(HypervisorAddress.node(adding.trim())) }
+                }
             }
         }
         return
@@ -197,6 +260,11 @@ object HypervisorWords {
     const val XO_ELSEWHERE = "Its page opens on the phone that set it up, which holds its token."
     const val XO_CHOICE = "A pool of XCP-ng hosts, through the Xen Orchestra in front of it."
     const val PVE_CHOICE = "A Proxmox VE 9 node or cluster, set up over SSH as root."
+    const val FIND_FOOTER = "The fleet's machines and this phone look at what answers there, and the setup for it opens."
+
+    /** Nothing answered as either kind: the one question the page asks. */
+    fun notFound(address: String) =
+        "Nothing at $address answered as Xen Orchestra or as Proxmox VE, from the fleet's machines or from this phone. Which is it?"
 
     fun reach(reachable: Boolean?): String = when (reachable) {
         true -> "reached it"
@@ -248,5 +316,40 @@ object HypervisorWords {
         h.images?.let { lines.add(if (it == 1) "1 machine image" else "$it machine images") }
         h.machines?.let { lines.add(if (it == 1) "1 machine of the fleet's on it" else "$it machines of the fleet's on it") }
         return lines
+    }
+}
+
+/** An address as Add a hypervisor reads it. The same as iOS (HypervisorAddress). */
+internal object HypervisorAddress {
+    /** The host, without a port, as the Proxmox VE setup takes it (it is what SSH is pointed at). */
+    fun node(address: String): String = split(address).first
+
+    fun split(address: String): Pair<String, Int?> {
+        if (address.startsWith("[")) {
+            val close = address.indexOf(']')
+            if (close > 0) {
+                val rest = address.substring(close + 1)
+                return address.substring(1, close) to (if (rest.startsWith(":")) rest.drop(1).toIntOrNull() else null)
+            }
+        }
+        val parts = address.split(":")
+        if (parts.size == 2) parts[1].toIntOrNull()?.let { return parts[0] to it }
+        return address to null
+    }
+
+    /**
+     * WHETHER PROXMOX VE'S PORT TAKES A CONNECTION from this phone: a TCP
+     * connection to 8006 (or the port the address names, unless it is 443,
+     * Xen Orchestra's), closed as soon as it opens. Nothing is sent, so no
+     * certificate is involved; the setup checks the node itself over SSH.
+     */
+    suspend fun pveAnswers(address: String): Boolean = withContext(Dispatchers.IO) {
+        val (host, named) = split(address)
+        val port = named?.takeIf { it != 443 } ?: 8006
+        if (host.isBlank()) return@withContext false
+        runCatching {
+            java.net.Socket().use { it.connect(java.net.InetSocketAddress(host, port), 3_000) }
+            true
+        }.getOrDefault(false)
     }
 }

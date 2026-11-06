@@ -35,6 +35,7 @@ test('both phones word a hypervisor\'s status, reach and facts the same', () => 
     'The datacenter firewall is off: machines are made only on networks you chose until it is on.',
     '1 machine image', "1 machine of the fleet's on it",
     'Proxmox VE', 'Xen Orchestra', 'Hypervisors', 'Add a hypervisor', 'Which hypervisor is it', 'What each machine saw', 'The hypervisor', 'Set it up again',
+    'Host name or address', 'Find it', 'Looking…',
   ]) {
     assert.ok(strings(swift).has(said), `iOS does not say ${JSON.stringify(said)}`);
     assert.ok(a.has(said), `Android does not say ${JSON.stringify(said)}`);
@@ -43,6 +44,12 @@ test('both phones word a hypervisor\'s status, reach and facts the same', () => 
   for (const [ios, android] of [
     ['Reached from \\(reached.joined(separator: ", "))', 'Reached from ${reached.joinToString(", ")}'],
     ['No machine reached it. \\(failed.hostId)\\(why)', 'No machine reached it. ${failed.hostId}$why'],
+    [
+      "Nothing at \\(address) answered as Xen Orchestra or as Proxmox VE, from the fleet's machines or from this phone. Which is it?",
+      "Nothing at $address answered as Xen Orchestra or as Proxmox VE, from the fleet's machines or from this phone. Which is it?",
+    ],
+    // THE PHONE'S OWN LOOK: Proxmox VE's port, or the one named unless it is Xen Orchestra's.
+    ['let port = named.flatMap { $0 == 443 ? nil : $0 } ?? 8006', 'val port = named?.takeIf { it != 443 } ?: 8006'],
   ]) {
     assert.ok(swift.includes(ios), `iOS: ${ios}`);
     assert.ok(kotlin.includes(android), `Android: ${android}`);

@@ -42,7 +42,11 @@ test('iOS: the entry is on Machines, for a known admin only', () => {
   assert.match(IOS, /if settings\.configured && settings\.showsAdmin \{[\s\S]{0,200}?HypervisorsView\(settings: settings\)[\s\S]{0,200}?Label\("Hypervisors"/);
   // There, one Add, which asks which kind and opens that kind's own setup.
   assert.match(IOS, /AddHypervisorChoiceView\(settings: settings\)[\s\S]{0,200}?Label\("Add a hypervisor"/);
-  assert.match(IOS, /NavigationLink \{ AddHypervisorView\(settings: settings\) \} label: \{\s*VStack[^\n]*\n\s*Text\("Xen Orchestra"\)/);
+  // WHICH KIND IS FOUND, not asked: the fleet's probe or this phone's look
+  // at Proxmox VE's port; asked only when nothing answered as either.
+  assert.match(IOS, /if probes\.contains\(where: \{ \$0\.xo == true \}\) \{\s*found = \.xo\(at\)/);
+  assert.match(IOS, /\} else if probes\.contains\(where: \{ \$0\.pve == true \}\) \|\| phoneSees \{\s*found = \.pve\(HypervisorAddress\.node\(at\)\)/);
+  assert.match(IOS, /NavigationLink \{ AddHypervisorView\(settings: settings, startAt: trimmed\) \} label: \{\s*VStack[^\n]*\n\s*Text\("Xen Orchestra"\)/);
 });
 
 test('iOS: the screen asks every machine first, then runs one job on one machine through its four phases', () => {

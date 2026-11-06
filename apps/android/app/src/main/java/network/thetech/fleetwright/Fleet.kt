@@ -1103,6 +1103,12 @@ class Fleet(
          * own network, which is every probe from a fleet before relays.
          */
         val through: String? = null,
+        /**
+         * Whether Proxmox VE answered on its API port, so Add a hypervisor
+         * tells the kind without asking. NULL IS A MACHINE THAT DID NOT SAY:
+         * too old to look, or nothing answered there.
+         */
+        val pve: Boolean? = null,
     )
 
     /**
@@ -3205,6 +3211,7 @@ class Fleet(
                                         )
                                     },
                                     through = p.optString("through").takeIf { it == "phone" },
+                                    pve = if (p.has("pve") && !p.isNull("pve")) p.optBoolean("pve") else null,
                                 )
                             }
                         }

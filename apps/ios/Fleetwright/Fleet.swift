@@ -1243,6 +1243,10 @@ struct Fleet {
         /// or one that found Xen Orchestra: never one that found nothing
         /// (`narrowSsh` in src/fleet/coordinator/core.js).
         var ssh: SSH? = nil
+        /// Whether Proxmox VE answered on its API port, so Add a hypervisor
+        /// tells the kind without asking. NIL IS A MACHINE THAT DID NOT SAY:
+        /// too old to look, or nothing answered there.
+        var pve: Bool? = nil
         /// "phone" when this machine reached the address through this phone's
         /// own network (a relay, PhoneRelay) rather than its own. Absent is
         /// its own network, which is every probe from a fleet before relays.
