@@ -32,6 +32,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -440,6 +441,7 @@ internal object ProxmoxLine {
 
 /** The options' words, the same on iOS (AddProxmoxView.swift, ProxmoxWords). */
 internal object ProxmoxWords {
+    const val SYSTEMS_HINT = "Each system chosen becomes an image a session's machine can be made from. One already on the cluster is kept, and built again only when asked."
     const val FIREWALL_HINT = "Until it is on, the fleet's machines are made only on networks you choose. Proxmox VE's own rules keep the nodes' web interface, SSH and cluster traffic open to the local network; anything else coming in to the nodes themselves is dropped, so add a rule first for any other service they run."
 }
 
@@ -461,8 +463,23 @@ internal data class ProxmoxOptions(
     val groups: Int = 2,
     val labsOpen: Int = 1,
     val labsClosed: Int = 1,
+    /**
+     * Which systems the setup builds an image of, by the script's keys
+     * (`--images`, its `pinned` table), in the catalogue's order. Debian 13
+     * alone is every run before there was a choice, and options saved then.
+     */
+    val systems: List<String> = listOf("debian-13"),
 ) {
     private val trimmedStorage get() = storage.trim()
+
+    fun builds(key: String) = key in systems
+
+    /** One system on or off, the list kept in the catalogue's order. */
+    fun withSystem(key: String, on: Boolean) =
+        copy(systems = SYSTEMS.map { it.first }.filter { if (it == key) on else it in systems })
+
+    /** Passed only when it is not Debian 13 alone, and never with no image. */
+    private val imagesArg: List<String>? get() = if (image == "none" || systems == listOf("debian-13")) null else systems
     private val trimmedBridge get() = bridge.trim()
 
     /** What is wrong with them, in the script's own words, or null. */
@@ -471,6 +488,7 @@ internal data class ProxmoxOptions(
             trimmedStorage.isNotEmpty() && !STORAGE.matches(trimmedStorage) -> "The storage is not a Proxmox VE storage id, such as local-lvm."
             trimmedBridge.isNotEmpty() && !BRIDGE.matches(trimmedBridge) -> "The bridge is not a bridge's name, such as vmbr0."
             labsOpen + labsClosed > 4 -> "Four labs at most, open and closed together."
+            image != "none" && systems.isEmpty() -> "Choose at least one system to build, or Do not build one."
             else -> null
         }
 
@@ -482,6 +500,7 @@ internal data class ProxmoxOptions(
             if (firewall) a.append(" --enable-firewall")
             if (image == "rebuild") a.append(" --rebuild-image")
             if (image == "none") a.append(" --no-image")
+            imagesArg?.let { a.append(" --images ${it.joinToString(",")}") }
             if (channel == "rolling") a.append(" --channel rolling")
             if (trimmedStorage.isNotEmpty()) a.append(" --storage $trimmedStorage")
             if (trimmedBridge.isNotEmpty()) a.append(" --bridge $trimmedBridge")
@@ -499,6 +518,7 @@ internal data class ProxmoxOptions(
         if (firewall) p.put("firewall", true)
         if (image == "rebuild") p.put("rebuildImage", true)
         if (image == "none") p.put("noImage", true)
+        imagesArg?.let { p.put("images", JSONArray(it)) }
         if (channel == "rolling") p.put("channel", "rolling")
         if (trimmedStorage.isNotEmpty()) p.put("storage", trimmedStorage)
         if (trimmedBridge.isNotEmpty()) p.put("bridge", trimmedBridge)
@@ -513,12 +533,20 @@ internal data class ProxmoxOptions(
     fun saved(): String = JSONObject()
         .put("firewall", firewall).put("image", image).put("channel", channel).put("storage", storage).put("bridge", bridge)
         .put("expireDays", expireDays).put("groups", groups).put("labsOpen", labsOpen).put("labsClosed", labsClosed)
+        .put("systems", JSONArray(systems))
         .toString()
 
     companion object {
         val STORAGE = Regex("^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
         val BRIDGE = Regex("^[A-Za-z0-9_.-]{1,15}$")
         val LIFETIMES = listOf(30, 90, 180, 365, 730)
+
+        /** Every system the setup can build, in its own order: the catalogue Xen Orchestra pools build from too (src/fleet/host/vm-image.js, IMAGES). */
+        val SYSTEMS = listOf(
+            "debian-13" to "Debian 13",
+            "ubuntu-24.04" to "Ubuntu 24.04 LTS",
+            "ubuntu-26.04" to "Ubuntu 26.04 LTS",
+        )
 
         fun load(text: String?): ProxmoxOptions = runCatching {
             val o = JSONObject(text ?: "")
@@ -532,6 +560,10 @@ internal data class ProxmoxOptions(
                 groups = o.optInt("groups", 2).coerceIn(0, 4),
                 labsOpen = o.optInt("labsOpen", 1).coerceIn(0, 4),
                 labsClosed = o.optInt("labsClosed", 1).coerceIn(0, 4),
+                systems = o.optJSONArray("systems")?.let { a ->
+                    val kept = (0 until a.length()).map { a.optString(it) }.toSet()
+                    SYSTEMS.map { it.first }.filter { it in kept }
+                } ?: listOf("debian-13"),
             )
         }.getOrDefault(ProxmoxOptions())
     }
@@ -547,11 +579,20 @@ internal fun ProxmoxOptionsBlock(options: ProxmoxOptions, enabled: Boolean, open
         Switch(checked = options.firewall, onCheckedChange = { onChange(options.copy(firewall = it)) }, enabled = enabled)
     }
     Hint(ProxmoxWords.FIREWALL_HINT)
-    Hint("Machine image", Design.Palette.ink.now)
+    Hint("Machine images", Design.Palette.ink.now)
     Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-        listOf("keep" to "Keep the one there", "rebuild" to "Build it again", "none" to "Do not build one").forEach { (k, label) ->
+        listOf("keep" to "Keep what is there", "rebuild" to "Build them again", "none" to "Do not build one").forEach { (k, label) ->
             FilterChip(selected = options.image == k, onClick = { onChange(options.copy(image = k)) }, enabled = enabled, label = { Text(label) })
         }
+    }
+    if (options.image != "none") {
+        ProxmoxOptions.SYSTEMS.forEach { (key, name) ->
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(name, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                Switch(checked = options.builds(key), onCheckedChange = { onChange(options.withSystem(key, it)) }, enabled = enabled)
+            }
+        }
+        Hint(ProxmoxWords.SYSTEMS_HINT)
     }
     Hint("Updates for its machines", Design.Palette.ink.now)
     Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
