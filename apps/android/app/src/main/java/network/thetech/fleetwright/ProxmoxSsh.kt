@@ -55,8 +55,8 @@ internal object ProxmoxSsh {
      * for running it by hand, and the line to a file. A run already going is
      * stopped first: the person asked again.
      */
-    fun startCommand(coordinator: String, vmids: String = ""): String {
-        val run = ProxmoxLine.setupCommand(coordinator, vmids) + " --line-file $LINE_FILE"
+    fun startCommand(coordinator: String, vmids: String = "", options: ProxmoxOptions = ProxmoxOptions()): String {
+        val run = ProxmoxLine.setupCommand(coordinator, vmids, options) + " --line-file $LINE_FILE"
         return "systemctl stop $UNIT 2>/dev/null; systemctl reset-failed $UNIT 2>/dev/null; rm -f $LINE_FILE; " +
             "systemd-run --unit=$UNIT --collect /bin/bash -c '$run'"
     }

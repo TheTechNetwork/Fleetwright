@@ -199,7 +199,15 @@ struct HypervisorPageView: View {
                 Section {
                     // THE SAME SETUP, again: it finds what it made, keeps the
                     // image, and hands over a new line.
-                    NavigationLink("Set it up again") { AddProxmoxView(settings: settings) }
+                    // THE FIREWALL, where it is off: the same setup, with the
+                    // address filled in and the option already on.
+                    if row.fleet?.fenced == false {
+                        NavigationLink(HypervisorWords.turnOnFirewall) {
+                            AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(firewall: true))
+                        }
+                        .frame(minHeight: 44)
+                    }
+                    NavigationLink("Set it up again") { AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address)) }
                         .frame(minHeight: 44)
                 } footer: {
                     Text(HypervisorWords.againFooter)
@@ -374,6 +382,7 @@ enum HypervisorWords {
     static let fleetSilentEmpty = "The fleet did not answer, and this phone holds no pool of its own. Open this page again to ask again."
     static let noBox = "No machine of the fleet holds its token yet. Machines pick up a hypervisor from your vault within ten minutes of it being kept there."
     static let boxesFooter = "Each machine you approved reads your vault and looks at the hypervisor every few minutes. One that can reach it makes machines on it."
+    static let turnOnFirewall = "Turn on the datacenter firewall"
     static let againFooter = "Run on the node again, it finds what it made, keeps the image, and hands over a new line. The old line stops working."
     static let xoElsewhere = "Its page opens on the phone that set it up, which holds its token."
     static let xoChoice = "A pool of XCP-ng hosts, through the Xen Orchestra in front of it."

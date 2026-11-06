@@ -1,11 +1,16 @@
 package network.thetech.fleetwright
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -17,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -51,7 +57,13 @@ import org.json.JSONObject
  * within ten minutes (src/fleet/host/pve-pools.js).
  */
 @Composable
-internal fun ProxmoxSheet(settings: Settings, startNode: String = "", onDismiss: () -> Unit) {
+internal fun ProxmoxSheet(
+    settings: Settings,
+    startNode: String = "",
+    /** Options to open with, over the remembered ones: the cluster's page asks for the firewall on. */
+    startOptions: ProxmoxOptions? = null,
+    onDismiss: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val known = remember { context.getSharedPreferences("proxmox-host-keys", android.content.Context.MODE_PRIVATE) }
@@ -72,6 +84,9 @@ internal fun ProxmoxSheet(settings: Settings, startNode: String = "", onDismiss:
     var vmids by remember { mutableStateOf(known.getString("vmids", "") ?: "") }
     val trimmedVmids = vmids.trim().replace('–', '-')
     val vmidsOk = trimmedVmids.isEmpty() || ProxmoxLine.isVmids(trimmedVmids)
+    // EVERY OTHER OPTION, remembered for next time as the numbers are.
+    var options by remember { mutableStateOf(startOptions ?: ProxmoxOptions.load(known.getString("options", null))) }
+    var optionsOpen by remember { mutableStateOf(startOptions != null) }
     var password by remember { mutableStateOf("") }
     /** The key the node answered with, waiting on the person's word, or null. */
     var offered by remember { mutableStateOf<String?>(null) }
@@ -192,7 +207,7 @@ internal fun ProxmoxSheet(settings: Settings, startNode: String = "", onDismiss:
         val key = trusted ?: run { sshBusy = false; return }
         ProxmoxSsh.run(at, key, password, ProxmoxSsh.NOW).mapCatching { (_, out) -> out.trim().toLong() }.fold(
             onSuccess = { now ->
-                ProxmoxSsh.run(at, key, password, ProxmoxSsh.startCommand(settings.coordinatorUrl, trimmedVmids)).fold(
+                ProxmoxSsh.run(at, key, password, ProxmoxSsh.startCommand(settings.coordinatorUrl, trimmedVmids, options)).fold(
                     onSuccess = { (status, out) ->
                         if (status == 0) {
                             ProxmoxDirectHandoff.started(settings, at, key, now, password)
@@ -218,6 +233,7 @@ internal fun ProxmoxSheet(settings: Settings, startNode: String = "", onDismiss:
             node,
             password = password,
             vmids = trimmedVmids,
+            options = options,
             auto = true,
             // KEPT BY THE MACHINE'S HAND-OFF (ProxmoxThroughHandoff), said
             // here as a line kept by hand is.
@@ -264,6 +280,10 @@ internal fun ProxmoxSheet(settings: Settings, startNode: String = "", onDismiss:
             modifier = Modifier.fillMaxWidth(),
         )
         if (!vmidsOk) Hint("Two numbers from 100 up with a dash between, the first no larger, such as 9000-9099.", color = Design.Palette.bad.now)
+        ProxmoxOptionsBlock(options, enabled = since == null && !kept, open = optionsOpen, onOpen = { optionsOpen = it }) {
+            options = it
+            known.edit().putString("options", it.saved()).apply()
+        }
         val waiting = offered
         when {
             !coordinatorOk -> Hint("This phone's fleet address is not one the setup can be told, so set it up by hand below.", color = Design.Palette.bad.now)
@@ -278,7 +298,7 @@ internal fun ProxmoxSheet(settings: Settings, startNode: String = "", onDismiss:
                     scope.launch { start() }
                 }) { Text("It matches") }
             }
-            since == null && !kept && node.isNotBlank() && password.isNotEmpty() && vmidsOk -> OutlinedButton(
+            since == null && !kept && node.isNotBlank() && password.isNotEmpty() && vmidsOk && options.problem == null -> OutlinedButton(
                 enabled = !sshBusy,
                 modifier = Modifier.heightIn(min = 48.dp),
                 onClick = { scope.launch { start() } },
@@ -377,7 +397,8 @@ internal object ProxmoxLine {
     fun setupCommand(coordinator: String): String = "curl -fsSLo /root/fleetwright-pve-setup $SCRIPT_URL && bash /root/fleetwright-pve-setup --coordinator $coordinator"
 
     /** The same, with the range of machine numbers the person gave, when it is one (`--vmids`, pve-setup.js VMIDS_RE). */
-    fun setupCommand(coordinator: String, vmids: String): String = setupCommand(coordinator) + if (isVmids(vmids)) " --vmids $vmids" else ""
+    fun setupCommand(coordinator: String, vmids: String, options: ProxmoxOptions = ProxmoxOptions()): String =
+        setupCommand(coordinator) + (if (isVmids(vmids)) " --vmids $vmids" else "") + options.args
 
     /** FROM-TO, two numbers Proxmox numbers machines with, the first no larger. */
     fun isVmids(s: String): Boolean {
@@ -414,5 +435,160 @@ internal object ProxmoxLine {
             }
             Record(address, pool, trust, json)
         }.getOrNull()
+    }
+}
+
+/** The options' words, the same on iOS (AddProxmoxView.swift, ProxmoxWords). */
+internal object ProxmoxWords {
+    const val FIREWALL_HINT = "Until it is on, the fleet's machines are made only on networks you choose. Proxmox VE's own rules keep the nodes' web interface, SSH and cluster traffic open to the local network; anything else coming in to the nodes themselves is dropped, so add a rule first for any other service they run."
+}
+
+/**
+ * EVERY OPTION THE SETUP TAKES, as this phone sets them. Asked for:
+ * "Everything should be in app". The script's defaults are the defaults here,
+ * and only what differs from them is passed, so a run with nothing changed is
+ * the run it always was. The bounds and the flags are pve-setup.js's
+ * (pveOptionsOf, optionArgs), the same as iOS (ProxmoxOptions).
+ */
+internal data class ProxmoxOptions(
+    val firewall: Boolean = false,
+    /** "keep" the image there, "rebuild" it, or "none" built at all. */
+    val image: String = "keep",
+    val channel: String = "stable",
+    val storage: String = "",
+    val bridge: String = "",
+    val expireDays: Int = 365,
+    val groups: Int = 2,
+    val labsOpen: Int = 1,
+    val labsClosed: Int = 1,
+) {
+    private val trimmedStorage get() = storage.trim()
+    private val trimmedBridge get() = bridge.trim()
+
+    /** What is wrong with them, in the script's own words, or null. */
+    val problem: String?
+        get() = when {
+            trimmedStorage.isNotEmpty() && !STORAGE.matches(trimmedStorage) -> "The storage is not a Proxmox VE storage id, such as local-lvm."
+            trimmedBridge.isNotEmpty() && !BRIDGE.matches(trimmedBridge) -> "The bridge is not a bridge's name, such as vmbr0."
+            labsOpen + labsClosed > 4 -> "Four labs at most, open and closed together."
+            else -> null
+        }
+
+    /** The flags for the script, each only when it differs from its default. */
+    val args: String
+        get() {
+            if (problem != null) return ""
+            val a = StringBuilder()
+            if (firewall) a.append(" --enable-firewall")
+            if (image == "rebuild") a.append(" --rebuild-image")
+            if (image == "none") a.append(" --no-image")
+            if (channel == "rolling") a.append(" --channel rolling")
+            if (trimmedStorage.isNotEmpty()) a.append(" --storage $trimmedStorage")
+            if (trimmedBridge.isNotEmpty()) a.append(" --bridge $trimmedBridge")
+            if (expireDays != 365) a.append(" --expire-days $expireDays")
+            if (groups != 2) a.append(" --groups $groups")
+            if (labsOpen != 1) a.append(" --labs-open $labsOpen")
+            if (labsClosed != 1) a.append(" --labs-closed $labsClosed")
+            return a.toString()
+        }
+
+    /** The same for the route through a machine, sealed with the password. */
+    fun payload(): JSONObject {
+        val p = JSONObject()
+        if (problem != null) return p
+        if (firewall) p.put("firewall", true)
+        if (image == "rebuild") p.put("rebuildImage", true)
+        if (image == "none") p.put("noImage", true)
+        if (channel == "rolling") p.put("channel", "rolling")
+        if (trimmedStorage.isNotEmpty()) p.put("storage", trimmedStorage)
+        if (trimmedBridge.isNotEmpty()) p.put("bridge", trimmedBridge)
+        if (expireDays != 365) p.put("expireDays", expireDays)
+        if (groups != 2) p.put("groups", groups)
+        if (labsOpen != 1) p.put("labsOpen", labsOpen)
+        if (labsClosed != 1) p.put("labsClosed", labsClosed)
+        return p
+    }
+
+    /** Remembered for the next run, as the machine numbers are. */
+    fun saved(): String = JSONObject()
+        .put("firewall", firewall).put("image", image).put("channel", channel).put("storage", storage).put("bridge", bridge)
+        .put("expireDays", expireDays).put("groups", groups).put("labsOpen", labsOpen).put("labsClosed", labsClosed)
+        .toString()
+
+    companion object {
+        val STORAGE = Regex("^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+        val BRIDGE = Regex("^[A-Za-z0-9_.-]{1,15}$")
+        val LIFETIMES = listOf(30, 90, 180, 365, 730)
+
+        fun load(text: String?): ProxmoxOptions = runCatching {
+            val o = JSONObject(text ?: "")
+            ProxmoxOptions(
+                firewall = o.optBoolean("firewall", false),
+                image = o.optString("image", "keep").takeIf { it in listOf("keep", "rebuild", "none") } ?: "keep",
+                channel = o.optString("channel", "stable").takeIf { it in listOf("stable", "rolling") } ?: "stable",
+                storage = o.optString("storage", ""),
+                bridge = o.optString("bridge", ""),
+                expireDays = o.optInt("expireDays", 365).takeIf { it in LIFETIMES } ?: 365,
+                groups = o.optInt("groups", 2).coerceIn(0, 4),
+                labsOpen = o.optInt("labsOpen", 1).coerceIn(0, 4),
+                labsClosed = o.optInt("labsClosed", 1).coerceIn(0, 4),
+            )
+        }.getOrDefault(ProxmoxOptions())
+    }
+}
+
+/** Every option, folded away until opened: the defaults are what most nodes want, and each says what it changes. */
+@Composable
+internal fun ProxmoxOptionsBlock(options: ProxmoxOptions, enabled: Boolean, open: Boolean, onOpen: (Boolean) -> Unit, onChange: (ProxmoxOptions) -> Unit) {
+    OpenRow(if (open) "Options ▾" else "Options") { onOpen(!open) }
+    if (!open) return
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Turn on the datacenter firewall", style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+        Switch(checked = options.firewall, onCheckedChange = { onChange(options.copy(firewall = it)) }, enabled = enabled)
+    }
+    Hint(ProxmoxWords.FIREWALL_HINT)
+    Hint("Machine image", Design.Palette.ink.now)
+    Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+        listOf("keep" to "Keep the one there", "rebuild" to "Build it again", "none" to "Do not build one").forEach { (k, label) ->
+            FilterChip(selected = options.image == k, onClick = { onChange(options.copy(image = k)) }, enabled = enabled, label = { Text(label) })
+        }
+    }
+    Hint("Updates for its machines", Design.Palette.ink.now)
+    Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+        listOf("stable" to "Stable", "rolling" to "Rolling").forEach { (k, label) ->
+            FilterChip(selected = options.channel == k, onClick = { onChange(options.copy(channel = k)) }, enabled = enabled, label = { Text(label) })
+        }
+    }
+    OutlinedTextField(
+        value = options.storage, onValueChange = { onChange(options.copy(storage = it)) }, enabled = enabled,
+        label = { Text("Storage (found by itself when empty)") }, singleLine = true,
+        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = options.bridge, onValueChange = { onChange(options.copy(bridge = it)) }, enabled = enabled,
+        label = { Text("Bridge (vmbr0 when empty)") }, singleLine = true,
+        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Hint("The fleet's token lasts", Design.Palette.ink.now)
+    Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+        ProxmoxOptions.LIFETIMES.forEach { d ->
+            FilterChip(selected = options.expireDays == d, onClick = { onChange(options.copy(expireDays = d)) }, enabled = enabled, label = { Text("$d days") })
+        }
+    }
+    CountRow("Group networks", options.groups, enabled) { onChange(options.copy(groups = it)) }
+    CountRow("Open labs", options.labsOpen, enabled) { onChange(options.copy(labsOpen = it)) }
+    CountRow("Closed labs", options.labsClosed, enabled) { onChange(options.copy(labsClosed = it)) }
+    options.problem?.let { Hint(it, Design.Palette.bad.now) }
+}
+
+/** A count from 0 to 4, with a step down and up. */
+@Composable
+private fun CountRow(label: String, value: Int, enabled: Boolean, onChange: (Int) -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("$label: $value", style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+        TextButton(onClick = { onChange(value - 1) }, enabled = enabled && value > 0, modifier = Modifier.heightIn(min = 48.dp)) { Text("−") }
+        TextButton(onClick = { onChange(value + 1) }, enabled = enabled && value < 4, modifier = Modifier.heightIn(min = 48.dp)) { Text("+") }
     }
 }
