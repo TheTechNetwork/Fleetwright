@@ -50,7 +50,7 @@ test('iOS: New session offers a machine from each of your images, drawn from the
   assert.match(IOS_SHEET, /ForEach\(images\) \{ image in\s*Text\(standby\?\.template == image\.template[\s\S]{0,120}image\.label\)\s*\.tag\(vmImageTag \+ image\.template\)/);
   assert.match(IOS_SHEET, /if hosts\.count > 1 \|\| canStartMachine \|\| !images\.isEmpty \{/);
   assert.match(IOS_SHEET, /template: chosenImage\?\.template,/);
-  assert.match(IOS_FLEET, /var label: String \{ "New machine from \\\(name\)" \+ \(poolName\.map \{ " on \\\(\$0\)" \} \?\? ""\) \}/);
+  assert.match(IOS_FLEET, /var label: String \{ "New machine from \\\(name\) on \\\(whereTo\)" \}/);
 });
 
 test('iOS: the pool’s token is kept in the fleet under its address, after setup and on asking', () => {
@@ -97,7 +97,7 @@ test('Android: New session offers a machine from each of your images, drawn from
   assert.match(A_SHEET, /images = Fleet\(settings\)\.vmImages\(\)\.getOrDefault\(emptyList\(\)\)/);
   assert.match(A_SHEET, /if \(hosts\.size > 1 \|\| canStartMachine \|\| images\.isNotEmpty\(\)\) \{/);
   assert.match(A_SHEET, /template = template\.ifBlank \{ null \}\.takeIf \{ platform == "vm" \},/);
-  assert.match(A_FLEET, /val label: String get\(\) = "New machine from \$name" \+ \(poolName\?\.let \{ " on \$it" \} \?: ""\)/);
+  assert.match(A_FLEET, /val label: String get\(\) = "New machine from \$name on \$whereTo"/);
 });
 
 test('Android: the pool’s token is kept in the fleet under its address, after setup and on asking', () => {
@@ -121,5 +121,21 @@ test('both phones say it in the same words', () => {
   for (const words of SHARED) {
     assert.ok(ios.includes(words), `iOS: ${words}`);
     assert.ok(android.includes(words), `Android: ${words}`);
+  }
+});
+
+// WHERE A MACHINE GOES, asked of a list whose every image ended "on
+// fleetwright": "Is it on proxmox or on xcp where is it going to go?" A
+// Proxmox VE pool is always `fleetwright`, so the kind and the cluster's
+// address are named, the same words on both phones and in the coordinator's
+// own record of the request.
+test('both phones and the coordinator say which hypervisor a new machine goes on', async () => {
+  const { imageWhere } = await import('../src/fleet/coordinator/core.js');
+  assert.equal(imageWhere('proxmox', '10.69.10.10:8006', 'fleetwright'), 'Proxmox VE at 10.69.10.10');
+  assert.equal(imageWhere('xo', 'xo.lan', 'rack'), 'XCP-ng pool rack');
+  assert.equal(imageWhere(null, 'xo.lan', null), 'Xen Orchestra at xo.lan');
+  for (const [name, src] of [['iOS', IOS_FLEET], ['Android', A_FLEET]]) {
+    for (const words of ['"Proxmox VE at ', '"XCP-ng pool ', '"Xen Orchestra at ']) assert.ok(src.includes(words), `${name} does not say ${words}`);
+    assert.ok(src.includes(':[0-9]+$'), `${name} keeps the port`);
   }
 });

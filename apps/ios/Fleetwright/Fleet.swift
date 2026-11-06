@@ -1850,8 +1850,19 @@ struct Fleet {
         /// The first free lab of that kind, or nil when none is.
         func freeLab(open: Bool) -> Lab? { labs?.first { $0.open == open && $0.free } }
 
-        /// "New machine from Fleetwright Debian 13 on rack", for a picker.
-        var label: String { "New machine from \(name)" + (poolName.map { " on \($0)" } ?? "") }
+        /// "New machine from Fleetwright Ubuntu 24.04 on Proxmox VE at
+        /// 10.69.10.10", or "… on XCP-ng pool rack", for a picker. Asked: "Is
+        /// it on proxmox or on xcp where is it going to go?" A Proxmox VE
+        /// pool is always `fleetwright`, so its name told nothing; the kind
+        /// is named, and the cluster's address. The coordinator says it the
+        /// same way (core.js, imageWhere).
+        var label: String { "New machine from \(name) on \(whereTo)" }
+
+        var whereTo: String {
+            let host = address.replacingOccurrences(of: ":[0-9]+$", with: "", options: .regularExpression)
+            if onProxmox { return "Proxmox VE at \(host)" }
+            return poolName.map { "XCP-ng pool \($0)" } ?? "Xen Orchestra at \(host)"
+        }
     }
 
     /// One of your hypervisors, of either kind, as the boxes holding its
