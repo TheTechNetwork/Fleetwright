@@ -9083,6 +9083,9 @@ export function narrowProbe(p) {
     cert,
     certificate: cert ? narrowCertificate(p.certificate) : null,
     version: typeof p.version === 'string' ? p.version.slice(0, 40) : null,
+    // WHETHER PROXMOX VE ANSWERED on its API port, so the phone tells the
+    // kind without asking. Only when the box said: an older one did not look.
+    ...(typeof p.pve === 'boolean' ? { pve: p.pve } : {}),
     // ONLY WHEN THE HOST ANSWERED THE SSH QUESTION. A host too old to know
     // it probed for Xen Orchestra instead and said nothing about SSH, and an
     // `ssh` entry built here for it would be a claim nobody made.
