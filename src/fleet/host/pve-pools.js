@@ -266,6 +266,23 @@ export function markText(m) {
 const tagsOf = (/** @type {any} */ v) => String(v?.tags || '').split(/[;,\s]+/).filter(Boolean);
 
 /**
+ * THE POOL'S MACHINES WITH THEIR TAGS, from `/cluster/resources`. Not from
+ * `/pools/{id}`: Proxmox builds a pool's members from the run-time stats
+ * alone (pve-manager, PVE/API2/Pool.pm, extract_vm_stats), which carry a
+ * template flag but no tags, so every tag test on them failed. The first real
+ * node showed it: its image was never seen, by this box or by the setup
+ * script, which built another one on the next run. `/cluster/resources` adds
+ * `tags` and `pool` to the same stats for every guest the token may audit.
+ *
+ * @param {any} api @param {string} pool
+ * @returns {Promise<any[]>}
+ */
+async function poolVms(api, pool) {
+  const all = await api.get('/cluster/resources', { type: 'vm' });
+  return (Array.isArray(all) ? all : []).filter((m) => m?.type === 'qemu' && m.pool === pool);
+}
+
+/**
  * WHAT THE TOKEN MAY DO BEYOND WHAT THE FLEET NEEDS, from Proxmox's own
  * answer to `/access/permissions`: each path, and each privilege there that
  * no part of the setup grants for it. Empty is exactly as designed.
@@ -471,8 +488,7 @@ export class PvePools {
   async #look(record, owner) {
     const api = this.#client(record);
     const perms = (await api.get('/access/permissions')) || {};
-    const pool = (await api.get(`/pools/${encodeURIComponent(record.pool)}`)) || {};
-    const members = /** @type {any[]} */ (Array.isArray(pool.members) ? pool.members : []).filter((m) => m?.type === 'qemu' && Number.isInteger(Number(m.vmid)) && typeof m.node === 'string');
+    const members = (await poolVms(api, record.pool)).filter((m) => Number.isInteger(Number(m.vmid)) && typeof m.node === 'string');
     const version = await api.get('/version').catch(() => null);
     const major = Number(/^(\d+)\./.exec(String(version?.version ?? ''))?.[1]);
     // NULL IS "COULD NOT TELL", never "supported" (C-5).
@@ -794,11 +810,11 @@ export class PvePools {
    * @returns {Promise<Array<{ name: string, made: number }>|null>}
    */
   async #onLab(api, pool, labName, self) {
-    const p = await api.get(`/pools/${encodeURIComponent(pool)}`).catch(() => null);
-    if (!p) return null;
+    const vms = await poolVms(api, pool).catch(() => null);
+    if (!vms) return null;
     /** @type {Array<{ name: string, made: number }>} */
     const out = [];
-    for (const v of (Array.isArray(p.members) ? p.members : []).filter((/** @type {any} */ x) => x?.type === 'qemu' && Number(x.vmid) !== self && Number(x.template) !== 1 && tagsOf(x).includes(PVE_SESSION_TAG))) {
+    for (const v of vms.filter((/** @type {any} */ x) => Number(x.vmid) !== self && Number(x.template) !== 1 && tagsOf(x).includes(PVE_SESSION_TAG))) {
       const cfg = await api.get(`/nodes/${encodeURIComponent(v.node)}/qemu/${Number(v.vmid)}/config`).catch(() => null);
       const mk = markOf(cfg?.description);
       if (mk?.lab === labName) out.push({ name: String(v.name), made: mk.made });
@@ -850,14 +866,14 @@ export class PvePools {
     const held = [...this.held.values()].filter((h) => h.owner === who);
     for (const { record } of held) {
       const api = this.#client(record);
-      let pool;
+      let vms;
       try {
-        pool = (await api.get(`/pools/${encodeURIComponent(record.pool)}`)) || {};
+        vms = await poolVms(api, record.pool);
       } catch (e) {
         unreachable.push(`${record.address}: ${/** @type {Error} */ (e).message}`);
         continue;
       }
-      const v = (Array.isArray(pool.members) ? pool.members : []).find((/** @type {any} */ m) => m?.type === 'qemu' && m.name === name && Number(m.template) !== 1 && tagsOf(m).includes(PVE_SESSION_TAG));
+      const v = vms.find((/** @type {any} */ m) => m.name === name && Number(m.template) !== 1 && tagsOf(m).includes(PVE_SESSION_TAG));
       if (!v) continue;
       const base = `/nodes/${encodeURIComponent(v.node)}/qemu/${Number(v.vmid)}`;
       const cfg = (await api.get(`${base}/config`)) || {};
