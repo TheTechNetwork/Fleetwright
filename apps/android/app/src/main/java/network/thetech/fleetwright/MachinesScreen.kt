@@ -102,6 +102,9 @@ fun MachinesScreen(
     // that forgot these would close the progress on a job still running.
     var addingHypervisor by rememberSaveable { mutableStateOf(false) }
     var addingProxmox by rememberSaveable { mutableStateOf(false) }
+    // THE ONE HYPERVISORS PAGE (HypervisorsScreen): every pool and cluster,
+    // and the one way to add another.
+    var listingHypervisors by rememberSaveable { mutableStateOf(false) }
     var hypervisorJob by rememberSaveable { mutableStateOf<String?>(null) }
     // A pool whose policy is being changed, by address. Saveable for the same
     // reason; the job itself starts over after a rotation (HypervisorSheet).
@@ -203,6 +206,18 @@ fun MachinesScreen(
     }
     if (keepingReady) VmStandbyScreen(settings, poolImages, onDismiss = { keepingReady = false; scope.launch { loadHosts() } })
     if (adding) AddMachineSheet(settings, onDismiss = { adding = false })
+    if (listingHypervisors) {
+        // EACH WAY OUT CLOSES THE LIST FIRST, so what it opens is the one
+        // page on top, and Back from it lands on Machines.
+        HypervisorsScreen(
+            settings,
+            held = held,
+            onOpenPool = { listingHypervisors = false; managing = it },
+            onAddXo = { listingHypervisors = false; hypervisorJob = null; addingHypervisor = true },
+            onAddProxmox = { listingHypervisors = false; addingProxmox = true },
+            onDismiss = { listingHypervisors = false },
+        )
+    }
     if (addingProxmox) ProxmoxSheet(settings, onDismiss = { addingProxmox = false })
     if (addingHypervisor) {
         // KEYED ON THE JOB: a second notification, tapped while the sheet is
@@ -311,24 +326,6 @@ fun MachinesScreen(
                     }
                 }
             }
-            // ADMINS ONLY, as Add a hypervisor is: the pools here are the ones
-            // an admin set up from this phone. Each opens its page: what is
-            // on it and what can be done there, phone-direct with the token
-            // setup handed back (PoolPage), and the change to what the fleet
-            // may use. Drawn only when this phone holds a pool, because an
-            // empty section is a heading that promises something and lists
-            // nothing.
-            if (settings.configured && admin == true && held.isNotEmpty()) {
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-                        SectionHead("Hypervisors")
-                        Hint("Pools whose token this phone keeps. Open one to see what is on it and manage it from here.")
-                        Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
-                            held.forEach { h -> HeldRow(h, Manage.lastLooked(settings, h.address), onClick = { managing = h.address }) }
-                        }
-                    }
-                }
-            }
             if (settings.configured) {
                 // ONE ROW, AFTER THE LIST. Adding a machine is something done
                 // once per machine; the list is read every time.
@@ -338,14 +335,15 @@ fun MachinesScreen(
                         // ADMINS ONLY, drawn only for true: the verbs behind it
                         // refuse a member, and a member should not meet a row
                         // that only answers "needs an admin".
+                        // EVERY HYPERVISOR, ON ONE PAGE: Xen Orchestra's pools
+                        // and Proxmox VE's clusters, what the machines holding
+                        // each saw, and the one way to add another. Asked for:
+                        // "unify the two hypervisor pages". It replaces Add a
+                        // hypervisor, Add Proxmox VE and the list of this
+                        // phone's pools, three rows for one thing that showed
+                        // no Proxmox cluster at all.
                         if (admin == true) {
-                            OpenRow("Add a hypervisor") {
-                                hypervisorJob = null
-                                addingHypervisor = true
-                            }
-                            // PROXMOX VE beside it: its own screen, because it
-                            // asks for none of what Xen Orchestra's does.
-                            OpenRow("Add Proxmox VE") { addingProxmox = true }
+                            OpenRow("Hypervisors") { listingHypervisors = true }
                         }
                     }
                 }
@@ -383,45 +381,6 @@ private fun PoolMachineCard(m: Fleet.VmMachine, onClick: () -> Unit) {
     }
 }
 
-/**
- * A pool this phone keeps a token for: its address, the pools the machine
- * named when it handed the token over (or that it named none this phone can
- * read), and when this phone last looked at it. The row is the way to its
- * page; that is said to TalkBack as the action, and in the hint above for the
- * eye. HOW CURRENT ITS PAGE WILL BE is the last line: nothing watches a pool
- * while the app is closed, so the row says when, rather than letting the
- * page's first frame pass for now.
- */
-@Composable
-private fun HeldRow(held: XoHandoff.Held, looked: Long?, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .clickable(onClickLabel = "Opens its page", role = Role.Button, onClick = onClick)
-            .padding(vertical = Design.Space.insideTight),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
-            Text(held.address, style = Design.Style.body, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
-            Text(
-                when {
-                    held.pools == null -> "This phone cannot read which pools it has."
-                    held.pools.isEmpty() -> "Its pools have no names."
-                    else -> held.pools.joinToString(", ")
-                },
-                style = Design.Style.label,
-                color = Design.Palette.inkDim.now,
-            )
-            Text(
-                looked?.let { Manage.Words.rowLooked(relative(it).toString()) } ?: Manage.Words.never,
-                style = Design.Style.label,
-                color = Design.Palette.inkDim.now,
-            )
-        }
-        Text("  ›", style = Design.Style.body, color = Design.Palette.inkDim.now)
-    }
-}
 
 /**
  * One machine, facts only. The whole card is the way in: Role.Button and 48dp

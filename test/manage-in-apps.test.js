@@ -35,6 +35,8 @@ const IOS_LINK = read('apps/ios/Fleetwright/XOLink.swift');
 const IOS_WATCH = read('apps/ios/Fleetwright/PoolWatch.swift');
 const IOS_SCREEN = read('apps/ios/Fleetwright/ManageView.swift');
 const IOS_MACHINES = read('apps/ios/Fleetwright/MachinesView.swift');
+// THE ONE HYPERVISORS PAGE, where the pools this phone holds are listed now.
+const IOS_HYPERVISORS = read('apps/ios/Fleetwright/HypervisorsView.swift');
 
 test('the pin the phone compares is the one the machine wrote', () => {
   // The machine records the pin as certSha256 of the certificate's DER
@@ -159,10 +161,11 @@ test('iOS: every control on the pool’s pages is a 44pt target', () => {
 
 test('iOS: the page is under Machines, on the row that names the pool, and says when it was last looked at', () => {
   // Machines → Hypervisors → the pool. The policy is a row on that page now.
-  assert.match(IOS_MACHINES, /ForEach\(hypervisors\) \{ pool in\s*NavigationLink \{\s*PoolManageView\(settings: settings, pool: pool\)/);
+  assert.match(IOS_MACHINES, /NavigationLink \{\s*HypervisorsView\(settings: settings\)/);
+  assert.match(IOS_HYPERVISORS, /if row\.onPhone, let pool = held\.first\(where: \{ \$0\.address == row\.address \}\) \{\s*PoolManageView\(settings: settings, pool: pool\)/);
   assert.match(IOS_SCREEN, /if settings\.showsAdmin \{\s*NavigationLink \{\s*AddHypervisorView\(settings: settings, policyFor: pool\.address\)/);
   // The row says how current the page will be: when, or never.
-  assert.match(IOS_MACHINES, /Manage\.lastLooked\(pool\.address\)\.map \{ Manage\.Words\.rowLooked\([^\n]*\n\s*\?\? Manage\.Words\.never\)/);
+  assert.match(IOS_HYPERVISORS, /Manage\.lastLooked\(row\.address\)\.map \{ Manage\.Words\.rowLooked\([^\n]*\n\s*\?\? Manage\.Words\.never\)/);
   // And the page: watching (or read through a machine, at a time), or the
   // last time, and that nothing watches while closed.
   assert.match(bare(IOS_SCREEN), /case \.live: return watch\.currentLine/);
@@ -199,6 +202,7 @@ const KT_LINK = read(`${KT_DIR}/XoLink.kt`);
 const KT_WATCH = read(`${KT_DIR}/PoolWatch.kt`);
 const KT_SCREEN = read(`${KT_DIR}/PoolPage.kt`);
 const KT_MACHINES = read(`${KT_DIR}/MachinesScreen.kt`);
+const KT_HYPERVISORS = read(`${KT_DIR}/HypervisorsScreen.kt`);
 
 test('Android: the pin is checked in the handshake, before the upgrade is written', () => {
   const code = bare(KT_LINK);
@@ -271,7 +275,9 @@ test('Android: notifications are applied in the order they arrived', () => {
 
 test('Android: the page is under Machines, on the row that names the pool, and says when it was last looked at', () => {
   assert.match(KT_MACHINES, /PoolPage\(settings, pool, admin, onChangePolicy = \{ policyFor = address \}, onDismiss = \{ managing = null \}, onReconnect = \{ reconnectVia = null; reconnectFor = address \}, onAddWatchdog = \{ watchdogFor = address \}\)/);
-  assert.match(KT_MACHINES, /looked\?\.let \{ Manage\.Words\.rowLooked\(relative\(it\)\.toString\(\)\) \} \?: Manage\.Words\.never/);
+  // Machines → Hypervisors → the pool: the list closes and the page opens.
+  assert.match(KT_MACHINES, /onOpenPool = \{ listingHypervisors = false; managing = it \}/);
+  assert.match(KT_HYPERVISORS, /Manage\.lastLooked\(settings, row\.address\)\?\.let \{ Manage\.Words\.rowLooked\(relative\(it\)\.toString\(\)\) \} \?: Manage\.Words\.never/);
   assert.match(bare(KT_SCREEN), /PoolWatch\.Phase\.Live -> watch\.currentLine/);
   assert.match(KT_MODEL, /fun lookedAt\(time: String\) = "Last looked at \$time\. \$closed"/);
   // The socket closes when the app stops, said as such.

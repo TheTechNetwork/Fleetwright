@@ -39,7 +39,10 @@ const WIDGET = readdirSync(new URL(`../${WIDGET_DIR}`, import.meta.url))
 test('iOS: the entry is on Machines, for a known admin only', () => {
   // `showsAdmin` is true only for a confirmed admin not viewing as a member;
   // nil (cannot tell) draws nothing, which is the rule every admin row obeys.
-  assert.match(IOS, /if settings\.configured && settings\.showsAdmin \{[\s\S]{0,400}?Label\("Add a hypervisor"/);
+  assert.match(IOS, /if settings\.configured && settings\.showsAdmin \{[\s\S]{0,200}?HypervisorsView\(settings: settings\)[\s\S]{0,200}?Label\("Hypervisors"/);
+  // There, one Add, which asks which kind and opens that kind's own setup.
+  assert.match(IOS, /AddHypervisorChoiceView\(settings: settings\)[\s\S]{0,200}?Label\("Add a hypervisor"/);
+  assert.match(IOS, /NavigationLink \{ AddHypervisorView\(settings: settings\) \} label: \{\s*VStack[^\n]*\n\s*Text\("Xen Orchestra"\)/);
 });
 
 test('iOS: the screen asks every machine first, then runs one job on one machine through its four phases', () => {
