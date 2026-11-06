@@ -1416,6 +1416,15 @@ export class XoSetups {
         // now rather than which step it was on.
         rec.state = 'failed';
         rec.text = ctx.outcome ?? `It stopped at the ten minutes this machine holds an admin session for, before any server it had no time to finish. ${ctx.outcomes ? 'Which servers were touched is on your phone.' : 'Nothing was changed.'}`;
+      } else if (rec.cancelled && rec.phase === 'inventory' && ctx.outcomes) {
+        // CANCELLED WHILE RECONNECTING the servers of a Xen Orchestra that
+        // showed no pool (#reconnectForPools): nothing of the fleet's was
+        // made, but what was asked of Xen Orchestra stands and is said.
+        rec.state = 'cancelled';
+        const touched = touchedCount(ctx);
+        rec.text = touched
+          ? `Cancelled while reconnecting Xen Orchestra’s servers, before anything of the fleet’s was changed. ${plural(touched, 'server')} had been asked to reconnect, and that stands.${leftOffWords(ctx)}`
+          : 'Cancelled before anything was changed.';
       } else if (policy && rec.cancelled) {
         rec.state = 'cancelled';
         // Cancelled during the build, the policy was already in force: say
@@ -1451,8 +1460,9 @@ export class XoSetups {
         // server's dump, and scrub's three hundred was cutting them: a build
         // VM that stopped before done was reported up to "Its build VM was
         // kept," and the phone never saw where, or that applying again
-        // starts over.
-        rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets, rec.phase === 'apply' ? 600 : 300)}`;
+        // starts over. Reading the pool's too, which can say what a
+        // reconnect it ran by itself did (#reconnectForPools).
+        rec.text = `${STEP_WORDS[rec.phase] ?? 'Setup'} stopped: ${scrub(/** @type {Error} */ (e).message, secrets, rec.phase === 'apply' || rec.phase === 'inventory' ? 600 : 300)}`;
         // AND WHAT IT HAD DONE BY THEN. The apply step builds one thing after
         // another and keeps what each said (ctx.built); a failure used to
         // keep only the error, and a person whose image build died behind a
@@ -2193,72 +2203,11 @@ export class XoSetups {
       },
       // reconnect
       async (/** @type {any} */ ctx) => {
-        /** @type {Map<string, { action: string, error: string|null }>} */
-        const outcomes = new Map();
-        ctx.outcomes = outcomes;
-        const servers = /** @type {XenServer[]} */ (ctx.servers);
-        // NOTHING TO DO IS SAID AS THAT, and nothing is asked of Xen
-        // Orchestra: every server connected and none with an error.
-        for (const [i, s] of servers.entries()) {
-          if (s.status === 'connected' && !s.error) {
-            outcomes.set(s.id, { action: 'left', error: null });
-            continue;
-          }
-          // ONLY A PERSON TURNS A SERVER OFF, so one that is off stays off,
-          // and is named on the phone so they know it is the reason.
-          if (!s.enabled) {
-            outcomes.set(s.id, { action: 'skipped-disabled', error: null });
-            continue;
-          }
-          // ROOM FOR THE WHOLE OF ONE before beginning it: a cycle turns the
-          // server off first, and must not be cut off before it is on again.
-          // Its windows and its pauses, and every call it can make waiting
-          // as long as the connection waits for one: a Xen Orchestra slow to
-          // answer spends the ten minutes in calls, not in pauses, and a
-          // cycle begun with room only for its pauses ran past them.
-          if (ctx.rec.cancelled) throw new Error('cancelled');
-          const cycle = s.status !== 'disconnected';
-          const room = cycle ? cycleMs(ctx.admin?.callTimeoutMs ?? CALL_TIMEOUT_MS) : RECONNECT.settleMs + RECONNECT.retryForMs;
-          if (ctx.expired || this.now() + room >= ctx.deadline) {
-            ctx.expired = true;
-            throw new Error('ten minutes were up');
-          }
-          ctx.rec.text = `Reconnecting server ${i + 1} of ${servers.length}.`;
-          try {
-            if (cycle) await this.#cycle(ctx, s.id);
-            else await this.#enable(ctx, s.id, { stoppable: true });
-            outcomes.set(s.id, { action: cycle ? 'cycled' : 'enabled', error: null });
-          } catch (e) {
-            // A CYCLE THAT BEGAN IS ACCOUNTED FOR, however it ended: its
-            // server was turned off, and one left without an outcome is
-            // sealed to the phone as left, connected already.
-            if (!cycle && (/** @type {any} */ (e)?.stop || ctx.expired)) throw e;
-            outcomes.set(s.id, { action: 'failed', error: await this.#failure(ctx, s.id, /** @type {Error} */ (e)) });
-            if (ctx.expired) throw e;
-          }
-        }
+        await this.#reconnectEach(ctx);
       },
       // wait
       async (/** @type {any} */ ctx) => {
-        const servers = /** @type {XenServer[]} */ (ctx.servers);
-        const tried = servers.filter((s) => ['enabled', 'cycled', 'failed'].includes(String(ctx.outcomes.get(s.id)?.action)));
-        const waitedFor = tried.filter((s) => ctx.outcomes.get(s.id)?.action !== 'failed');
-        const until = this.now() + RECONNECT.waitMs;
-        let back = false;
-        for (;;) {
-          const now = await this.#xenServers(ctx);
-          const pools = await this.#poolsNow(ctx);
-          const on = (/** @type {XenServer} */ s) => now.find((x) => x.id === s.id)?.status === 'connected';
-          // THE POOLS SHOW when Xen Orchestra lists a pool object for every
-          // connected server that names its pool, or any pool where none do.
-          const ids = new Set(pools.map((/** @type {any} */ p) => String(p?.id)));
-          const named = now.filter((x) => x.status === 'connected' && x.poolId);
-          const showing = named.length ? named.every((x) => ids.has(/** @type {string} */ (x.poolId))) : pools.length > 0;
-          back = tried.every(on) && showing;
-          if (back || !waitedFor.length || this.now() >= until) break;
-          ctx.rec.text = `Waiting for the pools: ${waitedFor.filter(on).length} of ${plural(waitedFor.length, 'server')} connected.`;
-          await this.#pause(ctx, RECONNECT.pollMs, { stoppable: true });
-        }
+        const { back, tried, waitedFor } = await this.#waitForPools(ctx);
         await this.#sealReconnect(ctx);
         const said = reconnectSentence(ctx, { back, gaveUp: !back && waitedFor.length > 0 });
         if (!back && tried.length) {
@@ -2268,6 +2217,91 @@ export class XoSetups {
         ctx.summary = said;
       },
     ];
+  }
+
+  /**
+   * The reconnect step itself, one server at a time, each outcome kept on
+   * `ctx.outcomes`: the reconnect job's third step, and what setup and a
+   * policy change do by themselves when Xen Orchestra shows no pool
+   * (#reconnectForPools).
+   *
+   * @param {any} ctx with `servers` read
+   */
+  async #reconnectEach(ctx) {
+    /** @type {Map<string, { action: string, error: string|null }>} */
+    const outcomes = new Map();
+    ctx.outcomes = outcomes;
+    const servers = /** @type {XenServer[]} */ (ctx.servers);
+    // NOTHING TO DO IS SAID AS THAT, and nothing is asked of Xen
+    // Orchestra: every server connected and none with an error.
+    for (const [i, s] of servers.entries()) {
+      if (s.status === 'connected' && !s.error) {
+        outcomes.set(s.id, { action: 'left', error: null });
+        continue;
+      }
+      // ONLY A PERSON TURNS A SERVER OFF, so one that is off stays off,
+      // and is named on the phone so they know it is the reason.
+      if (!s.enabled) {
+        outcomes.set(s.id, { action: 'skipped-disabled', error: null });
+        continue;
+      }
+      // ROOM FOR THE WHOLE OF ONE before beginning it: a cycle turns the
+      // server off first, and must not be cut off before it is on again.
+      // Its windows and its pauses, and every call it can make waiting
+      // as long as the connection waits for one: a Xen Orchestra slow to
+      // answer spends the ten minutes in calls, not in pauses, and a
+      // cycle begun with room only for its pauses ran past them.
+      if (ctx.rec.cancelled) throw new Error('cancelled');
+      const cycle = s.status !== 'disconnected';
+      const room = cycle ? cycleMs(ctx.admin?.callTimeoutMs ?? CALL_TIMEOUT_MS) : RECONNECT.settleMs + RECONNECT.retryForMs;
+      if (ctx.expired || this.now() + room >= ctx.deadline) {
+        ctx.expired = true;
+        throw new Error('ten minutes were up');
+      }
+      ctx.rec.text = `Reconnecting server ${i + 1} of ${servers.length}.`;
+      try {
+        if (cycle) await this.#cycle(ctx, s.id);
+        else await this.#enable(ctx, s.id, { stoppable: true });
+        outcomes.set(s.id, { action: cycle ? 'cycled' : 'enabled', error: null });
+      } catch (e) {
+        // A CYCLE THAT BEGAN IS ACCOUNTED FOR, however it ended: its
+        // server was turned off, and one left without an outcome is
+        // sealed to the phone as left, connected already.
+        if (!cycle && (/** @type {any} */ (e)?.stop || ctx.expired)) throw e;
+        outcomes.set(s.id, { action: 'failed', error: await this.#failure(ctx, s.id, /** @type {Error} */ (e)) });
+        if (ctx.expired) throw e;
+      }
+    }
+  }
+
+  /**
+   * Every five seconds, for up to three minutes, until every server the
+   * reconnect touched is connected and the pools show.
+   *
+   * @param {any} ctx with `servers` read and `outcomes` kept
+   * @returns {Promise<{ back: boolean, tried: XenServer[], waitedFor: XenServer[] }>}
+   */
+  async #waitForPools(ctx) {
+    const servers = /** @type {XenServer[]} */ (ctx.servers);
+    const tried = servers.filter((s) => ['enabled', 'cycled', 'failed'].includes(String(ctx.outcomes.get(s.id)?.action)));
+    const waitedFor = tried.filter((s) => ctx.outcomes.get(s.id)?.action !== 'failed');
+    const until = this.now() + RECONNECT.waitMs;
+    let back = false;
+    for (;;) {
+      const now = await this.#xenServers(ctx);
+      const pools = await this.#poolsNow(ctx);
+      const on = (/** @type {XenServer} */ s) => now.find((x) => x.id === s.id)?.status === 'connected';
+      // THE POOLS SHOW when Xen Orchestra lists a pool object for every
+      // connected server that names its pool, or any pool where none do.
+      const ids = new Set(pools.map((/** @type {any} */ p) => String(p?.id)));
+      const named = now.filter((x) => x.status === 'connected' && x.poolId);
+      const showing = named.length ? named.every((x) => ids.has(/** @type {string} */ (x.poolId))) : pools.length > 0;
+      back = tried.every(on) && showing;
+      if (back || !waitedFor.length || this.now() >= until) break;
+      ctx.rec.text = `Waiting for the pools: ${waitedFor.filter(on).length} of ${plural(waitedFor.length, 'server')} connected.`;
+      await this.#pause(ctx, RECONNECT.pollMs, { stoppable: true });
+    }
+    return { back, tried, waitedFor };
   }
 
   /**
@@ -2470,6 +2504,62 @@ export class XoSetups {
   }
 
   /**
+   * What setup and a policy change work from: the pools, hosts, storage,
+   * networks and PIFs the admin session sees, read again after a reconnect.
+   *
+   * @param {any} ctx
+   */
+  async #readPool(ctx) {
+    ctx.pools = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'pool' } })) || {});
+    ctx.hosts = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'host' } })) || {});
+    ctx.srs = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'SR' } })) || {});
+    ctx.networks = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'network' } })) || {});
+    ctx.pifs = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'PIF' } })) || {});
+  }
+
+  /**
+   * Xen Orchestra answered and showed no pool: reconnect its servers as a
+   * reconnect job would (#reconnectEach, #waitForPools), with the admin
+   * session this job already holds, and read the pool again. The sentence it
+   * leaves on the job when the pools came back; when they did not, it
+   * stops the job with one saying what was tried.
+   *
+   * THE SAME BOUNDS AS A RECONNECT JOB: one server at a time, a server a
+   * person turned off left off, three minutes for the pools to show, and no
+   * server begun with too little of the ten minutes left. What reaches the
+   * coordinator is counts: server names and pool masters' addresses are the
+   * person's, and a setup has no sealed answer to put them in. Reconnect its
+   * servers, on the pool's page, says which and why.
+   *
+   * @param {any} ctx with `methods` read
+   * @returns {Promise<string>}
+   */
+  async #reconnectForPools(ctx) {
+    const missing = RECONNECT_METHODS.filter((m) => !Object.hasOwn(ctx.methods, m));
+    if (missing.length) {
+      throw new Error(`this Xen Orchestra shows no pool, and does not offer ${missing.join(', ')}, so its servers could not be reconnected from here. Nothing was changed.`);
+    }
+    ctx.servers = await this.#xenServers(ctx);
+    if (!ctx.servers.length) throw new Error('this Xen Orchestra has no pool connected to it yet. Add one in Xen Orchestra first.');
+    ctx.deadline ??= this.now() + RECONNECT.capMs;
+    ctx.rec.text = 'Xen Orchestra shows no pool, so its servers are being reconnected.';
+    this.#report(ctx.rec);
+    let back = false;
+    try {
+      await this.#reconnectEach(ctx);
+      ({ back } = await this.#waitForPools(ctx));
+    } catch (e) {
+      if (ctx.rec.cancelled) throw e;
+      const touched = touchedCount(ctx);
+      throw new Error(`this Xen Orchestra shows no pool, and reconnecting its servers stopped (${scrub(/** @type {Error} */ (e).message, ctx.secrets ?? {}, 120)}).${touched ? ` ${plural(touched, 'server')} had been asked to reconnect.` : ' Nothing was changed.'}${leftOffWords(ctx)}`);
+    }
+    await this.#readPool(ctx);
+    const said = inlineReconnectSentence(ctx, back);
+    if (!ctx.pools.length) throw new Error(said);
+    return said;
+  }
+
+  /**
    * Remove the limited user's tokens from earlier runs, signed in as it,
    * keeping the one this run made. Never throws; what it says is what is
    * true of the old tokens now: gone, or still valid and why (C-5).
@@ -2537,13 +2627,16 @@ export class XoSetups {
           throw new Error(`this Xen Orchestra does not offer ${missing.join(', ')}. Nothing was changed.`);
         }
         ctx.methods = methods;
-        ctx.pools = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'pool' } })) || {});
-        ctx.hosts = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'host' } })) || {});
-        ctx.srs = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'SR' } })) || {});
-        ctx.networks = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'network' } })) || {});
-        ctx.pifs = Object.values((await ctx.admin.call('xo.getAllObjects', { filter: { type: 'PIF' } })) || {});
-        if (!ctx.pools.length) throw new Error('this Xen Orchestra has no pool connected to it yet. Add one in Xen Orchestra first.');
-        return `Found ${plural(ctx.pools.length, 'pool')} and ${plural(ctx.hosts.length, 'host')}.`;
+        await this.#readPool(ctx);
+        // NO POOL IS USUALLY A LOST CONNECTION, not a Xen Orchestra nobody
+        // added one to: a pool master that restarted or moved leaves its
+        // server disconnected while Xen Orchestra goes on answering. This
+        // job is already signed in as the admin a reconnect needs, so it
+        // reconnects the servers itself and reads the pool again, rather
+        // than stopping and sending the person off to do it by hand.
+        const reconnected = ctx.pools.length ? null : await this.#reconnectForPools(ctx);
+        const found = `Found ${plural(ctx.pools.length, 'pool')} and ${plural(ctx.hosts.length, 'host')}.`;
+        return reconnected ? `${reconnected} ${found}` : found;
       },
       // user
       async (/** @type {any} */ ctx) => {
@@ -3292,6 +3385,57 @@ function reconnectSentence(ctx, { back, gaveUp }) {
   if (off) said.push(`${off === 1 ? 'One server is' : `${off} servers are`} turned off in Xen Orchestra and ${off === 1 ? 'was' : 'were'} left that way.`);
   if (failed) said.push(`${failed === 1 ? 'One' : failed} could not be reconnected; which and why are on your phone.`);
   return said.join(' ');
+}
+
+/** How many servers a reconnect asked anything of. @param {any} ctx */
+function touchedCount(ctx) {
+  return [...(ctx.outcomes?.values() ?? [])].filter((o) => ['enabled', 'cycled', 'failed'].includes(o.action)).length;
+}
+
+/**
+ * The servers a reconnect may have left turned off, in words, or nothing:
+ * a cycle that could not turn its server on again says so on its error
+ * (#failure), and a person reading only counts must still be told.
+ *
+ * @param {any} ctx
+ */
+function leftOffWords(ctx) {
+  const off = [...(ctx.outcomes?.values() ?? [])].filter((o) => /turn it on there/.test(String(o.error ?? ''))).length;
+  return off ? ` ${off === 1 ? 'One server' : `${off} servers`} may be turned off in Xen Orchestra now: turn ${off === 1 ? 'it' : 'them'} on there, under Settings, Servers.` : '';
+}
+
+/**
+ * How a reconnect setup or a policy change ran by itself ended, in counts:
+ * the note it leaves when the pools came back, or why the job stops when
+ * they did not. "Xen Orchestra showed no pool, so its 2 servers were
+ * reconnected and it shows 1 pool."
+ *
+ * @param {any} ctx @param {boolean} back
+ */
+function inlineReconnectSentence(ctx, back) {
+  const servers = /** @type {XenServer[]} */ (ctx.servers);
+  const actions = servers.map((s) => String(ctx.outcomes?.get(s.id)?.action ?? 'left'));
+  const off = actions.filter((a) => a === 'skipped-disabled').length;
+  const failed = actions.filter((a) => a === 'failed').length;
+  const tried = touchedCount(ctx);
+  const connected = servers.filter((s) => (ctx.lastServers || []).find((/** @type {XenServer} */ x) => x.id === s.id)?.status === 'connected').length;
+  const count = ctx.pools?.length ?? 0;
+  const said = [];
+  if (count) {
+    // RECONNECTED MEANS ASKED AND ANSWERED: one that failed is said below,
+    // and a pool that showed without any is said as that.
+    const done = actions.filter((a) => a === 'enabled' || a === 'cycled').length;
+    said.push(done
+      ? `Xen Orchestra showed no pool, so ${plural(done, 'server')} ${done === 1 ? 'was' : 'were'} reconnected and it shows ${plural(count, 'pool')}${back ? '' : ', though not every server is connected'}.`
+      : `Xen Orchestra showed no pool at first and shows ${plural(count, 'pool')} now.`);
+  } else if (!tried && !off) {
+    said.push(`this Xen Orchestra shows no pool, and its ${plural(servers.length, 'server')} ${servers.length === 1 ? 'was' : 'were'} already connected, so there was nothing to reconnect. Look at its servers in Xen Orchestra.`);
+  } else {
+    said.push(`this Xen Orchestra showed no pool, so its servers were reconnected, and it still shows none: ${connected} of ${plural(servers.length, 'server')} connected.`);
+  }
+  if (off) said.push(`${off === 1 ? 'One server is' : `${off} servers are`} turned off in Xen Orchestra and ${off === 1 ? 'was' : 'were'} left that way.`);
+  if (failed) said.push(`${failed === 1 ? 'One' : failed} could not be reconnected; Reconnect its servers, on the pool’s page, says which and why.`);
+  return `${said.join(' ')}${leftOffWords(ctx)}`;
 }
 
 /** @param {any} rec @returns {SetupStatus} */

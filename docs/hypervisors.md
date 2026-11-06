@@ -2481,6 +2481,27 @@ ongoing notification. An iPhone told the job is done while the pools it sees
 are none says "Done, and Xen Orchestra still shows no pools" rather than
 "Pools back".
 
+**Setup and a policy change reconnect by themselves.** Asked for, over a
+policy change that stopped at "this Xen Orchestra has no pool connected to it
+yet": *"Run a reconnect if something fails."* Both are already signed in as
+the admin a reconnect needs, so when their `inventory` step finds Xen
+Orchestra answering with no pool, they do what the reconnect job does
+(steps 3 and 4 above, with the same bounds), read the pool again, and go on
+from there: the person's choice is offered, or the token is made, against
+the pools that came back. The job's text says so while it runs ("Xen
+Orchestra shows no pool, so its servers are being reconnected."), and its
+summary begins "Xen Orchestra showed no pool, so 2 servers were reconnected
+and it shows 2 pools." When the pools do not come back the job stops at
+`inventory` saying what it found: servers already connected with nothing
+behind them, servers left turned off, servers that could not be reconnected,
+and any it may have left turned off and where to turn them on. These are
+counts, as the coordinator carries them: a setup has no sealed answer for
+server names, so which server and why is what **Reconnect its servers** on
+the pool's page is for. A Xen Orchestra with no servers at all still says to
+add a pool, and one without the server methods says it could not reconnect
+from here, both with nothing changed. A cancel while reconnecting says how
+many servers had been asked to reconnect, because that stands.
+
 **An older machine is sent nothing it could open.** The phone seals a
 reconnect only to a machine whose `begin` lists `reconnect-signin` in `can`,
 checked when `begin` answers and again where the seal is made, and seals it
