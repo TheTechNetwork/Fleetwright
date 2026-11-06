@@ -2195,7 +2195,14 @@ export class Sidecar {
         ? {
             xo: this.pools.report().map(({ problem, ...seen }) => {
               const edges = this.edgeWatch?.reportFor(seen.owner, seen.address);
-              return edges ? { ...seen, edges } : seen;
+              // WHY A PROXMOX CLUSTER DID NOT ANSWER, for the phone's
+              // Hypervisors page: its token lives on boxes alone, so a box
+              // that cannot reach it is the only one who can say why. Proxmox
+              // API errors name a path and a status, never the token. Xen
+              // Orchestra's stays home, as before: its page asks the pool
+              // itself, phone-direct.
+              const why = seen.kind === 'proxmox' && seen.reachable === false && typeof problem === 'string' ? { problem: problem.slice(0, 200) } : {};
+              return { ...seen, ...why, ...(edges ? { edges } : {}) };
             }),
           }
         : {}),

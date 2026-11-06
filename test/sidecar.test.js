@@ -1140,13 +1140,26 @@ test('what a box reads of a pool’s edge routers rides on that pool’s entry i
   const edges = { at: 1_700_000_000_000, routers: [{ name: 'fleetwright-edge', role: 'master' }], events: [] };
   const xoPools = /** @type {any} */ ({
     held: new Map([['eli@example.com xo.lan', {}]]),
-    report: () => [{ address: 'xo.lan', owner: 'eli@example.com', reachable: true }, { address: 'other.lan', owner: 'eli@example.com', reachable: true, problem: 'x' }],
+    report: () => [
+      { address: 'xo.lan', owner: 'eli@example.com', reachable: true },
+      { address: 'other.lan', owner: 'eli@example.com', reachable: true, problem: 'x' },
+      // A PROXMOX CLUSTER THAT DID NOT ANSWER says why, for the phone's
+      // Hypervisors page: its token is on boxes alone. One that answered
+      // has nothing to say.
+      { address: 'pve.lan:8006', owner: 'eli@example.com', kind: 'proxmox', reachable: false, problem: `pve.lan:8006 did not answer${' '.repeat(300)}` },
+      { address: 'pve2.lan:8006', owner: 'eli@example.com', kind: 'proxmox', reachable: true, problem: 'stale' },
+    ],
     refresh: async () => {},
   });
   const edgeWatch = /** @type {any} */ ({ start() {}, stop() {}, reportFor: (/** @type {string} */ o, /** @type {string} */ a) => (a === 'xo.lan' ? edges : null) });
   const { sidecar } = await setup(t, {}, { xoPools, edgeWatch });
   const health = /** @type {any} */ (await sidecar.health());
-  assert.deepEqual(health.xo, [{ address: 'xo.lan', owner: 'eli@example.com', reachable: true, edges }, { address: 'other.lan', owner: 'eli@example.com', reachable: true }]);
+  assert.deepEqual(health.xo, [
+    { address: 'xo.lan', owner: 'eli@example.com', reachable: true, edges },
+    { address: 'other.lan', owner: 'eli@example.com', reachable: true },
+    { address: 'pve.lan:8006', owner: 'eli@example.com', kind: 'proxmox', reachable: false, problem: `pve.lan:8006 did not answer${' '.repeat(300)}`.slice(0, 200) },
+    { address: 'pve2.lan:8006', owner: 'eli@example.com', kind: 'proxmox', reachable: true },
+  ]);
 });
 
 test('after a pool’s servers are reconnected, the box looks again with the fleet’s own token and its health says what that saw', { skip: noStandIn }, async (t) => {

@@ -1114,3 +1114,37 @@ test('a box that saw the edge routers wins over a fresher one that could not rea
   const both = fleet({ cloud: report(1_700_000_120_000, blind), other: report(1_700_000_100_000, blind) }).core.snapshot(eli).vmEdges;
   assert.equal(both[0].hostId, 'cloud');
 });
+
+// THE ONE HYPERVISORS PAGE. Asked for: "unify the two hypervisor pages".
+// A Proxmox VE cluster's token lives in the vault and on boxes alone, so this
+// list is the phone's only way to know one exists, and whether any box can
+// use it. One row per hypervisor of either kind, every box under it.
+test('a person is given each of their hypervisors once, of either kind, with what every box holding it saw', () => {
+  const pve = (/** @type {boolean|undefined} */ reachable, extra = {}) => ({
+    address: '10.69.10.10:8006', owner: ELI, kind: 'proxmox', ...(reachable === undefined ? { reachable: null } : { reachable }),
+    version: '9.0.3', supported: true, fenced: false,
+    pools: [{ id: 'p', name: 'fleetwright' }],
+    images: reachable ? [{ id: OTHER, name: 'fleetwright-debian-13' }] : [],
+    machines: reachable ? [{ name: 'vm-0123456789ab' }] : [],
+    ...extra,
+  });
+  const { core } = fleet({
+    rpi: { xo: [...holding(ELI), pve(true)] },
+    oci: { xo: [pve(false, { problem: '10.69.10.10:8006 did not answer within 10 seconds', supported: null, fenced: null, version: null })] },
+    fresh: { xo: [pve(undefined, { supported: null, fenced: null, version: null })] },
+    sams: { xo: holding(SAM) },
+  });
+  const rows = core.snapshot(eli).hypervisors;
+  assert.deepEqual(rows.map((/** @type {any} */ r) => [r.kind, r.address]), [['proxmox', '10.69.10.10:8006'], ['xo', 'xo.lan']]);
+  const [cluster, xo] = rows;
+  assert.deepEqual(cluster.boxes, [
+    { hostId: 'fresh', reachable: null, problem: null },
+    { hostId: 'oci', reachable: false, problem: '10.69.10.10:8006 did not answer within 10 seconds' },
+    { hostId: 'rpi', reachable: true, problem: null },
+  ]);
+  assert.deepEqual([cluster.version, cluster.supported, cluster.fenced, cluster.images, cluster.machines, cluster.pools], ['9.0.3', true, false, 1, 1, ['fleetwright']]);
+  assert.deepEqual([xo.kind, xo.boxes.map((/** @type {any} */ b) => b.hostId), xo.pools, xo.images], ['xo', ['rpi'], ['rack'], 1]);
+  // ONLY THEIR OWN, and nothing for nobody.
+  assert.deepEqual(core.snapshot(sam).hypervisors.map((/** @type {any} */ r) => [r.address, r.boxes.map((/** @type {any} */ b) => b.hostId)]), [['xo.lan', ['sams']]]);
+  assert.deepEqual(core.snapshot(null).hypervisors, []);
+});
