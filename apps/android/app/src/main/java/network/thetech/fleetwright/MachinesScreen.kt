@@ -108,6 +108,8 @@ fun MachinesScreen(
     // Where Add a hypervisor found what it found, for the setup it opens.
     var hypervisorAt by rememberSaveable { mutableStateOf<String?>(null) }
     var proxmoxAt by rememberSaveable { mutableStateOf("") }
+    // Opened from a cluster's page to turn its datacenter firewall on.
+    var proxmoxFirewall by rememberSaveable { mutableStateOf(false) }
     var hypervisorJob by rememberSaveable { mutableStateOf<String?>(null) }
     // A pool whose policy is being changed, by address. Saveable for the same
     // reason; the job itself starts over after a rotation (HypervisorSheet).
@@ -217,11 +219,19 @@ fun MachinesScreen(
             held = held,
             onOpenPool = { listingHypervisors = false; managing = it },
             onAddXo = { listingHypervisors = false; hypervisorJob = null; hypervisorAt = it; addingHypervisor = true },
-            onAddProxmox = { listingHypervisors = false; proxmoxAt = it; addingProxmox = true },
+            onAddProxmox = { listingHypervisors = false; proxmoxAt = it; proxmoxFirewall = false; addingProxmox = true },
+            onTurnOnFirewall = { listingHypervisors = false; proxmoxAt = it; proxmoxFirewall = true; addingProxmox = true },
             onDismiss = { listingHypervisors = false },
         )
     }
-    if (addingProxmox) ProxmoxSheet(settings, startNode = proxmoxAt, onDismiss = { addingProxmox = false; proxmoxAt = "" })
+    if (addingProxmox) {
+        ProxmoxSheet(
+            settings,
+            startNode = proxmoxAt,
+            startOptions = if (proxmoxFirewall) ProxmoxOptions(firewall = true) else null,
+            onDismiss = { addingProxmox = false; proxmoxAt = ""; proxmoxFirewall = false },
+        )
+    }
     if (addingHypervisor) {
         // KEYED ON THE JOB: a second notification, tapped while the sheet is
         // already open on another job, retargets it rather than leaving the

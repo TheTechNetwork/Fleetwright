@@ -126,13 +126,14 @@ internal object ProxmoxThrough {
     fun handoffAad(job: String, address: String): String = "fleetwright-pvesetup-handoff/v1:$job:$address"
 
     /** The root password and the key the line comes back to, sealed to the job's key, as the one string `run` carries. */
-    fun sealRoot(key: String, job: String, address: String, rootPassword: String, reply: String, vmids: String = ""): String {
+    fun sealRoot(key: String, job: String, address: String, rootPassword: String, reply: String, vmids: String = "", options: ProxmoxOptions = ProxmoxOptions()): String {
         val payload = JSONObject()
             .put("v", 1)
             .put("purpose", PURPOSE)
             .put("root", JSONObject().put("password", rootPassword))
             .put("reply", reply)
             .put("vmids", if (ProxmoxLine.isVmids(vmids)) vmids else "")
+            .put("options", options.payload())
         val sealed = Seal.seal(key, aad(job, address), payload)
         return "${sealed.getString("epk")}.${sealed.getString("iv")}.${sealed.getString("ct")}"
     }
@@ -163,6 +164,8 @@ internal fun ProxmoxThroughSheet(
     password: String = "",
     /** The range of machine numbers the person gave, or empty (ProxmoxSheet). */
     vmids: String = "",
+    /** Every other option the person set (ProxmoxSheet), sealed with the password. */
+    options: ProxmoxOptions = ProxmoxOptions(),
     /** Opened because this phone could not reach the node: machines are asked at once, and the first that reached it is chosen. */
     auto: Boolean = false,
     kept: (String) -> Unit,
@@ -226,7 +229,7 @@ internal fun ProxmoxThroughSheet(
         // THE KEY THE LINE COMES BACK TO OUTLIVES THIS SCREEN: kept under the
         // job until the line is in the vault (ProxmoxThroughHandoff).
         val back = ProxmoxThroughHandoff.newKey(settings, b.setup.job, b.where)
-        val sealed = ProxmoxThrough.sealRoot(key, b.setup.job, b.where, rootPassword, back.publicKey, vmids)
+        val sealed = ProxmoxThrough.sealRoot(key, b.setup.job, b.where, rootPassword, back.publicKey, vmids, options)
         rootPassword = ""
         val r = fleet.xosetup("run", job = b.setup.job, sealed = sealed)
         if (!r.ok) {

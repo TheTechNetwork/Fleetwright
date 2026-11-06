@@ -30,12 +30,16 @@ struct ProxmoxThroughMachineView: View {
 
     /// The range of machine numbers the person gave, or empty (AddProxmoxView).
     let vmids: String
+    /// Every other option the person set (AddProxmoxView), sealed with the
+    /// password for the machine to pass to the script.
+    let options: ProxmoxOptions
 
-    init(settings: Settings, node: String, password: String = "", vmids: String = "", auto: Bool = false, kept: @escaping (String) -> Void) {
+    init(settings: Settings, node: String, password: String = "", vmids: String = "", options: ProxmoxOptions = ProxmoxOptions(), auto: Bool = false, kept: @escaping (String) -> Void) {
         self.settings = settings
         self.kept = kept
         self.auto = auto
         self.vmids = ProxmoxLine.isVmids(vmids) ? vmids : ""
+        self.options = options
         _address = State(initialValue: node)
         _rootPassword = State(initialValue: password)
     }
@@ -442,7 +446,7 @@ struct ProxmoxThroughMachineView: View {
             sealed = try Seal.seal(
                 to: begun.key,
                 aad: Seal.pvesetupAAD(job: begun.job, address: begun.address),
-                payload: ["v": 1, "purpose": "pve", "root": ["password": rootPassword], "reply": back.publicKey, "vmids": vmids]
+                payload: ["v": 1, "purpose": "pve", "root": ["password": rootPassword], "reply": back.publicKey, "vmids": vmids, "options": options.payload]
             )
         } catch {
             ProxmoxThroughHandoff.forget(job: begun.job)

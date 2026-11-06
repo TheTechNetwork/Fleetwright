@@ -27,6 +27,9 @@ struct AddProxmoxView: View {
     let settings: Settings
     /// The node's address when Add a hypervisor found Proxmox VE there.
     var startNode: String = ""
+    /// Options to open with, over the remembered ones: the cluster's page
+    /// opens this with the firewall on, for Turn on the datacenter firewall.
+    var startOptions: ProxmoxOptions? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var line = ""
@@ -43,6 +46,10 @@ struct AddProxmoxView: View {
     /// for the cluster's next free ones. Asked for: "vmid range user
     /// deserves a choice".
     @AppStorage("proxmox-vmids") private var vmids = ""
+    /// Every other option, remembered for next time as the numbers are.
+    @AppStorage("proxmox-options") private var optionsText = ""
+    @State private var options = ProxmoxOptions()
+    @State private var optionsOpen = false
     /// The key the node answered with, waiting on the person's word.
     @State private var offered: String?
     /// The key the person checked, which every connection holds the node to.
@@ -57,7 +64,7 @@ struct AddProxmoxView: View {
 
     /// What the pasted line carries, or nil while it is not one.
     private var parsed: ProxmoxLine.Record? { ProxmoxLine.parse(line) }
-    private var command: String { ProxmoxLine.setupCommand(coordinator: settings.coordinatorURL, vmids: trimmedVmids) }
+    private var command: String { ProxmoxLine.setupCommand(coordinator: settings.coordinatorURL, vmids: trimmedVmids, options: options) }
     private var trimmedVmids: String { vmids.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "–", with: "-") }
     private var vmidsOk: Bool { trimmedVmids.isEmpty || ProxmoxLine.isVmids(trimmedVmids) }
     private var coordinatorOk: Bool {
@@ -89,6 +96,40 @@ struct AddProxmoxView: View {
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.bad)
                 }
+                // EVERY OTHER OPTION THE SETUP TAKES. Asked for: "Everything
+                // should be in app". Folded away, because the defaults are
+                // what most nodes want; each says what it changes.
+                DisclosureGroup(isExpanded: $optionsOpen) {
+                    Toggle("Turn on the datacenter firewall", isOn: $options.firewall)
+                    Text(ProxmoxWords.firewallHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                    Picker("Machine image", selection: $options.image) {
+                        Text("Keep the one there").tag("keep")
+                        Text("Build it again").tag("rebuild")
+                        Text("Do not build one").tag("none")
+                    }
+                    Picker("Updates for its machines", selection: $options.channel) {
+                        Text("Stable").tag("stable")
+                        Text("Rolling").tag("rolling")
+                    }
+                    TextField("Storage (found by itself when empty)", text: $options.storage)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("Bridge (vmbr0 when empty)", text: $options.bridge)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Picker("The fleet's token lasts", selection: $options.expireDays) {
+                        ForEach(ProxmoxOptions.lifetimes, id: \.self) { Text("\($0) days").tag($0) }
+                    }
+                    Stepper("Group networks: \(options.groups)", value: $options.groups, in: 0...4)
+                    Stepper("Open labs: \(options.labsOpen)", value: $options.labsOpen, in: 0...4)
+                    Stepper("Closed labs: \(options.labsClosed)", value: $options.labsClosed, in: 0...4)
+                    if let problem = options.problem {
+                        Text(problem).fleetType(.label).foregroundStyle(Design.Palette.bad)
+                    }
+                } label: {
+                    Text("Options").frame(minHeight: 44, alignment: .leading)
+                }
+                .disabled(since != nil || kept)
                 if !coordinatorOk {
                     Text("This phone's fleet address is not one the setup can be told, so set it up by hand below.")
                         .fleetType(.label)
@@ -107,7 +148,7 @@ struct AddProxmoxView: View {
                         Task { await connectOrStart() }
                     }
                     .frame(minHeight: 44)
-                } else if since == nil && !kept && !nodeKey.isEmpty && !password.isEmpty && vmidsOk {
+                } else if since == nil && !kept && !nodeKey.isEmpty && !password.isEmpty && vmidsOk && options.problem == nil {
                     Button(sshBusy ? "Reaching the node…" : "Set it up") {
                         Task { await connectOrStart() }
                     }
@@ -209,7 +250,14 @@ struct AddProxmoxView: View {
         .task(id: since) { await follow() }
         // A RUN THIS PHONE STARTED and has not collected, followed again
         // when the screen is opened.
+        .onChange(of: options) { _, now in optionsText = now.saved }
         .task {
+            // THE OPTIONS: remembered ones, and over them any this was opened
+            // with (the cluster's page asks for the firewall on).
+            if options == ProxmoxOptions() {
+                options = startOptions ?? ProxmoxOptions.load(optionsText)
+                if startOptions != nil { optionsOpen = true }
+            }
             // THE ADDRESS ADD A HYPERVISOR FOUND PROXMOX VE AT, filled in.
             if node.isEmpty, !startNode.isEmpty, since == nil { node = startNode }
             guard nodeKey.isEmpty, since == nil, let run = ProxmoxDirectHandoff.pending().first else { return }
@@ -221,7 +269,7 @@ struct AddProxmoxView: View {
         // that can does it, with what was typed here already filled in.
         .sheet(isPresented: $through) {
             NavigationStack {
-                ProxmoxThroughMachineView(settings: settings, node: nodeKey, password: password, vmids: trimmedVmids, auto: true) { at in
+                ProxmoxThroughMachineView(settings: settings, node: nodeKey, password: password, vmids: trimmedVmids, options: options, auto: true) { at in
                     keptThrough(at)
                     through = false
                 }
@@ -266,7 +314,7 @@ struct AddProxmoxView: View {
                 sshText = "The node did not say what time it is, so its setup could not be followed."
                 return
             }
-            let (status, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.startCommand(coordinator: settings.coordinatorURL, vmids: trimmedVmids))
+            let (status, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.startCommand(coordinator: settings.coordinatorURL, vmids: trimmedVmids, options: options))
             if status == 0 {
                 ProxmoxDirectHandoff.started(address: nodeKey, fingerprint: key, since: now, password: password)
                 since = now
@@ -350,6 +398,92 @@ struct AddProxmoxView: View {
     }
 }
 
+/// EVERY OPTION THE SETUP TAKES, as this phone sets them. Asked for:
+/// "Everything should be in app". The script's defaults are the defaults
+/// here, and only what differs from them is passed, so a run with nothing
+/// changed is the run it always was. The bounds and the flags are
+/// pve-setup.js's (pveOptionsOf, optionArgs); test/pvesetup-in-apps.test.js
+/// holds the three apps' words and flags equal.
+/// The options' words, the same on Android (ProxmoxSheet.kt).
+enum ProxmoxWords {
+    static let firewallHint = "Until it is on, the fleet's machines are made only on networks you choose. Proxmox VE's own rules keep the nodes' web interface, SSH and cluster traffic open to the local network; anything else coming in to the nodes themselves is dropped, so add a rule first for any other service they run."
+}
+
+struct ProxmoxOptions: Codable, Equatable {
+    var firewall = false
+    /// "keep" the image there, "rebuild" it, or "none" built at all.
+    var image = "keep"
+    var channel = "stable"
+    var storage = ""
+    var bridge = ""
+    var expireDays = 365
+    var groups = 2
+    var labsOpen = 1
+    var labsClosed = 1
+
+    static let storagePattern = "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
+    static let bridgePattern = "^[A-Za-z0-9_.-]{1,15}$"
+    static let lifetimes = [30, 90, 180, 365, 730]
+
+    private var trimmedStorage: String { storage.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedBridge: String { bridge.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// What is wrong with them, in the script's own words, or nil.
+    var problem: String? {
+        if !trimmedStorage.isEmpty && trimmedStorage.range(of: Self.storagePattern, options: .regularExpression) == nil {
+            return "The storage is not a Proxmox VE storage id, such as local-lvm."
+        }
+        if !trimmedBridge.isEmpty && trimmedBridge.range(of: Self.bridgePattern, options: .regularExpression) == nil {
+            return "The bridge is not a bridge's name, such as vmbr0."
+        }
+        if labsOpen + labsClosed > 4 { return "Four labs at most, open and closed together." }
+        return nil
+    }
+
+    /// The flags for the script, each only when it differs from its default.
+    var args: String {
+        guard problem == nil else { return "" }
+        var a = ""
+        if firewall { a += " --enable-firewall" }
+        if image == "rebuild" { a += " --rebuild-image" }
+        if image == "none" { a += " --no-image" }
+        if channel == "rolling" { a += " --channel rolling" }
+        if !trimmedStorage.isEmpty { a += " --storage \(trimmedStorage)" }
+        if !trimmedBridge.isEmpty { a += " --bridge \(trimmedBridge)" }
+        if expireDays != 365 { a += " --expire-days \(expireDays)" }
+        if groups != 2 { a += " --groups \(groups)" }
+        if labsOpen != 1 { a += " --labs-open \(labsOpen)" }
+        if labsClosed != 1 { a += " --labs-closed \(labsClosed)" }
+        return a
+    }
+
+    /// The same for the route through a machine, sealed with the password.
+    var payload: [String: Any] {
+        guard problem == nil else { return [:] }
+        var p: [String: Any] = [:]
+        if firewall { p["firewall"] = true }
+        if image == "rebuild" { p["rebuildImage"] = true }
+        if image == "none" { p["noImage"] = true }
+        if channel == "rolling" { p["channel"] = "rolling" }
+        if !trimmedStorage.isEmpty { p["storage"] = trimmedStorage }
+        if !trimmedBridge.isEmpty { p["bridge"] = trimmedBridge }
+        if expireDays != 365 { p["expireDays"] = expireDays }
+        if groups != 2 { p["groups"] = groups }
+        if labsOpen != 1 { p["labsOpen"] = labsOpen }
+        if labsClosed != 1 { p["labsClosed"] = labsClosed }
+        return p
+    }
+
+    /// Remembered for the next run, as the machine numbers are.
+    static func load(_ text: String) -> ProxmoxOptions {
+        (try? JSONDecoder().decode(ProxmoxOptions.self, from: Data(text.utf8))) ?? ProxmoxOptions()
+    }
+
+    var saved: String {
+        (try? JSONEncoder().encode(self)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    }
+}
+
 /// The line `fleetwright-pve-setup` prints, read the way the boxes read it
 /// (src/fleet/host/pve-pools.js, `parseConnection` and `recordOf`), so a line
 /// this phone keeps is one they take. test/pve-pools.test.js holds the
@@ -364,9 +498,9 @@ enum ProxmoxLine {
     }
 
     /// The same, with the range of machine numbers the person gave, when it
-    /// is one (`--vmids`, pve-setup.js VMIDS_RE).
-    static func setupCommand(coordinator: String, vmids: String) -> String {
-        setupCommand(coordinator: coordinator) + (isVmids(vmids) ? " --vmids \(vmids)" : "")
+    /// is one (`--vmids`, pve-setup.js VMIDS_RE), and every other option.
+    static func setupCommand(coordinator: String, vmids: String, options: ProxmoxOptions = ProxmoxOptions()) -> String {
+        setupCommand(coordinator: coordinator) + (isVmids(vmids) ? " --vmids \(vmids)" : "") + options.args
     }
 
     /// FROM-TO, two numbers Proxmox numbers machines with, the first no larger.

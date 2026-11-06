@@ -54,6 +54,8 @@ internal fun HypervisorsScreen(
     onAddXo: (String?) -> Unit,
     /** Proxmox VE's setup, with the node it was found at, if any. */
     onAddProxmox: (String) -> Unit,
+    /** The same setup with the datacenter firewall already on, for a cluster where it is off. */
+    onTurnOnFirewall: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var fleet by remember { mutableStateOf<List<Fleet.Hypervisor>?>(null) }
@@ -110,7 +112,12 @@ internal fun HypervisorsScreen(
     val rows = hypervisorRows(fleet, held)
 
     open?.let { row ->
-        HypervisorPage(row, onSetUpAgain = { open = null; onAddProxmox(HypervisorAddress.node(row.address)) }, onDismiss = { open = null })
+        HypervisorPage(
+            row,
+            onSetUpAgain = { open = null; onAddProxmox(HypervisorAddress.node(row.address)) },
+            onTurnOnFirewall = { open = null; onTurnOnFirewall(HypervisorAddress.node(row.address)) },
+            onDismiss = { open = null },
+        )
         return
     }
     if (choosing) {
@@ -216,7 +223,7 @@ private fun ChoiceRow(title: String, line: String, onClick: () -> Unit) {
 
 /** What the fleet saw of one hypervisor, box by box, and what can be done. */
 @Composable
-private fun HypervisorPage(row: HypervisorRow, onSetUpAgain: () -> Unit, onDismiss: () -> Unit) {
+private fun HypervisorPage(row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnOnFirewall: () -> Unit, onDismiss: () -> Unit) {
     FullScreen(title = row.address, onDismiss = onDismiss) {
         SectionHead("What each machine saw")
         val boxes = row.fleet?.boxes ?: emptyList()
@@ -245,6 +252,9 @@ private fun HypervisorPage(row: HypervisorRow, onSetUpAgain: () -> Unit, onDismi
         }
         if (row.proxmox) {
             Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
+                // THE FIREWALL, where it is off: the same setup, with the
+                // address filled in and the option already on.
+                if (row.fleet?.fenced == false) OpenRow(HypervisorWords.TURN_ON_FIREWALL, onClick = onTurnOnFirewall)
                 OpenRow("Set it up again", onClick = onSetUpAgain)
             }
             Hint(HypervisorWords.AGAIN_FOOTER)
@@ -264,6 +274,7 @@ object HypervisorWords {
     const val AGAIN_FOOTER = "Run on the node again, it finds what it made, keeps the image, and hands over a new line. The old line stops working."
     const val XO_ELSEWHERE = "Its page opens on the phone that set it up, which holds its token."
     const val XO_CHOICE = "A pool of XCP-ng hosts, through the Xen Orchestra in front of it."
+    const val TURN_ON_FIREWALL = "Turn on the datacenter firewall"
     const val PVE_CHOICE = "A Proxmox VE 9 node or cluster, set up over SSH as root."
     const val FIND_FOOTER = "The fleet's machines and this phone look at what answers there, and the setup for it opens."
 

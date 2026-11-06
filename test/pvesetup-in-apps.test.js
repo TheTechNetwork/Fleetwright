@@ -49,8 +49,8 @@ test('both phones begin `pve`, check the key under `pvesetup-key`, and seal unde
   assert.equal(kotlin('aad'), pvesetupAad(job, at));
   assert.equal(kotlin('handoffAad'), pvesetupHandoffAad(job, at));
   // What is inside: what xo-setup.js `run` reads for this job, and the line it seals back.
-  assert.match(IOS, /payload: \["v": 1, "purpose": "pve", "root": \["password": rootPassword\], "reply": back\.publicKey, "vmids": vmids\]/);
-  assert.match(ANDROID, /\.put\("purpose", PURPOSE\)\s*\.put\("root", JSONObject\(\)\.put\("password", rootPassword\)\)\s*\.put\("reply", reply\)\s*\.put\("vmids", if \(ProxmoxLine\.isVmids\(vmids\)\) vmids else ""\)/);
+  assert.match(IOS, /payload: \["v": 1, "purpose": "pve", "root": \["password": rootPassword\], "reply": back\.publicKey, "vmids": vmids, "options": options\.payload\]/);
+  assert.match(ANDROID, /\.put\("purpose", PURPOSE\)\s*\.put\("root", JSONObject\(\)\.put\("password", rootPassword\)\)\s*\.put\("reply", reply\)\s*\.put\("vmids", if \(ProxmoxLine\.isVmids\(vmids\)\) vmids else ""\)\s*\.put\("options", options\.payload\(\)\)/);
   assert.match(ANDROID, /const val PURPOSE = "pve"/);
   assert.match(IOS, /inside\["line"\] as\? String/);
   assert.match(ANDROID, /inside\.optString\("line"\)/);
@@ -122,8 +122,8 @@ test('both phones set up a node one way: the phone first, a machine when it cann
   assert.match(iosAdd, /answered = try await ProxmoxSSH\.hostKey\(nodeKey\)[\s\S]*?catch \{[\s\S]*?through = true/);
   assert.match(androidAdd, /ProxmoxSsh\.hostKey\(at\)\.getOrElse \{[\s\S]*?through = true/);
   // With the address and password carried over, and the machines asked at once.
-  assert.match(iosAdd, /ProxmoxThroughMachineView\(settings: settings, node: nodeKey, password: password, vmids: trimmedVmids, auto: true\)/);
-  assert.match(androidAdd, /ProxmoxThroughSheet\(\s*settings,\s*node,\s*password = password,\s*vmids = trimmedVmids,\s*auto = true,/);
+  assert.match(iosAdd, /ProxmoxThroughMachineView\(settings: settings, node: nodeKey, password: password, vmids: trimmedVmids, options: options, auto: true\)/);
+  assert.match(androidAdd, /ProxmoxThroughSheet\(\s*settings,\s*node,\s*password = password,\s*vmids = trimmedVmids,\s*options = options,\s*auto = true,/);
   assert.match(IOS, /if auto, probes == nil, job == nil, XOSetupKey\.isAddress\(trimmedAddress\) \{ await probe\(\) \}/);
   assert.match(ANDROID, /if \(auto && probes == null && job == null && addressOk\) probe\(\)/);
   // A direct run is registered when it starts, followed through the same look
@@ -157,13 +157,53 @@ test('both phones take a range of machine numbers and pass it to the node on eve
   }
   assert.match(iosAdd, /static func isVmids\(_ s: String\) -> Bool/);
   // In the command, on both routes and by hand.
-  assert.match(iosAdd, /setupCommand\(coordinator: coordinator\) \+ \(isVmids\(vmids\) \? " --vmids \\\(vmids\)" : ""\)/);
-  assert.match(androidAdd, /setupCommand\(coordinator\) \+ if \(isVmids\(vmids\)\) " --vmids \$vmids" else ""/);
+  assert.match(iosAdd, /setupCommand\(coordinator: coordinator\) \+ \(isVmids\(vmids\) \? " --vmids \\\(vmids\)" : ""\) \+ options\.args/);
+  assert.match(androidAdd, /setupCommand\(coordinator\) \+ \(if \(isVmids\(vmids\)\) " --vmids \$vmids" else ""\) \+ options\.args/);
   assert.equal(setupCommand('https://f.example', '9000-9099'), `${setupCommand('https://f.example')} --vmids 9000-9099`);
-  assert.match(iosSsh, /ProxmoxLine\.setupCommand\(coordinator: coordinator, vmids: vmids\)/);
-  assert.match(androidSsh, /ProxmoxLine\.setupCommand\(coordinator, vmids\)/);
-  assert.match(iosAdd, /ProxmoxSSH\.startCommand\(coordinator: settings\.coordinatorURL, vmids: trimmedVmids\)/);
-  assert.match(androidAdd, /ProxmoxSsh\.startCommand\(settings\.coordinatorUrl, trimmedVmids\)/);
-  assert.match(iosAdd, /vmids: trimmedVmids, auto: true/);
-  assert.match(androidAdd, /vmids = trimmedVmids,\s*auto = true/);
+  assert.match(iosSsh, /ProxmoxLine\.setupCommand\(coordinator: coordinator, vmids: vmids, options: options\)/);
+  assert.match(androidSsh, /ProxmoxLine\.setupCommand\(coordinator, vmids, options\)/);
+  assert.match(iosAdd, /ProxmoxSSH\.startCommand\(coordinator: settings\.coordinatorURL, vmids: trimmedVmids, options: options\)/);
+  assert.match(androidAdd, /ProxmoxSsh\.startCommand\(settings\.coordinatorUrl, trimmedVmids, options\)/);
+  assert.match(iosAdd, /vmids: trimmedVmids, options: options, auto: true/);
+  assert.match(androidAdd, /vmids = trimmedVmids,\s*options = options,\s*auto = true/);
+});
+
+// EVERY OPTION THE SETUP TAKES, set the same way on both phones and on the
+// machine that runs it through. Asked for: "Everything should be in app".
+test('both phones set every setup option as the script and the machines take it', async () => {
+  const { optionArgs, PVE_STORAGE_RE, PVE_BRIDGE_RE } = await import('../src/fleet/host/pve-setup.js');
+  const rd = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+  const swift = rd('apps/ios/Fleetwright/AddProxmoxView.swift');
+  const kotlin = rd('apps/android/app/src/main/java/network/thetech/fleetwright/ProxmoxSheet.kt');
+  const script = rd('install/fleetwright-pve-setup');
+  // THE FLAGS, in the machine's order, on both phones.
+  const flags = optionArgs({ firewall: true, rebuildImage: true, channel: 'rolling', storage: 's', bridge: 'b', expireDays: 90, groups: 1, labsOpen: 2, labsClosed: 2 }).match(/--[a-z-]+/g) ?? [];
+  flags.splice(2, 0, '--no-image');
+  for (const [name, src] of [['iOS', swift], ['Android', kotlin]]) {
+    const at = flags.map((f) => src.indexOf(`" ${f}`));
+    assert.ok(at.every((i) => i > 0), `${name} lacks ${flags.filter((_, k) => at[k] < 0)}`);
+    assert.deepEqual([...at].sort((a, b) => a - b), at, `${name} passes the flags in another order`);
+    // THE PAYLOAD'S KEYS are the machine's (pveOptionsOf).
+    for (const key of ['firewall', 'rebuildImage', 'noImage', 'channel', 'storage', 'bridge', 'expireDays', 'groups', 'labsOpen', 'labsClosed']) {
+      assert.ok(src.includes(`"${key}"`), `${name} never sends ${key}`);
+    }
+  }
+  // THE DEFAULTS are the script's, so nothing changed passes nothing.
+  for (const [v, d] of [['EXPIRE_DAYS', '365'], ['GROUP_NETS', '2'], ['LABS_OPEN', '1'], ['LABS_CLOSED', '1'], ['CHANNEL', 'stable']]) {
+    assert.match(script, new RegExp(`^${v}=${d}$`, 'm'));
+  }
+  assert.match(swift, /var expireDays = 365\s+var groups = 2\s+var labsOpen = 1\s+var labsClosed = 1/);
+  assert.match(kotlin, /val expireDays: Int = 365,\s+val groups: Int = 2,\s+val labsOpen: Int = 1,\s+val labsClosed: Int = 1,/);
+  // THE PATTERNS are the machine's.
+  assert.ok(swift.includes(`static let storagePattern = "${PVE_STORAGE_RE.source}"`));
+  assert.ok(swift.includes(`static let bridgePattern = "${PVE_BRIDGE_RE.source}"`));
+  assert.ok(kotlin.includes(`val STORAGE = Regex("${PVE_STORAGE_RE.source}")`));
+  assert.ok(kotlin.includes(`val BRIDGE = Regex("${PVE_BRIDGE_RE.source}")`));
+  // THE WORDS are one sentence on both, and true to what the script does.
+  const hint = /static let firewallHint = "([^"]+)"/.exec(swift)?.[1];
+  assert.ok(hint && kotlin.includes(`const val FIREWALL_HINT = "${hint}"`));
+  assert.match(script, /its own rules keep this node's web interface and SSH open to the local network/);
+  // THE CLUSTER'S PAGE opens the setup with the firewall on where it is off.
+  assert.match(rd('apps/ios/Fleetwright/HypervisorsView.swift'), /if row\.fleet\?\.fenced == false \{\s*NavigationLink\(HypervisorWords\.turnOnFirewall\) \{\s*AddProxmoxView\(settings: settings, startNode: HypervisorAddress\.node\(row\.address\), startOptions: ProxmoxOptions\(firewall: true\)\)/);
+  assert.match(rd('apps/android/app/src/main/java/network/thetech/fleetwright/HypervisorsScreen.kt'), /if \(row\.fleet\?\.fenced == false\) OpenRow\(HypervisorWords\.TURN_ON_FIREWALL, onClick = onTurnOnFirewall\)/);
 });

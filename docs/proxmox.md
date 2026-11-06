@@ -327,6 +327,19 @@ Finding each first, so it is safe to run again:
    The first real node's cluster stayed invisible because the box dropped
    its record without saying so.
 
+**Every option is in the app** (asked for: *"Everything should be in
+app"*): Add Proxmox VE › Options has the datacenter firewall, the machine
+image (keep it, build it again, or none), the update channel, the storage,
+the bridge, how long the fleet's token lasts, and the group and lab
+networks. Each defaults to the script's own default, and only what differs
+is passed, on the phone's route and sealed through a machine alike
+(`pveOptionsOf`, `optionArgs` in pve-setup.js). A cluster whose datacenter
+firewall is off offers **Turn on the datacenter firewall** on its page,
+which opens the same setup with that option on. Proxmox VE's own rules keep
+the nodes' web interface, SSH and cluster traffic open to the local network
+once it is on, and other traffic coming in to the nodes is dropped, which
+the option says.
+
 Its options: `--address`, `--storage`, `--bridge`, `--enable-firewall`,
 `--channel stable|rolling`, `--no-image`, `--rebuild-image`,
 `--expire-days`, `--line-file`, `--coordinator`, `--vmids FROM-TO`.
