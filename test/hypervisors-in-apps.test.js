@@ -48,6 +48,12 @@ test('both phones word a hypervisor\'s status, reach and facts the same', () => 
       "Nothing at \\(address) answered as Xen Orchestra or as Proxmox VE, from the fleet's machines or from this phone. Which is it?",
       "Nothing at $address answered as Xen Orchestra or as Proxmox VE, from the fleet's machines or from this phone. Which is it?",
     ],
+    [
+      'return "Nothing at \\(address) answered as Xen Orchestra, and this phone could not reach its Proxmox VE port. \\(machines.joined(separator: ", ")) did not look for Proxmox VE: \\(one ? "its" : "their") Fleetwright is older than that look. Apply update on \\(one ? "its page" : "their pages") under Machines, then Find it again, or say which it is."',
+      'return "Nothing at $address answered as Xen Orchestra, and this phone could not reach its Proxmox VE port. ${machines.joinToString(", ")} did not look for Proxmox VE: ${if (one) "its" else "their"} Fleetwright is older than that look. Apply update on ${if (one) "its page" else "their pages"} under Machines, then Find it again, or say which it is."',
+    ],
+    // A MACHINE THAT NEVER LOOKED is named, by the same test on both phones.
+    ['let didNotLook = probes.filter { $0.pveLooked != true && $0.through != "phone" }.map(\\.hostId)', 'val didNotLook = probes.filter { it.pveLooked != true && it.through != "phone" }.map { it.hostId }'],
     // THE PHONE'S OWN LOOK: Proxmox VE's port, or the one named unless it is Xen Orchestra's.
     ['let port = named.flatMap { $0 == 443 ? nil : $0 } ?? 8006', 'val port = named?.takeIf { it != 443 } ?: 8006'],
   ]) {

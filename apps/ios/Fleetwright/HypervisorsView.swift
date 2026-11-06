@@ -304,7 +304,10 @@ struct AddHypervisorChoiceView: View {
         } else if probes.contains(where: { $0.pve == true }) || phoneSees {
             found = .pve(HypervisorAddress.node(at))
         } else {
-            unknown = HypervisorWords.notFound(at)
+            // A MACHINE THAT NEVER LOOKED is named, and the way to make it look
+            // given, rather than counted among the ones that found nothing.
+            let didNotLook = probes.filter { $0.pveLooked != true && $0.through != "phone" }.map(\.hostId)
+            unknown = didNotLook.isEmpty ? HypervisorWords.notFound(at) : HypervisorWords.notLooked(at, machines: didNotLook)
         }
     }
 }
@@ -376,6 +379,13 @@ enum HypervisorWords {
     static let xoChoice = "A pool of XCP-ng hosts, through the Xen Orchestra in front of it."
     static let pveChoice = "A Proxmox VE 9 node or cluster, set up over SSH as root."
     static let findFooter = "The fleet's machines and this phone look at what answers there, and the setup for it opens."
+
+    /// Nothing answered as Xen Orchestra, and some machines never looked for
+    /// Proxmox VE: they are named, with the update that makes them look.
+    static func notLooked(_ address: String, machines: [String]) -> String {
+        let one = machines.count == 1
+        return "Nothing at \(address) answered as Xen Orchestra, and this phone could not reach its Proxmox VE port. \(machines.joined(separator: ", ")) did not look for Proxmox VE: \(one ? "its" : "their") Fleetwright is older than that look. Apply update on \(one ? "its page" : "their pages") under Machines, then Find it again, or say which it is."
+    }
 
     /// Nothing answered as either kind: the one question the page asks.
     static func notFound(_ address: String) -> String {

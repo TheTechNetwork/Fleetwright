@@ -1109,6 +1109,12 @@ class Fleet(
          * too old to look, or nothing answered there.
          */
         val pve: Boolean? = null,
+        /**
+         * Whether the machine looked for Proxmox VE at all. False or null is a
+         * machine from before that look, which is told apart from one that
+         * looked and found nothing there.
+         */
+        val pveLooked: Boolean? = null,
     )
 
     /**
@@ -3212,6 +3218,7 @@ class Fleet(
                                     },
                                     through = p.optString("through").takeIf { it == "phone" },
                                     pve = if (p.has("pve") && !p.isNull("pve")) p.optBoolean("pve") else null,
+                                    pveLooked = if (p.has("pveLooked") && !p.isNull("pveLooked")) p.optBoolean("pveLooked") else null,
                                 )
                             }
                         }
