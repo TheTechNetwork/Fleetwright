@@ -25,6 +25,8 @@ import UIKit
 ///
 struct AddProxmoxView: View {
     let settings: Settings
+    /// The node's address when Add a hypervisor found Proxmox VE there.
+    var startNode: String = ""
     @Environment(\.dismiss) private var dismiss
 
     @State private var line = ""
@@ -208,6 +210,8 @@ struct AddProxmoxView: View {
         // A RUN THIS PHONE STARTED and has not collected, followed again
         // when the screen is opened.
         .task {
+            // THE ADDRESS ADD A HYPERVISOR FOUND PROXMOX VE AT, filled in.
+            if node.isEmpty, !startNode.isEmpty, since == nil { node = startNode }
             guard nodeKey.isEmpty, since == nil, let run = ProxmoxDirectHandoff.pending().first else { return }
             node = run.address
             trusted = run.fingerprint

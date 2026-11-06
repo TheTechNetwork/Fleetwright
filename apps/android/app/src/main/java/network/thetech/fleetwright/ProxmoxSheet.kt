@@ -51,7 +51,7 @@ import org.json.JSONObject
  * within ten minutes (src/fleet/host/pve-pools.js).
  */
 @Composable
-internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
+internal fun ProxmoxSheet(settings: Settings, startNode: String = "", onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val known = remember { context.getSharedPreferences("proxmox-host-keys", android.content.Context.MODE_PRIVATE) }
@@ -64,7 +64,8 @@ internal fun ProxmoxSheet(settings: Settings, onDismiss: () -> Unit) {
 
     // FROM THIS PHONE. The password is never saveable: it goes when the
     // screen does.
-    var node by rememberSaveable { mutableStateOf("") }
+    // The node's address when Add a hypervisor found Proxmox VE there.
+    var node by rememberSaveable { mutableStateOf(startNode) }
     // THE VM IDS the fleet's image and machines take, FROM-TO, or empty for
     // the cluster's next free ones, remembered for next time. Asked for:
     // "vmid range user deserves a choice".
