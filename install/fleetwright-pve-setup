@@ -431,12 +431,43 @@ BUILD
 # AN EARLIER BUILD THAT DID NOT FINISH is removed first: one that failed,
 # or a run that was stopped. Only this pool's, and only what is tagged as a
 # build and is not a template, which nothing but this script makes.
-for old in $(pvesh get "/pools/$POOL" --output-format json | json 'join "\n", map { $_->{vmid} } grep { ($_->{template} // 0) != 1 && ($_->{tags} // "") =~ /(^|[;, ])fleetwright-build($|[;, ])/ } @{$d->{members}}'); do
+# THE POOL'S MACHINES, BY TAG: from /cluster/resources, which carries each
+# guest's tags and pool. Not /pools/$POOL, whose members Proxmox builds from
+# run-time stats alone, with no tags (pve-manager, PVE/API2/Pool.pm): read
+# there, the first real image was never found, and the next run built a
+# second one. $1 is 1 for templates and 0 for the rest, $2 the tag; the
+# numbers come one to a line, lowest first.
+tagged() {
+  pvesh get /cluster/resources --type vm --output-format json |
+    TPL="$1" TAG="$2" IN_POOL="$POOL" perl -MJSON::PP -e '
+      my $d = decode_json(join("", <STDIN>));
+      print map { "$_->{vmid}\n" } sort { $a->{vmid} <=> $b->{vmid} } grep {
+        ($_->{type} // "") eq "qemu" && ($_->{pool} // "") eq $ENV{IN_POOL}
+          && (($_->{template} // 0) == 1 ? 1 : 0) == $ENV{TPL}
+          && ($_->{tags} // "") =~ /(^|[;, ])\Q$ENV{TAG}\E($|[;, ])/
+      } @$d;'
+}
+
+for old in $(tagged 0 fleetwright-build); do
   qm stop "$old" --skiplock 1 >/dev/null 2>&1 || true
   qm destroy "$old" --purge 1 >/dev/null 2>&1 && say "removed VM $old, an earlier build that did not finish" || say "could not remove VM $old, an earlier build that did not finish"
 done
 
-existing="$(pvesh get "/pools/$POOL" --output-format json | json 'join "\n", map { $_->{vmid} } grep { ($_->{template} // 0) == 1 && ($_->{tags} // "") =~ /(^|[;, ])fleetwright-image($|[;, ])/ } @{$d->{members}}')"
+existing="$(tagged 1 fleetwright-image)"
+# ONE IMAGE: a second copy, which a run made while the first could not be
+# found, is removed and the newest kept, by when Proxmox says each was made.
+if [ "$(echo $existing | wc -w)" -gt 1 ]; then
+  newest="" best=-1
+  for t in $existing; do
+    c="$(qm config "$t" 2>/dev/null | sed -n 's/^meta:.*ctime=\([0-9]*\).*/\1/p' || true)"
+    if [ "${c:-0}" -gt "$best" ]; then best="${c:-0}"; newest="$t"; fi
+  done
+  for t in $existing; do
+    [ "$t" = "$newest" ] && continue
+    if qm destroy "$t" --purge 1 >/dev/null 2>&1; then say "removed template $t, a second copy of the image"; else say "could not remove template $t, a second copy of the image"; fi
+  done
+  existing="$newest"
+fi
 if [ "$IMAGE" = 0 ]; then
   say "no image built (--no-image)${existing:+; the pool has template $existing}"
 elif [ -n "$existing" ] && [ "$REBUILD" = 0 ]; then

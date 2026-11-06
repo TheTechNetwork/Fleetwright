@@ -96,7 +96,15 @@ async function standIn({ cert, firewall = true, perms = null, version = '9.0.3' 
       const vmAt = /^\/nodes\/pve1\/qemu\/(\d+)(\/.*)?$/.exec(p);
       if (p === '/access/permissions') return ok(state.perms);
       if (p === '/version') return ok({ version });
-      if (p === '/pools/fleetwright') return ok({ members: [...state.vms.values()].map((v) => ({ type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, tags: v.tags, status: v.status })) });
+      // AS PROXMOX ANSWERS: a pool's members carry no tags (pve-manager,
+      // PVE/API2/Pool.pm); the cluster's resources carry them and the pool.
+      // The first version of this stand-in gave the pool tags, and the box's
+      // reading of them passed here and saw nothing on a real node.
+      if (p === '/pools/fleetwright') return ok({ members: [...state.vms.values()].map((v) => ({ type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, status: v.status })) });
+      if (p === '/cluster/resources') {
+        const vms = [...state.vms.values()].map((v) => ({ id: `qemu/${v.vmid}`, type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, tags: v.tags, status: v.status, pool: 'fleetwright' }));
+        return ok(params.type === 'vm' || !params.type ? [...vms, { id: 'qemu/999', type: 'qemu', vmid: 999, node: 'pve1', name: 'someone-elses', template: 1, tags: 'fleetwright-image', status: 'stopped' }] : []);
+      }
       if (p === '/cluster/firewall/options') return ok({ enable: state.firewall ? 1 : 0 });
       if (p === '/cluster/firewall/groups') return ok([{ group: PVE_FENCE_GROUP }]);
       // A NUMBER ASKED ABOUT is free or a parameter error, as Proxmox answers.
