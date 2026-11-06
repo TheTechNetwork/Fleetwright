@@ -305,6 +305,14 @@ Finding each first, so it is safe to run again:
    refused at setup, because reaching it would mean turning the chain check
    off.
 
+   The line carries the certificate blocks alone, with plain line ends,
+   whatever else the file around them held. A box reads any certificate
+   field the same way. One that still cannot use a line says which part was
+   wrong, in the setup's own words when it was handed the line, and in its
+   journal when the vault gave it one, once, while the record stays wrong.
+   The first real node's cluster stayed invisible because the box dropped
+   its record without saying so.
+
 Its options: `--address`, `--storage`, `--bridge`, `--enable-firewall`,
 `--channel stable|rolling`, `--no-image`, `--rebuild-image`,
 `--expire-days`, `--line-file`, `--coordinator`, `--vmids FROM-TO`.
