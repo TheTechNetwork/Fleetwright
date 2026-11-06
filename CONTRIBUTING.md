@@ -48,7 +48,10 @@ old version, which is rare and deliberate. See
 
 - `./scripts/verify.sh` green before every commit — it is the gate that can
   actually fail, and "SOMETHING FAILED — do not commit" means exactly that.
-  CI runs this same file rather than a copy of it.
+  CI runs this same file rather than a copy of it. `npm test` alone is the
+  Node suite and nothing else: the typecheck, the coverage ratchet, the
+  Worker bundles, the OpenAPI copy and the workflow checks are the rest of
+  CI, and only `verify` runs them.
 - **Coverage does not go backwards.** `verify.sh` runs
   `scripts/check-coverage.mjs`, which fails a change that executes less of a
   file than the last one did. It never fails on a low number and never argues

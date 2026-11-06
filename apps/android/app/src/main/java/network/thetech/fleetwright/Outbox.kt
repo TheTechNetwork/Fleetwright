@@ -97,7 +97,12 @@ class Outbox(context: Context) {
 
     private var entries: MutableList<Held> = load().toMutableList()
 
+    /** Everything held, expired or not. The screen draws the two apart. */
     val held: List<Held> get() = entries.sortedBy { it.queuedAt }
+    /** What will be sent when the fleet answers. */
+    val waiting: List<Held> get() = held.filter { !it.isExpired }
+    /** What will not be sent, and is shown as such until dismissed (rule 4). */
+    val expired: List<Held> get() = held.filter { it.isExpired }
 
     /** Hold a command. Returns null when this verb must not be held. */
     fun hold(verb: String, params: Map<String, String>, host: String?): Held? {
@@ -122,6 +127,10 @@ class Outbox(context: Context) {
         save()
     }
 
+    /**
+     * Forget every expired entry at once. Only a person's "dismiss all" would
+     * want this; a flush never calls it (rule 4: shown, not dropped).
+     */
     fun dropExpired() {
         val before = entries.size
         entries.removeAll { it.isExpired }
@@ -145,9 +154,13 @@ class Outbox(context: Context) {
      * and `resume` then `stop` are different intentions.
      */
     suspend fun flush(send: suspend (Held) -> Result<Unit>): Int {
-        dropExpired()
+        // EXPIRED ENTRIES ARE SKIPPED, NOT DROPPED. This called dropExpired()
+        // here, which deleted them on the next flush, so a start queued on the
+        // train was gone the next afternoon with nothing on any screen saying
+        // whether it ran. They stay, drawn as not sent, until the person
+        // dismisses them (MainActivity).
         var sent = 0
-        for (entry in held) {
+        for (entry in waiting) {
             val result = send(entry)
             if (result.isSuccess) {
                 drop(entry.id)

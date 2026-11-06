@@ -344,8 +344,10 @@ fun FleetScreen(
     val settings = remember { Settings(context) }
     val outbox = remember { Outbox(context) }
     val fleet = remember { Fleet(settings, outbox) }
-    // What is waiting, so the pending row can say how many.
-    var pending by remember { mutableStateOf(outbox.held.size) }
+    // What is waiting, so the pending row can say how many; and what expired
+    // unsent, so each can be said and dismissed.
+    var pending by remember { mutableStateOf(outbox.waiting.size) }
+    var expired by remember { mutableStateOf(outbox.expired) }
     val scope = rememberCoroutineScope()
 
     // rememberSaveable, not remember: a rotation destroys and recreates the
@@ -419,7 +421,8 @@ fun FleetScreen(
         runCatching { fleet.fleetHosts() }
             .onSuccess { binHosts = it; hostsHeard = true }
             .onFailure { if (!hostsHeard && status.isBlank()) status = "The fleet did not say which machines report: ${it.message ?: "no answer"}" }
-        pending = outbox.held.size
+        pending = outbox.waiting.size
+        expired = outbox.expired
         busy = false
     }
 
@@ -579,8 +582,13 @@ fun FleetScreen(
         }
     }
 
-    // BACK IN FRONT: a Proxmox VE setup that ended while the app was away has
-    // its line kept now, not at the next launch (ProxmoxThroughHandoff).
+    // BACK IN FRONT. This used to collect only a Proxmox VE line that ended
+    // while the app was away, so a phone that sat in a pocket while a session
+    // changed state showed the pocket's list until somebody pulled, and a
+    // command held through the outage waited for the next sign-in to be
+    // sent. The fleet is asked again, what was held goes, and the handoff is
+    // still collected. The first resume is the launch, which the sign-in
+    // effect below already covers.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var resumes by remember { mutableStateOf(0) }
     DisposableEffect(lifecycle) {
@@ -590,6 +598,21 @@ fun FleetScreen(
     }
     LaunchedEffect(resumes) {
         if (resumes > 1 && signedIn) {
+            reload(keepStatus = true)
+            val sent = outbox.flush { entry ->
+                runCatching {
+                    val reply = fleet.resend(entry)
+                    // A REFUSAL COUNTS AS DELIVERED: the fleet answered.
+                    if (!reply.ok) status = reply.text.said()
+                }
+            }
+            pending = outbox.waiting.size
+            expired = outbox.expired
+            if (sent > 0) reload(keepStatus = true)
+            // Every kind of setup this phone is owed a result from, not only
+            // Proxmox: a Xen Orchestra setup that finished while the app was
+            // away was collected only at the next launch or on its own screen.
+            XoHandoff.collectPending(settings, fleet)
             ProxmoxThroughHandoff.collectPending(settings, fleet)
             ProxmoxDirectHandoff.collectPending(settings)
         }
@@ -614,7 +637,8 @@ fun FleetScreen(
                 if (!reply.ok) status = reply.text.said()
             }
         }
-        pending = outbox.held.size
+        pending = outbox.waiting.size
+        expired = outbox.expired
         if (sent > 0) reload(keepStatus = true)
         // A token a finished hypervisor setup handed back while the app was
         // closed is collected now (XoHandoff).
@@ -857,6 +881,33 @@ fun FleetScreen(
                                     style = Design.Style.bodySmall,
                                     color = Design.Palette.inkDim.now,
                                 )
+                            }
+                            // AND WHAT WAS NOT SENT. A held command that outlived
+                            // its twelve hours used to be deleted on the next
+                            // flush, so a start queued on the train was gone the
+                            // next afternoon and the list got shorter: a queue
+                            // that forgets is a queue that lies (Outbox). Each
+                            // stays, in the person's own words, until dismissed.
+                            // Same words as iOS.
+                            expired.forEach { entry ->
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
+                                        .padding(Design.Space.inside),
+                                    horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+                                    verticalAlignment = Alignment.Top,
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Not sent: ${entry.summary}", style = Design.Style.bodySmall, color = Design.Palette.attention.now)
+                                        Text(
+                                            "Held for more than 12 hours while the fleet could not be reached, so it was not sent. Ask again if you still want it.",
+                                            style = Design.Style.label,
+                                            color = Design.Palette.inkDim.now,
+                                        )
+                                    }
+                                    TextButton(onClick = { outbox.drop(entry.id); expired = outbox.expired }) { Text("Dismiss") }
+                                }
                             }
                             if (sessions.isEmpty() && !busy) {
                                 EmptySessions(

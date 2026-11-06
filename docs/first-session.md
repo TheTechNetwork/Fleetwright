@@ -28,9 +28,12 @@ sudo bash install/install.sh
 ```
 
 **Use `bash`, not `sh`, for the installer run by hand.** It says so if you get
-it wrong. The prerequisite line is separate on purpose — node is the one thing
-the installer refuses to install for you, and it refuses *before* changing
-anything, naming this command.
+it wrong. The prerequisite line is separate on purpose: the installer installs
+the distribution's own node when there is none, but a node that is there and
+too old is one it will not replace for you — adding a third-party repository
+is not a thing an installer does on your behalf — and it refuses *before*
+changing anything, naming the prerequisite script at the coordinator you gave
+it.
 
 ## Join it to a coordinator
 
@@ -40,8 +43,8 @@ yet? Deploy it to your own Cloudflare account first —
 account — and give the installer that URL when it asks (or curl the
 coordinator's own `/install`, which carries it).
 
-Then a pin. From the app — Fleet → Add a host — which shows, beside the six
-digits, the one line that installs a fresh box and joins it:
+Then a pin. From the app — Machines › Add a machine — which shows, beside the
+six digits, the one line that installs a fresh box and joins it:
 
 ```sh
 curl -fsSL https://your-coordinator/install | sudo FLEETWRIGHT_ENROL_PIN=123456 sh
@@ -56,7 +59,13 @@ sudo -u fleetwright-sidecar fleetwright-sidecar enrol <pin>
 No phone signed in yet? The break-glass admin token mints one over curl — see
 the Hosts section of [coordinator-deploy.md](./coordinator-deploy.md).
 
-The pin is single-use and short-lived. Mint it when the box is ready for it.
+The pin is single-use and lasts ten minutes. Mint it when the box is ready for
+it; one that ran out is replaced from the same screen.
+
+**Joined is not ready.** The installer stops at "enrolled", and that is the
+box's half: until the next step is done the coordinator knows the machine and
+will still place no work on it, and both the machine's page in the app and
+`fleetwright-sidecar doctor` say so.
 
 ## Keep your Claude login, and approve this machine — **this is the step people miss**
 
@@ -78,10 +87,16 @@ it.
 ## Check it
 
 ```sh
-fleetwright doctor        # every line should say ok
-fleetwright new hello     # start a session on this box
-fleetwright list          # it should be running
+fleetwright doctor                # the box can run itself: every line should say ok
+sudo -u fleetwright-sidecar fleetwright-sidecar doctor   # the fleet can use it: every line should say ok
+fleetwright new hello             # start a session on this box
+fleetwright list                  # it should be running
 ```
+
+The sidecar's doctor is the one that answers the question above: its line
+"a Claude login for sessions" is ok once somebody's vault has approved this
+machine, and FAIL — naming the step — until then. The box's own Claude login
+is printed as a note and never judged; it is normal for a box to have none.
 
 From the fleet, through a coordinator:
 
@@ -98,7 +113,7 @@ Every refusal here names its reason. The three you are most likely to meet:
 
 | It says | It means |
 |---|---|
-| `nobody has linked a Claude account on this host` | You skipped the linking step above. The message names all three ways to do it. |
+| `nobody’s vault gives this host a Claude login` | You skipped the step above. Keep your Claude login under You › Credentials, then approve this machine from its page. |
 | `No host has ever connected to this coordinator` | The sidecar has not enrolled, or cannot reach the coordinator. Check `journalctl -u fleetwright-sidecar`. |
 | `<host> does not know that command — it is running older code` | The box is behind the coordinator. `fleetwright update --restart` on that box. |
 
@@ -107,7 +122,8 @@ Every refusal here names its reason. The three you are most likely to meet:
 ```sh
 npm install
 npm install --prefix worker    # the tests import the Worker; skipping this fails four files
-npm test
+npm test                       # the Node suite
+./scripts/verify.sh            # the rest of CI: coverage, typecheck, the Worker bundles, the contract
 ```
 
 ## The essays

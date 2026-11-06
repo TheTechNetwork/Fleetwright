@@ -167,6 +167,13 @@ enum PushCrypto {
         userInfo["e"] == nil ? clear : ""
     }
 
+    /// The body of a sealed notification that could not be opened in time,
+    /// so the person is told why there are no buttons and what still works.
+    static func openToAnswer(after body: String) -> String {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Open the app to answer." : "\(trimmed) Open the app to answer."
+    }
+
     static func unb64(_ value: String) -> Data? {
         var text = value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         let pad = (4 - (text.count % 4)) % 4

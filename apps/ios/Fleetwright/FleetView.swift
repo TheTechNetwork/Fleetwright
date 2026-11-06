@@ -265,15 +265,41 @@ struct FleetView: View {
                 // queue — it is a surprise arriving later. The count is enough:
                 // each command says what it is when it lands, and a list of
                 // them here would be a second inbox to read.
-                if !outbox.held.isEmpty {
+                if !outbox.waiting.isEmpty {
                     Label(
-                        outbox.held.count == 1
+                        outbox.waiting.count == 1
                             ? "1 command is held on this phone and will be sent when the fleet answers."
-                            : "\(outbox.held.count) commands are held on this phone and will be sent when the fleet answers.",
+                            : "\(outbox.waiting.count) commands are held on this phone and will be sent when the fleet answers.",
                         systemImage: "tray.full"
                     )
                     .fleetType(.bodySmall)
                     .foregroundStyle(Design.Palette.inkDim)
+                    .fleetCard(radius: Design.Radius.row, padding: Design.Space.inside,
+                               fill: Design.Palette.inner)
+                    .fleetRow()
+                }
+                // AND WHAT WAS NOT SENT. A held command that outlived its twelve
+                // hours used to be deleted on the next flush, so a start queued
+                // on the train was simply gone the next afternoon and the list
+                // got shorter: a queue that forgets is a queue that lies
+                // (Outbox). Each stays, in the person's own words, until they
+                // dismiss it. One row per command, because "2 expired" names
+                // nothing anybody can act on.
+                ForEach(outbox.expired) { entry in
+                    HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            Text("Not sent: \(entry.summary)")
+                                .fleetType(.bodySmall)
+                                .foregroundStyle(Design.Palette.attention)
+                            Text("Held for more than 12 hours while the fleet could not be reached, so it was not sent. Ask again if you still want it.")
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
+                        }
+                        Spacer(minLength: 0)
+                        Button("Dismiss") { outbox.drop(entry.id) }
+                            .fleetType(.label)
+                            .frame(minHeight: 44)
+                    }
                     .fleetCard(radius: Design.Radius.row, padding: Design.Space.inside,
                                fill: Design.Palette.inner)
                     .fleetRow()
@@ -429,6 +455,12 @@ struct FleetView: View {
             }
             // Again when the view changes: the same list, answered as somebody else.
             .task(id: settings.viewAsMember) { await refresh() }
+            // AND WHEN THE APP COMES BACK. The fleet may have moved while the
+            // phone was in a pocket; refresh re-lists and sends what was held,
+            // and keeps whatever reply is on screen.
+            .onReceive(NotificationCenter.default.publisher(for: .becameActive)) { _ in
+                Task { await refresh(keepStatus: true) }
+            }
             // The list a notification tap lands on should be the list as it is
             // now, not as it was when the phone went in a pocket — AND THE
             // SESSION THE NOTIFICATION WAS ABOUT SHOULD BE OPEN. A buzz says
@@ -471,8 +503,10 @@ struct FleetView: View {
     /// Try everything held, now that the fleet has just answered.
     ///
     /// ON REFRESH, NOT ON A TIMER. A timer retries into an outage; a refresh is
-    /// the moment we have just learned the fleet is reachable, and it already
-    /// happens when the app opens, is pulled, or comes back to the foreground.
+    /// the moment we have just learned the fleet is reachable, and it happens
+    /// when the app opens, is pulled, a notification is tapped, or the app
+    /// comes back to the foreground (FleetwrightApp posts `.becameActive`;
+    /// this comment used to claim the last one while nothing did it).
     /// Returns how many were sent, and does NOT refresh.
     ///
     /// The first version called refresh() at the end, and refresh() calls this
@@ -1236,6 +1270,11 @@ func describeRunning(_ host: Fleet.FleetHost) -> String {
         // above are silent on it and it read as current with an Apply button —
         // a row contradicting its own button.
         parts.append("update waiting")
+    } else if host.health?.updates?.incomplete != nil {
+        // THE CODE IS CURRENT AND THE UPDATE IS NOT DONE. The host says which
+        // part did not happen, on the machine's page; the row says only that
+        // "up to date" would be a claim about the code alone.
+        parts.append("last update incomplete")
     } else if host.health?.updates?.appStatusKnown == false {
         // "UP TO DATE" IS A CLAIM AND THIS IS WHERE IT WAS BEING INVENTED.
         // Every packaged box reports `appBehind: nil`, and a box that has never

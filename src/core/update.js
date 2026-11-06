@@ -32,6 +32,7 @@ import { log } from '../log.js';
 import { Connections } from './connectors.js';
 import { refreshSandboxImage, podmanAvailable } from './podman.js';
 import { requestRestart } from './restart-watch.js';
+import { recordUpdateOutcome, STEP_NAMES } from './update-outcome.js';
 import { sessionImage } from './sandbox-variant.js';
 import { unitName } from '../fleet/legacy-paths.js';
 
@@ -312,6 +313,16 @@ export const HOST_PATHS = Object.freeze([
 ]);
 
 /**
+ * What one update step answers. `incomplete` is a step that did not do its
+ * work and does not stop the update — the session image, the credential tidy
+ * — named as data so the reply can lead with it and update-outcome.js can
+ * keep it, rather than as a sentence a flag contradicts.
+ *
+ * @typedef {{ ok: boolean, changed: boolean, text?: string,
+ *   incomplete?: { step: import('./update-outcome.js').UpdateStep, text: string } }} StepResult
+ */
+
+/**
  * Pull the session image again, as an update step.
  *
  * EXPORTED BECAUSE THERE ARE TWO UPDATE PATHS AND THE IMAGE MOVES ON BOTH.
@@ -328,7 +339,7 @@ export const HOST_PATHS = Object.freeze([
  * @param {import('../config.js').Config} cfg
  * @param {{ changed: boolean }} [_state] unused; the signature is shared
  *   across STEPS so the union stays inferable
- * @returns {Promise<{ ok: boolean, changed: boolean, text?: string }>}
+ * @returns {Promise<StepResult>}
  */
 export async function refreshSandboxImageStep(cfg, _state) {
   if (!cfg.sandbox) return { ok: true, changed: false };
@@ -340,10 +351,17 @@ export async function refreshSandboxImageStep(cfg, _state) {
   if (!podmanAvailable(cfg)) return { ok: true, changed: false };
   const r = await refreshSandboxImage(cfg);
   if (!r.ok) {
-    // NOT a failure of the update. The box has a working image and the
-    // registry is what went wrong; saying so and carrying on beats
-    // failing an update over a network hiccup.
-    return { ok: true, changed: false, text: `Could not refresh the sandbox image: ${r.message}` };
+    // NOT a failure of the update, AND NOT A SUCCESS EITHER. The box has a
+    // working image and the registry is what went wrong, so the other steps
+    // carry on — failing an update over a network hiccup would leave new
+    // code unfetched for nothing. But `ok: true` with the reason in prose is
+    // how boxes stayed on an old image while /update said they were current
+    // (the incident above): the reply read the flag and nobody read the
+    // sentence. So the step is INCOMPLETE, as data: runUpdate leads with it,
+    // records it (update-outcome.js), and /updates keeps saying so until a
+    // pull succeeds.
+    const text = `The session image was NOT refreshed: ${r.message}. New sessions keep running the image already here; run the update again when the registry answers.`;
+    return { ok: true, changed: false, incomplete: { step: 'image', text: `not refreshed: ${r.message}` }, text };
   }
   return r.changed
     ? { ok: true, changed: true, text: 'Sandbox image updated — new sessions will use it.' }
@@ -514,7 +532,7 @@ const STEPS = [
      * @param {import('../config.js').Config} cfg
      * @param {{ changed: boolean }} [_state] unused; the signature is shared
      *   across STEPS so the union stays inferable
-     * @returns {Promise<{ ok: boolean, changed: boolean, text?: string }>}
+     * @returns {Promise<StepResult>}
      */
     run: refreshSandboxImageStep,
   },
@@ -544,8 +562,11 @@ const STEPS = [
         swept = new Connections(cfg.stateDir).sweep();
       } catch (e) {
         // Never fails an update. A box that could not tidy up is a box that
-        // still wants the new code.
-        return { ok: true, changed: false, text: `Could not tidy stored credentials: ${/** @type {Error} */ (e).message}` };
+        // still wants the new code — and a box that still holds what the
+        // tidy exists to remove, which is why this is incomplete rather
+        // than a sentence that `ok` then contradicts.
+        const why = /** @type {Error} */ (e).message;
+        return { ok: true, changed: false, incomplete: { step: 'credentials', text: `could not tidy them: ${why}` }, text: `Stored credentials were NOT tidied: ${why}` };
       }
 
       const lines = [];
@@ -657,7 +678,9 @@ export function restartSelf({ actor = null, stateDir = null, head = null, exit }
 /**
  * @param {import('../config.js').Config} cfg
  * @param {{ restart?: boolean, actor?: string|null, exit?: (code: number) => void }} opts
- * @returns {Promise<{ ok: boolean, changed: boolean, message: string, restarting: boolean }>}
+ * @returns {Promise<{ ok: boolean, changed: boolean, message: string, restarting: boolean,
+ *   incomplete?: Array<{ step: import('./update-outcome.js').UpdateStep, text: string }> }>} `incomplete`
+ *   names the steps that did not do their work; the message leads with them
  */
 export async function runUpdate(cfg, { restart = false, actor = null, exit } = {}) {
   const status = updateStatus(cfg);
@@ -680,26 +703,44 @@ export async function runUpdate(cfg, { restart = false, actor = null, exit } = {
 
   const parts = [];
   let changed = false;
+  /** The steps that did not do their work, in order. @type {Array<{ step: import('./update-outcome.js').UpdateStep, text: string }>} */
+  const incomplete = [];
+  // A NEW RECORD FOR THIS UPDATE, so a verdict from the one before does not
+  // outlive it. Each step writes its own line as it is known.
+  recordUpdateOutcome(cfg.stateDir, { image: null, credentials: null }, { fresh: true });
   for (const step of STEPS) {
     // Awaited: the sandbox-image step pulls from a registry, and that pull
     // no longer holds the event loop for the length of the transfer.
-    /** @type {{ ok: boolean, changed: boolean, text?: string }} */
+    /** @type {StepResult} */
     const result = await step.run(cfg, { changed });
     // A step with nothing to say says nothing, rather than contributing a blank
     // paragraph to a chat message.
     if (result.text) parts.push(result.text);
-    if (!result.ok) return { ok: false, changed, message: parts.join('\n\n'), restarting: false };
+    if (!result.ok) return { ok: false, changed, incomplete, message: parts.join('\n\n'), restarting: false };
+    if (result.incomplete) {
+      incomplete.push(result.incomplete);
+      recordUpdateOutcome(cfg.stateDir, { [result.incomplete.step]: { ok: false, text: result.incomplete.text } });
+    } else if (step.name === 'sandbox image' || step.name === 'credentials') {
+      recordUpdateOutcome(cfg.stateDir, { [step.name === 'credentials' ? 'credentials' : 'image']: { ok: true, text: 'finished' } });
+    }
     changed = changed || result.changed;
+  }
+  // WHAT DID NOT FINISH GOES FIRST. The reply is read top to bottom, and
+  // "Restarting now" at the end of it is the sentence somebody remembers; the
+  // one that says the image is still last month's belongs above it, not in
+  // paragraph three.
+  if (incomplete.length) {
+    parts.unshift(`Not everything finished: ${incomplete.map((i) => `${STEP_NAMES[i.step]} ${i.text}`).join('; ')}.`);
   }
 
   if (!restart) {
-    if (!changed) return { ok: true, changed: false, message: parts.join('\n\n'), restarting: false };
+    if (!changed) return { ok: true, changed: false, incomplete, message: parts.join('\n\n'), restarting: false };
     parts.push(
       canSelfRestart()
         ? 'The new code is on disk but this process is still the old one. /update --restart to apply it.'
         : 'The new code is on disk. Restart the service to apply it.',
     );
-    return { ok: true, changed: true, message: parts.join('\n\n'), restarting: false };
+    return { ok: true, changed: true, incomplete, message: parts.join('\n\n'), restarting: false };
   }
 
   // A RESTART WAS ASKED FOR, so `changed` no longer decides anything.
@@ -719,7 +760,7 @@ export async function runUpdate(cfg, { restart = false, actor = null, exit } = {
   // session running.
   if (!canSelfRestart()) {
     parts.push('Not running under systemd, so this cannot restart itself — restart it however you started it.');
-    return { ok: true, changed, message: parts.join('\n\n'), restarting: false };
+    return { ok: true, changed, incomplete, message: parts.join('\n\n'), restarting: false };
   }
 
   if (!changed) {
@@ -752,5 +793,5 @@ export async function runUpdate(cfg, { restart = false, actor = null, exit } = {
   const stop = exit || ((code) => process.exit(code));
   setTimeout(() => stop(0), RESTART_DELAY_MS);
 
-  return { ok: true, changed: true, message: parts.join('\n\n'), restarting: true };
+  return { ok: true, changed: true, incomplete, message: parts.join('\n\n'), restarting: true };
 }
