@@ -2161,21 +2161,14 @@ class Fleet(
         val kind: String? = null,
     ) {
         /**
-         * "New machine from Fleetwright Ubuntu 24.04 on Proxmox VE at
-         * 10.69.10.10", or "… on XCP-ng pool rack", for a picker. Asked: "Is it
-         * on proxmox or on xcp where is it going to go?" A Proxmox VE pool is
-         * always `fleetwright`, so its name told nothing; the kind is named, and
-         * the cluster's address. The coordinator says it the same way (core.js,
-         * imageWhere).
+         * "New machine from Fleetwright Ubuntu 24.04 on Proxmox", or "… on
+         * XCP-ng", for a picker. Asked: "Is it on proxmox or on xcp where is it
+         * going to go?" A Proxmox VE pool is always `fleetwright`, so its name
+         * told nothing, and the kind alone is enough: "if we need sub pickers
+         * from there we can do it". The coordinator says it the same way
+         * (core.js, imageWhere).
          */
-        val label: String get() = "New machine from $name on $whereTo"
-
-        val whereTo: String
-            get() {
-                val host = address.replace(Regex(":[0-9]+$"), "")
-                if (onProxmox) return "Proxmox VE at $host"
-                return poolName?.let { "XCP-ng pool $it" } ?: "Xen Orchestra at $host"
-            }
+        val label: String get() = "New machine from $name on ${if (onProxmox) "Proxmox" else "XCP-ng"}"
 
         /** The first free lab of that kind, or null when none is. */
         fun freeLab(open: Boolean): VmLab? = labs?.firstOrNull { it.open == open && it.free }
