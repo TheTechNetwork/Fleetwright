@@ -1846,6 +1846,41 @@ struct Fleet {
         var label: String { "New machine from \(name)" + (poolName.map { " on \($0)" } ?? "") }
     }
 
+    /// One of your hypervisors, of either kind, as the boxes holding its
+    /// token last saw it: the `hypervisors` field of /api/hosts. A Proxmox
+    /// VE cluster's token lives in the vault and on boxes alone, so this is
+    /// how this phone knows one exists (docs/hypervisors.md, "One page").
+    struct Hypervisor: Codable, Hashable, Identifiable {
+        let address: String
+        /// `proxmox`, or `xo` for Xen Orchestra.
+        let kind: String
+        let boxes: [Box]
+        let pools: [String]?
+        let version: String?
+        /// Nil is no box could tell, never "supported".
+        let supported: Bool?
+        let fenced: Bool?
+        let images: Int?
+        let machines: Int?
+        var id: String { "\(kind) \(address)" }
+        var onProxmox: Bool { kind == "proxmox" }
+
+        struct Box: Codable, Hashable {
+            let hostId: String
+            /// What that box last saw. Nil is "has not looked yet", never "no".
+            let reachable: Bool?
+            let problem: String?
+        }
+    }
+
+    /// Your hypervisors. Nil from a coordinator too old to send the field,
+    /// which is cannot tell and not none.
+    func hypervisors() async throws -> [Hypervisor]? {
+        let data = try await get("/api/hosts")
+        struct Reply: Codable { let hypervisors: [Hypervisor]? }
+        return try JSONDecoder().decode(Reply.self, from: data).hypervisors
+    }
+
     /// The machine images you can start a machine from: the `vmImages` field
     /// of /api/hosts, one per image, from the boxes holding a pool token you
     /// kept in your vault. Empty is an answer (none of yours); an older

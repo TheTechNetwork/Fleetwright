@@ -126,7 +126,10 @@ test('iOS: the choice is sent with an idempotency key and never held', () => {
 });
 
 test('iOS: the pools this phone holds are listed on Machines for a known admin only, each leading to its policy', () => {
-  assert.match(IOS, /if settings\.configured && settings\.showsAdmin && !hypervisors\.isEmpty \{\s*hypervisorRows\s*\}/);
+  // ONE ROW on Machines for a known admin, to the one page, which lists the
+  // pools this phone holds beside the fleet's.
+  assert.match(IOS, /if settings\.configured && settings\.showsAdmin \{\s*NavigationLink \{\s*HypervisorsView\(settings: settings\)/);
+  assert.match(IOS, /for pool in held where !all\.contains\(where: \{ !\$0\.proxmox && \$0\.address == pool\.address \}\)/);
   assert.match(IOS, /AddHypervisorView\(settings: settings, policyFor: pool\.address\)/);
   // The list is written where the token is kept, and nowhere else.
   const handoff = read('apps/ios/Fleetwright/XOSetupHandoff.swift');

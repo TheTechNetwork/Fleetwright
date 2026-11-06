@@ -2187,6 +2187,61 @@ class Fleet(
         }
     }
 
+    /**
+     * One of your hypervisors, of either kind, as the boxes holding its token
+     * last saw it: the `hypervisors` field of /api/hosts. A Proxmox VE
+     * cluster's token lives in the vault and on boxes alone, so this is how
+     * this phone knows one exists (docs/hypervisors.md, "One page").
+     */
+    data class Hypervisor(
+        val address: String,
+        /** `proxmox`, or `xo` for Xen Orchestra. */
+        val kind: String,
+        val boxes: List<HypervisorBox>,
+        val pools: List<String>,
+        val version: String?,
+        /** Null is no box could tell, never "supported". */
+        val supported: Boolean?,
+        val fenced: Boolean?,
+        val images: Int?,
+        val machines: Int?,
+    ) {
+        val onProxmox: Boolean get() = kind == "proxmox"
+    }
+
+    /** What one box holding a hypervisor last saw: null is it has not looked yet, never no. */
+    data class HypervisorBox(val hostId: String, val reachable: Boolean?, val problem: String?)
+
+    /** Your hypervisors. Null from a coordinator too old to send the field: cannot tell, not none. */
+    suspend fun hypervisors(): Result<List<Hypervisor>?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val list = get("/api/hosts").optJSONArray("hypervisors") ?: return@runCatching null
+            val flag = { o: JSONObject, k: String -> if (o.has(k) && !o.isNull(k)) o.optBoolean(k) else null }
+            val text = { o: JSONObject, k: String -> o.optString(k).takeIf { o.has(k) && !o.isNull(k) && it.isNotBlank() } }
+            val count = { o: JSONObject, k: String -> if (o.has(k) && !o.isNull(k)) o.optInt(k) else null }
+            (0 until list.length()).mapNotNull { i ->
+                val o = list.optJSONObject(i) ?: return@mapNotNull null
+                val address = o.optString("address").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val boxes = o.optJSONArray("boxes")
+                val pools = o.optJSONArray("pools")
+                Hypervisor(
+                    address = address,
+                    kind = if (o.optString("kind") == "proxmox") "proxmox" else "xo",
+                    boxes = if (boxes == null) emptyList() else (0 until boxes.length()).mapNotNull { j ->
+                        val b = boxes.optJSONObject(j) ?: return@mapNotNull null
+                        HypervisorBox(b.optString("hostId"), flag(b, "reachable"), text(b, "problem"))
+                    },
+                    pools = if (pools == null) emptyList() else (0 until pools.length()).map { pools.optString(it) },
+                    version = text(o, "version"),
+                    supported = flag(o, "supported"),
+                    fenced = flag(o, "fenced"),
+                    images = count(o, "images"),
+                    machines = count(o, "machines"),
+                )
+            }
+        }
+    }
+
     suspend fun vmImages(): Result<List<VmImage>> = withContext(Dispatchers.IO) {
         runCatching {
             val list = get("/api/hosts").optJSONArray("vmImages") ?: return@runCatching emptyList()

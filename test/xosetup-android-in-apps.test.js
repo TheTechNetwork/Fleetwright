@@ -22,10 +22,15 @@ const ANDROID = androidSources();
 const DIR = new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/', import.meta.url);
 const file = (/** @type {string} */ name) => readFileSync(new URL(name, DIR), 'utf8');
 
-test('Android: Add a hypervisor is on Machines, for admins only', () => {
+test('Android: Add a hypervisor is on the Hypervisors page, reached from Machines for admins only', () => {
   const machines = file('MachinesScreen.kt');
-  assert.match(machines, /if \(admin == true\) \{\s*OpenRow\("Add a hypervisor"\)/);
+  assert.match(machines, /if \(admin == true\) \{\s*OpenRow\("Hypervisors"\)/);
   assert.ok(machines.includes('OpenRow("Add a machine")'), 'beside Add a machine, not instead of it');
+  // There, one Add, which asks which kind and opens that kind's own setup.
+  const page = file('HypervisorsScreen.kt');
+  assert.ok(page.includes('OpenRow("Add a hypervisor") { choosing = true }'));
+  assert.ok(page.includes('ChoiceRow("Xen Orchestra", HypervisorWords.XO_CHOICE) { choosing = false; onAddXo() }'));
+  assert.match(machines, /onAddXo = \{ listingHypervisors = false; hypervisorJob = null; addingHypervisor = true \}/);
 });
 
 test('Android: the screen asks the address, probes, then begins, runs, polls and cancels, in that order', () => {

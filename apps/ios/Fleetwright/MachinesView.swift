@@ -132,49 +132,25 @@ struct MachinesView: View {
                 .fleetRow()
             }
 
-            // A POOL OF VIRTUAL MACHINES, for the one person who can add one:
-            // onboarding makes a user and a token on the hypervisor, which is
-            // the fleet's business and not a member's. Drawn only for a known
-            // admin (nil is cannot tell and draws nothing), and the row is the
-            // same shape as the one above it, because it is the same kind of
-            // thing: a way in, read once. The stacked squares are the mark
-            // the Dynamic Island uses for the same job, so the two agree.
+            // EVERY HYPERVISOR, ON ONE PAGE: Xen Orchestra's pools and Proxmox
+            // VE's clusters, what the machines holding each saw, and the one
+            // way to add another. Asked for: "unify the two hypervisor pages".
+            // It replaces Add a hypervisor, Add Proxmox VE and the list of
+            // this phone's pools, which were three rows for one thing, and
+            // showed no Proxmox cluster at all. For a known admin only (nil
+            // is cannot tell and draws nothing): adding one makes a user and
+            // a token on the hypervisor, the fleet's business. The stacked
+            // squares are the mark the Dynamic Island uses for the same job.
             if settings.configured && settings.showsAdmin {
                 NavigationLink {
-                    AddHypervisorView(settings: settings)
+                    HypervisorsView(settings: settings)
                 } label: {
-                    Label("Add a hypervisor", systemImage: "square.stack.3d.up")
+                    Label("Hypervisors", systemImage: "square.stack.3d.up")
                         .fleetType(.body)
                         .frame(minHeight: 44)
                 }
                 .fleetCard(radius: Design.Radius.cardSmall)
                 .fleetRow()
-                // PROXMOX VE beside it, the same shape: its own screen,
-                // because it asks for none of what Xen Orchestra's does.
-                NavigationLink {
-                    AddProxmoxView(settings: settings)
-                } label: {
-                    Label("Add Proxmox VE", systemImage: "square.stack.3d.up")
-                        .fleetType(.body)
-                        .frame(minHeight: 44)
-                }
-                .fleetCard(radius: Design.Radius.cardSmall)
-                .fleetRow()
-            }
-
-            // THE POOLS THIS PHONE HOLDS, each a way to its page: what is on
-            // it and what can be done there, phone-direct with the token
-            // setup handed back (PoolManageView, docs/manage.md), and the
-            // change to what the fleet may use. Behind the same gate as Add a
-            // hypervisor, for the same reason, and drawn only when there is
-            // one: a heading over nothing is a screen promising something it
-            // does not have. The rows are cards of the one shape (RHYTHM 1):
-            // the address at the weight a hostname gets, what the record says
-            // the pools are called, and when this phone last looked.
-            // A method rather than more of this body, for the reason
-            // healthLines gives.
-            if settings.configured && settings.showsAdmin && !hypervisors.isEmpty {
-                hypervisorRows
             }
         }
         .listStyle(.plain)
@@ -231,47 +207,6 @@ struct MachinesView: View {
         }
         .frame(minHeight: 44, alignment: .leading)
         .accessibilityElement(children: .combine)
-    }
-
-    @ViewBuilder private var hypervisorRows: some View {
-        Text("Hypervisors")
-            .fleetType(.section)
-            .foregroundStyle(Design.Palette.ink)
-            .accessibilityAddTraits(.isHeader)
-            .padding(.top, Design.Space.insideTight)
-            .fleetRow()
-        ForEach(hypervisors) { pool in
-            NavigationLink {
-                PoolManageView(settings: settings, pool: pool)
-            } label: {
-                hypervisorRow(pool)
-            }
-            .fleetCard(radius: Design.Radius.cardSmall)
-            .fleetRow()
-        }
-    }
-
-    private func hypervisorRow(_ pool: XOSetupHandoff.Held) -> some View {
-        VStack(alignment: .leading, spacing: Design.Space.hair) {
-            Text(pool.address)
-                .fleetType(.bodyStrong)
-                .foregroundStyle(Design.Palette.ink)
-            // Nil is a record that did not say, and is said as that.
-            Text(pool.pools.map { $0.isEmpty ? "Its record lists no pools" : $0.joined(separator: ", ") }
-                 ?? "Pool names not recorded")
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.inkDim)
-            // HOW CURRENT ITS PAGE WILL BE: nothing watches a pool while the
-            // app is closed, so the row says when this phone last looked
-            // rather than letting the page's first frame pass for now.
-            Text(Manage.lastLooked(pool.address).map { Manage.Words.rowLooked(relativeTime($0.timeIntervalSince1970 * 1000)) }
-                 ?? Manage.Words.never)
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.inkDim)
-        }
-        .frame(minHeight: 44, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityHint("Opens its page")
     }
 
     /// Push the page somebody asked for from elsewhere, once this list knows
