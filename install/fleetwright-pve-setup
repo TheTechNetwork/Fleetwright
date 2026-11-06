@@ -600,7 +600,10 @@ CUSTOM=/etc/pve/local/pveproxy-ssl.pem
 CA=/etc/pve/pve-root-ca.pem
 TRUST=ca
 if [ -f "$CUSTOM" ] && ! openssl verify -CAfile "$CA" "$CUSTOM" >/dev/null 2>&1; then
-  if openssl verify "$CUSTOM" >/dev/null 2>&1; then
+  # WITH THE INTERMEDIATES THE FILE CARRIES: an ACME certificate is the leaf
+  # and then its issuer, which the system's roots do not hold, and `verify`
+  # reads the first certificate alone unless it is given the rest.
+  if openssl verify -untrusted "$CUSTOM" "$CUSTOM" >/dev/null 2>&1; then
     TRUST=public
   elif openssl verify -CAfile "$CUSTOM" "$CUSTOM" >/dev/null 2>&1; then
     CA="$CUSTOM"
@@ -608,8 +611,38 @@ if [ -f "$CUSTOM" ] && ! openssl verify -CAfile "$CA" "$CUSTOM" >/dev/null 2>&1;
     die "the web interface's certificate ($CUSTOM) is signed by a CA this node does not hold, so the fleet could not check it. Put the CA's certificate after it in that file, or use an ACME certificate, and run this again."
   fi
 fi
-LINE="$(KIND=proxmox ADDRESS="$ADDRESS" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POOL="$POOL" TRUST="$TRUST" CA_FILE="$CA" VMID_FROM="${VMID_FROM:-}" VMID_TO="${VMID_TO:-}" perl -MJSON::PP -MMIME::Base64 -e '
+# THE NAME A PUBLIC CERTIFICATE IS CHECKED AS, when the address is an IP. A
+# browser holds a certificate to the name it asked for, and this one was
+# issued to a name, not to the node's address: checked against the IP, every
+# box refused it. So the line carries the name too, and a box dials the
+# address and holds the certificate to the name, the way a hosts-file entry
+# would, for its own connection alone and with no DNS. The node's own name
+# when the certificate covers it, else the first name it was issued to.
+NAME=""
+host_part="${ADDRESS%:*}"
+if [ "$TRUST" = public ] && printf '%s' "$host_part" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$|^\[?[0-9A-Fa-f]*:[0-9A-Fa-f:]+\]?$'; then
+  sans="$(openssl x509 -in "$CUSTOM" -noout -ext subjectAltName 2>/dev/null | grep -o 'DNS:[^,[:space:]]*' | sed 's/^DNS://' || true)"
+  fqdn="$(hostname -f 2>/dev/null || true)"
+  for n in $sans; do
+    if [ "$n" = "$fqdn" ]; then NAME="$n"; fi
+  done
+  if [ -z "$NAME" ]; then
+    for n in $sans; do
+      case "$n" in '*.'*) ;; *) if [ -z "$NAME" ]; then NAME="$n"; fi ;; esac
+    done
+  fi
+  # A WILDCARD ALONE covers the node's name when its domain is the same.
+  if [ -z "$NAME" ] && [ -n "$fqdn" ]; then
+    for n in $sans; do
+      if [ "${n#\*.}" != "$n" ] && [ "${fqdn#*.}" = "${n#\*.}" ]; then NAME="$fqdn"; fi
+    done
+  fi
+  [ -n "$NAME" ] || die "the web interface's certificate is publicly trusted but names no host this node can be checked as, so a box reaching $host_part would refuse it. Run this again with --address and the name the certificate was issued to."
+  say "the web interface's certificate is checked as $NAME, at $host_part"
+fi
+LINE="$(KIND=proxmox ADDRESS="$ADDRESS" NAME="$NAME" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POOL="$POOL" TRUST="$TRUST" CA_FILE="$CA" VMID_FROM="${VMID_FROM:-}" VMID_TO="${VMID_TO:-}" perl -MJSON::PP -MMIME::Base64 -e '
   my %r = (kind => $ENV{KIND}, address => $ENV{ADDRESS}, token => $ENV{TOKEN}, pool => $ENV{POOL});
+  $r{name} = $ENV{NAME} if length $ENV{NAME};
   $r{vmids} = { from => $ENV{VMID_FROM} + 0, to => $ENV{VMID_TO} + 0 } if length $ENV{VMID_FROM};
   # THE CERTIFICATE BLOCKS ALONE, with plain line ends: a file a tool wrote
   # may carry Windows line ends or subject= lines between them, which
