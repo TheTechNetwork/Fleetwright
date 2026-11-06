@@ -230,7 +230,7 @@ const TOKEN_LIFETIME_MS = 180 * 24 * 60 * 60_000;
  *
  * @param {string} address
  * @param {{ timeoutMs?: number, through?: (() => Promise<import('node:stream').Duplex>)|null }} [opts]
- * @returns {Promise<{ reachable: boolean, xo: boolean|null, tls: boolean, cert: string|null, certificate: ReturnType<typeof describeCertificate>, version: string|null, text: string, ssh?: any }>}
+ * @returns {Promise<{ reachable: boolean, xo: boolean|null, tls: boolean, cert: string|null, certificate: ReturnType<typeof describeCertificate>, version: string|null, text: string, ssh?: any, pve?: boolean|null }>}
  */
 // FOUR SECONDS AN ATTEMPT, and at most two attempts (HTTPS, then plain HTTP
 // on 80, or on the address's own port), so a probe answers inside the
@@ -251,14 +251,54 @@ export async function probe(address, { timeoutMs = 4_000, through = null } = {})
   // and its answer kept only when Xen Orchestra did not.
   const stop = new AbortController();
   const overSsh = sshProbe(address, { signal: stop.signal }).catch(() => null);
+  // AND PROXMOX VE'S API, AT THE SAME TIME, so the phone can tell which kind
+  // of hypervisor this is without asking. Asked for: "Instead of ask which
+  // kind detect".
+  const pve = probePve(address, { timeoutMs }).catch(() => null);
   const found = await probeXo(address, { timeoutMs });
   if (found.xo === true) {
     stop.abort();
-    return found;
+    return { ...found, pve: await pve };
   }
   const ssh = await overSsh;
-  return ssh ? { ...found, ssh: ssh.ssh } : found;
+  return { ...found, pve: await pve, ...(ssh ? { ssh: ssh.ssh } : {}) };
 }
+
+/**
+ * WHETHER PROXMOX VE'S API PORT TAKES A CONNECTION at the address: true when
+ * it does, null when nothing answered there. ONLY TO TELL WHICH KIND, and
+ * the same look the phone takes (HypervisorAddress.pveAnswers): a TCP
+ * connection, closed as soon as it opens, with nothing sent and no TLS, so
+ * no certificate is skipped to find out. 8006 is Proxmox VE's own port and
+ * nothing else's that this asks about; Xen Orchestra's answer is asked first
+ * and wins. Setup checks the node itself over SSH.
+ *
+ * @param {string} address
+ * @param {{ timeoutMs: number }} opts
+ * @returns {Promise<boolean|null>}
+ */
+export function probePve(address, { timeoutMs }) {
+  // ITS OWN PORT, unless the address names another: 443 is Xen Orchestra's.
+  const { host, port: named, explicitPort } = splitAddress(address, PVE_API_PORT);
+  const port = explicitPort && named !== 443 ? named : PVE_API_PORT;
+  return new Promise((resolve) => {
+    let done = false;
+    const end = (/** @type {boolean|null} */ v) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(v);
+    };
+    const socket = net.connect({ host, port });
+    const timer = setTimeout(() => end(null), timeoutMs);
+    socket.once('connect', () => end(true));
+    socket.once('error', () => end(null));
+  });
+}
+
+/** Proxmox VE's API port. */
+const PVE_API_PORT = 8006;
 
 /**
  * The HTTPS look, then plain HTTP: `probe` without SSH.
