@@ -265,12 +265,13 @@ export async function probe(address, { timeoutMs = 4_000, through = null } = {})
 }
 
 /**
- * WHETHER PROXMOX VE ANSWERS at the address, on its API port: true when the
- * server says it is `pve-api-daemon`, false when something else answered
- * there, null when nothing did. ONLY TO TELL WHICH KIND: one GET of the
- * version with no token and no body, so nothing of anybody's is sent, which
- * is why the certificate is not checked here; setup checks it, and a box
- * holds every later request to what the line says to trust (pve-api.js).
+ * WHETHER PROXMOX VE'S API PORT TAKES A CONNECTION at the address: true when
+ * it does, null when nothing answered there. ONLY TO TELL WHICH KIND, and
+ * the same look the phone takes (HypervisorAddress.pveAnswers): a TCP
+ * connection, closed as soon as it opens, with nothing sent and no TLS, so
+ * no certificate is skipped to find out. 8006 is Proxmox VE's own port and
+ * nothing else's that this asks about; Xen Orchestra's answer is asked first
+ * and wins. Setup checks the node itself over SSH.
  *
  * @param {string} address
  * @param {{ timeoutMs: number }} opts
@@ -289,17 +290,10 @@ export function probePve(address, { timeoutMs }) {
       socket.destroy();
       resolve(v);
     };
-    const socket = tls.connect({ host, port, ...(net.isIP(host) ? {} : { servername: host }), rejectUnauthorized: false, ALPNProtocols: ['http/1.1'] });
+    const socket = net.connect({ host, port });
     const timer = setTimeout(() => end(null), timeoutMs);
-    let head = '';
-    socket.once('secureConnect', () => socket.write(`GET /api2/json/version HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`));
-    socket.on('data', (d) => {
-      head += d.toString('latin1');
-      const at = head.indexOf('\r\n\r\n');
-      if (at >= 0 || head.length > 16_384) end(/^server:\s*pve-api-daemon/im.test(head.slice(0, at >= 0 ? at : head.length)));
-    });
-    socket.once('end', () => end(head ? /^server:\s*pve-api-daemon/im.test(head) : false));
-    socket.once('error', () => end(head ? false : null));
+    socket.once('connect', () => end(true));
+    socket.once('error', () => end(null));
   });
 }
 
