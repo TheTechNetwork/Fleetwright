@@ -125,7 +125,7 @@ export function writeImagePin(source, name, { url, field, digest, compressedSize
  * @param {{ url: string, field: string, digest: string }} pin
  */
 export function writeScriptPin(script, key, { url, field, digest }) {
-  const re = new RegExp(`^( {4}${key.replace(/[.]/g, '\\.')}\\) OS="[^"]*" URL=)\\S+( SUM=)[a-z0-9]+:[0-9a-f]+( ;;)$`, 'm');
+  const re = new RegExp(`^( {4}${key.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}\\) OS="[^"]*" URL=)\\S+( SUM=)[a-z0-9]+:[0-9a-f]+( ;;)$`, 'm');
   if (!re.test(script)) throw new Error(`install/fleetwright-pve-setup has no row for ${key}`);
   return script.replace(re, `$1${url}$2${field}:${digest}$3`);
 }
