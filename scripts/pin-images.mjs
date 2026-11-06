@@ -25,6 +25,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const SOURCE = new URL('../src/fleet/host/vm-image.js', import.meta.url);
+/** The Proxmox VE setup, which carries the same pins in its own table. */
+const PVE_SCRIPT = new URL('../install/fleetwright-pve-setup', import.meta.url);
 
 /** The same three days renovate.json soaks everything else for. */
 export const SOAK_MS = 3 * 24 * 60 * 60 * 1000;
@@ -112,6 +114,22 @@ export function writeImagePin(source, name, { url, field, digest, compressedSize
   return source.slice(0, start) + block + source.slice(end);
 }
 
+/**
+ * The Proxmox VE setup script with one image's row moved to the new pin.
+ * The script has no Fleetwright to import the catalogue from, so it carries
+ * its own table (`pinned`), and test/pve-pools.test.js holds the two equal:
+ * a pin written to vm-image.js alone would fail it. Refuses a script with no
+ * row for the image, rather than leave it on the old build.
+ *
+ * @param {string} script @param {string} key
+ * @param {{ url: string, field: string, digest: string }} pin
+ */
+export function writeScriptPin(script, key, { url, field, digest }) {
+  const re = new RegExp(`^( {4}${key.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}\\) OS="[^"]*" URL=)\\S+( SUM=)[a-z0-9]+:[0-9a-f]+( ;;)$`, 'm');
+  if (!re.test(script)) throw new Error(`install/fleetwright-pve-setup has no row for ${key}`);
+  return script.replace(re, `$1${url}$2${field}:${digest}$3`);
+}
+
 /** @param {string} url @param {RequestInit} [init] */
 async function get(url, init) {
   const res = await fetch(url, { redirect: 'follow', ...init });
@@ -139,6 +157,7 @@ async function head(url, n) {
 async function main() {
   const images = await import('../src/fleet/host/vm-image.js');
   let source = readFileSync(SOURCE, 'utf8');
+  let script = readFileSync(PVE_SCRIPT, 'utf8');
   const now = Date.now();
   let wrote = 0;
   for (const p of PINNED) {
@@ -162,10 +181,14 @@ async function main() {
     if (!Number.isSafeInteger(length) || length <= 0) throw new Error(`${url} gives no length`);
     const rawSize = qcow2VirtualSize(await head(url, 64));
     source = writeImagePin(source, p.name, { url, field: p.field, digest, compressedSize: length, rawSize });
+    script = writeScriptPin(script, spec.key, { url, field: p.field, digest });
     wrote++;
     console.log(`${spec.os} ${spec.build}: ${length} bytes, ${p.field} ${digest.slice(0, 16)}…, a ${rawSize}-byte disk\n  ${url}`);
   }
-  if (wrote) writeFileSync(SOURCE, source);
+  if (wrote) {
+    writeFileSync(SOURCE, source);
+    writeFileSync(PVE_SCRIPT, script);
+  }
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

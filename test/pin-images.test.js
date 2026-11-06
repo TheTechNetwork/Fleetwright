@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs';
 
 import { DEBIAN_IMAGE, UBUNTU_2404_IMAGE, UBUNTU_2604_IMAGE } from '../src/fleet/host/vm-image.js';
 import { EDGE_IMAGE, OPNSENSE_IMAGE } from '../src/fleet/host/edge-router.js';
-import { PINNED, SOAK_MS, addressFor, digestFor, qcow2VirtualSize, soakLeft, writeImagePin } from '../scripts/pin-images.mjs';
+import { PINNED, SOAK_MS, addressFor, digestFor, qcow2VirtualSize, soakLeft, writeImagePin, writeScriptPin } from '../scripts/pin-images.mjs';
 import { RELEASES, checkManifestDigest, pinFrom, renderEdgeImage, tagFor, writeEdgeImagePin } from '../scripts/pin-edge-image.mjs';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -228,4 +228,22 @@ test('the script writes one image’s address, digest and sizes, and nothing els
   assert.deepEqual(changed, [`  url: '${pin.url}',`, `  sha256: '${pin.digest}',`, '  compressedSize: 1,', '  rawSize: 2,']);
   assert.ok(out.includes(`url: '${UBUNTU_2604_IMAGE.url}'`), 'the other Ubuntu image is left as it was');
   assert.throws(() => writeImagePin(source, 'NOT_AN_IMAGE', pin), /not where this script expects it/);
+});
+
+// THE PROXMOX VE SETUP CARRIES THE SAME PINS, in its own table, because it
+// runs on a node with no Fleetwright to import them from. A pin written to
+// vm-image.js alone would leave Proxmox on the old build and fail
+// test/pve-pools.test.js, so the pin moves the script's row too, and only it.
+test('a pin moves the Proxmox VE setup script\'s row for that image, and no other', () => {
+  const script = readFileSync(new URL('../install/fleetwright-pve-setup', import.meta.url), 'utf8');
+  const url = UBUNTU_2404_IMAGE.url.replace(UBUNTU_2404_IMAGE.build, 'release-20991231');
+  const digest = 'ab'.repeat(32);
+  const moved = writeScriptPin(script, UBUNTU_2404_IMAGE.key, { url, field: 'sha256', digest });
+  const changed = moved.split('\n').filter((l, i) => l !== script.split('\n')[i]);
+  assert.deepEqual(changed, [`    ubuntu-24.04) OS="${UBUNTU_2404_IMAGE.os}" URL=${url} SUM=sha256:${digest} ;;`]);
+  assert.throws(() => writeScriptPin(script, 'rocky-10', { url, field: 'sha256', digest }), /no row for rocky-10/);
+  // Every image this pins has a row there to move.
+  for (const spec of [DEBIAN_IMAGE, UBUNTU_2404_IMAGE, UBUNTU_2604_IMAGE]) {
+    assert.doesNotThrow(() => writeScriptPin(script, spec.key, { url: spec.url, field: spec.algorithm, digest: 'cd'.repeat(32) }));
+  }
 });

@@ -21,9 +21,10 @@
 #      internet and nothing private. The box that clones a machine puts it
 #      behind the group, on the bridge, out of the guest's reach. It does
 #      nothing while the datacenter's firewall is off, and the app says so.
-#   5. The machine image: Debian 13's cloud image, checked against its
-#      published SHA-512, with Fleetwright installed and not joined, as a
-#      template in the pool.
+#   5. The machine images: Debian 13's cloud image unless --images names
+#      others (Ubuntu 24.04 and 26.04 too), each checked against its
+#      published checksum, with Fleetwright installed and not joined, as a
+#      template in the pool, one for each.
 #   6. The line: `fleetwright-pve:1:` and the address, the token, the pool,
 #      the numbers its machines take when --vmids gave them, and how to trust
 #      this cluster: its own CA, read from
@@ -32,6 +33,7 @@
 # Usage:
 #   fleetwright-pve-setup [--address HOST[:PORT]] [--storage ID] [--bridge NAME]
 #                         [--enable-firewall] [--channel stable|rolling]
+#                         [--images debian-13,ubuntu-24.04,ubuntu-26.04]
 #                         [--no-image] [--rebuild-image] [--expire-days N]
 #                         [--line-file PATH] [--coordinator URL] [--vmids FROM-TO]
 #                         [--groups 0-4] [--labs-open 0-4] [--labs-closed 0-4]
@@ -51,10 +53,21 @@ TOKEN_NAME=fleet
 # NO LONGER THAN 18: Proxmox's limit on a security group's name. The first
 # name, fleetwright-isolate, was 19, and the first real run stopped on it.
 FENCE=fleetwright-fence
-IMAGE_NAME=fleetwright-debian-13
-# The image, pinned (src/fleet/host/vm-image.js, DEBIAN_IMAGE; the test holds them equal).
-IMAGE_URL=https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2
-IMAGE_SHA512=3ace18e33bdd036edb49d1f79342bd01d2ab980e35194edb0b410435cd543538d286a0bd13bbb0835f7862306e3d385ce2f6a70d8ecf0bd961111166adbc1b8e
+# THE IMAGES THIS CAN BUILD, each its publisher's own cloud image pinned by
+# its published checksum: the same catalogue Xen Orchestra pools build from
+# (src/fleet/host/vm-image.js, IMAGES). The test holds the two equal, and
+# scripts/pin-images.mjs moves both when a new build is pinned. A new one is a
+# row here and an entry there. Asked for: "Other images Ubuntu Rocky or
+# whatever else". Only systems the fleet's apt package installs on are here.
+IMAGE_KEYS="debian-13 ubuntu-24.04 ubuntu-26.04"
+pinned() {
+  case "$1" in
+    debian-13) OS="Debian 13" URL=https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2 SUM=sha512:3ace18e33bdd036edb49d1f79342bd01d2ab980e35194edb0b410435cd543538d286a0bd13bbb0835f7862306e3d385ce2f6a70d8ecf0bd961111166adbc1b8e ;;
+    ubuntu-24.04) OS="Ubuntu 24.04 LTS" URL=https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-amd64.img SUM=sha256:04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94 ;;
+    ubuntu-26.04) OS="Ubuntu 26.04 LTS" URL=https://cloud-images.ubuntu.com/releases/resolute/release-20261016/ubuntu-26.04-server-cloudimg-amd64.img SUM=sha256:5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7eb5 ;;
+    *) return 1 ;;
+  esac
+}
 
 # EVERY PRIVILEGE, by where it applies (src/fleet/host/pve-pools.js, PVE_*_PRIVS).
 ROLE_PRIVS="VM.Allocate VM.Clone VM.Audit VM.PowerMgmt VM.Config.CPU VM.Config.Memory VM.Config.Network VM.Config.Options VM.Config.HWType VM.Config.Cloudinit Pool.Audit"
@@ -73,6 +86,8 @@ COORDINATOR=""
 CHANNEL=stable
 IMAGE=1
 REBUILD=0
+# Which images, by key; Debian 13 alone unless asked.
+IMAGES=debian-13
 EXPIRE_DAYS=365
 LINE_FILE=""
 # THE NUMBERS THE FLEET'S MACHINES TAKE: empty for whatever is next free,
@@ -138,16 +153,25 @@ while [ $# -gt 0 ]; do
     --channel) CHANNEL="${2:?--channel needs stable or rolling}"; shift 2 ;;
     --no-image) IMAGE=0; shift ;;
     --rebuild-image) REBUILD=1; shift ;;
+    --images) IMAGES="${2:?--images needs a list, such as debian-13,ubuntu-24.04}"; shift 2 ;;
     --expire-days) EXPIRE_DAYS="${2:?--expire-days needs a number}"; shift 2 ;;
     --line-file) LINE_FILE="${2:?--line-file needs a path}"; shift 2 ;;
     --vmids) VMIDS="${2:?--vmids needs FROM-TO}"; shift 2 ;;
     # Read from stdin there is no file to print the head of.
-    -h | --help) if [ -f "$0" ]; then sed -n '2,40p' "$0"; else echo "see docs/proxmox.md, \"Setting it up\""; fi; exit 0 ;;
+    -h | --help) if [ -f "$0" ]; then sed -n '2,46p' "$0"; else echo "see docs/proxmox.md, \"Setting it up\""; fi; exit 0 ;;
     *) die "unknown option $1 (--help says what there is)" ;;
   esac
 done
 
 case "$CHANNEL" in stable | rolling) ;; *) die "--channel is stable or rolling" ;; esac
+# THE IMAGES ASKED FOR, each once, in the order asked, and every one known.
+wanted=""
+for k in ${IMAGES//,/ }; do
+  pinned "$k" || die "--images takes $(echo $IMAGE_KEYS | sed 's/ /, /g'); $k is not one of them"
+  case " $wanted " in *" $k "*) ;; *) wanted="${wanted:+$wanted }$k" ;; esac
+done
+[ -n "$wanted" ] || die "--images needs at least one image, or --no-image for none"
+IMAGES="$wanted"
 case "$EXPIRE_DAYS" in '' | *[!0-9]*) die "--expire-days is a number of days" ;; esac
 case "$BRIDGE" in *[!A-Za-z0-9_.-]*) die "--bridge is a bridge's name" ;; esac
 for n in "$GROUP_NETS" "$LABS_OPEN" "$LABS_CLOSED"; do case "$n" in [0-4]) ;; *) die "--groups, --labs-open and --labs-closed are 0 to 4 each" ;; esac; done
@@ -159,7 +183,7 @@ if [ "$LABS_CLOSED" -gt 0 ] && [ -z "$COORD_HOST" ]; then
   die "a closed lab needs --coordinator https://<your fleet's address>, or --labs-closed 0"
 fi
 [ "$(id -u)" = 0 ] || die "run this as root on a Proxmox VE node"
-for c in pveum pvesh pvesm qm perl openssl curl sha512sum; do
+for c in pveum pvesh pvesm qm perl openssl curl sha512sum sha256sum; do
   command -v "$c" >/dev/null || die "$c is missing: this is not a Proxmox VE node"
 done
 # PROXMOX VE 9 AND NEWER, and nothing older: one API and one set of
@@ -453,46 +477,73 @@ for old in $(tagged 0 fleetwright-build); do
   qm destroy "$old" --purge 1 >/dev/null 2>&1 && say "removed VM $old, an earlier build that did not finish" || say "could not remove VM $old, an earlier build that did not finish"
 done
 
-existing="$(tagged 1 fleetwright-image)"
-# ONE IMAGE: a second copy, which a run made while the first could not be
-# found, is removed and the newest kept, by when Proxmox says each was made.
-if [ "$(echo $existing | wc -w)" -gt 1 ]; then
-  newest="" best=-1
-  for t in $existing; do
-    c="$(qm config "$t" 2>/dev/null | sed -n 's/^meta:.*ctime=\([0-9]*\).*/\1/p' || true)"
-    if [ "${c:-0}" -gt "$best" ]; then best="${c:-0}"; newest="$t"; fi
+# WHICH IMAGE A TEMPLATE IS: its fleetwright-os-<key> tag, or Debian 13 for
+# one made before there was a choice, which tagged nothing more. Templates of
+# key $1, lowest number first.
+templates_of() {
+  local t tags
+  for t in $(tagged 1 fleetwright-image); do
+    tags="$(pvesh get /cluster/resources --type vm --output-format json | VMID="$t" perl -MJSON::PP -e '
+      my $d = decode_json(join("", <STDIN>));
+      print map { $_->{tags} // "" } grep { ($_->{vmid} // 0) == $ENV{VMID} } @$d;')"
+    case ";${tags//[, ]/;};" in
+      *";fleetwright-os-$1;"*) echo "$t" ;;
+      *";fleetwright-os-"*) ;;
+      *) [ "$1" = debian-13 ] && echo "$t" ;;
+    esac
   done
-  for t in $existing; do
-    [ "$t" = "$newest" ] && continue
-    if qm destroy "$t" --purge 1 >/dev/null 2>&1; then say "removed template $t, a second copy of the image"; else say "could not remove template $t, a second copy of the image"; fi
-  done
-  existing="$newest"
-fi
-if [ "$IMAGE" = 0 ]; then
-  say "no image built (--no-image)${existing:+; the pool has template $existing}"
-elif [ -n "$existing" ] && [ "$REBUILD" = 0 ]; then
-  say "image: template $existing, already in the pool (--rebuild-image makes it again)"
-else
-  img="/var/tmp/$(basename "$IMAGE_URL")"
-  if ! echo "$IMAGE_SHA512  $img" | sha512sum -c --status 2>/dev/null; then
-    say "downloading Debian 13's cloud image"
+}
+
+# ONE IMAGE: the kind of image a person makes a machine from.
+# BUILD_IMAGE KEY N OF: makes the template for one image, unless the pool
+# has it already and it was not asked for again. N of OF is for the phone.
+build_image() {
+  local key="$1" nth="$2" of="$3" OS URL SUM alg want existing newest best c t img name tag label
+  pinned "$key"
+  alg="${SUM%%:*}"; want="${SUM#*:}"
+  name="fleetwright-${key//./-}"
+  tag="fleetwright-os-$key"
+  label="$OS's cloud image"
+  [ "$of" -gt 1 ] && label="$label ($nth of $of)"
+  existing="$(templates_of "$key")"
+  # A SECOND COPY, which a run made while the first could not be found, is
+  # removed and the newest kept, by when Proxmox says each was made.
+  if [ "$(echo $existing | wc -w)" -gt 1 ]; then
+    newest="" best=-1
+    for t in $existing; do
+      c="$(qm config "$t" 2>/dev/null | sed -n 's/^meta:.*ctime=\([0-9]*\).*/\1/p' || true)"
+      if [ "${c:-0}" -gt "$best" ]; then best="${c:-0}"; newest="$t"; fi
+    done
+    for t in $existing; do
+      [ "$t" = "$newest" ] && continue
+      if qm destroy "$t" --purge 1 >/dev/null 2>&1; then say "removed template $t, a second copy of $OS"; else say "could not remove template $t, a second copy of $OS"; fi
+    done
+    existing="$newest"
+  fi
+  if [ -n "$existing" ] && [ "$REBUILD" = 0 ]; then
+    say "image: template $existing, $OS, already in the pool (--rebuild-image makes it again)"
+    return 0
+  fi
+  img="/var/tmp/$(basename "$URL")"
+  if ! echo "$want  $img" | "${alg}sum" -c --status 2>/dev/null; then
+    say "downloading $label"
     # THE DOWNLOAD, MEASURED: its size asked first, then the file watched
     # grow. A size the server does not say is said as what has come so far.
-    total="$(curl -fsSLI "$IMAGE_URL" 2>/dev/null | awk 'tolower($1)=="content-length:" {n=$2+0} END {print n+0}')" || total=0
+    total="$(curl -fsSLI "$URL" 2>/dev/null | awk 'tolower($1)=="content-length:" {n=$2+0} END {print n+0}')" || total=0
     rm -f "$img.part"
-    curl -fsSL --retry 3 -o "$img.part" "$IMAGE_URL" &
+    curl -fsSL --retry 3 -o "$img.part" "$URL" &
     pid=$!
     while kill -0 "$pid" 2>/dev/null; do
       sleep 5
       have="$(stat -c %s "$img.part" 2>/dev/null)" || have=0
       if [ "$total" -gt 0 ]; then
-        part "$(( have * 1000 / total ))" "downloading Debian 13's cloud image: $(( have / 1048576 )) of $(( total / 1048576 )) MB"
+        part "$(( have * 1000 / total ))" "downloading $label: $(( have / 1048576 )) of $(( total / 1048576 )) MB"
       else
-        part - "downloading Debian 13's cloud image: $(( have / 1048576 )) MB so far"
+        part - "downloading $label: $(( have / 1048576 )) MB so far"
       fi
     done
-    wait "$pid" || { rm -f "$img.part"; die "Debian 13's cloud image could not be downloaded from $IMAGE_URL; nothing was built"; }
-    echo "$IMAGE_SHA512  $img.part" | sha512sum -c --status || { rm -f "$img.part"; die "the image did not match its published SHA-512; nothing was built"; }
+    wait "$pid" || { rm -f "$img.part"; die "$OS's cloud image could not be downloaded from $URL; nothing was built"; }
+    echo "$want  $img.part" | "${alg}sum" -c --status || { rm -f "$img.part"; die "$OS's cloud image did not match its published ${alg^^}; nothing was built"; }
     mv "$img.part" "$img"
   fi
   # free_vmid's own die has said why, from its subshell.
@@ -501,13 +552,13 @@ else
   # unit, and a build left running would hold its number and its memory.
   BUILDING="$ID"
   trap 'trap - TERM; [ -n "${BUILDING:-}" ] && { qm stop "$BUILDING" --skiplock 1 >/dev/null 2>&1; qm destroy "$BUILDING" --purge 1 >/dev/null 2>&1; }; SAID=1; exit 143' TERM
-  qm create "$ID" --name "$IMAGE_NAME-build" --pool "$POOL" --memory 2048 --cores 2 --cpu host --ostype l26 \
+  qm create "$ID" --name "$name-build" --pool "$POOL" --memory 2048 --cores 2 --cpu host --ostype l26 \
     --net0 "virtio,bridge=$BRIDGE,firewall=1" --scsihw virtio-scsi-single \
     --scsi0 "$STORAGE:0,import-from=$img,discard=on" --ide2 "$STORAGE:cloudinit" --boot order=scsi0 \
     --serial0 socket --vga serial0 --agent 1 --ipconfig0 ip=dhcp \
     --cicustom "user=$SNIPPETS:snippets/fleetwright-pve-build.yaml" --tags fleetwright-build >/dev/null
   qm disk resize "$ID" scsi0 16G >/dev/null
-  say "building the image in VM $ID; it powers itself off when Fleetwright is installed (a few minutes)"
+  say "building $OS in VM $ID; it powers itself off when Fleetwright is installed (a few minutes)"
   qm start "$ID"
   # WHAT THE BUILD MACHINE IS DOING, in its own words: the build's
   # cloud-config writes a marker to its serial console at each stage, and
@@ -527,30 +578,6 @@ else
     ' "/var/run/qemu-server/$ID.serial0" "$console"
   ) &
   reader=$!
-  # WHY A BUILD FAILED, from its console: the last line that reads as an
-  # error, or else its last line, for the person to act on. Not systemd's
-  # "[FAILED] Failed to start cloud-final.service", which only says a stage
-  # failed and came after the line that said why (the installer's own
-  # "FAIL could not read a version ..." on the first real build).
-  console_said() {
-    local why
-    why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -v '^[[:space:]]*\[' | grep -E 'FAIL |E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | sed 's/^[[:space:]]*//' | cut -c1-240 || true)"
-    [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -E 'FAIL |E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | cut -c1-240 || true)"
-    [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | tail -n 1 | cut -c1-240 || true)"
-    printf '%s' "$why"
-  }
-  # A FAILED BUILD IS REMOVED once its console has been read: it says why,
-  # and a VM that cannot be used would hold its number and its memory.
-  build_failed() {
-    local why
-    why="$(console_said)"
-    qm stop "$ID" --skiplock 1 >/dev/null 2>&1 || true
-    qm destroy "$ID" --purge 1 >/dev/null 2>&1 || true
-    BUILDING=""
-    kill "$reader" 2>/dev/null || true
-    rm -f "$console"
-    die "$1${why:+ Its console said: $why} VM $ID was removed; running this again builds it afresh."
-  }
   started=$SECONDS
   said=""
   # EVERY "$(grep ...)" HERE ENDS IN "|| true": grep finding nothing is
@@ -563,12 +590,12 @@ else
     [ "$(qm status "$ID" | awk '{print $2}')" = stopped ] && break
     mins=$(( (SECONDS - started) / 60 ))
     case "$(grep -o 'fleetwright-build: [a-z]*' "$console" 2>/dev/null | tail -n 1 || true)" in
-      *": up") now="250 VM $ID started and is installing its packages ($mins min so far)" ;;
-      *": fleetwright") now="500 VM $ID is installing Fleetwright ($mins min so far)" ;;
-      *": off") now="900 VM $ID has finished and is powering off ($mins min so far)" ;;
+      *": up") now="250 VM $ID started $OS and is installing its packages ($mins min so far)" ;;
+      *": fleetwright") now="500 VM $ID is installing Fleetwright on $OS ($mins min so far)" ;;
+      *": off") now="900 VM $ID has finished $OS and is powering off ($mins min so far)" ;;
       # THE BUILD SAID IT FAILED: no waiting out the clock.
       *": failed") build_failed "the image's build stopped inside VM $ID." ;;
-      *) now="- VM $ID is building the image ($mins min so far)" ;;
+      *) now="- VM $ID is building $OS ($mins min so far)" ;;
     esac
     [ "$now" = "$said" ] || part "${now%% *}" "${now#* }"
     said="$now"
@@ -582,11 +609,53 @@ else
   # A CLONE STARTS WITHOUT UPGRADING EVERYTHING: Fleetwright updates itself
   # where its owner lets it (src/core/grants.js), and a person is waiting.
   qm set "$ID" --delete cicustom >/dev/null
-  qm set "$ID" --name "$IMAGE_NAME" --cicustom "vendor=$SNIPPETS:snippets/fleetwright-pve-vendor.yaml" --tags fleetwright-image >/dev/null
+  qm set "$ID" --name "$name" --cicustom "vendor=$SNIPPETS:snippets/fleetwright-pve-vendor.yaml" --tags "fleetwright-image;$tag" >/dev/null
   qm set "$ID" --ciupgrade 0 >/dev/null
   qm template "$ID"
-  for old in $existing; do qm destroy "$old" --purge 1 >/dev/null 2>&1 || say "could not remove the old image, template $old"; done
-  say "image: template $ID, $IMAGE_NAME"
+  for t in $existing; do qm destroy "$t" --purge 1 >/dev/null 2>&1 || say "could not remove the old image, template $t"; done
+  say "image: template $ID, $name"
+}
+
+# WHY A BUILD FAILED, from its console: the last line that reads as an
+# error, or else its last line, for the person to act on. Not systemd's
+# "[FAILED] Failed to start cloud-final.service", which only says a stage
+# failed and came after the line that said why (the installer's own
+# "FAIL could not read a version ..." on the first real build).
+console_said() {
+  local why
+  why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -v '^[[:space:]]*\[' | grep -E 'FAIL |E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | sed 's/^[[:space:]]*//' | cut -c1-240 || true)"
+  [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | grep -E 'FAIL |E: |[Ee]rror|[Ff]ailed|[Cc]ould not|[Uu]nable to|[Tt]emporary failure' | tail -n 1 | cut -c1-240 || true)"
+  [ -n "$why" ] || why="$(grep -v 'fleetwright-build:' "$console" 2>/dev/null | tail -n 1 | cut -c1-240 || true)"
+  printf '%s' "$why"
+}
+# A FAILED BUILD IS REMOVED once its console has been read: it says why,
+# and a VM that cannot be used would hold its number and its memory.
+build_failed() {
+  local why
+  why="$(console_said)"
+  qm stop "$ID" --skiplock 1 >/dev/null 2>&1 || true
+  qm destroy "$ID" --purge 1 >/dev/null 2>&1 || true
+  BUILDING=""
+  kill "$reader" 2>/dev/null || true
+  rm -f "$console"
+  die "$1${why:+ Its console said: $why} VM $ID was removed; running this again builds it afresh."
+}
+
+if [ "$IMAGE" = 0 ]; then
+  have="$(tagged 1 fleetwright-image | tr '\n' ' ')"
+  say "no image built (--no-image)${have:+; the pool has template(s) ${have% }}"
+else
+  n=0 of="$(echo $IMAGES | wc -w)"
+  for key in $IMAGES; do
+    n=$((n + 1))
+    build_image "$key" "$n" "$of"
+  done
+  # AN IMAGE NOT ASKED FOR THIS TIME IS KEPT: machines may be made from it,
+  # and removing one is not something a run should do on its own.
+  for key in $IMAGE_KEYS; do
+    case " $IMAGES " in *" $key "*) continue ;; esac
+    for t in $(templates_of "$key"); do say "kept template $t, $key, which this run was not asked to build"; done
+  done
 fi
 
 # --- 6. the line ---------------------------------------------------------------

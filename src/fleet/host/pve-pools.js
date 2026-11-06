@@ -60,12 +60,29 @@ import { machineGrantsOf } from '../../core/grants.js';
 import { lookup } from 'node:dns/promises';
 import { HYPERVISOR_ITEM, MAX_MINUTES, SSH_KEYS_ITEM, sshKeys, groupPlace } from './xo-pools.js';
 import { fleetHosts } from './edge-router.js';
-import { JOIN_RUNCMD } from './vm-image.js';
+import { IMAGES, JOIN_RUNCMD } from './vm-image.js';
 
 /** What a Proxmox record says it is, beside Xen Orchestra's, which says nothing. */
 export const PVE_KIND = 'proxmox';
 /** The tag on a Fleetwright machine image, and on a machine made from one. */
 export const PVE_IMAGE_TAG = 'fleetwright-image';
+/** Beside it, which image it is: `fleetwright-os-<key>`, a key of vm-image.js's IMAGES. */
+export const PVE_OS_TAG = 'fleetwright-os-';
+
+/**
+ * WHICH IMAGE A TEMPLATE IS, as the setup script tags it (`templates_of`):
+ * its `fleetwright-os-<key>` tag, or Debian 13 for one built before there
+ * was a choice, which carried no such tag. Null for a key the catalogue does
+ * not have, which is said as "could not tell", never as Debian.
+ *
+ * @param {string[]} tags @returns {string|null}
+ */
+export function pveImageKeyOf(tags) {
+  const os = tags.find((t) => t.startsWith(PVE_OS_TAG));
+  if (!os) return 'debian-13';
+  const key = os.slice(PVE_OS_TAG.length);
+  return Object.hasOwn(IMAGES, key) ? key : null;
+}
 export const PVE_SESSION_TAG = 'fleetwright-session';
 /** The cluster security group the setup script makes and every machine is put behind. */
 /** No longer than 18 characters, Proxmox's limit on a security group's name (the setup script says so too). */
@@ -127,7 +144,7 @@ const MAX_MACHINES = 200;
 
 /**
  * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', name?: string, grants?: any, vmids?: { from: number, to: number } }} PveRecord
- * @typedef {{ id: string, name: string, node: string, vmid: number, pool: string|null, poolName: string|null, bridge: string|null }} PveImage
+ * @typedef {{ id: string, name: string, key: string|null, os: string|null, node: string, vmid: number, pool: string|null, poolName: string|null, bridge: string|null }} PveImage
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string, lab?: 'open'|'closed', gateway?: string|null, taken?: boolean|null }} PveNetwork
  */
 
@@ -590,7 +607,11 @@ export class PvePools {
     for (const t of members.filter((m) => Number(m.template) === 1 && tagsOf(m).includes(PVE_IMAGE_TAG))) {
       const cfg = (await api.get(`/nodes/${encodeURIComponent(t.node)}/qemu/${Number(t.vmid)}/config`)) || {};
       const ctime = /(?:^|,)ctime=(\d+)/.exec(String(cfg.meta || ''))?.[1] ?? '0';
-      images.push({ id: pveIdOf(record.address, 'image', `${t.vmid}:${ctime}`), name: String(t.name || cfg.name || `template ${t.vmid}`).slice(0, 80), node: String(t.node), vmid: Number(t.vmid), pool: poolEntry.id, poolName: record.pool, bridge: bridgeOf(cfg.net0) });
+      const key = pveImageKeyOf(tagsOf(t));
+      // NAMED AS XEN ORCHESTRA'S ARE ("Fleetwright Ubuntu 24.04"), so New
+      // session › Where says which system a machine runs, whichever kind of
+      // pool it comes from; the template's own name when it cannot tell.
+      images.push({ id: pveIdOf(record.address, 'image', `${t.vmid}:${ctime}`), name: key ? IMAGES[key].name : String(t.name || cfg.name || `template ${t.vmid}`).slice(0, 80), key, os: key ? IMAGES[key].os : null, node: String(t.node), vmid: Number(t.vmid), pool: poolEntry.id, poolName: record.pool, bridge: bridgeOf(cfg.net0) });
     }
     // THE FENCE, as Proxmox says it is, and null when it will not say.
     const fw = await api.get('/cluster/firewall/options').catch(() => null);
