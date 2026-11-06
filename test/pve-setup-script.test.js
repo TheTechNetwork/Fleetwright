@@ -137,3 +137,36 @@ test('the script reading a file that does not say anything yet is not an error',
     assert.equal(r.stdout, 'ok[]\n', `${sub}\n${r.stdout}${r.stderr}`);
   }
 });
+
+// THE SCRIPT FINDS ITS IMAGE AND ITS UNFINISHED BUILDS by their tags, read
+// where Proxmox gives tags: /cluster/resources. It once read /pools/<pool>,
+// whose members Proxmox gives no tags (pve-manager, PVE/API2/Pool.pm), so the
+// first real node's template was never found and the next run built another.
+// The script's own `tagged`, run against an answer shaped as Proxmox's.
+test('the script finds its templates and its builds by tag, in its own pool only', { skip }, () => {
+  const text = readFileSync(SCRIPT, 'utf8');
+  const fn = /^tagged\(\) \{\n[\s\S]*?\n\}\n/m.exec(text)?.[0];
+  assert.ok(fn, 'the script has no tagged()');
+  assert.ok(!/\/pools\/\$POOL"? --output-format/.test(text), 'the script reads tags from /pools/<pool> again');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-pve-tagged-'));
+  const resources = [
+    { type: 'qemu', vmid: 9001, pool: 'fleetwright', template: 1, tags: 'fleetwright-image' },
+    { type: 'qemu', vmid: 9000, pool: 'fleetwright', template: 1, tags: 'fleetwright-image;other' },
+    { type: 'qemu', vmid: 9002, pool: 'fleetwright', tags: 'fleetwright-build' },
+    { type: 'qemu', vmid: 9003, pool: 'fleetwright', template: 1, tags: 'fleetwright-build' },
+    { type: 'qemu', vmid: 500, pool: 'elsewhere', template: 1, tags: 'fleetwright-image' },
+    { type: 'qemu', vmid: 501, template: 1, tags: 'fleetwright-image' },
+    { type: 'lxc', vmid: 502, pool: 'fleetwright', tags: 'fleetwright-build' },
+    { type: 'qemu', vmid: 503, pool: 'fleetwright', template: 1, tags: 'not-fleetwright-image' },
+  ];
+  writeFileSync(path.join(dir, 'pvesh'), `#!/bin/bash\n[ "$*" = "get /cluster/resources --type vm --output-format json" ] || exit 9\necho '${JSON.stringify(resources)}'\n`);
+  chmodSync(path.join(dir, 'pvesh'), 0o755);
+  const ask = (/** @type {string} */ args) => {
+    const r = spawnSync('bash', ['-c', `set -Eeuo pipefail; POOL=fleetwright; ${fn}tagged ${args}`], { encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.split('\n').filter(Boolean);
+  };
+  assert.deepEqual(ask('1 fleetwright-image'), ['9000', '9001']);
+  assert.deepEqual(ask('0 fleetwright-build'), ['9002']);
+  assert.deepEqual(ask('1 fleetwright-session'), []);
+});

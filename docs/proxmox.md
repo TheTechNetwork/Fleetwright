@@ -309,6 +309,13 @@ Its options: `--address`, `--storage`, `--bridge`, `--enable-firewall`,
 `--channel stable|rolling`, `--no-image`, `--rebuild-image`,
 `--expire-days`, `--line-file`, `--coordinator`, `--vmids FROM-TO`.
 
+Running it again keeps the image it made, found by its `fleetwright-image`
+tag, and keeps one: a second copy is removed and the newest kept. The tags are
+read from `/cluster/resources`, by the script and by the boxes alike. A pool's
+own listing, `/pools/<pool>`, carries no tags in Proxmox's answer: read there,
+the first real node's template was never found, so the next run built another
+and no box ever offered it.
+
 The snippets the image boots with, the privileges and the image pin are
 written in the script, which has no Fleetwright to import them from, and in
 `pve-pools.js`; `test/pve-pools.test.js` holds the two equal.
