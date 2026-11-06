@@ -7800,7 +7800,7 @@ export class CoordinatorCore {
     this.record({
       event: 'vm.requested',
       actor: spec.actor ?? null,
-      text: `${owner} asked for a machine from ${image.name}${image.poolName ? ` on ${image.poolName}` : ''}${lab ? ' in a lab' : ''}, as ${vmHost}`,
+      text: `${owner} asked for a machine from ${image.name} on ${imageWhere(holders[0].entries[0].kind, holders[0].entries[0].address, image.poolName)}${lab ? ' in a lab' : ''}, as ${vmHost}`,
     });
     /** @type {Record<string, any>} */
     const vmParams = { platform: lab ? 'lab' : 'vm', template, ticket: ticket.token };
@@ -8936,6 +8936,24 @@ const DEPLOY_TITLES = Object.freeze({ running: 'Installing Xen Orchestra', done:
  * token stopped seeing. What the person wants back is the pools, so the end
  * says whether they came back rather than what was done to the servers.
  */
+/**
+ * WHERE A MACHINE FROM AN IMAGE GOES, in words, as both phones say it under
+ * New session › Where (Fleet.swift and Fleet.kt, VMImage.label). Asked, of a
+ * list of images that each ended "on fleetwright": "Is it on proxmox or on
+ * xcp where is it going to go?" The pool's name alone did not say, because a
+ * Proxmox VE cluster's pool is always `fleetwright` and a Xen Orchestra pool
+ * may be called anything. So the kind of hypervisor is named, and the
+ * cluster's address for Proxmox VE, whose pool name tells nothing; a port is
+ * dropped, the address being enough to tell two clusters apart.
+ *
+ * @param {string|null|undefined} kind @param {string} address @param {string|null|undefined} poolName
+ */
+export function imageWhere(kind, address, poolName) {
+  const host = String(address || '').replace(/:\d+$/, '');
+  if (kind === 'proxmox') return `Proxmox VE at ${host}`;
+  return poolName ? `XCP-ng pool ${poolName}` : `Xen Orchestra at ${host}`;
+}
+
 const PVE_TITLES = Object.freeze({ running: 'Setting up Proxmox VE', done: 'Proxmox VE set up', failed: 'Proxmox VE was not set up', cancelled: 'Setting up Proxmox VE cancelled' });
 const WATCHDOG_TITLES = Object.freeze({ running: 'Adding the reconnect watchdog', done: 'Watchdog added', failed: 'The watchdog was not added', cancelled: 'Adding the watchdog cancelled' });
 const RECONNECT_TITLES = Object.freeze({ running: 'Reconnecting Xen Orchestra\u2019s servers', done: 'Pools back', failed: 'The pools did not come back', cancelled: 'Reconnecting cancelled' });
