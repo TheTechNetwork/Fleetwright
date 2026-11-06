@@ -44,21 +44,109 @@ export const VMIDS_RE = /^(?:[1-9]\d{2,8})-(?:[1-9]\d{2,8})$/;
  * script fetched and run, naming the fleet a closed lab answers names for,
  * and the range its machines take when the person gave one.
  *
- * @param {string} coordinator @param {string|null} [vmids]
+ * @param {string} coordinator @param {string|null} [vmids] @param {PveOptions|null} [options]
  */
-export function setupCommand(coordinator, vmids = null) {
+export function setupCommand(coordinator, vmids = null, options = null) {
   return `curl -fsSLo /root/fleetwright-pve-setup ${SCRIPT_URL} && bash /root/fleetwright-pve-setup --coordinator ${coordinator}` +
-    (vmids && VMIDS_RE.test(vmids) ? ` --vmids ${vmids}` : '');
+    (vmids && VMIDS_RE.test(vmids) ? ` --vmids ${vmids}` : '') + optionArgs(options);
+}
+
+/**
+ * @typedef {{
+ *   firewall?: boolean, rebuildImage?: boolean, noImage?: boolean,
+ *   channel?: 'stable'|'rolling', storage?: string, bridge?: string,
+ *   expireDays?: number, groups?: number, labsOpen?: number, labsClosed?: number,
+ * }} PveOptions
+ */
+
+/** A storage id as Proxmox VE names one. */
+export const PVE_STORAGE_RE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+/** A Linux bridge's name. */
+export const PVE_BRIDGE_RE = /^[A-Za-z0-9_.-]{1,15}$/;
+
+/**
+ * EVERY OPTION THE SETUP TAKES, from the app. Asked for: "Everything should
+ * be in app". The datacenter firewall, the storage and bridge the fleet
+ * uses, how many group and lab networks it makes, the update channel its
+ * machines follow, whether the image is built again or not at all, and how
+ * long the token lasts. Each is checked here because it goes into a
+ * command, and the phones check the same (ProxmoxLine); the script checks
+ * again and says what is wrong. Null for anything that is not a valid set,
+ * with what is wrong; an empty set is no options at all.
+ *
+ * @param {unknown} v
+ * @returns {{ options: PveOptions, problem: null }|{ options: null, problem: string }}
+ */
+export function pveOptionsOf(v) {
+  if (v === undefined || v === null) return { options: {}, problem: null };
+  if (typeof v !== 'object' || Array.isArray(v)) return { options: null, problem: 'the options are not a set of options' };
+  const o = /** @type {any} */ (v);
+  /** @type {PveOptions} */
+  const out = {};
+  const no = (/** @type {string} */ problem) => ({ options: null, problem });
+  for (const k of ['firewall', 'rebuildImage', 'noImage']) {
+    if (o[k] === undefined) continue;
+    if (typeof o[k] !== 'boolean') return no(`${k} is yes or no`);
+    if (o[k]) /** @type {any} */ (out)[k] = true;
+  }
+  if (out.rebuildImage && out.noImage) return no('the image cannot be built again and not built at all');
+  if (o.channel !== undefined && o.channel !== '') {
+    if (o.channel !== 'stable' && o.channel !== 'rolling') return no('the channel is stable or rolling');
+    out.channel = o.channel;
+  }
+  if (o.storage !== undefined && o.storage !== '') {
+    if (typeof o.storage !== 'string' || !PVE_STORAGE_RE.test(o.storage)) return no('the storage is not a Proxmox VE storage id');
+    out.storage = o.storage;
+  }
+  if (o.bridge !== undefined && o.bridge !== '') {
+    if (typeof o.bridge !== 'string' || !PVE_BRIDGE_RE.test(o.bridge)) return no("the bridge is not a bridge's name");
+    out.bridge = o.bridge;
+  }
+  if (o.expireDays !== undefined && o.expireDays !== null) {
+    if (!Number.isInteger(o.expireDays) || o.expireDays < 1 || o.expireDays > 3650) return no('the token lasts 1 to 3650 days');
+    out.expireDays = o.expireDays;
+  }
+  for (const k of ['groups', 'labsOpen', 'labsClosed']) {
+    if (o[k] === undefined || o[k] === null) continue;
+    if (!Number.isInteger(o[k]) || o[k] < 0 || o[k] > 4) return no('group and lab networks are 0 to 4 each');
+    /** @type {any} */ (out)[k] = o[k];
+  }
+  if ((out.labsOpen ?? 0) + (out.labsClosed ?? 0) > 4) return no('four labs at most, open and closed together');
+  return { options: out, problem: null };
+}
+
+/**
+ * The options as the script's arguments, each one only when it was given,
+ * so a node run with none is run exactly as before.
+ *
+ * @param {PveOptions|null|undefined} options
+ */
+export function optionArgs(options) {
+  const read = pveOptionsOf(options ?? null);
+  const o = read.options;
+  if (!o) return '';
+  return [
+    o.firewall ? ' --enable-firewall' : '',
+    o.rebuildImage ? ' --rebuild-image' : '',
+    o.noImage ? ' --no-image' : '',
+    o.channel ? ` --channel ${o.channel}` : '',
+    o.storage ? ` --storage ${o.storage}` : '',
+    o.bridge ? ` --bridge ${o.bridge}` : '',
+    o.expireDays ? ` --expire-days ${o.expireDays}` : '',
+    o.groups !== undefined ? ` --groups ${o.groups}` : '',
+    o.labsOpen !== undefined ? ` --labs-open ${o.labsOpen}` : '',
+    o.labsClosed !== undefined ? ` --labs-closed ${o.labsClosed}` : '',
+  ].join('');
 }
 
 /**
  * Start the setup as a unit of its own, with the line to a file. A run
  * already going is stopped first: the person asked again.
  *
- * @param {string} coordinator @param {string|null} [vmids]
+ * @param {string} coordinator @param {string|null} [vmids] @param {PveOptions|null} [options]
  */
-export function startCommand(coordinator, vmids = null) {
-  const run = `${setupCommand(coordinator, vmids)} --line-file ${LINE_FILE}`;
+export function startCommand(coordinator, vmids = null, options = null) {
+  const run = `${setupCommand(coordinator, vmids, options)} --line-file ${LINE_FILE}`;
   return `systemctl stop ${UNIT} 2>/dev/null; systemctl reset-failed ${UNIT} 2>/dev/null; rm -f ${LINE_FILE}; ` +
     `systemd-run --unit=${UNIT} --collect /bin/bash -c '${run}'`;
 }
@@ -180,7 +268,7 @@ export function pveSteps({ open, coordinatorUrl, sealLine, say = () => {}, sleep
       const since = Number.parseInt(String(clock.stdout).trim(), 10);
       if (clock.code !== 0 || !Number.isInteger(since)) throw new Error('the node did not say what time it is, so its setup could not be followed. Nothing was started.');
       ctx.since = since;
-      const started = await ctx.pool.remote(startCommand(coordinatorUrl, ctx.rec?.vmids ?? null), { timeoutMs: 60_000 });
+      const started = await ctx.pool.remote(startCommand(coordinatorUrl, ctx.rec?.vmids ?? null, ctx.rec?.options ?? null), { timeoutMs: 60_000 });
       if (started.code !== 0) throw new Error(`the node would not start the setup: ${lastLine(started.stderr || started.stdout) || `systemd-run said ${started.code}`}.`);
       ctx.started = true;
       ctx.deadline = now() + limitMs;

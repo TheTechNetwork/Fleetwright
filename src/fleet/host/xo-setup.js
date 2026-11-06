@@ -127,7 +127,7 @@ import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { clearExposed, exposedOn, keptFor, newWatch, watchOf } from './edge-credentials.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
 import { addToDisk, findXoVm, startXoVm, stopXoVm, waitForXo } from './xo-watchdog.js';
-import { pveSteps, stopOnNode, VMIDS_RE } from './pve-setup.js';
+import { pveSteps, stopOnNode, VMIDS_RE, pveOptionsOf } from './pve-setup.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
 export const FLEET_USER = 'fleetwright';
@@ -972,8 +972,17 @@ export class XoSetups {
         this.#ended(rec);
         return { ok: false, text: rec.text, xosetup: status(rec) };
       }
+      // AND EVERY OTHER OPTION THE APP SETS (pve-setup.js, pveOptionsOf).
+      const read = pveOptionsOf(inside.options);
+      if (!read.options) {
+        rec.state = 'failed';
+        rec.text = `The setup's options were not ones it takes: ${read.problem}. Nothing was started.`;
+        this.#ended(rec);
+        return { ok: false, text: rec.text, xosetup: status(rec) };
+      }
       rec.reply = String(inside.reply);
       rec.vmids = vmids || null;
+      rec.options = read.options;
       rec.state = 'running';
       rec.text = 'Starting.';
       void this.#execute(rec, { root });
