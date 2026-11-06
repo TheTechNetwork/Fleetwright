@@ -2076,6 +2076,91 @@ const OPENAPI = JSON.stringify({
                         }
                       }
                     },
+                    "hypervisors": {
+                      "description": "EVERY hypervisor of yours, of either kind, as the boxes holding its token last saw it: one row per Xen Orchestra or Proxmox VE address, and under it every box that holds it and whether that box could reach it. A Proxmox VE cluster's token lives in your vault and on boxes alone, so this is how a phone knows one exists. Empty when no box holds one of yours; absent from an older coordinator, which means the same.",
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "address",
+                          "kind",
+                          "boxes"
+                        ],
+                        "properties": {
+                          "address": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "xo",
+                              "proxmox"
+                            ]
+                          },
+                          "boxes": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "hostId",
+                                "reachable"
+                              ],
+                              "properties": {
+                                "hostId": {
+                                  "type": "string"
+                                },
+                                "reachable": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ],
+                                  "description": "what that box last saw; null is it has not looked yet, never no"
+                                },
+                                "problem": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ],
+                                  "description": "why it could not reach it, for a Proxmox VE cluster, in the box's words"
+                                }
+                              }
+                            }
+                          },
+                          "pools": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "version": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "supported": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ],
+                            "description": "a Proxmox VE version the fleet works with; null is no box could tell"
+                          },
+                          "fenced": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ],
+                            "description": "the datacenter firewall is on and the fleet's group is there; null is no box could tell"
+                          },
+                          "images": {
+                            "type": "integer"
+                          },
+                          "machines": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
                     "vmStandby": {
                       "description": "What you keep ready on your hypervisor and how many are, or null when you keep none. Set with PUT /api/vm-standby.",
                       "type": [

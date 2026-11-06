@@ -290,6 +290,15 @@ export const EDGE_REPORT = Object.freeze({
  */
 
 /**
+ * @typedef {{
+ *   address: string, kind: 'xo'|'proxmox',
+ *   boxes: Array<{ hostId: string, reachable: boolean|null, problem: string|null }>,
+ *   pools: string[], version: string|null, supported: boolean|null, fenced: boolean|null,
+ *   images: number, machines: number,
+ * }} HypervisorRow
+ */
+
+/**
  * The hypervisors a box says it holds this person's token for (`xo[]`),
  * believed only from a box that may act for them (hosts.js mayActFor).
  *
@@ -7079,6 +7088,9 @@ export class CoordinatorCore {
       // when it ends, so a machine's page can show it and offer what can be
       // done to it (`vmctl`). Only the person's own.
       vmMachines: this.vmMachinesFor(requester),
+      // AND EVERY HYPERVISOR THEY ARE ON, of either kind, with what each box
+      // holding it saw: the phone's one Hypervisors page. Empty is an answer.
+      hypervisors: this.hypervisorsFor(requester),
       // WHAT THIS PERSON KEEPS READY, and how many are: null is keeping none.
       vmStandby: this.vmStandbyFor(requester),
       // AND HOW EACH POOL'S EDGE ROUTERS ARE, as the box watching them last
@@ -7439,6 +7451,64 @@ export class CoordinatorCore {
       }
     }
     return [...found.values()].sort((a, b) => a.name.localeCompare(b.name) || a.template.localeCompare(b.template));
+  }
+
+  /**
+   * EVERY HYPERVISOR OF A PERSON'S, OF EITHER KIND, as the boxes holding its
+   * token last saw it: for the one Hypervisors page on the phone. Asked for:
+   * "unify the two hypervisor pages". A Proxmox VE cluster's token lives in
+   * the vault and on the boxes alone, so the phone has no other way to know
+   * one exists, or that no box can use it.
+   *
+   * ONE ROW PER HYPERVISOR, and under it every box that holds it and what
+   * that box saw: answered, did not answer and why, or cannot tell yet.
+   * `reachable` is the box's word; null is "has not looked yet", never "no"
+   * (C-5). A person's own only, as placement believes it (xoFor).
+   *
+   * @param {{ email?: string|null }|null} requester
+   * @returns {HypervisorRow[]}
+   */
+  hypervisorsFor(requester) {
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) return [];
+    const text = (/** @type {any} */ v, /** @type {number} */ n) => (typeof v === 'string' && v ? v.slice(0, n) : null);
+    /** @type {Map<string, HypervisorRow & { imageIds: Set<string>, machineNames: Set<string> }>} */
+    const found = new Map();
+    for (const host of this.registry.reachable()) {
+      if (host.ephemeral || !Array.isArray(host.health?.xo)) continue;
+      // THE BOX'S OWN WORDS, so read as `any` and checked field by field.
+      for (const e of /** @type {any[]} */ (xoFor(host, email))) {
+        const address = String(e?.address || '');
+        if (!address || address.length > 260) continue;
+        const kind = e?.kind === 'proxmox' ? 'proxmox' : 'xo';
+        const key = `${kind} ${address}`;
+        let row = found.get(key);
+        if (!row) {
+          row = { address, kind, boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, imageIds: new Set(), machineNames: new Set() };
+          found.set(key, row);
+        }
+        row.boxes.push({ hostId: host.hostId, reachable: typeof e.reachable === 'boolean' ? e.reachable : null, problem: e.reachable === false ? text(e.problem, 200) : null });
+        for (const p of Array.isArray(e.pools) ? e.pools.slice(0, 32) : []) {
+          const name = text(p?.name ?? p?.name_label, 80);
+          if (name && !row.pools.includes(name)) row.pools.push(name);
+        }
+        row.version ??= text(e.version, 20);
+        // TRUE FROM ANY BOX THAT COULD TELL, false only when one said so and
+        // none said otherwise, null when none could tell.
+        if (typeof e.supported === 'boolean') row.supported = row.supported === true || e.supported;
+        if (typeof e.fenced === 'boolean') row.fenced = row.fenced === true || e.fenced;
+        for (const i of Array.isArray(e.images) ? e.images : []) if (typeof i?.id === 'string') row.imageIds.add(i.id);
+        for (const m of Array.isArray(e.machines) ? e.machines : []) if (typeof m?.name === 'string') row.machineNames.add(m.name);
+      }
+    }
+    return [...found.values()]
+      .map(({ imageIds, machineNames, ...row }) => ({
+        ...row,
+        boxes: row.boxes.sort((a, b) => a.hostId.localeCompare(b.hostId)),
+        images: imageIds.size,
+        machines: machineNames.size,
+      }))
+      .sort((a, b) => a.kind.localeCompare(b.kind) || a.address.localeCompare(b.address));
   }
 
   /**
