@@ -112,7 +112,7 @@ test('the heal records the repair the reply already promised', () => {
   healAfterRelease({ ...common, run: () => ({ status: 1, stdout: '', stderr: 'sudo: a password is required' }) });
   assert.equal(recorded.at(-1).steps.repair.ok, false);
   assert.match(recorded.at(-1).steps.repair.text, /sudo exited 1/);
-  assert.match(recorded.at(-1).steps.repair.text, new RegExp(`sudo ${MIGRATE_BIN.replace(/\//g, '\\/')}`), 'the one command that finishes it, on the phone');
+  assert.ok(recorded.at(-1).steps.repair.text.includes(`sudo ${MIGRATE_BIN}`), 'the one command that finishes it, on the phone');
   assert.ok(recorded.every((r) => r.dir === '/var/lib/fw'));
 });
 
