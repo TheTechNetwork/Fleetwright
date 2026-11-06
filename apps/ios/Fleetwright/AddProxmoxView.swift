@@ -102,10 +102,19 @@ struct AddProxmoxView: View {
                 DisclosureGroup(isExpanded: $optionsOpen) {
                     Toggle("Turn on the datacenter firewall", isOn: $options.firewall)
                     Text(ProxmoxWords.firewallHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
-                    Picker("Machine image", selection: $options.image) {
-                        Text("Keep the one there").tag("keep")
-                        Text("Build it again").tag("rebuild")
+                    Picker("Machine images", selection: $options.image) {
+                        Text("Keep what is there").tag("keep")
+                        Text("Build them again").tag("rebuild")
                         Text("Do not build one").tag("none")
+                    }
+                    if options.image != "none" {
+                        ForEach(ProxmoxOptions.systemChoices, id: \.key) { choice in
+                            Toggle(choice.name, isOn: Binding(
+                                get: { options.builds(choice.key) },
+                                set: { options.set(choice.key, builds: $0) }
+                            ))
+                        }
+                        Text(ProxmoxWords.systemsHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                     Picker("Updates for its machines", selection: $options.channel) {
                         Text("Stable").tag("stable")
@@ -406,6 +415,7 @@ struct AddProxmoxView: View {
 /// holds the three apps' words and flags equal.
 /// The options' words, the same on Android (ProxmoxSheet.kt).
 enum ProxmoxWords {
+    static let systemsHint = "Each system chosen becomes an image a session's machine can be made from. One already on the cluster is kept, and built again only when asked."
     static let firewallHint = "Until it is on, the fleet's machines are made only on networks you choose. Proxmox VE's own rules keep the nodes' web interface, SSH and cluster traffic open to the local network; anything else coming in to the nodes themselves is dropped, so add a rule first for any other service they run."
 }
 
@@ -420,6 +430,33 @@ struct ProxmoxOptions: Codable, Equatable {
     var groups = 2
     var labsOpen = 1
     var labsClosed = 1
+    /// Which systems the setup builds an image of, by the script's keys
+    /// (`--images`, its `pinned` table). Nil is Debian 13 alone, as every
+    /// run was before there was a choice, and as options saved then read.
+    var systems: [String]? = nil
+
+    /// Every system the setup can build, in its own order: the catalogue
+    /// Xen Orchestra pools build from too (src/fleet/host/vm-image.js, IMAGES).
+    static let systemChoices: [(key: String, name: String)] = [
+        ("debian-13", "Debian 13"),
+        ("ubuntu-24.04", "Ubuntu 24.04 LTS"),
+        ("ubuntu-26.04", "Ubuntu 26.04 LTS"),
+    ]
+
+    var chosenSystems: [String] { systems ?? ["debian-13"] }
+
+    func builds(_ key: String) -> Bool { chosenSystems.contains(key) }
+
+    /// One system on or off, the list kept in the catalogue's order.
+    mutating func set(_ key: String, builds on: Bool) {
+        let now = Set(chosenSystems).union(on ? [key] : []).subtracting(on ? [] : [key])
+        systems = Self.systemChoices.map(\.key).filter(now.contains)
+    }
+
+    /// Passed only when it is not Debian 13 alone, and never with no image.
+    private var imagesArg: [String]? {
+        image == "none" || chosenSystems == ["debian-13"] ? nil : chosenSystems
+    }
 
     static let storagePattern = "^[A-Za-z][A-Za-z0-9_.-]{0,63}$"
     static let bridgePattern = "^[A-Za-z0-9_.-]{1,15}$"
@@ -437,6 +474,7 @@ struct ProxmoxOptions: Codable, Equatable {
             return "The bridge is not a bridge's name, such as vmbr0."
         }
         if labsOpen + labsClosed > 4 { return "Four labs at most, open and closed together." }
+        if image != "none" && chosenSystems.isEmpty { return "Choose at least one system to build, or Do not build one." }
         return nil
     }
 
@@ -447,6 +485,7 @@ struct ProxmoxOptions: Codable, Equatable {
         if firewall { a += " --enable-firewall" }
         if image == "rebuild" { a += " --rebuild-image" }
         if image == "none" { a += " --no-image" }
+        if let images = imagesArg { a += " --images \(images.joined(separator: ","))" }
         if channel == "rolling" { a += " --channel rolling" }
         if !trimmedStorage.isEmpty { a += " --storage \(trimmedStorage)" }
         if !trimmedBridge.isEmpty { a += " --bridge \(trimmedBridge)" }
@@ -464,6 +503,7 @@ struct ProxmoxOptions: Codable, Equatable {
         if firewall { p["firewall"] = true }
         if image == "rebuild" { p["rebuildImage"] = true }
         if image == "none" { p["noImage"] = true }
+        if let images = imagesArg { p["images"] = images }
         if channel == "rolling" { p["channel"] = "rolling" }
         if !trimmedStorage.isEmpty { p["storage"] = trimmedStorage }
         if !trimmedBridge.isEmpty { p["bridge"] = trimmedBridge }

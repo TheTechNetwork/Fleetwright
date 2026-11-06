@@ -177,17 +177,32 @@ test('both phones set every setup option as the script and the machines take it'
   const kotlin = rd('apps/android/app/src/main/java/network/thetech/fleetwright/ProxmoxSheet.kt');
   const script = rd('install/fleetwright-pve-setup');
   // THE FLAGS, in the machine's order, on both phones.
-  const flags = optionArgs({ firewall: true, rebuildImage: true, channel: 'rolling', storage: 's', bridge: 'b', expireDays: 90, groups: 1, labsOpen: 2, labsClosed: 2 }).match(/--[a-z-]+/g) ?? [];
+  const flags = optionArgs({ firewall: true, rebuildImage: true, images: ['ubuntu-24.04'], channel: 'rolling', storage: 's', bridge: 'b', expireDays: 90, groups: 1, labsOpen: 2, labsClosed: 2 }).match(/--[a-z-]+/g) ?? [];
   flags.splice(2, 0, '--no-image');
   for (const [name, src] of [['iOS', swift], ['Android', kotlin]]) {
     const at = flags.map((f) => src.indexOf(`" ${f}`));
     assert.ok(at.every((i) => i > 0), `${name} lacks ${flags.filter((_, k) => at[k] < 0)}`);
     assert.deepEqual([...at].sort((a, b) => a - b), at, `${name} passes the flags in another order`);
     // THE PAYLOAD'S KEYS are the machine's (pveOptionsOf).
-    for (const key of ['firewall', 'rebuildImage', 'noImage', 'channel', 'storage', 'bridge', 'expireDays', 'groups', 'labsOpen', 'labsClosed']) {
+    for (const key of ['firewall', 'rebuildImage', 'noImage', 'images', 'channel', 'storage', 'bridge', 'expireDays', 'groups', 'labsOpen', 'labsClosed']) {
       assert.ok(src.includes(`"${key}"`), `${name} never sends ${key}`);
     }
   }
+  // THE SYSTEMS, asked for: "Other images Ubuntu Rocky or whatever else".
+  // Each phone offers exactly the catalogue the script pins and the boxes
+  // read, in its order and named as it names them; Debian 13 alone is the
+  // script's default, so a phone that changes nothing passes nothing.
+  const { IMAGES } = await import('../src/fleet/host/vm-image.js');
+  const catalogue = Object.values(IMAGES).map((i) => [i.key, i.os]);
+  const iosSystems = [...(/static let systemChoices[\s\S]*?\n {4}\]/.exec(swift)?.[0] ?? '').matchAll(/\("([^"]+)", "([^"]+)"\)/g)].map((m) => [m[1], m[2]]);
+  const androidSystems = [...(/val SYSTEMS = listOf\([\s\S]*?\n {8}\)/.exec(kotlin)?.[0] ?? '').matchAll(/"([^"]+)" to "([^"]+)"/g)].map((m) => [m[1], m[2]]);
+  assert.deepEqual(iosSystems, catalogue, 'iOS offers other systems than the catalogue');
+  assert.deepEqual(androidSystems, catalogue, 'Android offers other systems than the catalogue');
+  assert.match(script, /^IMAGES=debian-13$/m);
+  assert.match(swift, /chosenSystems == \["debian-13"\] \? nil/);
+  assert.match(kotlin, /systems == listOf\("debian-13"\)\) null/);
+  const systemsHint = /static let systemsHint = "([^"]+)"/.exec(swift)?.[1];
+  assert.ok(systemsHint && kotlin.includes(`const val SYSTEMS_HINT = "${systemsHint}"`), 'the phones say what a system is differently');
   // THE DEFAULTS are the script's, so nothing changed passes nothing.
   for (const [v, d] of [['EXPIRE_DAYS', '365'], ['GROUP_NETS', '2'], ['LABS_OPEN', '1'], ['LABS_CLOSED', '1'], ['CHANNEL', 'stable']]) {
     assert.match(script, new RegExp(`^${v}=${d}$`, 'm'));

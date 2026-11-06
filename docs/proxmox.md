@@ -296,8 +296,9 @@ Finding each first, so it is safe to run again:
    new one and the old one stops working;
 4. the firewall group `fleetwright-fence`: SSH in, DHCP and DNS out, then
    nothing private out (RFC 1918, CGNAT, link-local, IPv6 ULA);
-5. the machine image: Debian 13's cloud image, pinned and checked, booted once
-   to install Fleetwright from apt, left unjoined and turned into a template;
+5. the machine images: Debian 13's cloud image unless more are chosen, each
+   pinned and checked, booted once to install Fleetwright from apt, left
+   unjoined and turned into a template, one for each (below);
 6. one line, `fleetwright-pve:1:…`: the address, the token, the pool and the
    cluster's CA. A web interface given a certificate of somebody's own is
    trusted as a browser would trust it when a public CA signed it (ACME), or
@@ -329,7 +330,7 @@ Finding each first, so it is safe to run again:
 
 **Every option is in the app** (asked for: *"Everything should be in
 app"*): Add Proxmox VE › Options has the datacenter firewall, the machine
-image (keep it, build it again, or none), the update channel, the storage,
+images (keep them, build them again, or none, and which systems), the update channel, the storage,
 the bridge, how long the fleet's token lasts, and the group and lab
 networks. Each defaults to the script's own default, and only what differs
 is passed, on the phone's route and sealed through a machine alike
@@ -340,18 +341,46 @@ the nodes' web interface, SSH and cluster traffic open to the local network
 once it is on, and other traffic coming in to the nodes is dropped, which
 the option says.
 
-Its options: `--address`, `--storage`, `--bridge`, `--enable-firewall`,
-`--channel stable|rolling`, `--no-image`, `--rebuild-image`,
-`--expire-days`, `--line-file`, `--coordinator`, `--vmids FROM-TO`.
+**Which systems.** Asked for: *"Other images Ubuntu Rocky or whatever else
+maybe even windows"*. Options › Machine images has a switch for each system
+the setup can build: **Debian 13**, **Ubuntu 24.04 LTS** and **Ubuntu 26.04
+LTS**, the same catalogue Xen Orchestra pools build from
+(`src/fleet/host/vm-image.js`, `IMAGES`). Each chosen becomes its own
+template, and New session › Where offers a machine from each, named as Xen
+Orchestra names them ("Fleetwright Ubuntu 24.04"). By hand it is `--images
+debian-13,ubuntu-24.04`; Debian 13 alone is the default, so a run that names
+none builds what every run built before. Each is its publisher's own cloud
+image, pinned by its published checksum (SHA-512 for Debian, SHA-256 for
+Ubuntu). The script carries the pins in its own table, `pinned`, which
+`test/pve-pools.test.js` holds equal to the catalogue, and
+`scripts/pin-images.mjs` moves both when Renovate brings a new build. An
+image already on the cluster is kept and built again only with **Build them
+again**; one not chosen this time is kept too and said so, because machines
+may be made from it.
 
-Running it again keeps the image it made, found by its `fleetwright-image`
-tag, and keeps one: a second copy is removed and the newest kept. The tags are
+**Not Rocky, not Windows, yet.** Every image installs Fleetwright from the
+fleet's apt repository, and a machine updates along it. Rocky (or any
+RHEL-like system) needs an RPM repository of the same package, which the
+fleet does not publish; Windows needs a Fleetwright host for Windows, which
+there is not. Either is a new row in the catalogue once that exists, and
+neither is offered before, because a choice that cannot be built is worse
+than none (C-2).
+
+Its options: `--address`, `--storage`, `--bridge`, `--enable-firewall`,
+`--channel stable|rolling`, `--images LIST`, `--no-image`,
+`--rebuild-image`, `--expire-days`, `--line-file`, `--coordinator`,
+`--vmids FROM-TO`.
+
+Running it again keeps the images it made, found by their `fleetwright-image`
+tag and told apart by `fleetwright-os-<key>` (an image from before there was
+a choice carries no such tag and is Debian 13), and keeps one of each: a
+second copy is removed and the newest kept. The tags are
 read from `/cluster/resources`, by the script and by the boxes alike. A pool's
 own listing, `/pools/<pool>`, carries no tags in Proxmox's answer: read there,
 the first real node's template was never found, so the next run built another
 and no box ever offered it.
 
-The snippets the image boots with, the privileges and the image pin are
+The snippets the images boot with, the privileges and the image pins are
 written in the script, which has no Fleetwright to import them from, and in
 `pve-pools.js`; `test/pve-pools.test.js` holds the two equal.
 
