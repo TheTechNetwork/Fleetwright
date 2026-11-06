@@ -99,11 +99,11 @@ async function machine({ coordinatorUrl = /** @type {string|null} */ (FLEET) } =
 }
 
 /** The phone's half: check the key is this machine's for this node, and seal the root password with a key to hand the line back to. */
-async function phone(/** @type {any} */ begun, /** @type {string} */ pin, { aad = pvesetupAad, vmids = /** @type {string|undefined} */ (undefined) } = {}) {
+async function phone(/** @type {any} */ begun, /** @type {string} */ pin, { aad = pvesetupAad, vmids = /** @type {string|undefined} */ (undefined), options = /** @type {any} */ (undefined) } = {}) {
   const { job, key, keySig, hostKey } = begun.xosetup;
   const signed = await verify(hostKey, keySig, signingInput('pvesetup-key', { address: NODE, job, key, pin }));
   const reply = await newSealKey();
-  const box = await seal({ to: key, aad: aad(job, NODE), payload: { v: 1, purpose: 'pve', root: { password: ROOT_PASSWORD }, reply: reply.publicKey, ...(vmids === undefined ? {} : { vmids }) } });
+  const box = await seal({ to: key, aad: aad(job, NODE), payload: { v: 1, purpose: 'pve', root: { password: ROOT_PASSWORD }, reply: reply.publicKey, ...(vmids === undefined ? {} : { vmids }), ...(options === undefined ? {} : { options }) } });
   return { signed, reply, sealed: `${box.epk}.${box.iv}.${box.ct}` };
 }
 
@@ -192,6 +192,24 @@ test('a range of machine numbers from the phone is passed to the script, and any
   assert.equal(setupCommand('https://f.example', '9000-9099; x'), setupCommand('https://f.example'));
 });
 
+// THE SETUP'S OTHER OPTIONS travel the same way, sealed with the password,
+// and reach the node's command; a set the script would refuse refuses the job.
+test('the setup\'s options from the phone reach the node, and a set it would not take refuses the job', async () => {
+  const n = node({});
+  const m = await machine();
+  const begun = await m.setups.beginPve({ address: NODE, pin: n.pin, actor: ACTOR });
+  const p = await phone(begun, n.pin, { options: { firewall: true, channel: 'rolling', storage: 'local-zfs' } });
+  const ran = await m.setups.run({ job: begun.xosetup.job, sealed: p.sealed, actor: ACTOR });
+  assert.equal(ran.ok, true, ran.text);
+  assert.equal((await settled(m.setups, begun.xosetup.job)).state, 'done');
+  assert.ok(n.asked().some((l) => l.startsWith('systemd-run') && l.includes(' --enable-firewall --channel rolling --storage local-zfs --line-file ')), n.asked().join('\n'));
+  const again = await m.setups.beginPve({ address: NODE, pin: n.pin, actor: ACTOR });
+  const q = await phone(again, n.pin, { options: { storage: 'x; rm -rf /' } });
+  const refused = await m.setups.run({ job: again.xosetup.job, sealed: q.sealed, actor: ACTOR });
+  assert.equal(refused.ok, false);
+  assert.match(refused.text, /options were not ones it takes: the storage/);
+});
+
 test('a setup the node stops is said in the node’s words, at the step it stopped', async () => {
   const n = node({ steps: ['pool', 'user', 'token'], error: 'pvesm has no storage called local-lvm' });
   const m = await machine();
@@ -234,4 +252,39 @@ test('it is refused without the compared host key, through a phone, or by a mach
   assert.match((await m.setups.beginPve({ address: NODE, pin: 'a'.repeat(64), relay: 'b'.repeat(24), actor: ACTOR })).text, /reaches the node itself/);
   const lost = await machine({ coordinatorUrl: null });
   assert.match((await lost.setups.beginPve({ address: NODE, pin: 'a'.repeat(64), actor: ACTOR })).text, /does not know its fleet’s address/);
+});
+
+// EVERY OPTION THE SETUP TAKES, from the app. Asked for: "Everything should be
+// in app". Each is checked before it goes into a command, and each flag it
+// becomes is one the script reads.
+test('the setup\'s options are checked, become the script\'s flags, and the script reads every one', async () => {
+  const { pveOptionsOf, optionArgs, setupCommand } = await import('../src/fleet/host/pve-setup.js');
+  const all = { firewall: true, rebuildImage: true, channel: 'rolling', storage: 'local-zfs', bridge: 'vmbr1', expireDays: 90, groups: 2, labsOpen: 1, labsClosed: 1 };
+  assert.deepEqual(pveOptionsOf(all), { options: all, problem: null });
+  assert.equal(optionArgs(all), ' --enable-firewall --rebuild-image --channel rolling --storage local-zfs --bridge vmbr1 --expire-days 90 --groups 2 --labs-open 1 --labs-closed 1');
+  // NONE GIVEN runs the node exactly as before, and false is not a flag.
+  assert.equal(optionArgs(null), '');
+  assert.equal(optionArgs({ firewall: false, channel: '', storage: '' }), '');
+  assert.match(setupCommand('https://fleet.example.com', '9000-9999', { firewall: true }), /--coordinator https:\/\/fleet\.example\.com --vmids 9000-9999 --enable-firewall$/);
+  // REFUSED, with what is wrong, and never a flag from a refused set.
+  for (const [bad, said] of /** @type {Array<[any, RegExp]>} */ ([
+    [{ firewall: 'yes' }, /yes or no/],
+    [{ rebuildImage: true, noImage: true }, /built again and not built/],
+    [{ channel: 'nightly' }, /stable or rolling/],
+    [{ storage: 'local; rm -rf /' }, /storage/],
+    [{ bridge: 'vmbr0 && x' }, /bridge/],
+    [{ expireDays: 0 }, /1 to 3650/],
+    [{ groups: 5 }, /0 to 4/],
+    [{ labsOpen: 3, labsClosed: 2 }, /four labs/],
+    [[], /not a set/],
+  ])) {
+    const r = pveOptionsOf(bad);
+    assert.equal(r.options, null, JSON.stringify(bad));
+    assert.match(r.problem ?? '', said);
+    assert.equal(optionArgs(bad), '', JSON.stringify(bad));
+  }
+  const script = readFileSync(new URL('../install/fleetwright-pve-setup', import.meta.url), 'utf8');
+  for (const flag of optionArgs({ ...all, rebuildImage: false, noImage: true }).match(/--[a-z-]+/g) ?? []) {
+    assert.ok(script.includes(`    ${flag})`), `the script does not read ${flag}`);
+  }
 });
