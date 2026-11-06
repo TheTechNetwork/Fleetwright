@@ -64,6 +64,18 @@ sent, when, and to which device address. A push service has to know all three to
 deliver anything. The claim is about **content**, and it is worth keeping exact
 — an overstated privacy claim is worse than none.
 
+**Not proven either: who sealed it.** The envelope carries a fresh key per
+message and no sender key, so opening it proves that whoever made it held this
+phone's public key — the coordinator it was registered with, which never hands
+it on — and nothing in it names a coordinator. And a notification with **no**
+envelope is drawn as it arrived, on both phones, buttons included, because a
+coordinator from before this sends none. So anything holding our APNs key or
+our Firebase service account, the relay first among them, can put its own words
+on a lock screen under our app's name. The seal is confidentiality, not sender
+authentication; [`relay-terms.md`](./relay-terms.md), "What the relay can
+originate", says what that is worth and what closes it, and `security.md` G15
+tracks it.
+
 ## How it reaches the phone
 
 The two platforms need opposite things, and getting it wrong looks like success.
@@ -102,7 +114,10 @@ a sentence rather than a placeholder:
 
 ## When it was sent is inside the envelope
 
-AES-GCM proves the bytes are ours; nothing proved they are *current*. A
+AES-GCM proves the bytes were sealed to this phone's key and not changed
+since — by whoever held that key, which is the coordinator it was given to and
+not the relay, as the section above is careful about; nothing proved they are
+*current*. A
 captured `session.awaiting-input` replayed a day later invites somebody to
 answer a question the host stopped asking — the `promptId` refuses the answer,
 but the person still read it. So `sentAt` (milliseconds, as a string, because
@@ -183,6 +198,7 @@ the check is an allowlist of `1`, `true`, `yes`, `on`.
 | The category sealed beside the words | **done**. The coordinator writes it inside the envelope, empty when there is nothing to answer, and still in the clear for iOS and older phones. A phone that opens the envelope takes the sealed one, and draws no buttons when the clear one disagrees |
 | iOS Notification Service Extension | **done**, `network.thetech.fleetwright.Push`. It rewrites the alert and copies the sealed fields into `userInfo`. A seal it cannot open leaves the fallback sentence and clears the category, so a button is not offered for a question that was not read |
 | Android data-message decryption | **done**, Android 12 and later. `onMessageReceived` opens `e` before it reads `kind`, and posts the notification itself when the tray was not given one |
+| A phone with a key refusing a notification that has no envelope | **not built.** Every notification without `e` is drawn as it arrived, with its clear category, so a phone that holds a key still renders whatever anything holding our push credentials sends it. The fix is on both phones and the coordinator in one round; `security.md` G15 |
 
 A phone installed before this, which registers no key, still gets the plaintext
 path. That is the point of the fallback being a first-class path rather than an

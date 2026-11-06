@@ -773,6 +773,9 @@ end of its job takes at most ten minutes with it. See
 [linked-repos.md](./linked-repos.md#the-archive).
 
 **Actions minutes are somebody's.** Free on standard runners for a public
-repository, metered otherwise, and macOS is the one to check before promising
-anything. A session on a runner bills to the API key the runner repository
-holds, or to its owner's subscription when they deposited a login.
+repository, macOS included — read on GitHub's billing and runner pages on 6
+November 2026, [linked-repos.md](./linked-repos.md#runners-from-the-same-list)
+has the sentences — metered on a private one, and the `-xlarge` images are
+billed per minute either way. A session on a runner bills to the API key the
+runner repository holds, or to its owner's subscription when they deposited a
+login.
