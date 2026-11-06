@@ -32,4 +32,9 @@ test('the fleet passes the box\'s word on to the phone, and invents none', () =>
   assert.equal(narrowProbe({ reachable: true, xo: true, pve: false }).pve, false);
   assert.ok(!('pve' in narrowProbe({ reachable: true, xo: true })), 'an older box did not look, and the phone is not told it did');
   assert.ok(!('pve' in narrowProbe({ reachable: true, pve: 'yes' })));
+  // WHETHER IT LOOKED: nothing there is a look; an older box made none.
+  assert.equal(narrowProbe({ reachable: false, pve: null }).pveLooked, true);
+  assert.equal(narrowProbe({ reachable: true, pve: true }).pveLooked, true);
+  assert.equal(narrowProbe({ reachable: true, xo: false }).pveLooked, false);
+  assert.equal(narrowProbe({ reachable: true, pve: 'yes' }).pveLooked, false);
 });
