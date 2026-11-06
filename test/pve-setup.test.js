@@ -259,9 +259,9 @@ test('it is refused without the compared host key, through a phone, or by a mach
 // becomes is one the script reads.
 test('the setup\'s options are checked, become the script\'s flags, and the script reads every one', async () => {
   const { pveOptionsOf, optionArgs, setupCommand } = await import('../src/fleet/host/pve-setup.js');
-  const all = { firewall: true, rebuildImage: true, channel: 'rolling', storage: 'local-zfs', bridge: 'vmbr1', expireDays: 90, groups: 2, labsOpen: 1, labsClosed: 1 };
+  const all = { firewall: true, rebuildImage: true, images: ['ubuntu-24.04', 'debian-13'], channel: 'rolling', storage: 'local-zfs', bridge: 'vmbr1', expireDays: 90, groups: 2, labsOpen: 1, labsClosed: 1 };
   assert.deepEqual(pveOptionsOf(all), { options: all, problem: null });
-  assert.equal(optionArgs(all), ' --enable-firewall --rebuild-image --channel rolling --storage local-zfs --bridge vmbr1 --expire-days 90 --groups 2 --labs-open 1 --labs-closed 1');
+  assert.equal(optionArgs(all), ' --enable-firewall --rebuild-image --images ubuntu-24.04,debian-13 --channel rolling --storage local-zfs --bridge vmbr1 --expire-days 90 --groups 2 --labs-open 1 --labs-closed 1');
   // NONE GIVEN runs the node exactly as before, and false is not a flag.
   assert.equal(optionArgs(null), '');
   assert.equal(optionArgs({ firewall: false, channel: '', storage: '' }), '');
@@ -271,6 +271,10 @@ test('the setup\'s options are checked, become the script\'s flags, and the scri
     [{ firewall: 'yes' }, /yes or no/],
     [{ rebuildImage: true, noImage: true }, /built again and not built/],
     [{ channel: 'nightly' }, /stable or rolling/],
+    [{ images: ['rocky-10'] }, /debian-13, ubuntu-24\.04, ubuntu-26\.04/],
+    [{ images: [] }, /one or more/],
+    [{ images: ['debian-13', 'debian-13'] }, /once/],
+    [{ images: 'debian-13;reboot' }, /one or more/],
     [{ storage: 'local; rm -rf /' }, /storage/],
     [{ bridge: 'vmbr0 && x' }, /bridge/],
     [{ expireDays: 0 }, /1 to 3650/],

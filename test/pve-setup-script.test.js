@@ -171,6 +171,42 @@ test('the script finds its templates and its builds by tag, in its own pool only
   assert.deepEqual(ask('1 fleetwright-session'), []);
 });
 
+// WHICH IMAGE A TEMPLATE IS, by its fleetwright-os-<key> tag, and Debian 13
+// for one built before there was a choice, which carries no such tag. Asked
+// for: "Other images Ubuntu Rocky or whatever else". A wrong answer here
+// builds a second Debian or never builds Ubuntu.
+test('the script tells its images apart by tag, and an old untagged one is Debian 13', { skip }, () => {
+  const text = readFileSync(SCRIPT, 'utf8');
+  const fns = ['tagged', 'templates_of'].map((n) => new RegExp(`^${n}\\(\\) \\{\\n[\\s\\S]*?\\n\\}\\n`, 'm').exec(text)?.[0]);
+  assert.ok(fns.every(Boolean), 'the script has no tagged() or templates_of()');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-pve-images-'));
+  const resources = [
+    { type: 'qemu', vmid: 9001, pool: 'fleetwright', template: 1, tags: 'fleetwright-image' },
+    { type: 'qemu', vmid: 9004, pool: 'fleetwright', template: 1, tags: 'fleetwright-image;fleetwright-os-ubuntu-24.04' },
+    { type: 'qemu', vmid: 9005, pool: 'fleetwright', template: 1, tags: 'fleetwright-image;fleetwright-os-debian-13' },
+    { type: 'qemu', vmid: 9006, pool: 'fleetwright', template: 1, tags: 'fleetwright-os-ubuntu-26.04' },
+  ];
+  writeFileSync(path.join(dir, 'pvesh'), `#!/bin/bash\n[ "$*" = "get /cluster/resources --type vm --output-format json" ] || exit 9\necho '${JSON.stringify(resources)}'\n`);
+  chmodSync(path.join(dir, 'pvesh'), 0o755);
+  const ask = (/** @type {string} */ key) => {
+    const r = spawnSync('bash', ['-c', `set -Eeuo pipefail; POOL=fleetwright; ${fns.join('')}templates_of ${key}`], { encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.split('\n').filter(Boolean);
+  };
+  assert.deepEqual(ask('debian-13'), ['9001', '9005']);
+  assert.deepEqual(ask('ubuntu-24.04'), ['9004']);
+  // Not the fleet's image without its own tag, whatever else it carries.
+  assert.deepEqual(ask('ubuntu-26.04'), []);
+});
+
+test('the script refuses an image it has no pin for, before it touches anything', { skip }, () => {
+  const n = node();
+  const r = spawnSync('bash', [SCRIPT, '--images', 'debian-13,rocky-10'], { encoding: 'utf8', env: { ...process.env, PATH: `${n.dir}/bin:${process.env.PATH}` } });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /^fleetwright-error: --images takes debian-13, ubuntu-24\.04, ubuntu-26\.04; rocky-10 is not one of them$/m);
+  assert.equal(n.asked(), '', 'the script asked the node something first');
+});
+
 // THE NAME A PUBLIC CERTIFICATE IS CHECKED AS, picked by the script's own
 // lines from the certificate the web interface has: the node's own name when
 // it is covered, else the first name the certificate was issued to, else the

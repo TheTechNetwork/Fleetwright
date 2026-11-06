@@ -21,7 +21,7 @@ import {
 } from '../src/fleet/host/pve-pools.js';
 import { poolRecord } from '../src/fleet/host/xo-pools.js';
 import { Pools } from '../src/fleet/host/pools.js';
-import { DEBIAN_IMAGE } from '../src/fleet/host/vm-image.js';
+import { IMAGES } from '../src/fleet/host/vm-image.js';
 import { REQUIRED_HOSTS } from '../src/core/egress.js';
 import * as pveSetup from '../src/fleet/host/pve-setup.js';
 
@@ -308,6 +308,9 @@ test('a machine is cloned into the pool with its join in its SMBIOS, put behind 
     assert.equal(seen.fenced, true);
     assert.deepEqual(seen.wide, []);
     const image = seen.images[0];
+    // An image from before there was a choice of system, tagged nothing
+    // more, is Debian 13, and named as Xen Orchestra names its images.
+    assert.deepEqual([image.key, image.os, image.name], ['debian-13', 'Debian 13', 'Fleetwright Debian 13']);
     assert.match(image.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     assert.deepEqual(seen.networks.map((/** @type {any} */ n) => [n.name, n.group, n.lab ?? null]), [['fwgrp1', true, null], ['fwlab1', false, 'open'], ['fwlab2', false, 'closed'], ['vmbr1', false, null]]);
 
@@ -613,8 +616,14 @@ test('the setup script embeds the snippets, privileges and image the driver expe
   // Whole lines compared as text: a URL made into a pattern is a pattern of
   // whatever characters the URL happens to hold.
   const lines = script.split('\n');
-  assert.ok(lines.includes(`IMAGE_URL=${DEBIAN_IMAGE.url}`), 'the script downloads another image');
-  assert.ok(lines.includes(`IMAGE_SHA512=${DEBIAN_IMAGE.sha512}`), 'the script checks another digest');
+  // EVERY IMAGE THE CATALOGUE HAS, pinned the same: the address and the
+  // digest Xen Orchestra pools build from, and nothing the catalogue lacks.
+  for (const i of Object.values(IMAGES)) {
+    const sum = i.algorithm === 'sha512' ? i.sha512 : i.sha256;
+    assert.ok(lines.includes(`    ${i.key}) OS="${i.os}" URL=${i.url} SUM=${i.algorithm}:${sum} ;;`), `the script pins ${i.os} differently`);
+  }
+  assert.equal(/^IMAGE_KEYS="([^"]+)"/m.exec(script)?.[1], Object.keys(IMAGES).join(' '));
+  assert.equal(lines.filter((l) => /^ {4}[a-z0-9.-]+\) OS=/.test(l)).length, Object.keys(IMAGES).length);
   assert.equal(spawnSync('bash', ['-n', fileURLToPathSafe('../install/fleetwright-pve-setup')]).status, 0);
   // A CLOSED LAB'S NAMES are the sandbox's required hosts, as the edge router's are.
   assert.deepEqual(/^REQUIRED="([^"]+)"/m.exec(script)?.[1].split(' '), [...REQUIRED_HOSTS]);
@@ -626,6 +635,17 @@ test('the setup script embeds the snippets, privileges and image the driver expe
   assert.match(PVE_FENCE_GROUP, /^[A-Za-z][A-Za-z0-9_-]{1,17}$/);
   for (const zone of [PVE_GROUP_ZONE, PVE_LAB_ZONE]) assert.ok(`${zone}8`.length <= 8, `${zone} leaves no room for a VNet number`);
   assert.ok(PVE_ALLOW_SET.length <= 64);
+});
+
+test('a template says which system it is by its tag, and an unknown one is not taken for Debian', async () => {
+  const { pveImageKeyOf } = await import('../src/fleet/host/pve-pools.js');
+  assert.equal(pveImageKeyOf(['fleetwright-image']), 'debian-13');
+  assert.equal(pveImageKeyOf(['fleetwright-image', 'fleetwright-os-ubuntu-24.04']), 'ubuntu-24.04');
+  assert.equal(pveImageKeyOf(['fleetwright-image', 'fleetwright-os-ubuntu-26.04']), 'ubuntu-26.04');
+  // C-5: a key this box's catalogue does not have is "could not tell".
+  assert.equal(pveImageKeyOf(['fleetwright-image', 'fleetwright-os-rocky-10']), null);
+  // Every key the script tags with is one this reads.
+  for (const key of Object.keys(IMAGES)) assert.equal(pveImageKeyOf([`fleetwright-os-${key}`]), key);
 });
 
 /** @param {string} rel */

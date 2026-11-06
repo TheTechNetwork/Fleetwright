@@ -24,6 +24,7 @@
 
 import { PVESETUP_STEPS } from '../protocol/intents.js';
 import { connectionOf } from './pve-pools.js';
+import { IMAGES } from './vm-image.js';
 
 export const UNIT = 'fleetwright-pve-setup';
 export const LINE_FILE = '/root/.fleetwright-pve-line';
@@ -53,7 +54,7 @@ export function setupCommand(coordinator, vmids = null, options = null) {
 
 /**
  * @typedef {{
- *   firewall?: boolean, rebuildImage?: boolean, noImage?: boolean,
+ *   firewall?: boolean, rebuildImage?: boolean, noImage?: boolean, images?: string[],
  *   channel?: 'stable'|'rolling', storage?: string, bridge?: string,
  *   expireDays?: number, groups?: number, labsOpen?: number, labsClosed?: number,
  * }} PveOptions
@@ -90,6 +91,14 @@ export function pveOptionsOf(v) {
     if (o[k]) /** @type {any} */ (out)[k] = true;
   }
   if (out.rebuildImage && out.noImage) return no('the image cannot be built again and not built at all');
+  // WHICH IMAGES, by the catalogue's keys (vm-image.js, IMAGES), which are
+  // the script's own (`pinned`): each once, in the order asked, at least one.
+  if (o.images !== undefined && o.images !== null) {
+    if (!Array.isArray(o.images) || o.images.length === 0 || o.images.length > Object.keys(IMAGES).length) return no('the images are a list of one or more');
+    if (o.images.some((/** @type {unknown} */ k) => typeof k !== 'string' || !Object.hasOwn(IMAGES, k))) return no(`the images are ${Object.keys(IMAGES).join(', ')}`);
+    if (new Set(o.images).size !== o.images.length) return no('each image is asked for once');
+    out.images = [...o.images];
+  }
   if (o.channel !== undefined && o.channel !== '') {
     if (o.channel !== 'stable' && o.channel !== 'rolling') return no('the channel is stable or rolling');
     out.channel = o.channel;
@@ -129,6 +138,7 @@ export function optionArgs(options) {
     o.firewall ? ' --enable-firewall' : '',
     o.rebuildImage ? ' --rebuild-image' : '',
     o.noImage ? ' --no-image' : '',
+    o.images ? ` --images ${o.images.join(',')}` : '',
     o.channel ? ` --channel ${o.channel}` : '',
     o.storage ? ` --storage ${o.storage}` : '',
     o.bridge ? ` --bridge ${o.bridge}` : '',
