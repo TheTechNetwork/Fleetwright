@@ -1755,7 +1755,7 @@ is used for that run and thrown away.
 
 ### From the app
 
-Machines → Add a hypervisor: the pool's address, and one of
+Machines → Hypervisors → Add a hypervisor → Xen Orchestra: the pool's address, and one of
 
 - a **Xen Orchestra admin** sign-in, when the pool has Xen Orchestra;
 - the pool master's **root password**, when it does not. The script then
@@ -1773,6 +1773,43 @@ connection for one machine (Through the phone).
 **The app can close.** The machine runs the setup; progress reaches the phone
 as a Live Activity on the Lock Screen and in the Dynamic Island on iOS, and as
 one ongoing notification on Android.
+
+### One page
+
+Asked for: *"unify the two hypervisor pages"*. Machines used to have three
+rows for one thing: Add a hypervisor, Add Proxmox VE, and a list of the Xen
+Orchestra pools this phone holds. No row anywhere showed a Proxmox VE cluster,
+because its token lives in the vault and on the boxes alone. The first real
+cluster was invisible for hours that way, while no box could use its line.
+
+Now Machines has one row, **Hypervisors**, for a known admin. It opens a page
+that lists every hypervisor of yours, of either kind:
+
+- **Each row** gives the address, the kind, and what the machines holding it
+  saw. That is "Reached from rpi-7550 · 1 image · 0 machines" when one could
+  reach it, "No machine reached it" and that machine's own words when none
+  could, and "Not looked at yet" when the boxes have not looked.
+- **A pool held on this phone** also says when this phone last looked at it,
+  and opens its own page (`manage.md`), read phone-direct with the token kept
+  here.
+- **Anything else** opens what each machine saw, and the hypervisor's facts:
+  version, whether Proxmox VE is new enough, the fence, the pool, images and
+  machines. A Proxmox VE cluster offers **Set it up again**.
+- **The attention ring** marks a row no machine can use, or a cluster older
+  than Proxmox VE 9. A row not looked at yet is not trouble.
+- **One Add a hypervisor** at the foot asks which kind, and opens that kind's
+  own setup: they ask for nothing alike.
+
+The list is the coordinator's `hypervisors` field of `/api/hosts`. It has one
+row per address and kind, each listing every box holding it with `reachable`,
+which is true, false, or null for "has not looked yet". A Proxmox VE row also
+carries the box's `problem` when it could not reach the cluster. Proxmox API
+errors name a path and a status, never the token. Xen Orchestra's problem
+stays on the box, as before, because its page asks the pool itself. Only the
+person's own hypervisors are listed, as placement believes it (`xoFor`). An
+older coordinator omits the field, and a failed ask is said as the fleet not
+answering, never as "none". `test/hypervisors-in-apps.test.js` holds the two
+phones' words equal.
 
 ### What ships first
 
@@ -2081,9 +2118,10 @@ an earlier run, or changed since, and running setup again for a new token
 leaves it as it is.
 
 Changing it is its own flow, from the app: Machines → Hypervisors → the pool
-→ Change what the fleet may use, a row on the pool's page (`manage.md`). The Hypervisors list is the pools this phone keeps
-a token for, written when it collects one, so a pool set up before the list
-existed appears there once it is set up again. It is a job like setup, begun on a machine that
+→ Change what the fleet may use, a row on the pool's page (`manage.md`). The pools this phone keeps a token for are on the
+Hypervisors page with every other hypervisor of yours ("One page", below),
+written when it collects one, so a pool set up before the list existed
+appears there once it is set up again. It is a job like setup, begun on a machine that
 reaches the pool, with the admin sign-in sealed to that job's key, and it
 needs that admin sign-in each time, because the limited token cannot widen
 its own resource set and must not be able to.

@@ -7,7 +7,7 @@ on it, behind the same seam as Xen Orchestra (`src/fleet/host/pools.js`), so
 the protocol did not change. Machines may be in a group or alone in an open
 or closed lab ("Labs and groups"). The cluster is set up by one script run
 as root on a node (`install/fleetwright-pve-setup`): a person runs it from
-the command both phones show under Add Proxmox VE and pastes the line it
+the command both phones show under Hypervisors › Add a hypervisor › Proxmox VE and pastes the line it
 prints ("By hand"), or presses Set it up ("One way in"): the phone runs it
 itself over SSH ("From the phone"), or, for a node the phone cannot reach,
 one of the person's machines that can runs it for the phone ("Through a
@@ -103,7 +103,7 @@ saying which version it found. A cluster on an older one is upgraded first.
 
 ### One way in
 
-**Built in both apps**: Machines › Add Proxmox VE, the node's address and
+**Built in both apps**: Machines › Hypervisors › Add a hypervisor › Proxmox VE, the node's address and
 its root password, and **Set it up**. Asked for: *"the route through a
 machine and main direct route can be combined"*, and when both can reach
 the node, **the phone goes first**, so the password goes to the node and
@@ -277,7 +277,7 @@ curl -fsSLo /root/fleetwright-pve-setup https://raw.githubusercontent.com/TheTec
 ```
 
 prints the line at the end. **This is built in both apps**: Machines › Add
-Proxmox VE (or "It is Proxmox VE" on Add a hypervisor) shows the command to
+Proxmox VE (or "It is Proxmox VE" on the Xen Orchestra setup) shows the command to
 run, which fetches the script from this repository's `main`, and takes the
 line. It keeps the line in the vault as `hypervisor:<address>`, and the
 boxes pick it up on their next vault pass, within ten minutes.
@@ -341,6 +341,16 @@ and no box ever offered it.
 The snippets the image boots with, the privileges and the image pin are
 written in the script, which has no Fleetwright to import them from, and in
 `pve-pools.js`; `test/pve-pools.test.js` holds the two equal.
+
+### Where a cluster shows
+
+Machines › **Hypervisors** lists it beside any Xen Orchestra pools, with what
+each machine holding its token saw: reached it, could not and why, or has not
+looked yet (`hypervisors.md`, "One page"). Its page lists them machine by
+machine, with the version, the fence, the image and the machines on it, and
+**Set it up again**. A cluster that no machine reaches shows here with the
+reason. Before this page it showed nowhere: the first real node's line sat in
+the vault, refused by every box, and nothing said so.
 
 ### Machine numbers
 
