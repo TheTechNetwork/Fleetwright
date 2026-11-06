@@ -10,11 +10,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import https from 'node:https';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { PveApi } from '../src/fleet/host/pve-api.js';
+import { PveApi, connectTrusted } from '../src/fleet/host/pve-api.js';
 import {
   PvePools, parseConnection, connectionOf, pveProblem, certsOf, pveRecord, markOf, markText, wideOf, pveIdOf, pveVendorConfig, pveBuildConfig, vmidsOf,
   CONNECTION_PREFIX, PVE_FENCE_GROUP, PVE_GROUP_ZONE, PVE_LAB_ZONE, PVE_ALLOW_SET, PVE_ROLE_PRIVS, PVE_STORAGE_PRIVS, PVE_NET_PRIVS, PVE_ROOT_PRIVS,
@@ -158,6 +158,48 @@ const recordFor = (address, ca) => ({ kind: 'proxmox', address, token: TOKEN, po
 /** @param {any} record */
 const vaultWith = (record, extra = []) => [{ email: OWNER, items: [{ name: `hypervisor:${record.address}`, value: JSON.stringify(record) }, { name: 'claude', value: 'sk-ant-oat01-' + 'x'.repeat(40) }, ...extra] }];
 const fast = { sleep: async () => {} };
+
+// A PUBLIC CERTIFICATE, AT AN IP. Asked: "for pools with valid certs like we
+// have on proxmox should we ... use the IP or host file resolution". The line
+// gives the IP, and the certificate was issued to a name, so a browser's
+// check against the IP refused it on every box. Now the record names the host
+// and the certificate is held to it while the IP is dialled, which is what a
+// hosts-file entry would do, for this connection alone. A name it does not
+// cover, or none, is still refused, and the token is never sent.
+test('a public certificate at an IP is checked as the name it was issued to, and refused as any other', { skip }, async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'pve-public-'));
+  const run = (/** @type {string[]} */ args) => {
+    const r = spawnSync('openssl', args, { cwd: dir, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+  };
+  run(['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', 'root.key', '-out', 'root.pem', '-days', '1', '-subj', '/CN=a public CA']);
+  run(['req', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-keyout', 'leaf.key', '-out', 'leaf.csr', '-subj', '/CN=pve01.example.test']);
+  writeFileSync(path.join(dir, 'san.cnf'), 'subjectAltName=DNS:pve01.example.test\n');
+  run(['x509', '-req', '-in', 'leaf.csr', '-CA', 'root.pem', '-CAkey', 'root.key', '-CAcreateserial', '-out', 'leaf.pem', '-days', '1', '-extfile', 'san.cnf']);
+  const f = (/** @type {string} */ n) => readFileSync(path.join(dir, n), 'utf8');
+  const server = await standIn({ cert: { key: f('leaf.key'), cert: f('leaf.pem') } });
+  const roots = [f('root.pem')];
+  const connect = (/** @type {any} */ o) => connectTrusted({ ...o, roots });
+  try {
+    const named = new PveApi({ address: server.address, token: TOKEN, trust: { trust: 'public', name: 'pve01.example.test' }, connect });
+    assert.equal((await named.get('/version')).version, '9.0.3');
+    const before = server.state.authorized;
+    for (const name of [null, 'pve02.example.test']) {
+      const api = new PveApi({ address: server.address, token: TOKEN, trust: { trust: 'public', name }, connect });
+      await assert.rejects(api.get('/version'), /altnames|does not match|Hostname\/IP/);
+    }
+    assert.equal(server.state.authorized, before, 'the token reached a server whose certificate did not name the host');
+  } finally {
+    await server.close();
+  }
+  // THE RECORD carries the name only for public trust, and only a host name.
+  const line = (/** @type {any} */ r) => CONNECTION_PREFIX + Buffer.from(JSON.stringify(r)).toString('base64url');
+  const pub = { kind: 'proxmox', address: '10.69.10.10:8006', token: TOKEN, pool: 'fleetwright', trust: 'public' };
+  assert.equal(parseConnection(line({ ...pub, name: 'PVE01.example.test' }))?.name, 'pve01.example.test');
+  assert.equal(parseConnection(line(pub))?.name, undefined);
+  assert.match(connectionOf(line({ ...pub, name: 'not a name' })).problem ?? '', /host name/);
+  assert.equal(parseConnection(line({ ...recordFor('10.69.10.10:8006', '-----BEGIN CERTIFICATE-----\n' + 'A'.repeat(120) + '\n-----END CERTIFICATE-----\n'), name: 'pve01.example.test' }))?.name, undefined, 'a name means nothing beside the cluster\'s own CA');
+});
 
 test('a cluster is trusted by its own CA, and a server another CA signed is never sent the token', { skip }, async () => {
   const certs = certificates();
