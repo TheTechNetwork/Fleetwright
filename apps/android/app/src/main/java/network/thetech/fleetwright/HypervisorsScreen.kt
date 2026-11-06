@@ -88,7 +88,12 @@ internal fun HypervisorsScreen(
             when {
                 probes.any { it.xo == true } -> { choosing = false; onAddXo(at) }
                 probes.any { it.pve == true } || phoneSees -> { choosing = false; onAddProxmox(HypervisorAddress.node(at)) }
-                else -> unknown = HypervisorWords.notFound(at)
+                // A MACHINE THAT NEVER LOOKED is named, and the way to make it
+                // look given, rather than counted among the ones that found nothing.
+                else -> {
+                    val didNotLook = probes.filter { it.pveLooked != true && it.through != "phone" }.map { it.hostId }
+                    unknown = if (didNotLook.isEmpty()) HypervisorWords.notFound(at) else HypervisorWords.notLooked(at, didNotLook)
+                }
             }
         }
     }
@@ -261,6 +266,12 @@ object HypervisorWords {
     const val XO_CHOICE = "A pool of XCP-ng hosts, through the Xen Orchestra in front of it."
     const val PVE_CHOICE = "A Proxmox VE 9 node or cluster, set up over SSH as root."
     const val FIND_FOOTER = "The fleet's machines and this phone look at what answers there, and the setup for it opens."
+
+    /** Nothing answered as Xen Orchestra, and some machines never looked for Proxmox VE: named, with the update that makes them look. */
+    fun notLooked(address: String, machines: List<String>): String {
+        val one = machines.size == 1
+        return "Nothing at $address answered as Xen Orchestra, and this phone could not reach its Proxmox VE port. ${machines.joinToString(", ")} did not look for Proxmox VE: ${if (one) "its" else "their"} Fleetwright is older than that look. Apply update on ${if (one) "its page" else "their pages"} under Machines, then Find it again, or say which it is."
+    }
 
     /** Nothing answered as either kind: the one question the page asks. */
     fun notFound(address: String) =

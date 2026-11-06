@@ -1247,6 +1247,10 @@ struct Fleet {
         /// tells the kind without asking. NIL IS A MACHINE THAT DID NOT SAY:
         /// too old to look, or nothing answered there.
         var pve: Bool? = nil
+        /// Whether the machine looked for Proxmox VE at all. False or nil is
+        /// a machine from before that look, which is told apart from one that
+        /// looked and found nothing there.
+        var pveLooked: Bool? = nil
         /// "phone" when this machine reached the address through this phone's
         /// own network (a relay, PhoneRelay) rather than its own. Absent is
         /// its own network, which is every probe from a fleet before relays.
