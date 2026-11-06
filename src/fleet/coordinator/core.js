@@ -7800,7 +7800,7 @@ export class CoordinatorCore {
     this.record({
       event: 'vm.requested',
       actor: spec.actor ?? null,
-      text: `${owner} asked for a machine from ${image.name}${image.poolName ? ` on ${image.poolName}` : ''}${lab ? ' in a lab' : ''}, as ${vmHost}`,
+      text: `${owner} asked for a machine from ${image.name} on ${imageWhere(holders[0].entries[0].kind)}${lab ? ' in a lab' : ''}, as ${vmHost}`,
     });
     /** @type {Record<string, any>} */
     const vmParams = { platform: lab ? 'lab' : 'vm', template, ticket: ticket.token };
@@ -8936,6 +8936,22 @@ const DEPLOY_TITLES = Object.freeze({ running: 'Installing Xen Orchestra', done:
  * token stopped seeing. What the person wants back is the pools, so the end
  * says whether they came back rather than what was done to the servers.
  */
+/**
+ * WHERE A MACHINE FROM AN IMAGE GOES, in a word, as both phones say it under
+ * New session › Where (Fleet.swift and Fleet.kt, VMImage.label). Asked, of a
+ * list of images that each ended "on fleetwright": "Is it on proxmox or on
+ * xcp where is it going to go?" A Proxmox VE cluster's pool is always
+ * `fleetwright`, so the pool's name did not say. The kind does, and alone:
+ * "on Proxmox or on XCP is enough; if we need sub pickers from there we can
+ * do it". A kind not given is Xen Orchestra, as everything was before
+ * Proxmox VE.
+ *
+ * @param {string|null|undefined} kind
+ */
+export function imageWhere(kind) {
+  return kind === 'proxmox' ? 'Proxmox' : 'XCP-ng';
+}
+
 const PVE_TITLES = Object.freeze({ running: 'Setting up Proxmox VE', done: 'Proxmox VE set up', failed: 'Proxmox VE was not set up', cancelled: 'Setting up Proxmox VE cancelled' });
 const WATCHDOG_TITLES = Object.freeze({ running: 'Adding the reconnect watchdog', done: 'Watchdog added', failed: 'The watchdog was not added', cancelled: 'Adding the watchdog cancelled' });
 const RECONNECT_TITLES = Object.freeze({ running: 'Reconnecting Xen Orchestra\u2019s servers', done: 'Pools back', failed: 'The pools did not come back', cancelled: 'Reconnecting cancelled' });
