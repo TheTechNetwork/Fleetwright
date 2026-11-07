@@ -29,7 +29,7 @@ const SHARED = [
   'Your approved machines can then create VMs here.',
   'Make the machine image for sessions',
   'Debian 13 · 20 GiB disk · 220 MB download · about 10 min',
-  'Nothing in the way out’s pool has 20 GiB free for the machine image’s disk.',
+  'Nothing in the uplink’s pool has 20 GiB free for the machine image’s disk.',
   'The machine image is built behind the edge router, and that pool has none yet. Build the router with it.',
   // New session's footer and the start's status, in one sentence each
   // (docs/reviews/copy-2026-11-06.md, 6, 39, 40).

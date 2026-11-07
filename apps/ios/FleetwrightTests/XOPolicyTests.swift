@@ -132,7 +132,7 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertNil(c.egress)
         XCTAssertFalse(c.edge, "a router with no way out was left asked for")
         c.edge = true
-        XCTAssertEqual(c.problem(in: inv), "The edge router needs a way out: choose the network its WAN goes on.")
+        XCTAssertEqual(c.problem(in: inv), "The edge router needs an uplink: choose the network its WAN goes on.")
     }
 
     // MARK: Where the screen starts
@@ -207,11 +207,11 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(c.payload(in: inv)["egress"] as? String, "net-wan")
         XCTAssertEqual(c.payload(in: inv)["networks"] as? [String], ["net-lab"])
         c.egress = "net-elsewhere"
-        XCTAssertEqual(c.problem(in: inv), "The way out has to be a network this pool listed.")
+        XCTAssertEqual(c.problem(in: inv), "The uplink has to be a network this pool listed.")
     }
 
     /// Asked for: "which disk did it put it on?" The router's disk goes on
-    /// the storage picked, any in the way out's pool with room; unpicked, the
+    /// the storage picked, any in the uplink's pool with room; unpicked, the
     /// fleet's there with the most room; and it is sent only to a machine
     /// that reads it.
     func testTheRoutersDiskGoesWhereItIsPickedAndIsSentOnlyToAMachineThatReadsIt() throws {
@@ -419,7 +419,7 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(c.problem(in: inv), "Disk is between 10 GiB and 500 GiB, the size of the storage chosen.")
         c = XOPolicy.Choice.initial(for: inv)
         c.egress = "net-lab"
-        XCTAssertEqual(c.problem(in: inv), "The way out has to be one of the networks the fleet may use.")
+        XCTAssertEqual(c.problem(in: inv), "The uplink has to be one of the networks the fleet may use.")
         c = XOPolicy.Choice.initial(for: inv)
         c.networks.insert("net-elsewhere")
         XCTAssertEqual(c.problem(in: inv), "That names storage or a network this pool did not list.")
@@ -608,7 +608,7 @@ final class XOPolicyTests: XCTestCase {
         c.groupsChoice = true
         c.groups = 2
         c.egress = nil
-        XCTAssertEqual(c.problem(in: inv), "Group networks are made in the way out’s pool: choose the way out. Nothing was changed.")
+        XCTAssertEqual(c.problem(in: inv), "Group networks are made in the uplink’s pool: choose the uplink. Nothing was changed.")
         XCTAssertNil(c.payload(in: inv)["groups"])
     }
 }

@@ -107,7 +107,7 @@ test('iOS: the sign-in footer says who keeps it, for the switch as it stands, an
 });
 
 test('iOS: internet access says what it is, and offers to build the router only where it can be built', () => {
-  assert.ok(SCREEN.includes('The network VMs reach the internet through'));
+  assert.ok(SCREEN.includes('The uplink: the network VMs reach the internet through'));
   // Offered by a machine that said it can, and only with a way out (C-2).
   assert.match(SCREEN, /canEdge: begun\.can\.contains\("edge"\)/);
   assert.match(SCREEN, /if canEdge, choice\.egress != nil \{\s*Toggle\(isOn: \$choice\.edge\)/);
@@ -125,7 +125,7 @@ test('iOS: internet access says what it is, and offers to build the router only 
   // What goes to the machine, which checkPolicy reads, and its one rule.
   const POLICY = read('apps/ios/Fleetwright/XOPolicy.swift');
   assert.match(POLICY, /"edge": edge,/);
-  assert.ok(POLICY.includes('The edge router needs a way out: choose the network its WAN goes on.'));
+  assert.ok(POLICY.includes('The edge router needs an uplink: choose the network its WAN goes on.'));
 });
 
 // ─── Android ────────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ test('both phones say the same things about what is remembered', () => {
     'The kept sign-in did not work, so this phone no longer keeps it.',
     ' Your other machines were asked instead.',
     'checks it again before signing in.',
-    'The network VMs reach the internet through',
+    'The uplink: the network VMs reach the internet through',
     '2 vCPU · 2 GiB · 3 GiB disk · 470 MB download',
     '"Running"',
     'Stopped · Apply starts it',

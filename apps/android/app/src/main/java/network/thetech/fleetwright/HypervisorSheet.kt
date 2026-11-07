@@ -418,7 +418,7 @@ internal fun HypervisorSheet(
                 // there is something to send it to.
                 if (remembered == null) unlockRemembered()
             } else {
-                probeText = r.text.ifBlank { "The fleet did not answer the probe." }
+                probeText = r.text.ifBlank { "No answer to the probe." }
             }
             probing = false
         }
@@ -942,7 +942,7 @@ internal fun HypervisorSheet(
                 inventory = null
                 choice = null
             } else {
-                choiceRefusal = r.text.ifBlank { "The fleet did not answer, so the choice was not applied. Try again." }
+                choiceRefusal = r.text.ifBlank { "No answer, so the choice was not applied. Try again." }
                 // Refused straight through: the form, with the refusal under
                 // it, as any Apply the machine refused.
                 straight = false
@@ -1095,7 +1095,7 @@ internal fun HypervisorSheet(
             // it was, or stays absent: "Stopped" is the machine's word for
             // its own job, and a fleet that did not answer has not said it.
             unanswered++
-            refusal = r.text.ifBlank { "The fleet did not answer about the setup." }
+            refusal = r.text.ifBlank { "No answer about the setup." }
             if (r.code == "unknown_job" || unanswered >= 5) {
                 pollGone = r.code == "unknown_job"
                 pollStopped = true
@@ -1153,7 +1153,7 @@ internal fun HypervisorSheet(
                 when {
                     pollStopped -> {
                         Hint(
-                            if (pollGone) "The fleet has no setup with this id for you, so there is nothing more to ask it."
+                            if (pollGone) "No setup with this id is listed for you, so there is nothing more to ask."
                             else "Asked five times with no answer, so this has stopped asking.",
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {

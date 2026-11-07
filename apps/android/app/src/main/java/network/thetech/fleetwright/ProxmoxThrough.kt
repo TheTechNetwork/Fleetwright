@@ -74,7 +74,7 @@ internal object ProxmoxThrough {
         "fence" to "Making the firewall group",
         "networks" to "Making lab and group networks",
         "image" to "Building the machine image",
-        "line" to "Handing over the line",
+        "line" to "Sending the token to this phone",
     )
 
     fun stepWords(phase: String?, step: Int, of: Int): String {
