@@ -44,7 +44,7 @@ struct TemporaryMachinesView: View {
 
     private var whoStarts: String {
         if phone.signedIn { return "This phone starts them itself, as \(phone.signIn?.login ?? "you") on GitHub." }
-        return "A permanent box with your GitHub connection starts them. Sign in to GitHub on this phone under You, and the phone starts them itself."
+        return "A machine with your GitHub connection starts them. Sign in to GitHub on this phone under You, and the phone starts them itself."
     }
 
     var body: some View {
@@ -79,7 +79,7 @@ struct TemporaryMachinesView: View {
                             .textSelection(.enabled)
                     }
                 } else {
-                    Text("Asking the fleet…")
+                    Text("Loading…")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
@@ -99,13 +99,13 @@ struct TemporaryMachinesView: View {
                 } header: {
                     sectionHead("Larger machines")
                 } footer: {
-                    Text("GitHub's larger macOS machines, 5 cores and 14 GB instead of 3 and 7, are billed by the minute to \(saved)'s owner on every plan. Off, New session does not offer them and the fleet refuses one.")
+                    Text("GitHub's larger macOS machines, 5 cores and 14 GB instead of 3 and 7, are billed by the minute to \(saved)'s owner on every plan. Off, New session does not offer them and a request for one is refused.")
                 }
             } else if runnerRepoAnswered, saved == nil, let fleetRepo, let fleetLarge {
                 Section {
                     Text(fleetLarge
                          ? "Machines from \(fleetRepo) may be GitHub's larger ones, which its operator allowed."
-                         : "Machines from \(fleetRepo) are standard ones. Its operator decides about larger ones, since the fleet pays for them.")
+                         : "Machines from \(fleetRepo) are standard ones. Its operator decides about larger ones, since they are billed to its owner.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 } header: {

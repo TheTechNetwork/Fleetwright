@@ -292,7 +292,7 @@ struct FleetView: View {
                             Text("Not sent: \(entry.summary)")
                                 .fleetType(.bodySmall)
                                 .foregroundStyle(Design.Palette.attention)
-                            Text("Held for more than 12 hours while the fleet could not be reached, so it was not sent. Ask again if you still want it.")
+                            Text("Held for more than 12 hours with no connection, so it was not sent. Ask again if you still want it.")
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
                         }

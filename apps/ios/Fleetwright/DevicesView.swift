@@ -32,7 +32,7 @@ struct DevicesView: View {
         List {
             Section {
                 if clients.isEmpty {
-                    Text(loaded ? "No devices reported." : "Asking the fleet…")
+                    Text(loaded ? "No devices reported." : "Loading…")
                         .fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                 }
                 ForEach(clientsInUse) { c in

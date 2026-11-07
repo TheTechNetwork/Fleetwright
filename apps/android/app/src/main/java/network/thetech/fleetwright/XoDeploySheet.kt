@@ -120,7 +120,7 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
                 // One machine that can is not a choice, so it is chosen.
                 r.probes.filter { XoDeploy.canInstall(it) }.singleOrNull()?.let { chosen = it.hostId }
             } else {
-                probeText = r.text.ifBlank { "The fleet did not try that address." }
+                probeText = r.text.ifBlank { "No machine tried that address." }
             }
             probing = false
         }
@@ -254,7 +254,7 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
                 continue
             }
             unanswered++
-            refusal = r.text.ifBlank { "The fleet did not answer about the install." }
+            refusal = r.text.ifBlank { "No answer about the install." }
             if (r.code == "unknown_job" || unanswered >= 5) break
         }
     }
