@@ -1197,6 +1197,14 @@ class Fleet(
          * keeps no copy (XoHandoff).
          */
         val handoff: String? = null,
+        /**
+         * Once a policy job that named the boxes is done: each box's own
+         * token, sealed the same way as [handoff] and under its binding, and
+         * whether the shared item should now leave the vault
+         * (XoHandoff.keepBoxUsers). A field of its own, so a phone from
+         * before it never keeps a box's token as the pool's.
+         */
+        val boxHandoff: String? = null,
         /** Once a policy job is done: the key the fleet reads the pool's edge routers with, sealed the same way (XoHandoff.keepEdgeKey). */
         val watch: String? = null,
         /**
@@ -3258,6 +3266,7 @@ class Fleet(
                             hostKey = s.optJSONObject("hostKey"),
                             fingerprint = s.optString("fingerprint").takeIf { it.isNotBlank() && it != "null" },
                             handoff = s.optString("handoff").takeIf { it.split(".").size == 3 },
+                            boxHandoff = s.optString("boxHandoff").takeIf { it.split(".").size == 3 },
                             watch = s.optString("watch").takeIf { it.split(".").size == 3 },
                             can = s.optJSONArray("can")?.let { a ->
                                 (0 until a.length()).mapNotNull { i -> a.optString(i, "").takeIf { it.isNotBlank() && !a.isNull(i) } }

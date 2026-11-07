@@ -49,9 +49,12 @@ import { HOLDER } from './xo-holder.js';
 import { seal, xolookAad, claudeBindingFor } from '../seal.js';
 import { xoActionArgs } from '../protocol/intents.js';
 import { machineGrantsOf } from '../../core/grants.js';
+import { HYPERVISOR_PREFIX, splitHypervisorItem } from '../protocol/hypervisor-name.js';
+import { BUSY_MS, BUSY_PREFIX, BUSY_TAG, GRACE_MS, MADE_PREFIX, RESTARTED_PREFIX, YOUNG_MS, tagValue } from './machine-verdict.js';
+import { boxTag, operates } from './xo-box-users.js';
 
-/** The prefix a pool's item carries in a vault answer. */
-export const HYPERVISOR_ITEM = 'hypervisor:';
+/** The prefix a pool's item carries in a vault answer (protocol/hypervisor-name.js). */
+export const HYPERVISOR_ITEM = HYPERVISOR_PREFIX;
 /** A Claude token's shape, as the vault keeps one. */
 const CLAUDE_RE = /^[A-Za-z0-9._~+/=-]{20,2048}$/;
 /** A dispatch ticket's shape (src/fleet/coordinator/runner-tickets.js). */
@@ -66,35 +69,13 @@ export const MAX_MINUTES = 350;
  * and this is only there for a pool no box reaches any more.
  */
 const BACKSTOP_MINUTES = MAX_MINUTES + 30;
-/** How long past its end a machine may still be running before it is removed. */
-const GRACE_MS = 60_000;
 /** How long a machine made here is remembered for its login, and how many at most (XoPools#made). */
 const MADE_FORGET_MS = 24 * 60 * 60_000;
 const MAX_MADE = 64;
-/**
- * A machine being resized is stopped on purpose, and the sweep leaves it be:
- * `fleetwright-busy:<seconds since the epoch>`, honoured for BUSY_MS from the
- * time in it. It used to be the bare tag, which a sidecar that died between
- * marking and unmarking (#work) left on for good, and the machine with it:
- * stopped, never swept, never started. A bare one found now (BUSY_TAG, from a
- * box older than this) is given the time it was first seen at, so that it
- * runs out like the rest and the sweep does not take a machine from under a
- * resize still going on an older box.
- */
-const BUSY_TAG = 'fleetwright-busy';
-const BUSY_PREFIX = 'fleetwright-busy:';
-const BUSY_MS = 30 * 60_000;
-/**
- * How long after it was made a stopped machine may still be booting rather
- * than done: vm.create clones and tags it before it is started, and any box
- * that looked in that window took it for a stopped machine and removed it,
- * disk and all, before it had booted once (#sweep).
- */
-const YOUNG_MS = 5 * 60_000;
-/** The sweep started this machine again once, found stopped before its end (#sweep). */
-const RESTARTED_PREFIX = 'fleetwright-restarted:';
-/** When a machine was made, its image and its network, as tags beside its end. */
-const MADE_PREFIX = 'fleetwright-made:';
+// GRACE_MS, the busy mark (BUSY_TAG, BUSY_PREFIX, BUSY_MS), YOUNG_MS,
+// RESTARTED_PREFIX and MADE_PREFIX are machine-verdict.js's: the sweep's
+// rules for what is done and what a resize has, shared with the admin job
+// that hands a gone box's machines on (xo-box-users.js).
 const FROM_PREFIX = VM_IMAGE.fromPrefix;
 const ON_PREFIX = 'fleetwright-on:';
 /**
@@ -149,7 +130,7 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
 
 /**
  * @typedef {{ key: string, secret: string, pin: string, routers: Array<{ name: string, address: string|null }> }} EdgeKey
- * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string, edge?: EdgeKey, grants?: { upgrades?: boolean, reboot?: boolean }, masters?: string[] }} PoolRecord
+ * @typedef {{ v?: number, address: string, pin: string|null, plain?: boolean, token: string, resourceSet?: string|null, user?: string, box?: string, edge?: EdgeKey, grants?: { upgrades?: boolean, reboot?: boolean }, masters?: string[] }} PoolRecord
  * @typedef {{ id: string, name: string, pool: string|null, poolName: string|null }} Image
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, lab?: 'open'|'closed', taken?: boolean|null, perPerson?: number }} Network
  * @typedef {{ interval: number, end: number, rx: Array<number|null>, tx: Array<number|null> }} Traffic
@@ -180,12 +161,6 @@ export function sshKeys(value) {
     .filter((l) => SSH_KEY_RE.test(l))
     .slice(0, 20);
 }
-
-/** A tag's value by its prefix, or null. @param {any} vm @param {string} prefix */
-const tagValue = (vm, prefix) => {
-  const t = (Array.isArray(vm?.tags) ? vm.tags : []).find((/** @type {string} */ x) => x.startsWith(prefix));
-  return t ? t.slice(prefix.length) : null;
-};
 
 /**
  * Which kind of lab a network is, by the tag the policy job gave it, or null
@@ -379,6 +354,30 @@ export function trafficFrom(stats) {
 }
 
 /**
+ * Two looks at one pool, through two of this box's tokens, as one: what
+ * either saw (report).
+ *
+ * @param {any} a @param {any} b
+ */
+function joinSeen(a, b) {
+  const byId = (/** @type {any[]} */ xs, /** @type {any[]} */ ys, /** @type {string} */ key) => {
+    const out = new Map(xs.map((x) => [String(x?.[key]), x]));
+    for (const y of ys) if (!out.has(String(y?.[key]))) out.set(String(y?.[key]), y);
+    return [...out.values()];
+  };
+  const reachable = a.reachable === true || b.reachable === true ? true : a.reachable === null && b.reachable === null ? null : a.reachable ?? b.reachable;
+  return {
+    ...a,
+    reachable,
+    pools: byId(a.pools || [], b.pools || [], 'id'),
+    images: byId(a.images || [], b.images || [], 'id'),
+    networks: byId(a.networks || [], b.networks || [], 'id'),
+    machines: byId(a.machines || [], b.machines || [], 'name'),
+    ...(reachable !== false ? (() => { const { problem, ...rest } = a; void problem; return { ...rest, ...(b.problem && reachable === false ? { problem: b.problem } : {}) }; })() : {}),
+  };
+}
+
+/**
  * A record as the vault handed it, or null for anything that is not one for
  * the address it was filed under.
  *
@@ -386,7 +385,8 @@ export function trafficFrom(stats) {
  * @returns {PoolRecord|null}
  */
 export function poolRecord(name, value) {
-  if (!name.startsWith(HYPERVISOR_ITEM) || typeof value !== 'string') return null;
+  const split = splitHypervisorItem(name);
+  if (!split || typeof value !== 'string') return null;
   /** @type {any} */
   let r;
   try {
@@ -394,8 +394,13 @@ export function poolRecord(name, value) {
   } catch {
     return null;
   }
-  const address = name.slice(HYPERVISOR_ITEM.length);
+  const { address } = split;
   if (!r || typeof r !== 'object' || r.address !== address || typeof r.token !== 'string' || !r.token) return null;
+  // ONE BOX'S OWN USER is filed under its name and says so inside, and the
+  // shared one under the bare address with no box in it (xo-box-users.js).
+  // The minter refuses the other pairings; a box reading them would hand
+  // one box's user to every box, or take the shared one for one box's.
+  if (split.box === null ? r.box != null : r.box !== split.box) return null;
   // A PROXMOX CLUSTER'S RECORD is pve-pools.js's (docs/proxmox.md). Read as
   // Xen Orchestra's it would be dialled over a WebSocket it does not speak.
   if (r.kind !== undefined) return null;
@@ -412,7 +417,7 @@ export function poolRecord(name, value) {
   // filed under, and nothing on it dials a pool master. Any other field a
   // later setup adds is passed over the same way, never a reason to drop
   // the pool.
-  return { address, pin, plain, token: r.token, resourceSet: typeof r.resourceSet === 'string' ? r.resourceSet : null, user: typeof r.user === 'string' ? r.user : undefined, ...(edge ? { edge } : {}), ...(grants ? { grants } : {}) };
+  return { address, pin, plain, token: r.token, resourceSet: typeof r.resourceSet === 'string' ? r.resourceSet : null, user: typeof r.user === 'string' ? r.user : undefined, ...(split.box ? { box: split.box } : {}), ...(edge ? { edge } : {}), ...(grants ? { grants } : {}) };
 }
 
 /**
@@ -441,20 +446,29 @@ export class XoPools {
    *   now?: () => number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
    *   holderFor?: string,
+   *   boxId?: string,
    * }} [opts]
    */
-  constructor({ connect = connectXo, connectPlain = connectXoPlain, now = () => Date.now(), log, holderFor = '' } = {}) {
+  constructor({ connect = connectXo, connectPlain = connectXoPlain, now = () => Date.now(), log, holderFor = '', boxId = '' } = {}) {
     /**
      * THE XEN ORCHESTRA THIS BOX WAS MADE TO HOLD, when it is a pool's own
      * machine (xo-holder.js), from FLEETWRIGHT_HOLDER_FOR. Its pool entry says
      * `holder`, and the coordinator asks it first. Empty everywhere else.
      */
     this.holderFor = String(holderFor || '');
+    /**
+     * THIS BOX, by the host id the fleet knows it by, so that a token filed
+     * for it alone (`hypervisor:<address>+<box>`, xo-box-users.js) is the one
+     * it makes machines with, and never a token filed for another box, which
+     * the vault does not hand it anyway. Empty, every record is read as the
+     * shared one was, which is what a box from before this did.
+     */
+    this.boxId = String(boxId || '');
     this.connect = connect;
     this.connectPlain = connectPlain;
     this.now = now;
     this.log = log || { info() {}, warn() {} };
-    /** @type {Map<string, { owner: string, record: PoolRecord }>} keyed `owner address` */
+    /** @type {Map<string, { owner: string, record: PoolRecord }>} keyed `owner address`, or `owner address box` for one box's own user */
     this.held = new Map();
     /** @type {Map<string, string>} owner → their Claude token, for the machines made for them */
     this.claude = new Map();
@@ -525,7 +539,7 @@ export class XoPools {
         if (i?.name === 'claude' && typeof i.value === 'string' && CLAUDE_RE.test(i.value) && owner) claude.set(owner, i.value);
         if (i?.name === SSH_KEYS_ITEM && owner) ssh.set(owner, sshKeys(i.value));
         const record = owner ? poolRecord(String(i?.name || ''), i?.value) : null;
-        if (record) held.set(`${owner} ${record.address}`, { owner, record });
+        if (record) held.set(`${owner} ${record.address}${record.box ? ` ${record.box}` : ''}`, { owner, record });
       }
       return { ...a, items: items.filter((i) => !String(i?.name || '').startsWith(HYPERVISOR_ITEM)) };
     });
@@ -537,16 +551,47 @@ export class XoPools {
     this.held = held;
     this.claude = claude;
     this.ssh = ssh;
-    if (added.length) this.log.info(`sidecar: holding the token for ${added.map((k) => k.split(' ')[1]).join(', ')}`);
+    if (added.length) this.log.info(`sidecar: holding the token for ${added.map((k) => { const [, address, box] = k.split(' '); return box ? `${address} as ${box}` : address; }).join(', ')}`);
     return stripped;
   }
 
   /** For the health frame: what each held pool was last seen to have. Empty is "holds none". @returns {Seen[]} */
   report() {
-    return [...this.held.keys()].map((k) => {
-      const seen = this.seen.get(k) ?? { address: /** @type {any} */ (this.held.get(k)).record.address, owner: /** @type {any} */ (this.held.get(k)).owner, reachable: null, pools: [], images: [], networks: [], machines: [] };
-      return this.holderFor && seen.address === this.holderFor ? { ...seen, holder: true } : seen;
-    });
+    // ONE ENTRY PER POOL, not one per token. Between the first apply that
+    // files a box's own token and the next that withdraws the shared one, a
+    // box holds both for the same pool, and reporting each would list the
+    // pool and its images twice to the coordinator. What each token saw is
+    // joined: a machine is on the list when either saw it, a pool is
+    // reachable when either reached it, and the images and networks are the
+    // union, by id, which for the same pool is the same list.
+    /** @type {Map<string, any>} */
+    const byPool = new Map();
+    for (const k of this.held.keys()) {
+      const held = /** @type {{ owner: string, record: PoolRecord }} */ (this.held.get(k));
+      const seen = this.seen.get(k) ?? { address: held.record.address, owner: held.owner, reachable: null, pools: [], images: [], networks: [], machines: [] };
+      const poolKey = `${held.owner} ${held.record.address}`;
+      const prior = byPool.get(poolKey);
+      byPool.set(poolKey, prior ? joinSeen(prior, seen) : { ...seen });
+    }
+    return [...byPool.values()].map((seen) => (this.holderFor && seen.address === this.holderFor ? { ...seen, holder: true } : seen));
+  }
+
+  /**
+   * The record this box reaches a pool with for one person, by address:
+   * the shared one where the vault still hands it over, else this box's own
+   * (the one that is left once a phone has withdrawn the shared token), else
+   * any of theirs for that address. For the page from away and the console,
+   * which read the pool and do not make anything on it: the shared user sees
+   * every machine it made, and a box's own user sees its own.
+   *
+   * @param {string} owner @param {string} address
+   * @returns {{ owner: string, record: PoolRecord }|undefined}
+   */
+  #heldAt(owner, address) {
+    const who = String(owner || '').toLowerCase();
+    return this.held.get(`${who} ${address}`)
+      ?? (this.boxId ? this.held.get(`${who} ${address} ${this.boxId}`) : undefined)
+      ?? [...this.held.values()].find((h) => h.owner === who && h.record.address === address);
   }
 
   /** @param {PoolRecord} record */
@@ -580,7 +625,7 @@ export class XoPools {
         const images = templates
           .filter((t) => t?.tags?.includes?.(VM_IMAGE.tag) && typeof t.id === 'string' && set.objects.has(t.id))
           .map((t) => ({ id: String(t.id), name: String(t.name_label || VM_IMAGE.name).slice(0, 80), pool: t.$pool ?? null, poolName: names.get(t.$pool) ?? null }));
-        await this.#sweep(rpc, set);
+        await this.#sweep(rpc, set, record);
         // THE NETWORKS A MACHINE CAN GO ON besides the uplink: the pool's that
         // the fleet may use (what is in its set), for a machine that
         // should be reachable from the person's own network; and the group
@@ -718,14 +763,20 @@ export class XoPools {
    * without an end in its tags was never given one to wait for, and goes as
    * it did; this box makes none like that. The running case is as it was.
    *
-   * @param {any} rpc @param {{ ids: Set<string> }} set
+   * ONLY THE MACHINES THIS TOKEN WORKS (xo-box-users.js, operates): a box's
+   * own user sweeps the machines tagged for it, and the shared user the ones
+   * with no box, which are the ones it made. Asking about another box's was
+   * measured to be refused, and a refusal every look is a warning every two
+   * minutes about a machine that is somebody else's to sweep.
+   *
+   * @param {any} rpc @param {{ ids: Set<string> }} set @param {PoolRecord} record
    */
-  async #sweep(rpc, set) {
+  async #sweep(rpc, set, record) {
     const vms = /** @type {any[]} */ (Object.values((await rpc.call('xo.getAllObjects', { filter: { type: 'VM' } })) || {}));
     const now = this.now();
     for (const vm of vms) {
       const tags = Array.isArray(vm?.tags) ? vm.tags : [];
-      if (!tags.includes(VM_IMAGE.sessionTag) || !inFleetSet(vm, set)) continue;
+      if (!tags.includes(VM_IMAGE.sessionTag) || !inFleetSet(vm, set) || !operates(record, vm)) continue;
       if (await this.#busy(rpc, vm, tags, now)) continue;
       const name = vm.name_label || vm.id;
       const untilTag = tagValue(vm, VM_IMAGE.untilPrefix);
@@ -813,7 +864,12 @@ export class XoPools {
     // THE PERSON'S OWN POOL. The image must be one this box saw under a
     // token that person kept; the coordinator chose this box by the same
     // report, and is the party this project assumes may be lying.
-    const found = [...this.held.entries()].find(([k, h]) => h.owner === who && this.seen.get(k)?.images.some((i) => i.id === template));
+    const candidates = [...this.held.entries()].filter(([k, h]) => h.owner === who && this.seen.get(k)?.images.some((i) => i.id === template));
+    // THIS BOX'S OWN USER, where a phone has filed one for it, so the
+    // machine's admin ACL is that user's and no other box's (docs/security.md,
+    // G14). The shared token is what a pool still runs on until then, and
+    // what a box this fleet has not named is left with.
+    const found = (this.boxId && candidates.find(([, h]) => h.record.box === this.boxId)) || candidates.find(([, h]) => !h.record.box);
     if (!found) return { ok: false, text: 'This box holds no pool of yours with that machine image.' };
     const [k, { record }] = found;
     const image = /** @type {Image} */ (this.seen.get(k)?.images.find((i) => i.id === template));
@@ -877,6 +933,8 @@ export class XoPools {
           ...(on ? [`${ON_PREFIX}${on.name}`] : []),
           ...(joined && groupNet ? [`${GROUP_TAG}${groupNet.name}`, `${GROUP_IP_TAG}${joined.address}`] : []),
           ...(labNet ? [`${LAB_TAG}${labNet.name}`] : []),
+          // Whose it is to work, when it was made with one box's own user.
+          ...(record.box ? [boxTag(record.box)] : []),
         ],
         cloudConfig: machineCloudConfig({
           name,
@@ -1124,6 +1182,10 @@ export class XoPools {
         // MADE FOR SOMEBODY ELSE on the same Xen Orchestra is not there, as
         // far as this person is concerned.
         if (tagValue(vm, FOR_PREFIX) !== who) continue;
+        // ANOTHER BOX'S MACHINE, or one on the shared user when this record
+        // is one box's: not this token's to work, and the coordinator asks
+        // the box that can (xo-box-users.js, operates).
+        if (!operates(record, vm)) continue;
         const r = await this.#work(rpc, vm, { action, minutes, cpus, memory });
         if (r.ok) void this.refresh().catch(() => {});
         return r;
@@ -1212,7 +1274,7 @@ export class XoPools {
    * @returns {{ host: string, port: number }|null}
    */
   consoleAddress(owner, address) {
-    const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
+    const held = this.#heldAt(owner, address);
     if (!held || held.record.plain || !held.record.pin) return null;
     const { host, port } = splitAddress(String(held.record.address));
     return Number.isInteger(port) && port > 0 && port < 65536 ? { host, port } : null;
@@ -1234,7 +1296,7 @@ export class XoPools {
    * @returns {Promise<{ ok: boolean, text: string, notHere?: boolean, unreachable?: boolean, sealed?: { epk: string, iv: string, ct: string } }>}
    */
   async look({ owner, address, reply }) {
-    const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
+    const held = this.#heldAt(owner, address);
     if (!held) return { ok: false, notHere: true, text: `This box holds no token of yours for ${address}.` };
     /** @type {any} */
     let rpc = null;
@@ -1302,7 +1364,7 @@ export class XoPools {
   async act({ owner, address, method, args }) {
     const checked = xoActionArgs(method, args);
     if (!checked.ok) return { ok: false, text: checked.error };
-    const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
+    const held = this.#heldAt(owner, address);
     if (!held) return { ok: false, notHere: true, text: `This box holds no token of yours for ${address}.` };
     /** @type {any} */
     let rpc = null;
