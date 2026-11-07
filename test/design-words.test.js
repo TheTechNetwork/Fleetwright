@@ -28,7 +28,10 @@ const ANDROID = 'apps/android/app/src/main/java/network/thetech/fleetwright/';
 
 /** The words, each with the one a person says instead. The regexes are case-insensitive and whole-word. */
 const RETIRED = [
-  [/\bthe fleet\b/, '"your fleet" as a place, or name the machine; the fleet is never the actor of a sentence'],
+  // THE FLEET AS AN ACTOR: "the fleet said", "Asking the fleet". As a place
+  // ("in the fleet", "the fleet's repository", the screen title "Change what
+  // the fleet may use") it is where things are, which is allowed.
+  [/\basking the fleet\b|\bthe fleet\s+(?:did|does|said|says|refus\w*|pays|paid|no longer|could|cannot|can't|has|have|had|picks|picked|dispatch\w*|answer\w*|is|was|will|asks|asked|sends|sent|keeps|kept|places|placed|closed|tries|tried|knows|knew|holds|held|makes|made|starts|started|decides|allows|lets|relays|carries)\b/, 'name the machine, or "your fleet" as a place; the fleet is never the actor of a sentence'],
   [/\bthe coordinator\b/, 'your fleet, or nothing'],
   [/\bboxe?s?\b/, 'machine'],
   [/\bminter\b/, 'nothing: custody detail goes under a disclosure'],
@@ -43,6 +46,11 @@ const RETIRED = [
 
 /** Sentences allowed to keep a retired word, each with its reason. Exact strings, after unescaping nothing. */
 const ALLOWED = new Map([
+  // THE BANNER KEEPS ITS BASIS (docs/design-system.md, Words): the one line
+  // the second sentence was argued for in psychology.md, and the fixture
+  // test/fixtures/parity/reassurance.json holds both phones to it.
+  ['The fleet has not yet said which machines report, so this cannot say whether anything is running.', 'Reassurance.basis'],
+  ['The coordinator has no health from any machine, so this cannot say whether anything is running.', 'Reassurance.basis'],
 ]);
 
 /**
