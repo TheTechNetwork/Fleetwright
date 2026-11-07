@@ -110,6 +110,13 @@
       "enabled": false
     },
     {
+      "description": "Renovate's own xcodegen manager reads apps/ios/project.yml too, alongside the customManager below that was written before it existed, so every Swift package bump came as two pull requests (#1639 and #1640, the same line). The customManager stays: its `# renovate:` comment names the datasource and depName a person reads and test/renovate-pins.test.js holds every pin to.",
+      "matchManagers": [
+        "xcodegen"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Actions are grouped and automerged on patch/minor: they are covered by every workflow run, so a break is visible immediately and revertible in one click.",
       "groupName": "github actions",
       "matchManagers": [
@@ -494,7 +501,7 @@
       "datasourceTemplate": "docker"
     },
     {
-      "description": "The Swift packages the iOS app builds with, under `packages:` in apps/ios/project.yml. XcodeGen writes the project from it, and no manager reads XcodeGen's spec.",
+      "description": "The Swift packages the iOS app builds with, under `packages:` in apps/ios/project.yml. XcodeGen writes the project from it. Renovate's own xcodegen manager reads the file as well and is turned off in packageRules, so each package is proposed once, from here.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^apps/ios/project\\.yml$/"
