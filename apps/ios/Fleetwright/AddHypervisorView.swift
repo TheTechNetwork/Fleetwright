@@ -2239,8 +2239,8 @@ struct AddHypervisorView: View {
                                   canLabsEach: begun.can.contains("labs-each"),
                                   canImageManage: begun.can.contains("image-manage"),
                                   canMachineGrants: begun.can.contains("machine-grants"),
-                                  canImageChannel: begun.can.contains("image-channel"),
-                                  canBoxUsers: begun.can.contains("box-users"))
+                                  canBoxUsers: begun.can.contains("box-users"),
+                                  canImageChannel: begun.can.contains("image-channel"))
             hostId = begun.hostId
             progress = answer.xosetup
             job = begun.job
