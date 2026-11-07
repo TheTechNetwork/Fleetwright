@@ -44,12 +44,12 @@ test('the Apple button is never drawn waiting on an address it cannot show it la
   // And it is drawn only once there is an address: the button sits in the
   // branch that runs when the address is not blank.
   const before = swift.slice(0, swift.indexOf('SignInWithAppleButton('));
-  assert.match(before.slice(-600), /if fleetAddressBlank \{[\s\S]*Enter your fleet's address first[\s\S]*\} else \{\s*$/,
+  assert.match(before.slice(-600), /if fleetAddressBlank \{[\s\S]*Enter your fleet's address to sign in[\s\S]*\} else \{\s*$/,
     'the Apple button is no longer drawn only when the address is filled in');
 });
 
 test('both phones say why there is nothing to sign in to yet, in the same words', () => {
-  const sentence = "Enter your fleet's address first — signing in means signing in to a fleet.";
+  const sentence = "Enter your fleet's address to sign in.";
   assert.ok(code(iosSources()).includes(sentence), 'the iOS app lost the sentence that stands in for the button');
   assert.ok(code(androidSources()).includes(sentence), 'the Android app lost the sentence beside its disabled button');
 });

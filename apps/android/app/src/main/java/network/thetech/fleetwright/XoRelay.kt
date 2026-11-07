@@ -141,11 +141,11 @@ internal class PhoneRelay private constructor(val address: String, private val t
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            finish("The connection to the fleet ended, so this phone is no longer carrying anything to Xen Orchestra.")
+            finish("Lost connection to your fleet.")
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            finish("The connection to the fleet ended, so this phone is no longer carrying anything to Xen Orchestra.")
+            finish("Lost connection to your fleet.")
         }
     }
 
@@ -158,7 +158,7 @@ internal class PhoneRelay private constructor(val address: String, private val t
                 val hostId = frame.optString("hostId")
                 if (relay.isNotBlank() && hostId.isNotBlank()) ready.complete(Ready(relay, hostId))
             }
-            "closed" -> finish(frame.optString("text").ifBlank { "The fleet closed the relay." })
+            "closed" -> finish(frame.optString("text").ifBlank { "Connection closed." })
             "open" -> if (stream != null) connect(stream)
             "data" -> {
                 val bytes = runCatching { Base64.decode(frame.optString("data"), Base64.NO_WRAP) }.getOrNull() ?: return
@@ -182,7 +182,7 @@ internal class PhoneRelay private constructor(val address: String, private val t
                 connection.connect(InetSocketAddress(target.host, target.port), 10_000)
             } catch (e: Exception) {
                 if (streams.remove(stream) != null) {
-                    send(JSONObject().put("op", "refused").put("stream", stream).put("text", "this phone could not reach $address: ${e.message ?: "no answer"}"))
+                    send(JSONObject().put("op", "refused").put("stream", stream).put("text", "Could not reach $address: ${e.message ?: "no answer"}"))
                 }
                 runCatching { connection.close() }
                 return@launch
@@ -223,7 +223,7 @@ internal class PhoneRelay private constructor(val address: String, private val t
         streams.clear()
         runCatching { socket?.close(1000, "relay closed") }
         socket = null
-        ready.completeExceptionally(IllegalStateException(text ?: "This phone stopped carrying the relay."))
+        ready.completeExceptionally(IllegalStateException(text ?: "Connection closed."))
         scope.cancel()
         if (text != null) onClose?.invoke(text)
     }

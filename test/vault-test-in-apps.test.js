@@ -23,17 +23,17 @@ const ANDROID = androidSources();
 
 // The sentences a person reads, the same on both phones.
 const SAID = [
-  "Runners you start go back to the runner repository's API key, and boxes stop being given it. ",
-  'Getting it back means a new token from claude setup-token.',
-  'Boxes stop being given it when they next ask. Getting it back means signing in again from this page.',
-  'Boxes stop being given it when they next ask. Getting it back means typing it in again.',
+  'Your sessions stop using it. Getting it back means adding it again.',
+  'Machines you approved stop being given it. Getting it back means signing in again.',
+  'Machines you approved stop being given it. Getting it back means typing it in again.',
 ];
 
 test('iOS: Test is offered for the three kept credentials the minter can ask about, and only those', () => {
   assert.ok(IOS.includes('op: "test"'), 'iOS never asks the vault to test');
   // C-2: a named secret or a hypervisor's token has no service to ask.
   assert.match(IOS, /static func isTestable\(_ name: String\) -> Bool \{\s*\["claude", "github", "cloudflare"\]\.contains\(name\)/);
-  assert.match(IOS, /if PhoneVault\.isTestable\(item\.name\) \{\s*Button\("Test \\\(PhoneVault\.label\(item\.name\)\)"\)/);
+  // A row action: the button says the verb, VoiceOver says which item.
+  assert.match(IOS, /if PhoneVault\.isTestable\(item\.name\) \{\s*Button\("Test"\) \{[\s\S]{0,160}\.accessibilityLabel\("Test \\\(PhoneVault\.label\(item\.name\)\)"\)/);
   // Cannot tell is not drawn as working (C-5).
   assert.match(IOS, /guard r\.answer\["state"\] as\? String == "accepted" else \{ throw/);
 });
@@ -41,7 +41,7 @@ test('iOS: Test is offered for the three kept credentials the minter can ask abo
 test('iOS: Forget asks first, and says what forgetting costs', () => {
   for (const words of SAID) assert.ok(IOS.includes(words), `iOS does not say: ${words}`);
   assert.match(IOS, /\.confirmationDialog\("Forget \\\(PhoneVault\.label\(forgetting \?\? ""\)\)\?"/);
-  assert.match(IOS, /Button\("Forget \\\(PhoneVault\.label\(item\.name\)\)", role: \.destructive\) \{ forgetting = item\.name \}/);
+  assert.match(IOS, /Button\("Forget", role: \.destructive\) \{ forgetting = item\.name \}\s*\.accessibilityLabel\("Forget \\\(PhoneVault\.label\(item\.name\)\)"\)/);
 });
 
 test('iOS: the vault makes a Claude token on a machine, as Set up Claude does', () => {
@@ -54,12 +54,13 @@ test('iOS: the vault makes a Claude token on a machine, as Set up Claude does', 
 test('Android: Test for the same three, the same Forget dialog, the same Claude rows', () => {
   assert.ok(ANDROID.includes('ask(fleet, "test",'), 'Android never asks the vault to test');
   assert.match(ANDROID, /fun isTestable\(name: String\): Boolean = name in setOf\("claude", "github", "cloudflare"\)/);
-  assert.match(ANDROID, /if \(PhoneVault\.isTestable\(item\.name\)\) \{[\s\S]{0,200}Text\("Test \$\{PhoneVault\.label\(item\.name\)\}"\)/);
+  assert.match(ANDROID, /if \(PhoneVault\.isTestable\(item\.name\)\) \{[\s\S]{0,300}contentDescription = "Test \$\{PhoneVault\.label\(item\.name\)\}"/);
   assert.match(ANDROID, /if \(answer\.optString\("state"\) != "accepted"\) error\(text\)/);
 
   for (const words of SAID) assert.ok(ANDROID.includes(words), `Android does not say: ${words}`);
   assert.match(ANDROID, /title = \{ Text\("Forget \$\{PhoneVault\.label\(name\)\}\?"\) \}/);
-  assert.match(ANDROID, /TextButton\(enabled = !busy, onClick = \{ forgetting = item\.name \}\) \{\s*Text\("Forget \$\{PhoneVault\.label\(item\.name\)\}"\)/);
+  // A row action now, and still a question first.
+  assert.match(ANDROID, /TextButton\(\s*enabled = !busy,\s*onClick = \{ forgetting = item\.name \},/);
 
   assert.match(ANDROID, /ClaudeSetup\(settings\) \{ scope\.launch \{ reload\(\) \} \}/);
   assert.doesNotMatch(ANDROID, /Forget my Claude login/);

@@ -3,6 +3,8 @@ package network.thetech.fleetwright
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
@@ -17,10 +19,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 /**
@@ -62,7 +69,7 @@ internal fun YourVault(settings: Settings) {
             .onSuccess { contents = it }
             .onFailure {
                 failed = true
-                result = it.message ?: "Your vault did not answer."
+                result = it.message ?: "Your credentials did not load."
             }
         boxes = fleet.enrolledHosts().filter { !it.revoked && !it.ephemeral }
     }
@@ -97,48 +104,63 @@ internal fun YourVault(settings: Settings) {
         )
     }
 
+    /**
+     * The one word beside a saved credential. A SETUP-TOKEN IS NOT A SIGN-IN,
+     * and a plain "Claude" let a person think Remote Control would work; said
+     * only when the minter said which (C-5): null is a minter from before it
+     * did, and reads as saved and nothing more.
+     */
+    fun status(item: PhoneVault.Item): String =
+        if (item.name == "claude" && item.kind == "token") "No Remote Control" else "Saved"
+
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-        Hint(
-            "Keep each credential here once. A box you approve gets them when a session needs them, " +
-                "and loses them when you remove it.",
-        )
+        Hint("Saved once, for your sessions on the machines you approve.")
 
         val kept = contents
         if (kept == null) {
-            Hint("Loading your vault…")
+            Hint("Loading your credentials…")
         } else {
-            Text(
-                if (kept.items.isEmpty()) "Nothing kept yet."
-                else "Kept: " + kept.items.joinToString(", ") { PhoneVault.label(it.name) } + ".",
-                style = Design.Style.bodySmall,
-                color = Design.Palette.ink.now,
-            )
-            // A SETUP-TOKEN IS NOT A SIGN-IN, and "Kept: Claude" let a person
-            // think Remote Control would work. Said only when the minter said
-            // which (C-5): null is a minter from before it did.
-            if (kept.items.firstOrNull { it.name == "claude" }?.kind == "token") {
-                Hint(
-                    "Your Claude login is a setup-token: it runs sessions but cannot open Remote Control. " +
-                        "Make it on a machine below to have Remote Control.",
-                )
+            if (kept.items.isEmpty()) {
+                Text("Nothing saved yet.", style = Design.Style.bodySmall, color = Design.Palette.ink.now)
             }
-            // TEST, BECAUSE KEPT IS NOT WORKS. A Claude token Claude had
-            // revoked sat here as "Kept" until a runner stopped at its first
+            // ONE ROW PER SAVED CREDENTIAL: its name, one status word, and its
+            // actions on the row. It was a sentence listing the names and then
+            // a column of Test and Forget buttons under it, naming each again.
+            // The button says the verb; the item it acts on is the row's name,
+            // and the content description says both for TalkBack.
+            //
+            // TEST, BECAUSE SAVED IS NOT WORKS. A Claude token Claude had
+            // revoked sat here as saved until a runner stopped at its first
             // message. Offered only where there is a service to ask (C-2).
             //
             // FORGET ASKS FIRST. It was one tap, beside the button people come
             // here to press, and it took the Claude login out from under every
             // runner without a word.
             kept.items.forEach { item ->
-                Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+                ) {
+                    Text(
+                        PhoneVault.label(item.name),
+                        style = Design.Style.body,
+                        color = Design.Palette.ink.now,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(status(item), style = Design.Style.label, color = Design.Palette.inkDim.now)
                     if (PhoneVault.isTestable(item.name)) {
-                        OutlinedButton(enabled = !busy, onClick = { act { vault.test(Fleet(settings), item.name) } }) {
-                            Text("Test ${PhoneVault.label(item.name)}")
-                        }
+                        TextButton(
+                            enabled = !busy,
+                            onClick = { act { vault.test(Fleet(settings), item.name) } },
+                            modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Test ${PhoneVault.label(item.name)}" },
+                        ) { Text("Test") }
                     }
-                    TextButton(enabled = !busy, onClick = { forgetting = item.name }) {
-                        Text("Forget ${PhoneVault.label(item.name)}")
-                    }
+                    TextButton(
+                        enabled = !busy,
+                        onClick = { forgetting = item.name },
+                        modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Forget ${PhoneVault.label(item.name)}" },
+                    ) { Text("Forget") }
                 }
             }
         }
@@ -151,10 +173,10 @@ internal fun YourVault(settings: Settings) {
         ClaudeSetup(settings) { scope.launch { reload() } }
 
         OutlinedButton(enabled = !busy, onClick = { act { vault.connect(context, Fleet(settings), "github") } }) {
-            Text("Keep GitHub for my boxes")
+            Text("Add GitHub")
         }
         OutlinedButton(enabled = !busy, onClick = { act { vault.connect(context, Fleet(settings), "cloudflare") } }) {
-            Text("Keep Cloudflare for my boxes")
+            Text("Add Cloudflare")
         }
 
         OutlinedTextField(
@@ -182,36 +204,40 @@ internal fun YourVault(settings: Settings) {
                     }
                 }
             },
-        ) { Text("Keep secret") }
+        ) { Text("Save secret") }
 
         if (kept != null) {
             // WORKED OUT HERE, from the keys the fleet listed, never the
             // fingerprints the fleet says beside them.
             val inFleet = boxes.mapNotNull { b -> b.publicJwk?.let { PhoneVault.fingerprint(it) to b.hostId } }.toMap()
             // A box approved for part of the vault (`only`, a pool's own machine
-            // and its one record) says so, rather than "Held by" as if it held
-            // everything (eighth audit).
+            // and its one record) says so, rather than being listed as if it
+            // held everything (eighth audit).
             val holders = kept.grants.mapNotNull { g ->
                 inFleet[g.fingerprint]?.let { name ->
                     if (g.only.isEmpty()) name else "$name (${g.only.joinToString(", ") { PhoneVault.label(it) }} only)"
                 }
             }.sorted()
-            Text("Boxes", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
-            Hint(
-                if (holders.isEmpty()) "No box holds your credentials yet. Approve one from its page under Machines."
-                else "Held by ${holders.joinToString(", ")}. Approve or remove a box from its page under Machines.",
+            // WHICH MACHINES, as one row with their names, and the how-to once
+            // under it. Approving is on each machine's page, beside its key,
+            // because the comparison is what makes it safe.
+            Text(
+                "Machines: ${if (holders.isEmpty()) "none" else holders.joinToString(", ")}",
+                style = Design.Style.bodySmall,
+                color = Design.Palette.ink.now,
             )
             // APPROVED, AND NOT IN THIS FLEET ANY MORE: still removable, because
             // an approval outlives the box being taken out of the fleet.
             kept.grants.filter { it.fingerprint !in inFleet }.forEach { grant ->
                 Text(
-                    "${grant.label.ifBlank { "A box" }} · ${grant.fingerprint} · not in this fleet",
+                    "${grant.label.ifBlank { "A machine" }} · ${grant.fingerprint} · not in this fleet",
                     style = Design.Style.label,
                     fontFamily = FontFamily.Monospace,
                     color = Design.Palette.inkDim.now,
                 )
                 TextButton(enabled = !busy, onClick = { act { vault.remove(Fleet(settings), grant) } }) { Text("Remove") }
             }
+            Hint("Approve a machine from its page.")
         }
 
         if (result.isNotBlank()) {
@@ -252,7 +278,7 @@ internal fun VaultApproval(settings: Settings, host: Fleet.Host) {
             }
             .onFailure {
                 failed = true
-                result = it.message ?: "Your vault did not answer."
+                result = it.message ?: "Your credentials did not load."
             }
         loaded = true
     }
@@ -280,7 +306,7 @@ internal fun VaultApproval(settings: Settings, host: Fleet.Host) {
                 fontFamily = FontFamily.Monospace,
                 color = Design.Palette.inkDim.now,
             )
-            !loaded -> Hint("Loading your vault…")
+            !loaded -> Hint("Loading your credentials…")
             held != null -> {
                 // ONLY WHAT IT WAS GIVEN: a grant scoped by `only` was shown as
                 // "Approved" over the whole vault (eighth audit).
@@ -293,7 +319,7 @@ internal fun VaultApproval(settings: Settings, host: Fleet.Host) {
                 TextButton(enabled = !busy, onClick = { act { vault.remove(Fleet(settings), held) } }) { Text("Remove") }
             }
             else -> {
-                Hint("Approve a box only if fleetwright-sidecar identity on it prints the same fingerprint.")
+                Hint("Check this matches fleetwright-sidecar identity on the machine before approving.")
                 SelectionContainer {
                     Text(fingerprint, style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
                 }

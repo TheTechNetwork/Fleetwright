@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -80,6 +81,9 @@ fun CredentialsSheet(
     // it answers. It used to land at the bottom of the sheet, below every row
     // and naming none of them.
     var tested by remember { mutableStateOf(mapOf<String, Pair<String, Boolean>>()) }
+    // Which rows have Details open. Closed by default, opened by a Test: the
+    // same disclosure iOS draws with a DisclosureGroup.
+    var expanded by remember { mutableStateOf(setOf<String>()) }
     var busy by remember { mutableStateOf(false) }
 
     // Reloaded on host AND on every resume, which is how coming back from the
@@ -157,9 +161,7 @@ fun CredentialsSheet(
             result = when {
                 came == null -> "Checked with the provider."
                 connections.linked(came.provider) != null -> "Connected with $name."
-                else ->
-                    "Checked with $name — it did not connect, so nothing is stored. Try again, and " +
-                        "if it keeps coming back like this the authorization is not reaching the fleet."
+                else -> "$name did not connect. Try again."
             }
         }
     }
@@ -176,26 +178,18 @@ fun CredentialsSheet(
     }
     FullScreen(title = title, onDismiss = onDismiss) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                // "Signing in to Claude is per machine: that one is a login the
-                // box performs" was true and is not any more. A machine has no
-                // Claude account — see docs/one-account-per-person.md — and a
-                // sentence describing one is how somebody spends an evening
-                // looking for a button that should not exist.
+                // ONE SENTENCE: the result, not the mechanism (docs/reviews/
+                // copy-2026-11-06.md, 123 to 125). "Signing in to Claude is per
+                // machine: that one is a login the box performs" was true and
+                // is not any more. A machine has no Claude account — see
+                // docs/one-account-per-person.md — and a sentence describing
+                // one is how somebody spends an evening looking for a button
+                // that should not exist. The same words as iOS.
                 Text(
                     when {
-                        linkedOnly ->
-                            "Linked on a box before your vault was the only place credentials came from. Sessions you start " +
-                                "do not use these any more; forget them to take them off the box."
-                        onlyClaude ->
-                            "This machine has no Claude account of its own. Sessions run on the account of whoever " +
-                                "started them, so connecting here links YOURS — and somebody who has not connected " +
-                                "one cannot start a session on this box."
-                        else ->
-                            "Each one is created on the provider's own page, on your account, and can be revoked " +
-                                "there at any time. A token goes to every machine in the fleet, because it is yours " +
-                                "rather than any one box's — sessions you start get it, and nobody else's do. Claude " +
-                                "is per person too: a session runs on the account of whoever started it, and this " +
-                                "machine has none of its own."
+                        linkedOnly -> "Older links. Sessions you start no longer use them."
+                        onlyClaude -> "Sessions here run on your own Claude account."
+                        else -> "Your sessions use these, on any machine. Nobody else's sessions do."
                     },
                     style = Design.Style.bodySmall,
                     color = Design.Palette.inkDim.now,
@@ -208,49 +202,14 @@ fun CredentialsSheet(
                     val linked = connections.linked(provider.provider)
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair / 2)) {
                         Text(provider.label, style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            if (linked == null) "not connected"
-                            else if (linked.account.isNullOrBlank()) "connected"
-                            else "connected as ${linked.account}",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        // WHAT THIS ACCOUNT HAS LEFT, in its own figures, on its
-                        // own row. The difference between "sessions are failing"
-                        // and "sessions are failing because this plan is out
-                        // until 15:10". Nothing at all from a host that has not
-                        // said; the error colour only when a window is nearly
-                        // spent.
-                        linked?.usage?.let { usage ->
-                            Text(
-                                describeUsage(usage),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (usage.isNearLimit) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        // MISSING PERMISSIONS, said here rather than discovered
-                        // in a session. The asked-for list grows; a token minted
-                        // before it grew still verifies, still says "connected",
-                        // and then fails at whatever step needs the scope it
-                        // never had.
-                        // THE ONE THAT NEEDS ACTING ON, above the scope detail
-                        // because it is more urgent than any of it: the token
-                        // works right now and stops within the day.
-                        if (linked?.needsReconnect == true) {
-                            Text(
-                                "Reconnect this — it still works but can no longer renew itself, so it stops "
-                                    + "within eight hours. One tap below; nothing to copy or paste.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                        if (!linked?.missing.isNullOrEmpty()) {
-                            Text(
-                                "missing ${linked.missing.joinToString(", ")}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
+                        // ONE STATUS PER ROW. It used to stack up to five
+                        // lines: the account, the usage, a reconnect paragraph
+                        // and the missing scopes. The row now says the one
+                        // thing that matters most (describeStatus), and the
+                        // rest is one tap away under Details, the way the
+                        // scope list already was.
+                        val status = describeStatus(linked)
+                        Text(status.first, style = MaterialTheme.typography.bodySmall, color = status.second.now)
                         Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                             if (!linkedOnly && host != null) TextButton(
                                 enabled = !busy,
@@ -301,6 +260,7 @@ fun CredentialsSheet(
                                             if (reply.check != null) {
                                                 checks = checks + (provider.provider to reply.check)
                                                 tested = tested - provider.provider
+                                                expanded = expanded + provider.provider
                                             } else {
                                                 checks = checks - provider.provider
                                                 tested = tested + (provider.provider to (reply.text to reply.ok))
@@ -325,60 +285,23 @@ fun CredentialsSheet(
                             }
                         }
 
-                        // WHAT IT CAN DO, once somebody has asked. Shown under
-                        // the row rather than in a dialog: it is the answer to
-                        // the button directly above it.
-                        checks[provider.provider]?.let { c ->
-                            Text(
-                                describeCheck(c),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (c.ok) MaterialTheme.colorScheme.onSurface
-                                else MaterialTheme.colorScheme.error,
-                            )
-                            c.granted?.takeIf { it.isNotEmpty() }?.let {
-                                Text("Has: ${it.joinToString(", ")}", style = MaterialTheme.typography.bodySmall)
-                            }
-                            if (c.granted == null) {
-                                // TWO DIFFERENT REASONS FOR THE SAME NULL, and
-                                // telling them apart is the difference between
-                                // "this is fine" and "we could not check".
-                                // Cloudflare has nothing a token may read about
-                                // its own permissions, so it never reports —
-                                // a property of the provider. GitHub reports
-                                // for classic tokens and not for app or
-                                // fine-grained ones, so it is a property of the
-                                // TOKEN, and "GitHub does not report" would be
-                                // flatly untrue of the next token shown here.
-                                //
-                                // The CATALOGUE's `wants` separates them: a
-                                // provider whose permissions are checkable
-                                // publishes one, and it is in scope here.
-                                Text(
-                                    if (provider.wants.isEmpty()) {
-                                        "${provider.label} does not report what a token was granted."
-                                    } else {
-                                        // The operator goes at the END of the
-                                        // line here, not the start of the next
-                                        // one. Inside a block that RETURNS a
-                                        // value, a newline ends the expression
-                                        // and a leading `+` is read as a unary
-                                        // plus on a String — which is not an
-                                        // operator String has. It compiles fine
-                                        // in argument position, which is why
-                                        // the rest of this file gets away with
-                                        // the other style.
-                                        "This token has no scopes to report — an app or fine-grained token " +
-                                            "carries permissions instead, set where it was created."
-                                    },
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                            c.missing?.takeIf { it.isNotEmpty() }?.let {
-                                Text(
-                                    "Asked for and not granted: ${it.joinToString(", ")}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
+                        // THE REST, once there is any: the account's usage,
+                        // the scopes it is missing, how long a reconnect can
+                        // wait, and what a Test found. Closed by default and
+                        // opened by a Test: a list of scopes is the answer to
+                        // a question, not something to read every time this
+                        // screen opens.
+                        val details = detailLines(provider, linked, checks[provider.provider])
+                        if (details.isNotEmpty()) {
+                            val open = provider.provider in expanded
+                            TextButton(
+                                onClick = { expanded = if (open) expanded - provider.provider else expanded + provider.provider },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) { Text(if (open) "Hide details" else "Details") }
+                            if (open) {
+                                details.forEach { line ->
+                                    Text(line.text, style = MaterialTheme.typography.bodySmall, color = line.tone.now)
+                                }
                             }
                         }
                         tested[provider.provider]?.let { (text, ok) ->
@@ -474,11 +397,8 @@ fun CredentialsSheet(
                             },
                         )
                         Text(
-                            if (p.isSignIn)
-                                "This page was generated by ${host ?: "that machine"} for this attempt, and the code goes back to the same box."
-                            else
-                                "It is checked with ${p.label} before it is stored, so a typo fails here and not four "
-                                    + "hours into a session. It goes to every machine in the fleet.",
+                            if (p.isSignIn) "Signing in on ${host ?: "that machine"}."
+                            else "Checked with ${p.label} before saving.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
@@ -544,10 +464,82 @@ private fun actionLabel(provider: Fleet.Connections.Available, linked: Fleet.Con
 }
 
 /**
+ * The one line a row shows: `Connected as @octocat`, `Reconnect needed`,
+ * `Not connected`. Most urgent first: a credential that stops within the day
+ * outranks the account it is for. The colour never carries the meaning alone
+ * (docs/psychology.md §5); the words do. The same words as iOS, which also
+ * says `Missing on <machine>` from a field this app's Linked does not carry.
+ */
+private fun describeStatus(linked: Fleet.Connections.Linked?): Pair<String, Tone> {
+    if (linked == null) return "Not connected" to Design.Palette.inkDim
+    // THE ONE THAT NEEDS ACTING ON: the token works right now and stops
+    // within the day, and the button below is the whole remedy.
+    if (linked.needsReconnect) return "Reconnect needed" to Design.Palette.bad
+    val account = linked.account
+    if (account.isNullOrBlank()) return "Connected" to Design.Palette.inkDim
+    return "Connected as $account" to Design.Palette.inkDim
+}
+
+/** One line under Details. */
+private class Detail(val text: String, val tone: Tone)
+
+/**
+ * What goes under Details for a row, in the order it matters, or nothing.
+ *
+ * USAGE in the account's own figures: the difference between "sessions are
+ * failing" and "sessions are failing because this plan is out until 15:10".
+ * Nothing at all from a host that has not said; the attention colour only
+ * when a window is nearly spent. MISSING PERMISSIONS said here rather than
+ * discovered in a session: the asked-for list grows, and a token minted
+ * before it grew still verifies and then fails at the step that needs the
+ * scope it never had. And what a Test found, when one has been run.
+ */
+private fun detailLines(provider: Fleet.Connections.Available, linked: Fleet.Connections.Linked?, check: Fleet.Check?): List<Detail> {
+    val out = mutableListOf<Detail>()
+    if (linked != null) {
+        if (linked.needsReconnect) out += Detail("Still works, and stops within eight hours.", Design.Palette.bad)
+        linked.usage?.let { usage ->
+            out += Detail(describeUsage(usage), if (usage.isNearLimit) Design.Palette.attention else Design.Palette.inkDim)
+        }
+        linked.missing?.takeIf { it.isNotEmpty() }?.let {
+            out += Detail("Missing permissions: ${it.joinToString(", ")}", Design.Palette.attention)
+        }
+    }
+    if (check != null) {
+        out += Detail(describeCheck(check), if (check.ok) Design.Palette.ink else Design.Palette.bad)
+        val granted = check.granted
+        if (granted != null && granted.isNotEmpty()) {
+            out += Detail("Has: ${granted.joinToString(", ")}", Design.Palette.inkDim)
+        } else if (granted == null) {
+            // TWO DIFFERENT REASONS FOR THE SAME NULL, and telling them apart
+            // is the difference between "this is fine" and "we could not
+            // check". Cloudflare has nothing a token may read about its own
+            // permissions, so it never reports — a property of the provider.
+            // GitHub reports for classic tokens and not for app or
+            // fine-grained ones, so it is a property of the TOKEN, and
+            // "GitHub does not report" would be flatly untrue of the next
+            // token shown here.
+            //
+            // The CATALOGUE's `wants` separates them: a provider whose
+            // permissions are checkable publishes one.
+            out += Detail(
+                if (provider.wants.isEmpty()) "${provider.label} does not report what a token was granted."
+                else "Permissions for this token are set on ${provider.label}.",
+                Design.Palette.inkDim,
+            )
+        }
+        check.missing?.takeIf { it.isNotEmpty() }?.let {
+            out += Detail("Asked for and not granted: ${it.joinToString(", ")}", Design.Palette.attention)
+        }
+    }
+    return out
+}
+
+/**
  * "works · octocat · 6 scopes · 4 missing", or what went wrong.
  *
- * One line, because the detail is directly underneath and this sits below a
- * row that is already three lines tall.
+ * One line, because it sits under Details with the scopes themselves
+ * directly beneath it.
  */
 private fun describeCheck(check: Fleet.Check): String {
     if (!check.ok) return check.message ?: "could not be checked"
