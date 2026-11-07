@@ -95,7 +95,11 @@ function sentences(src) {
         j += 1;
       }
       i = j + (triple ? 3 : 1);
-      if (/\S \S/.test(text)) out.push({ line: start, text });
+      // AN INTERPOLATION IS NOT A WORD: `\(one.box)` and `$box` name a
+      // variable, not what the person reads, so they are blanked before the
+      // sentence is judged (the text kept is the literal as written).
+      const said = text.replace(/\\\([^)]*\)/g, ' ').replace(/\$\{[^}]*\}/g, ' ').replace(/\$\w+/g, ' ');
+      if (/\S \S/.test(text)) out.push({ line: start, text, said });
       continue;
     }
     i += 1;
@@ -118,10 +122,10 @@ test('no sentence on either phone uses a word that belongs to the code', () => {
   const hits = [];
   for (const file of sources) {
     const src = readFileSync(new URL(file, root), 'utf8');
-    for (const { line, text } of sentences(src)) {
+    for (const { line, text, said } of sentences(src)) {
       if (ALLOWED.has(text)) continue;
       for (const [re, say] of RETIRED) {
-        if (new RegExp(re.source, 'i').test(text)) hits.push(`${file}:${line}  ${JSON.stringify(text)}\n    ${re}  →  say: ${say}`);
+        if (new RegExp(re.source, 'i').test(said)) hits.push(`${file}:${line}  ${JSON.stringify(text)}\n    ${re}  →  say: ${say}`);
       }
     }
   }

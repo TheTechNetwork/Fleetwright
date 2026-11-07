@@ -97,11 +97,11 @@ export function certificate() {
  *
  * @param {{ admin?: boolean, drop?: string[], plugin?: any, maxTokenMs?: number, plain?: boolean, sets?: any[], tls?: { key: string, cert: string, pin: string }, adminPassword?: string, more?: string[], vms?: Record<string, any>, templates?: Record<string, any>, nets?: Record<string, string>, servers?: XoServer[], refuse?: Record<string, string>, on?: Record<string, (params: any) => void> }} [opts]
  */
-export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, watchdog = /** @type {any} */ (null), maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}), servers = /** @type {XoServer[]|null} */ (null), refuse: refused = /** @type {Record<string, string>} */ ({}), on = /** @type {Record<string, (params: any) => void>} */ ({}) } = {}) {
+export async function standIn(t, { tls: givenTls = undefined, adminPassword = PASSWORD, admin = true, drop = [], plugin = { id: 'installer-updates', loaded: false, autoload: false, configuration: {} }, watchdog = /** @type {any} */ (null), maxTokenMs = 0.5 * 365.25 * 24 * 60 * 60_000, plain = false, sets: given = [], more = /** @type {string[]} */ ([]), vms = /** @type {Record<string, any>} */ ({}), templates = /** @type {Record<string, any>} */ ({}), nets = /** @type {Record<string, string>} */ ({}), vifs = /** @type {Record<string, any>} */ ({}), servers = /** @type {XoServer[]|null} */ (null), refuse: refused = /** @type {Record<string, string>} */ ({}), on = /** @type {Record<string, (params: any) => void>} */ ({}), users: extraUsers = /** @type {any[]} */ ([]) } = {}) {
   const { key, cert, pin } = givenTls ?? certificate();
   /** @type {Array<{ conn: number, method: string, params: any, as: string|null }>} */
   const calls = [];
-  const users = /** @type {any[]} */ ([{ id: 'u-admin', email: 'admin@admin.net', permission: admin ? 'admin' : 'none' }]);
+  const users = /** @type {any[]} */ ([{ id: 'u-admin', email: 'admin@admin.net', permission: admin ? 'admin' : 'none' }, ...extraUsers]);
   const sets = /** @type {any[]} */ (given);
   /** @type {Map<string, string[]>} the tags each network carries, as tag.add and tag.remove leave them */
   const tags = new Map([['net-mgmt', ['fleetwright-egress']], ['net-lab', []], ['net-dmz', []]]);
@@ -114,7 +114,7 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
    */
   const tokens = new Map();
   const methods = Object.fromEntries(
-    ['session.signIn', 'system.getMethodsInfo', 'xo.getAllObjects', 'user.getAll', 'user.create', 'user.set', 'resourceSet.getAll', 'resourceSet.create', 'resourceSet.set', 'token.create', 'token.deleteAll', 'plugin.get', 'plugin.load', 'plugin.enableAutoload', 'plugin.configure', 'tag.add', 'tag.remove']
+    ['session.signIn', 'system.getMethodsInfo', 'xo.getAllObjects', 'user.getAll', 'user.create', 'user.set', 'user.delete', 'resourceSet.getAll', 'resourceSet.create', 'resourceSet.set', 'resourceSet.addSubject', 'token.create', 'token.deleteAll', 'plugin.get', 'plugin.load', 'plugin.enableAutoload', 'plugin.configure', 'tag.add', 'tag.remove', 'acl.add', 'acl.remove', 'vm.stop', 'vm.delete']
       .concat(servers ? ['server.getAll', 'server.enable', 'server.disable'] : [])
       .concat(more)
       .filter((m) => !drop.includes(m))
@@ -329,6 +329,32 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
             answer(true);
             break;
           }
+          case 'resourceSet.addSubject': {
+            const set = sets.find((x) => x.id === p.id);
+            if (set) set.subjects = [...new Set([...(set.subjects ?? []), p.subject])];
+            answer(true);
+            break;
+          }
+          case 'user.delete': {
+            const at = users.findIndex((x) => x.id === p.id);
+            if (at >= 0) users.splice(at, 1);
+            answer(true);
+            break;
+          }
+          // A box's machine, stopped or removed by the admin job that hands a
+          // gone box's machines on (xo-box-users.js): the stand-in's VMs
+          // change under it, as Xen Orchestra's would.
+          case 'vm.stop': {
+            const vm = Object.hasOwn(vms, p.id) ? vms[p.id] : undefined;
+            if (vm) vm.power_state = 'Halted';
+            answer(true);
+            break;
+          }
+          case 'vm.delete': {
+            delete vms[p.id];
+            answer(true);
+            break;
+          }
           case 'network.create': answer('net-uplink'); break;
           // The new VM's id, as Xen Orchestra answers; the pool's own
           // machine is listed by it (xo-holder.js, ensureHolder).
@@ -342,7 +368,11 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
               break;
             }
             const mine = tokens.get(String(as)) ?? [];
-            const made = as === FLEET_USER ? `tok-limited-${123 + mine.length}` : 'tok-WRONG-USER';
+            // A box's own user is handed a token naming it (xo-box-users.js),
+            // counted up the same way when it is minted again.
+            const made = as === FLEET_USER ? `tok-limited-${123 + mine.length}`
+              : typeof as === 'string' && as.startsWith('fleetwright-box-') ? `tok-${as}${mine.length ? `-${mine.length + 1}` : ''}`
+                : 'tok-WRONG-USER';
             tokens.set(String(as), [...mine, made]);
             answer(made);
             break;
@@ -363,5 +393,5 @@ export async function standIn(t, { tls: givenTls = undefined, adminPassword = PA
   await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
   t.after(() => server.close());
   const address = `127.0.0.1:${/** @type {import('node:net').AddressInfo} */ (server.address()).port}`;
-  return { address, pin, calls, users, sets, tags, passwords, tokens, connections: () => conns, live: () => live };
+  return { address, pin, calls, users, sets, tags, passwords, tokens, vms, connections: () => conns, live: () => live };
 }

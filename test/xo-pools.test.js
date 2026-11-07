@@ -148,6 +148,61 @@ test('a look reports the pool’s machine images, and sweeps machines that are d
   assert.ok(stand.rpc.closed);
 });
 
+test('a box’s own token sweeps and makes only its machines, the shared token the ones with no box, and the pool is reported once', async () => {
+  // docs/security.md, G14: a user per box keeps a machine to the box that
+  // made it. The box holds both tokens for the pool between the apply that
+  // filed its own and the one that withdraws the shared one.
+  const now = Date.now();
+  const stand = xo({
+    objects: [
+      pool, image, uplink,
+      { type: 'VM', id: 'mine', name_label: 'vm-111111111111', power_state: 'Halted', tags: [VM_IMAGE.sessionTag, 'fleetwright-box:deb14', `fleetwright-for:${ELI}`] },
+      { type: 'VM', id: 'theirs', name_label: 'vm-222222222222', power_state: 'Halted', tags: [VM_IMAGE.sessionTag, 'fleetwright-box:gpu-1', `fleetwright-for:${ELI}`] },
+      { type: 'VM', id: 'shared', name_label: 'vm-333333333333', power_state: 'Halted', tags: [VM_IMAGE.sessionTag, `fleetwright-for:${ELI}`] },
+    ],
+  });
+  const pools = new XoPools({
+    connect: /** @type {any} */ (async () => stand.rpc),
+    connectPlain: /** @type {any} */ (async () => stand.rpc),
+    now: () => now,
+    boxId: 'deb14',
+  });
+  pools.adopt([{
+    email: ELI,
+    items: [
+      { name: 'hypervisor:xo.lan', value: record() },
+      { name: 'hypervisor:xo.lan+deb14', value: record({ box: 'deb14', token: 'tok-deb14', user: 'fleetwright-box-deb14' }) },
+      // A shared record filed under a box's name, and a box's under the
+      // shared name: the minter refuses both, and a box reading one would
+      // take it for a user it is not, so neither is held.
+      { name: 'hypervisor:other.lan+deb14', value: record({ address: 'other.lan' }) },
+      { name: 'hypervisor:other.lan', value: record({ address: 'other.lan', box: 'deb14' }) },
+    ],
+  }]);
+  assert.deepEqual([...pools.held.keys()], [`${ELI} xo.lan`, `${ELI} xo.lan deb14`]);
+  await pools.refresh();
+  assert.equal(pools.report().length, 1, 'one pool, however many tokens for it');
+  assert.equal(pools.report()[0].machines.length, 3, 'what either token saw, once each (this stand-in shows every machine to both)');
+  const deleted = stand.calls.filter((c) => c.method === 'vm.delete').map((c) => c.params.id);
+  assert.deepEqual(deleted.sort(), ['mine', 'shared'], 'each token sweeps what it works');
+  assert.ok(!deleted.includes('theirs'));
+  stand.calls.length = 0;
+  const stopped = await pools.control({ owner: ELI, name: 'vm-222222222222', action: 'stop' });
+  assert.equal(stopped.notHere, true, stopped.text);
+  assert.ok(!stand.calls.some((c) => c.method === 'vm.stop' && c.params?.id === 'theirs'), 'another box’s machine is not this box’s to work');
+  stand.calls.length = 0;
+  const made = await pools.make({ owner: ELI, template: IMAGE, ticket: TICKET, coordinatorUrl: 'https://fleet.test' });
+  assert.equal(made.ok, true, made.text);
+  assert.equal(stand.calls.find((c) => c.method === 'session.signIn')?.params.token, 'tok-deb14', 'made with this box’s own user');
+  assert.ok(stand.calls.find((c) => c.method === 'vm.create')?.params.tags.includes('fleetwright-box:deb14'));
+  // The page from away and the console read the pool through the shared
+  // token while this box still holds it, and through its own once it does not.
+  assert.equal(pools.consoleAddress(ELI, 'xo.lan')?.host, 'xo.lan');
+  pools.adopt([{ email: ELI, items: [{ name: 'hypervisor:xo.lan+deb14', value: record({ box: 'deb14', token: 'tok-deb14', user: 'fleetwright-box-deb14' }) }] }]);
+  assert.equal(pools.consoleAddress(ELI, 'xo.lan')?.host, 'xo.lan');
+  assert.equal(pools.consoleAddress(ELI, 'other.lan'), null);
+});
+
 test('a look reports, sweeps and works only what is in the fleet’s resource set: a tag is something anybody given a VM can add', async () => {
   // MEASURED on Xen Orchestra 5.211.0 (docs/hypervisors.md, "What Xen
   // Orchestra lets whom do"): it shows a user who is not an admin every

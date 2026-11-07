@@ -20,6 +20,7 @@ person removes the box.
 | named secrets | `secret:NAME`, any value up to 8 KiB | the value, by name |
 | SSH keys | `secret:SSH_AUTHORIZED_KEYS`, public keys one a line, from You › Credentials › SSH keys | the value, as any named secret is; a machine made on the person's pool takes them on its `fleetwright` account ([hypervisors.md](./hypervisors.md), "Working a machine") |
 | hypervisors | `hypervisor:ADDRESS`, the record a pool's setup handed the phone | the record, held in the sidecar's memory and never given to the hub or a session ([hypervisors.md](./hypervisors.md), "Machines from your pool") |
+| a box's own hypervisor user | `hypervisor:ADDRESS+BOX`, the same record with that box's user and token, filed by the phone from a policy apply's hand-off | that box alone: a full grant gets it only under that box's label, and a grant for the shared item gets its own box's with it; another box's is never handed over ([hypervisors.md](./hypervisors.md), "A user per box") |
 
 **Every credential a fleet person's session uses comes from here**, and from
 nothing on the box: not a Claude account linked on it, not a GitHub token

@@ -260,6 +260,59 @@ internal object XoHandoff {
     }.getOrDefault(false)
 
     /**
+     * EACH BOX'S OWN TOKEN, sealed back beside the shared hand-off under the
+     * same binding (xo-box-users.js). The record this phone already keeps for
+     * the pool is copied, with that box's user and token, and filed as
+     * `hypervisor:<address>+<box>`; when the machine says the hand-over is
+     * done (`retiredShared`), the shared item is dropped from the vault. The
+     * local copy is not rewritten or removed: this phone still signs in with
+     * it to look at the pool. Null when the seal does not open, this phone
+     * holds no record for the pool, or nothing was filed; otherwise what the
+     * fleet said, for the screen.
+     */
+    suspend fun keepBoxUsers(settings: Settings, fleet: Fleet, sealed: String, job: String, address: String, key: Seal.OneUseKey): String? {
+        val parts = sealed.split(".")
+        if (parts.size != 3) return null
+        val opened = runCatching {
+            Seal.open(key, aad(job, address), JSONObject().put("epk", parts[0]).put("iv", parts[1]).put("ct", parts[2]))
+        }.getOrNull() ?: return null
+        if (opened.optInt("v") != 1 || opened.optString("address") != address) return null
+        val base = settings.secret(tokenName(address))?.takeIf { it.isNotBlank() } ?: return null
+        val tokens = opened.optJSONArray("boxTokens") ?: return null
+        val vault = PhoneVault(settings)
+        val said = mutableListOf<String>()
+        for (i in 0 until tokens.length()) {
+            val one = tokens.optJSONObject(i) ?: continue
+            val box = one.optString("box")
+            val user = one.optString("user")
+            val token = one.optString("token")
+            // The same acceptance the choice uses: an id the host cannot put in
+            // a user name is not filed, and an empty grant is the whole vault,
+            // which is how a token the machine already minted is known to be
+            // for a box this fleet could have named.
+            val accepted = XoPolicy.boxes(address, listOf(XoPolicy.ApprovedBox(box, false)), listOf(XoPolicy.PoolGrant(box, emptyList())))
+            if (box !in accepted || user.isBlank() || token.isBlank()) continue
+            val record = JSONObject(base)
+            record.put("user", user)
+            record.put("token", token)
+            record.put("box", box)
+            if (one.has("tokenExpires") && !one.isNull("tokenExpires")) record.put("tokenExpires", one.optString("tokenExpires")) else record.remove("tokenExpires")
+            vault.keepHypervisor(fleet, address, record.toString(), box).fold(
+                onSuccess = { said += it },
+                onFailure = { said += "$box’s token was not kept in the fleet: ${it.message ?: "the vault did not answer"}" },
+            )
+        }
+        if (said.isEmpty()) return null
+        if (opened.optBoolean("retiredShared", false)) {
+            vault.forget(fleet, "hypervisor:$address").fold(
+                onSuccess = { said += it },
+                onFailure = { said += "The shared token was not dropped from the fleet: ${it.message ?: "the vault did not answer"}" },
+            )
+        }
+        return said.joinToString(" ")
+    }
+
+    /**
      * WHAT THE POOL'S MACHINES MAY DO FROM THE APP, as this phone last kept
      * it beside the pool's token, or null when it never chose. Each machine
      * made from the record is born with it (src/core/grants.js).

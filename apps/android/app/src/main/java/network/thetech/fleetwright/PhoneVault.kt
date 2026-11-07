@@ -104,13 +104,16 @@ internal class PhoneVault(private val settings: Settings) {
 
     /**
      * Keep a hypervisor's token in the fleet: the record setup handed this
-     * phone, under `hypervisor:<address>`. The minter checks the record names
-     * that address; the boxes this person approved are handed it and hold it
-     * in memory only (src/fleet/host/xo-pools.js), and make machines on the
-     * pool with it.
+     * phone, under `hypervisor:<address>`, or one box's own user under
+     * `hypervisor:<address>+<box>` (XoHandoff.keepBoxUsers). The minter
+     * checks the record names that address, and that box; the boxes this
+     * person approved are handed the shared one, and a box its own alone,
+     * hold it in memory only (src/fleet/host/xo-pools.js), and make machines
+     * on the pool with it.
      */
-    suspend fun keepHypervisor(fleet: Fleet, address: String, record: String): Result<String> = runCatching {
-        ask(fleet, "put", JSONObject().put("name", "hypervisor:$address").put("value", record)).first
+    suspend fun keepHypervisor(fleet: Fleet, address: String, record: String, box: String? = null): Result<String> = runCatching {
+        val name = if (box == null) "hypervisor:$address" else "hypervisor:$address+$box"
+        ask(fleet, "put", JSONObject().put("name", name).put("value", record)).first
     }
 
     suspend fun forget(fleet: Fleet, name: String): Result<String> = runCatching {

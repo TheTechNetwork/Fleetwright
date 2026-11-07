@@ -62,7 +62,7 @@ FENCE=fleetwright-fence
 IMAGE_KEYS="debian-13 ubuntu-24.04 ubuntu-26.04"
 pinned() {
   case "$1" in
-    debian-13) OS="Debian 13" URL=https://cloud.debian.org/images/cloud/trixie/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2 SUM=sha512:3ace18e33bdd036edb49d1f79342bd01d2ab980e35194edb0b410435cd543538d286a0bd13bbb0835f7862306e3d385ce2f6a70d8ecf0bd961111166adbc1b8e ;;
+    debian-13) OS="Debian 13" URL=https://cloud.debian.org/images/cloud/trixie/20261103-2651/debian-13-genericcloud-amd64-20261103-2651.qcow2 SUM=sha512:d25999de0770d4cde1be72c299ba3ad94eac7ea8fd4d18f8cc86c69df69337e2e8a91d64465a9bfd8f2a78c566fcbcb0842eacc91c09efdef72d719d9f13b535 ;;
     ubuntu-24.04) OS="Ubuntu 24.04 LTS" URL=https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-amd64.img SUM=sha256:04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94 ;;
     ubuntu-26.04) OS="Ubuntu 26.04 LTS" URL=https://cloud-images.ubuntu.com/releases/resolute/release-20261016/ubuntu-26.04-server-cloudimg-amd64.img SUM=sha256:5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7eb5 ;;
     *) return 1 ;;

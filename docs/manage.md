@@ -164,6 +164,14 @@ this token cannot see" rather than naming none. In practice this lists the
 storage and the VMs in the set, and probably not the hosts, which is the
 decision recorded under "Left from the first slice".
 
+**After the boxes have users of their own** ([hypervisors.md](./hypervisors.md),
+"A user per box"), this page still signs in with the copy setup handed the
+phone, which is the shared user's token: that user and its tokens are kept for
+exactly this, when the item leaves the vault. Xen Orchestra then lists the
+machines that user can still reach, which are the ones with no box tag. A
+machine made by, or handed to, one box is that box's user's, and is on the
+fleet's own list of machines rather than here.
+
 **The pool's own machine is listed and not worked.** It is made with the admin
 sign-in, outside the resource set ("A machine of its own" in
 [hypervisors.md](./hypervisors.md)), so Xen Orchestra lists every method and

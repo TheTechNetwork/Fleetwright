@@ -218,7 +218,19 @@ export class EdgeWatch {
   /** The pools this box holds a key to their routers for. */
   watched() {
     const held = this.pools?.held;
-    return held instanceof Map ? [...held.entries()].filter(([, h]) => h?.record?.edge) : [];
+    if (!(held instanceof Map)) return [];
+    // ONE WATCH PER POOL. A box holding both the shared token and its own for
+    // one pool (xo-box-users.js) holds the routers' key twice; the shared
+    // record is taken where there is one, since it is keyed without a box,
+    // and the first found otherwise.
+    /** @type {Map<string, [string, any]>} */
+    const byPool = new Map();
+    for (const [k, h] of held.entries()) {
+      if (!h?.record?.edge) continue;
+      const pool = `${h.owner} ${h.record.address}`;
+      if (!byPool.has(pool) || !h.record.box) byPool.set(pool, [k, h]);
+    }
+    return [...byPool.values()];
   }
 
   start() {
