@@ -95,9 +95,8 @@ test('Android: every step has the host’s words, in the protocol’s order, and
 });
 
 test('Android: what happens is said before the root password is asked for, and the end is the machine’s sentence', () => {
-  assert.ok(WATCHDOG.includes('Xen Orchestra’s VM is shut down for a minute or two while the watchdog is put on its disk, then started again.'));
-  assert.ok(WATCHDOG.includes('Xen Orchestra is unavailable meanwhile.'));
-  const said = SHEET.indexOf('Text(XoWatchdog.WHAT_HAPPENS');
+  assert.ok(WATCHDOG.includes('"Xen Orchestra at $xo goes offline for 1 to 2 minutes."'));
+  const said = SHEET.indexOf('Text(XoWatchdog.whatHappens(xoAddress)');
   const asked = SHEET.indexOf('label = { Text("Root password of the pool master") }');
   assert.ok(said > 0 && asked > said, 'what happens comes before the password field');
   // The job's text is drawn as given: whether the VM was started again is

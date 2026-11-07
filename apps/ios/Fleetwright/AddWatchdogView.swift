@@ -262,17 +262,25 @@ struct AddWatchdogView: View {
                     .disabled(busy || !matched || rootPassword.isEmpty || !XOSetupKey.isAddress(xoAddress))
                     .frame(minHeight: 44)
             }
+            // THE CUSTODY, ONCE, BEHIND A DISCLOSURE, as on an install.
+            DisclosureGroup {
+                Text(WatchdogWords.custody(probe.hostId))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            } label: {
+                Text(DeployWords.custodyTitle).frame(minHeight: 44, alignment: .leading)
+            }
+            .disabled(busy)
         } header: {
             sectionHead("Root password")
         } footer: {
-            Text(WatchdogWords.passwordFooter(probe.hostId))
+            Text(WatchdogWords.passwordFooter)
         }
     }
 
     /// The same comparison an install asks for, in the same words.
     @ViewBuilder private func compareRows(_ fingerprint: String) -> some View {
-        Text("This phone has not approved \(begun?.hostId ?? "that machine") before. On it, fleetwright-sidecar identity "
-             + "prints its fingerprint; send the root password only if it is this one.")
+        Text("First time using \(begun?.hostId ?? "that machine"). On it, run `fleetwright-sidecar identity` and check it shows this:")
             .fleetType(.label)
             .foregroundStyle(Design.Palette.ink)
         Text(fingerprint)
@@ -567,64 +575,33 @@ enum WatchdogWords {
     /// The row on the pool's page, and this screen's title.
     static let title = "Add the reconnect watchdog"
 
-    static let intro = "Fleetwright’s reconnect watchdog runs inside Xen Orchestra and reconnects a pool it loses by itself. "
-        + "A Xen Orchestra installed before it, or not by Fleetwright, may not have it. It goes in through the pool master "
-        + "that runs Xen Orchestra’s VM."
+    /// What it does and when to add it, in one line each. How it gets in
+    /// (through the pool master that runs Xen Orchestra's VM) is what the
+    /// rest of the screen asks for, and docs/hypervisors.md says why.
+    static let intro = "Reconnects lost pools automatically. Add it if Fleetwright didn’t install this Xen Orchestra."
 
     static func whereFooter(prefilled: Bool) -> String {
-        let how = "Its host name or address, as you would SSH to it as root: the pool master of the pool Xen Orchestra’s VM runs in."
-        return prefilled ? "\(how) Filled in from when Fleetwright installed this Xen Orchestra." : how
+        prefilled ? "Filled in from when Fleetwright installed this Xen Orchestra." : "The host that runs Xen Orchestra’s VM, or its pool’s master."
     }
 
-    /// What will happen, in the order it happens, and what it costs.
-    static func whatHappens(_ xo: String) -> String {
-        "Xen Orchestra’s VM, the one answering at \(xo), is shut down for a minute or two while the watchdog is put on its disk, "
-            + "then started again. Xen Orchestra is unavailable meanwhile, and so is this pool’s page."
-    }
+    /// What will happen, and what it costs: Xen Orchestra is away for those
+    /// minutes, and this pool's page with it.
+    static func whatHappens(_ xo: String) -> String { "Xen Orchestra at \(xo) goes offline for 1 to 2 minutes." }
 
     static func addFrom(_ host: String) -> String { "Add it from \(host)" }
 
-    static func passwordFooter(_ host: String) -> String {
+    /// The footer says the result; the custody is behind the disclosure.
+    static let passwordFooter = "Used once and not stored."
+    static func custody(_ host: String) -> String {
         "The root password signs in to the pool master over SSH once, and \(host) forgets it as soon as it has. "
-            + "It is sealed on this phone to a key only \(host) holds."
+            + "It is encrypted on this phone so that only \(host) can read it."
     }
 
-    /// What one machine found over SSH. Nil is cannot tell, said as that
-    /// (C-5), and an answer with no `ssh` is a machine too old to have looked.
-    static func describe(_ probe: Fleet.Probe) -> String {
-        guard let ssh = probe.ssh else { return "Too old to reach a pool master over SSH. Update it, then ask again." }
-        switch ssh.reachable {
-        case true?:
-            if DeployWords.canInstall(probe) { return "Reached its SSH server" }
-            let missing = ssh.missing ?? []
-            if ssh.deploy == false, !missing.isEmpty {
-                return "Reached its SSH server, and has no \(missing.joined(separator: ", ")) to work there with"
-            }
-            return "Reached its SSH server, and cannot tell whether it can work there"
-        case false?:
-            return "Could not reach its SSH server"
-        case nil:
-            return "Cannot tell: it has no ssh-keyscan to look with"
-        }
-    }
+    /// What one machine found over SSH, in an install's words: the job
+    /// reaches the pool master with the same tools (DeployWords.describe).
+    static func describe(_ probe: Fleet.Probe) -> String { DeployWords.describe(probe) }
 
-    /// Why no machine is offered when none reached the SSH server, with what
-    /// to check; nil when one did, and its row says the rest.
-    static func nobody(_ probes: [Fleet.Probe], address: String) -> String? {
-        if probes.isEmpty {
-            return "No permanent machine is connected, so nothing could try \(address). A machine in the fleet adds the watchdog."
-        }
-        if probes.contains(where: { $0.ssh?.reachable == true }) { return nil }
-        let missed = probes.filter { $0.ssh?.reachable == false }.map(\.hostId).sorted()
-        let unsure = probes.filter { $0.ssh != nil && $0.ssh?.reachable == nil }.map(\.hostId).sorted()
-        let old = probes.filter { $0.ssh == nil }.map(\.hostId).sorted()
-        var lines: [String] = []
-        if !missed.isEmpty {
-            lines.append("No machine reached SSH at \(address). Check the address, that SSH is on for the pool master, and that one of these "
-                         + "is on a network that can reach it: \(missed.joined(separator: ", ")).")
-        }
-        if !unsure.isEmpty { lines.append("Cannot tell from \(unsure.joined(separator: ", ")), which has no ssh-keyscan to look with.") }
-        if !old.isEmpty { lines.append("Too old to look over SSH: \(old.joined(separator: ", ")). Update one, then ask again.") }
-        return lines.joined(separator: " ")
-    }
+    /// Why no machine is offered when none reached the SSH server, in an
+    /// install's words; nil when one did, and its row says the rest.
+    static func nobody(_ probes: [Fleet.Probe], address: String) -> String? { DeployWords.nobody(probes, address: address) }
 }

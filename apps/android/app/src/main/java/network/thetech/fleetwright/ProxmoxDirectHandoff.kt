@@ -84,7 +84,7 @@ internal object ProxmoxDirectHandoff {
                     val record = ProxmoxLine.parse(got)
                     if (record == null) {
                         forget(settings, address)
-                        progress to Outcome.Failed("The setup finished, and what it left for this phone is not a line it can keep. Run it again; it finds what it made.")
+                        progress to Outcome.Failed("The setup finished, but what it left couldn’t be read. Run it again; it finds what it made.")
                     } else {
                         settings.putSecret(lineName(address), got.trim())
                         progress to keep(settings, record, address)
@@ -108,8 +108,8 @@ internal object ProxmoxDirectHandoff {
             },
             onFailure = {
                 Outcome.Failed(
-                    "The node is set up, and its line was not kept yet: ${it.message ?: "the vault would not keep it."} " +
-                        "This phone tries again when Fleetwright is next open.",
+                    "The node is set up, but its access isn’t saved yet: ${it.message ?: "it couldn’t be saved."} " +
+                        "This phone tries again when it is next open.",
                 )
             },
         )

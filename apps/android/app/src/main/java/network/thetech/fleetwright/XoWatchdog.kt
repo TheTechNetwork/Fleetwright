@@ -66,35 +66,28 @@ internal object XoWatchdog {
         else -> "Adding the reconnect watchdog"
     }
 
+    /** What it does and when to add it, in one line each; how it gets in is what the rest of the screen asks for. The same words as iOS (WatchdogWords.intro). */
+    const val INTRO = "Reconnects lost pools automatically. Add it if Fleetwright didn’t install this Xen Orchestra."
+
+    /** Where the pool master is typed: filled in from an install's record, or said in one line. */
+    fun whereHint(prefilled: Boolean): String =
+        if (prefilled) "Filled in from when Fleetwright installed this Xen Orchestra." else "The host that runs Xen Orchestra’s VM, or its pool’s master."
+
     /**
      * What will happen, said before the root password is asked for, because
      * it takes Xen Orchestra away for a while and the person should choose
-     * when.
+     * when. [xo] is where this pool's Xen Orchestra answers.
      */
-    const val WHAT_HAPPENS =
-        "Xen Orchestra’s VM is shut down for a minute or two while the watchdog is put on its disk, then started again. " +
-            "Xen Orchestra is unavailable meanwhile."
+    fun whatHappens(xo: String): String = "Xen Orchestra at $xo goes offline for 1 to 2 minutes."
 
-    fun passwordFooter(host: String): String =
-        "The root password signs in to the pool master over SSH once, and $host forgets it as soon as it has. It is sealed on " +
-            "this phone to a key only $host holds."
+    /** The footer says the result; the custody is behind the disclosure. */
+    const val PASSWORD_FOOTER = "Used once and not stored."
+    fun custody(host: String): String =
+        "The root password signs in to the pool master over SSH once, and $host forgets it as soon as it has. " +
+            "It is encrypted on this phone so that only $host can read it."
 
-    /**
-     * What one machine found over SSH, for this job. The same reading as an
-     * install's (XoDeploy.describe), in this job's words where they differ:
-     * null is cannot tell, and an answer with no `ssh` is a machine too old to
-     * have looked.
-     */
-    fun describe(probe: Fleet.Probe): String {
-        val ssh = probe.ssh ?: return "Too old to add the watchdog. Update it, then ask again."
-        if (ssh.reachable != true) return XoDeploy.describe(probe)
-        return when {
-            XoDeploy.canInstall(probe) -> "Reached its SSH server"
-            ssh.deploy == false && ssh.missing.isNotEmpty() ->
-                "Reached its SSH server, and has no ${ssh.missing.joinToString(", ")} to sign in with"
-            else -> "Reached its SSH server, and cannot tell whether it can sign in from there"
-        }
-    }
+    /** What one machine found over SSH, in an install's words: the job reaches the pool master with the same tools (XoDeploy.describe). */
+    fun describe(probe: Fleet.Probe): String = XoDeploy.describe(probe)
 
     /**
      * The bytes the machine signed for this job: its own context, then the
