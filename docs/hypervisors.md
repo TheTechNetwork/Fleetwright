@@ -294,7 +294,7 @@ said the address. A machine on the uplink is reachable only from behind the
 edge router; for SSH from your own network, start it on one of yours.
 
 **The network.** New session › Where offers the pool's networks the fleet may
-use besides the default, *Behind the edge router*. A network of yours puts the
+use besides the default, *Default (internet only)*. A network of yours puts the
 machine beside your own machines, which is what SSH from your laptop needs and
 exactly what the uplink exists to prevent, so it is a choice and never the
 default. The box takes only a network it saw on that pool
@@ -1048,8 +1048,8 @@ for each router:
   tell, not zero).
 
 **Built measured.** The first router read by this was fine and said almost
-nothing: "cannot tell whether its way out is up", "0 DHCP leases", "no log
-lines", twenty minutes after a rebuild. Each traced to its configuration.
+nothing: "Internet: Unknown", "No leases", "No log lines received", twenty
+minutes after a rebuild. Each traced to its configuration.
 OPNsense 26.7 makes a DHCP WAN's gateway itself with monitoring off
 (`Gateways.php`: "disable monitoring by default"), so dpinger never ran and
 the way out was cannot tell for good; Unbound's statistics were off, so there
@@ -1093,25 +1093,33 @@ that saw a router, by its API or its syslog, over one that could not tell, so
 the box on the network is the one shown as soon as it has read them.
 
 **What the phone shows.** The pool's page gains an Edge routers card under its
-status, refreshed every 30 seconds while it is open:
+status, refreshed every 30 seconds while it is open. The card says which
+machine read them and when ("Via rpi-7550 · 2 minutes ago"), then one word per
+router: "Unreachable", else "Internet down", else its part in the shared
+address ("Primary", "Standby", "Starting"), else "Internet up"; a read that
+could not tell is "Unknown". Under the word, its DNS: "DNS down", "DNS: 1,204
+answered, 3 blocked" once it counts, or "DNS up" for a router that answers
+names and has counted none (a router built before it counted, or one nothing
+has asked yet, which the read cannot tell apart). The card opens the routers'
+page, which has the rest, for each router in this order:
 
-- which machine read them, and when;
-- for each router, in this order: whether it holds the gateway address or
-  stands by; whether its way out is up, with its latency and loss once it is
-  monitored, no loss said as no loss; how many names it answered and refused
-  since it started counting and the five it refused most, or that it answers
-  names and none have been counted (a router built before it counted, or one
-  nothing has asked yet, which the read cannot tell apart); its leases, none
-  out said as none and a count not read said as not read; and its last log
-  line, or that none has reached the machine reading it, which is all that
-  machine knows; or why it could not be read;
+- its part in the shared address;
+- whether it reaches the internet, with its latency and loss once it is
+  monitored, no loss said as "no loss";
+- how many names it answered and the lists blocked since it started
+  counting, and the five blocked most;
+- its leases, none out said as "No leases" and a count not read as "Leases:
+  Unknown";
+- its last log line, or "No log lines received", which is all the machine
+  reading it knows; or why it could not be reached;
 - that the machine reading them cannot listen for their log lines, when
-  another program has the port;
+  another program has the port ("Router logs not received: another program
+  has the port.");
 - the last eight lines they logged, newest first.
 
-Cannot tell is said as cannot tell, and what is wrong is the one line in the
-attention tone. A pool nothing reads says so ("No machine reads this pool's
-edge routers yet"), never as fine.
+Cannot tell is said as "Unknown", and what is wrong is the one line in the
+attention tone. A pool nothing reads says so ("No router data yet. Use Change
+what the fleet may use once to start it."), never as fine.
 
 **What it needs:** a release with this in it on the boxes holding the pool,
 then one policy apply from the phone. That apply rebuilds the routers once,
@@ -2020,8 +2028,8 @@ new password for Xen Orchestra's admin. In order:
    port 22: Connection refused”" is a master that is up and said no, where
    "nothing answered SSH at 192.168.1.128 from here: ssh-keyscan heard
    nothing in 5 seconds, twice" is one that is off or out of reach. The first
-   had been said as the second, under a sheet that still showed the probe's
-   "Reached its SSH server", and read as a contradiction. It opens one
+   had been said as the second, under a sheet whose row for the master still
+   said "Ready", and read as a contradiction. It opens one
    OpenSSH master connection as root, answering the password prompt through
    `SSH_ASKPASS` from a unix socket in the job's 0700 directory, and wipes the
    password as soon as the master is up. The password is never in an argument,
