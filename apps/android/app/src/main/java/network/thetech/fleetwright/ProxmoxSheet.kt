@@ -109,14 +109,13 @@ internal fun ProxmoxSheet(
                 kept = true
                 failed = false
                 line = ""
-                // WHAT HAPPENS NEXT, AND WHEN: not "added", a claim about the
-                // cluster nobody has checked (C-5).
-                result = "Kept in your vault. Your machines pick it up within ten minutes and check it against the cluster; " +
-                    "it then shows under New session › Where, as Proxmox at ${record.address}."
+                // WHAT HAPPENS NEXT, AND WHEN: saved, not "added", a claim about
+                // the cluster nobody has checked (C-5).
+                result = "Saved. Within 10 minutes it appears under New session › Where, as Proxmox at ${record.address}."
             },
             onFailure = {
                 failed = true
-                result = it.message ?: "The vault would not keep it."
+                result = it.message ?: "Couldn’t save it."
             },
         )
         busy = false
@@ -127,8 +126,7 @@ internal fun ProxmoxSheet(
         kept = true
         failed = false
         line = ""
-        result = "Kept in your vault. Your machines pick it up within ten minutes and check it against the cluster; " +
-            "it then shows under New session › Where, as Proxmox at $address."
+        result = "Saved. Within 10 minutes it appears under New session › Where, as Proxmox at $address."
     }
 
     // A RUN THIS PHONE STARTED and has not collected, followed again when
@@ -154,7 +152,7 @@ internal fun ProxmoxSheet(
             if (looked == null) {
                 if (!ProxmoxDirectHandoff.isPending(settings, at)) {
                     since = null
-                    sshText = "This phone follows no setup on $at now. If it finished, its line is in your vault."
+                    sshText = "No setup running on $at."
                     break
                 }
             } else {
@@ -168,7 +166,7 @@ internal fun ProxmoxSheet(
                             null -> {}
                         }
                     },
-                    onFailure = { sshText = "Lost the node for a moment (${it.message}); asking again." },
+                    onFailure = { sshText = "Reconnecting…" },
                 )
             }
             if (since != null) delay(3_000)
@@ -190,7 +188,7 @@ internal fun ProxmoxSheet(
                 if (coordinatorOk) {
                     through = true
                 } else {
-                    sshText = "This phone could not reach $at (${e.message}), and its fleet address is not one a machine can be told. Set it up by hand below."
+                    sshText = "Couldn’t reach $at (${e.message}). Set it up by hand below."
                 }
                 sshBusy = false
                 return
@@ -273,7 +271,7 @@ internal fun ProxmoxSheet(
             value = vmids,
             onValueChange = { vmids = it; known.edit().putString("vmids", it.trim()).apply() },
             enabled = since == null && !kept,
-            label = { Text("Machine numbers (optional)") },
+            label = { Text("VM IDs, such as 9000-9099 (optional)") },
             placeholder = { Text("9000-9099") },
             singleLine = true,
             isError = !vmidsOk,
@@ -287,7 +285,7 @@ internal fun ProxmoxSheet(
         }
         val waiting = offered
         when {
-            !coordinatorOk -> Hint("This phone's fleet address is not one the setup can be told, so set it up by hand below.", color = Design.Palette.bad.now)
+            !coordinatorOk -> Hint("Can’t set this up from the phone. Use By hand below.", color = Design.Palette.bad.now)
             waiting != null -> {
                 // THE ONE THING TO CHECK, said once and plainly.
                 Hint("The node answered with this key. On its console: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub", color = Design.Palette.ink.now)
@@ -322,25 +320,20 @@ internal fun ProxmoxSheet(
                 }
                 Hint(part.text)
             }
-            if (since != null) Hint("Running on the node, and you need not watch: it carries on if this screen closes, and this phone keeps its line in your vault when Fleetwright is next open.")
+            if (since != null) Hint("Running on the node. You can close this screen.")
         }
         if (sshText.isNotBlank()) Hint(sshText, color = if (since != null) Design.Palette.inkDim.now else Design.Palette.bad.now)
-        Hint(
-            "Proxmox VE 9 or newer. This phone tries the node itself first, and the password goes to the node and nowhere else; " +
-                "it is kept on this phone only while the setup runs. When this phone cannot reach the node, one of your machines " +
-                "that can sets it up, with the password sealed to it alone. Machine numbers are the VM IDs the fleet's image and " +
-                "machines take; left empty, they take the cluster's next free ones.",
-        )
+        // THE RESULT IN ONE SENTENCE. The route (the phone first, a machine
+        // when it cannot reach the node) and the password's custody are in
+        // the header comment and docs/proxmox.md.
+        Hint("Needs Proxmox VE 9 or newer. Your password goes only to the node.")
 
         SectionHead("Or by hand, on the node")
         // SELECTABLE, so a long press copies it whole.
         SelectionContainer {
             Text(ProxmoxLine.setupCommand(settings.coordinatorUrl, trimmedVmids), style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
         }
-        Hint(
-            "In Proxmox's web interface: Datacenter › the node › Shell. It makes a pool, a user with no password, " +
-                "its token, a firewall group, the lab and group networks and the machine image, which takes a few minutes, and prints one line.",
-        )
+        Hint("Run it in Datacenter › node › Shell, then paste what it prints.")
         OutlinedTextField(
             value = line,
             onValueChange = { line = it },
@@ -366,8 +359,6 @@ internal fun ProxmoxSheet(
                 Text(if (busy) "Adding…" else "Add the cluster")
             }
         }
-        Hint("The line is the cluster's token. It is kept in your vault and handed only to the machines you approved, which hold it in memory.")
-
         if (result.isNotBlank()) {
             Hint(result, color = if (failed) Design.Palette.bad.now else Design.Palette.ink.now)
             if (kept) OpenRow("Done") { password = ""; onDismiss() }
@@ -442,7 +433,7 @@ internal object ProxmoxLine {
 /** The options' words, the same on iOS (AddProxmoxView.swift, ProxmoxWords). */
 internal object ProxmoxWords {
     const val SYSTEMS_HINT = "Each system chosen becomes an image a session's machine can be made from. One already on the cluster is kept, and built again only when asked."
-    const val FIREWALL_HINT = "Until it is on, the fleet's machines are made only on networks you choose. Proxmox VE's own rules keep the nodes' web interface, SSH and cluster traffic open to the local network; anything else coming in to the nodes themselves is dropped, so add a rule first for any other service they run."
+    const val FIREWALL_HINT = "Blocks traffic into the nodes except the web interface, SSH and cluster traffic."
 }
 
 /**
@@ -612,7 +603,7 @@ internal fun ProxmoxOptionsBlock(options: ProxmoxOptions, enabled: Boolean, open
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
         modifier = Modifier.fillMaxWidth(),
     )
-    Hint("The fleet's token lasts", Design.Palette.ink.now)
+    Hint("Access expires after", Design.Palette.ink.now)
     Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         ProxmoxOptions.LIFETIMES.forEach { d ->
             FilterChip(selected = options.expireDays == d, onClick = { onChange(options.copy(expireDays = d)) }, enabled = enabled, label = { Text("$d days") })

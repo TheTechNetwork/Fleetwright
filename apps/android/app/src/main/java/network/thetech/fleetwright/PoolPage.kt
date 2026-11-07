@@ -76,8 +76,10 @@ import kotlinx.coroutines.launch
  * with it, then what it is and the numbers behind how it is. No row wears a
  * ring: nothing here is asking anything.
  *
- * THE FIRST LINE SAYS HOW CURRENT IT IS: watching now while the socket is
- * open, and otherwise when it was last looked at (PoolWatch).
+ * THE FIRST LINE SAYS HOW CURRENT IT IS, in a row's words: Live while the
+ * socket is open, Via a machine and when otherwise, and when it was last
+ * updated when nothing is (PoolWatch). The why of each is in docs/manage.md,
+ * not on every page.
  *
  * MOTION: a section that gains or loses a row settles to its new height on
  * the spring, and a state word that changes crossfades, which is all that
@@ -99,6 +101,10 @@ internal fun PoolPage(
     // once: empty when the record does not say, and then not a line.
     val masters = remember(pool.address) { XoHandoff.masters(settings, pool.address) }
     var showing by remember { mutableStateOf<String?>(null) }
+    // The routers' own page, and Add a hypervisor again for a pool whose
+    // access this phone can only get by setting it up again.
+    var showingEdges by remember { mutableStateOf(false) }
+    var settingUp by remember { mutableStateOf(false) }
     val reduced = Design.Motion.reduced()
 
     LaunchedEffect(watch) { watch.start() }
@@ -138,8 +144,8 @@ internal fun PoolPage(
     }
 
     FullScreen(pool.address, onDismiss) {
-        StatusCard(watch, masters)
-        if (edgesAsked && edgesKnown) EdgeCard(edges, edgesFailed)
+        StatusCard(watch, masters, onSetUpAgain = if (admin == true) ({ settingUp = true }) else null)
+        if (edgesAsked && edgesKnown) EdgeCard(edges, edgesFailed) { showingEdges = true }
         if (watch.phase == PoolWatch.Phase.Live && watch.snapshot.isEmpty) Hint(Manage.Words.seesNothing)
         for (kind in Manage.Kind.values()) {
             val rows = watch.snapshot.list(kind)
@@ -167,10 +173,12 @@ internal fun PoolPage(
         }
     }
     showing?.let { id -> ComponentPage(watch, id, onDismiss = { showing = null }) }
+    edges?.takeIf { showingEdges }?.let { e -> EdgePage(e, onDismiss = { showingEdges = false }) }
+    if (settingUp) HypervisorSheet(settings, startAt = pool.address, onDismiss = { settingUp = false })
 }
 
 @Composable
-private fun StatusCard(watch: PoolWatch, masters: List<String>) {
+private fun StatusCard(watch: PoolWatch, masters: List<String>, onSetUpAgain: (() -> Unit)?) {
     val scope = rememberCoroutineScope()
     val phase = watch.phase
     val line = when (phase) {
@@ -220,43 +228,106 @@ private fun StatusCard(watch: PoolWatch, masters: List<String>) {
                 Text(Manage.Words.lookAgain)
             }
         }
-    }
-}
-
-/** How the pool's edge routers are, as the machine reading them last did. */
-@Composable
-private fun EdgeCard(e: Fleet.VmEdges?, failed: Boolean) {
-    Column(
-        Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(Design.Space.groupTight),
-        verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
-    ) {
-        Text(Manage.Words.edgeHeading, style = Design.Style.section, color = Design.Palette.ink.now, modifier = Modifier.semantics { heading() })
-        if (e == null) {
-            Text(if (failed) Manage.Words.edgeUnasked else Manage.Words.edgeNobody, style = Design.Style.label, color = Design.Palette.inkDim.now)
-        } else {
-            EdgeReport(e)
+        // THE REMEDY AS A BUTTON (§6): access this phone can only get by
+        // setting the pool up again is offered as that, to an admin, rather
+        // than as an instruction inside the sentence.
+        if (watch.needsSetup && onSetUpAgain != null) {
+            OutlinedButton(onClick = onSetUpAgain, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text(Manage.Words.setUpAgain)
+            }
         }
     }
 }
 
-/** What the machine read: when, each router, and what they logged lately. */
+/**
+ * THE CARD IS THE VERDICT, AND THE PAGE IS THE REST (docs/reviews/copy-2026-11-06.md,
+ * "The rule to adopt"): one word per router, its DNS beneath, and the whole
+ * card the way in to EdgePage for the numbers, the log and what was refused.
+ * Before any machine has read them, what is known is said.
+ */
+@Composable
+private fun EdgeCard(e: Fleet.VmEdges?, failed: Boolean, onOpen: () -> Unit) {
+    if (e == null) {
+        Column(
+            Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(Design.Space.groupTight),
+            verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+        ) {
+            Text(Manage.Words.edgeHeading, style = Design.Style.section, color = Design.Palette.ink.now, modifier = Modifier.semantics { heading() })
+            Text(if (failed) Manage.Words.edgeUnasked else Manage.Words.edgeNobody, style = Design.Style.label, color = Design.Palette.inkDim.now)
+        }
+        return
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .fleetCard(radius = Design.Radius.cardSmall)
+            .clickable(onClickLabel = "Opens the routers’ page", role = Role.Button, onClick = onOpen)
+            .heightIn(min = 48.dp)
+            .padding(Design.Space.groupTight),
+        verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+    ) {
+        Text(Manage.Words.edgeHeading, style = Design.Style.section, color = Design.Palette.ink.now, modifier = Modifier.semantics { heading() })
+        Text(Manage.Words.edgeRead(e.hostId, relative(e.at).toString()), style = Design.Style.label, color = Design.Palette.inkDim.now)
+        e.routers.forEach { r -> RouterSummary(r) }
+    }
+}
+
+/** One router on the card: its name, the one word for it on the right, and its DNS under that. What is wrong is the one thing in the attention tone, and the word carries it without the colour. */
+@Composable
+private fun RouterSummary(r: Fleet.VmEdges.Router) {
+    val (word, trouble) = Manage.Words.edgeStatus(r.reached, r.problem, r.gateway, r.role)
+    Column(Modifier.semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(r.name, style = Design.Style.bodyStrong, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+            AnimatedContent(
+                targetState = word,
+                transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
+                label = "router status",
+            ) { w ->
+                Text(w, style = Design.Style.label, color = if (trouble) Design.Palette.attention.now else Design.Palette.ink.now)
+            }
+        }
+        Manage.Words.edgeDnsLine(r.reached, r.dns, r.answered, r.blocked)?.let { (dns, bad) ->
+            Text(dns, style = Design.Style.label, color = if (bad) Design.Palette.attention.now else Design.Palette.inkDim.now)
+        }
+    }
+}
+
+/** The routers' own page: everything the machine read of them, which the card says in one word per router. The only place the numbers are, so the card stays a verdict. */
+@Composable
+private fun EdgePage(e: Fleet.VmEdges, onDismiss: () -> Unit) {
+    FullScreen(Manage.Words.edgeHeading, onDismiss) {
+        EdgeReport(e)
+    }
+}
+
+/** What the machine read: when, each router in full, and what they logged lately. */
 @Composable
 private fun EdgeReport(e: Fleet.VmEdges) {
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         Text(Manage.Words.edgeRead(e.hostId, relative(e.at).toString()), style = Design.Style.label, color = Design.Palette.inkDim.now)
         if (e.listening == false) Text(Manage.Words.edgeNotListening, style = Design.Style.label, color = Design.Palette.attention.now)
-        e.routers.forEach { r -> RouterRows(r) }
+        e.routers.forEach { r ->
+            Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(Design.Space.groupTight)) {
+                RouterRows(r)
+            }
+        }
         if (e.events.isNotEmpty()) {
-            Text(Manage.Words.edgeEvents, style = Design.Style.label, color = Design.Palette.inkDim.now)
-            // Newest first, eight of them: what changed last is read first.
-            val fmt = java.text.DateFormat.getTimeInstance(java.text.DateFormat.MEDIUM)
-            e.events.takeLast(8).reversed().forEach { ev ->
-                Text(
-                    "${fmt.format(java.util.Date(ev.at))}  ${ev.router}  ${ev.text}",
-                    style = Design.Style.label,
-                    fontFamily = FontFamily.Monospace,
-                    color = if (ev.kind == "carp") Design.Palette.ink.now else Design.Palette.inkDim.now,
-                )
+            Column(
+                Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(Design.Space.groupTight),
+                verticalArrangement = Arrangement.spacedBy(Design.Space.hair),
+            ) {
+                Text(Manage.Words.edgeEvents, style = Design.Style.section, color = Design.Palette.ink.now, modifier = Modifier.semantics { heading() })
+                // Newest first, eight of them: what changed last is read first.
+                val fmt = java.text.DateFormat.getTimeInstance(java.text.DateFormat.MEDIUM)
+                e.events.takeLast(8).reversed().forEach { ev ->
+                    Text(
+                        "${fmt.format(java.util.Date(ev.at))}  ${ev.router}  ${ev.text}",
+                        style = Design.Style.label,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (ev.kind == "carp") Design.Palette.ink.now else Design.Palette.inkDim.now,
+                    )
+                }
             }
         }
     }
@@ -283,7 +354,7 @@ private fun RouterRows(r: Fleet.VmEdges.Router) {
                     Text(Manage.Words.edgeDns(r.dns), style = Design.Style.label, color = if (r.dns == false) Design.Palette.attention.now else Design.Palette.ink.now)
                 }
                 r.topBlocked?.takeIf { it.isNotEmpty() }?.let { Text(Manage.Words.edgeRefused(it), style = Design.Style.micro, color = Design.Palette.inkDim.now) }
-                // Always, null included: a count not read is cannot tell, and a line that vanished read as nothing to say (C-5).
+                // Always, null included: a count not read is Unknown, and a line that vanished read as nothing to say (C-5).
                 Text(Manage.Words.edgeLeases(r.leases), style = Design.Style.label, color = Design.Palette.inkDim.now)
             }
         }
@@ -425,7 +496,7 @@ private fun ComponentPage(watch: PoolWatch, id: String, onDismiss: () -> Unit) {
         Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
             Fact("Kind", Manage.Words.kindTitle(c.kind))
             Fact("Where", Manage.what(c, s))
-            if (c.kind == Manage.Kind.VM || c.kind == Manage.Kind.HOST) Fact("Address", c.address ?: "cannot tell")
+            if (c.kind == Manage.Kind.VM || c.kind == Manage.Kind.HOST) Fact("Address", c.address ?: "Unknown")
         }
 
         SectionHead(Manage.Words.howItIs)
@@ -439,7 +510,6 @@ private fun ComponentPage(watch: PoolWatch, id: String, onDismiss: () -> Unit) {
             )
             if (c.kind == Manage.Kind.VM) s.attachedDisks(c.id).forEach { d -> Fact(d.name, Manage.diskLine(d, s)) }
         }
-        Hint(watch.currentLine)
 
         // THE CONSOLE, for a running VM. Read through one of your machines,
         // it opens through one too (ConsoleTunnel), the TLS still this phone's.
@@ -457,7 +527,7 @@ private fun ComponentPage(watch: PoolWatch, id: String, onDismiss: () -> Unit) {
         val grow = Manage.growMethod(c, methods)
         val disks = if (grow == null) emptyList() else s.attachedDisks(c.id).filter { it.size != null }
         when {
-            watch.phase != PoolWatch.Phase.Live -> Hint(Manage.Words.lost("this phone is not connected"))
+            watch.phase != PoolWatch.Phase.Live -> Hint(Manage.Words.notConnected)
             c.holder -> Hint(Manage.Words.holder(c.name))
             methods == null -> Hint(Manage.Words.methodsUnknown)
             offered.isEmpty() && !resize && !needsStopped && disks.isEmpty() -> Hint(Manage.Words.nothingOffered)
@@ -496,9 +566,6 @@ private fun ComponentPage(watch: PoolWatch, id: String, onDismiss: () -> Unit) {
             }
         }
         if (message.isNotBlank()) Hint(message, if (failed) Design.Palette.bad.now else Design.Palette.ink.now)
-        if (offered.isNotEmpty() || resize || disks.isNotEmpty()) {
-            Hint(if (disks.isEmpty()) Manage.Words.actionsFooter else "${Manage.Words.actionsFooter} ${Manage.Words.growNote}")
-        }
     }
 
     asking?.let { ask ->

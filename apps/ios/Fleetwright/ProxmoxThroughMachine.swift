@@ -84,10 +84,14 @@ struct ProxmoxThroughMachineView: View {
 
     var body: some View {
         Form {
-            Section {
-                Text(auto ? ProxmoxThroughWords.unreachable(trimmedAddress) : ProxmoxThroughWords.intro)
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.ink)
+            // ONLY WHEN THE PHONE TRIED FIRST: opened by hand, the node field
+            // and the button say what the screen is for.
+            if auto {
+                Section {
+                    Text(ProxmoxThroughWords.unreachable(trimmedAddress))
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.ink)
+                }
             }
             whereSection
             if probes != nil { machinesSection }
@@ -248,16 +252,24 @@ struct ProxmoxThroughMachineView: View {
                     .disabled(busy || !matched || rootPassword.isEmpty)
                     .frame(minHeight: 44)
             }
+            // THE CUSTODY, ONCE, BEHIND A DISCLOSURE, as on an install.
+            DisclosureGroup {
+                Text(ProxmoxThroughWords.custody(probe.hostId))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            } label: {
+                Text(DeployWords.custodyTitle).frame(minHeight: 44, alignment: .leading)
+            }
+            .disabled(busy)
         } header: {
             sectionHead("Root password")
         } footer: {
-            Text(ProxmoxThroughWords.passwordFooter(probe.hostId))
+            Text(ProxmoxThroughWords.passwordFooter)
         }
     }
 
     @ViewBuilder private func compareRows(_ fingerprint: String) -> some View {
-        Text("This phone has not approved \(begun?.hostId ?? "that machine") before. On it, fleetwright-sidecar identity "
-             + "prints its fingerprint; send the root password only if it is this one.")
+        Text("First time using \(begun?.hostId ?? "that machine"). On it, run `fleetwright-sidecar identity` and check it shows this:")
             .fleetType(.label)
             .foregroundStyle(Design.Palette.ink)
         Text(fingerprint)
@@ -316,7 +328,7 @@ struct ProxmoxThroughMachineView: View {
                 Button("Done") { dismiss() }
                     .frame(minHeight: 44)
             } else if progress?.state == "done", keepAgain, let state = progress {
-                Button("Keep the line") { Task { await apply(state) } }
+                Button("Add the cluster") { Task { await apply(state) } }
                     .disabled(busy)
                     .frame(minHeight: 44)
             } else {
@@ -579,40 +591,24 @@ struct ProxmoxThroughMachineView: View {
 enum ProxmoxThroughWords {
     static let title = "Through a machine"
 
-    static let intro = "When this phone cannot reach the node, one of your machines that can does the setup for it: "
-        + "the same steps, run on the node over SSH. The root password is sealed on this phone to that machine alone."
+    /// Said when this phone tried the node and could not reach it. Opened by
+    /// hand there is no intro: the node field says what the screen is for.
+    static func unreachable(_ node: String) -> String { "Couldn’t reach \(node) from this phone. Pick a machine to set it up." }
 
-    /// Said when this phone tried the node and could not reach it.
-    static func unreachable(_ node: String) -> String {
-        "This phone could not reach \(node), so one of your machines that can sets it up: the same steps, run on the node over SSH. "
-            + "The root password is sealed on this phone to that machine alone."
+    /// The screen may be closed, said while it runs; how the line comes
+    /// back is ProxmoxThroughHandoff's business, and docs/proxmox.md's.
+    static let mayClose = "Takes a few minutes. You can close this screen."
+
+    /// The footer says the result; the custody is behind the disclosure.
+    static let passwordFooter = "Used once and not stored."
+    static func custody(_ host: String) -> String {
+        "The root password signs in to the node over SSH once, and \(host) forgets it as soon as it has. "
+            + "It is encrypted on this phone so that only \(host) can read it, and the cluster’s access comes back readable by this phone alone."
     }
 
-    static let mayClose = "With the machine image this takes several minutes, and you need not watch: the setup goes on on the node, "
-        + "and the line comes back sealed to this phone, which keeps it in your vault when Fleetwright is next open."
-
-    static func passwordFooter(_ host: String) -> String {
-        "It signs in to the node over SSH once, and \(host) forgets it as soon as it has. "
-            + "The line comes back sealed to this phone, and \(host) keeps no copy."
-    }
-
-    /// Why no machine is offered when none reached the node's SSH, with what
-    /// to check; nil when one did.
-    static func nobody(_ probes: [Fleet.Probe], address: String) -> String? {
-        if probes.isEmpty {
-            return "No permanent machine is connected, so nothing could try \(address). Set it up by hand on the node instead."
-        }
-        if probes.contains(where: { $0.ssh?.reachable == true }) { return nil }
-        let missed = probes.filter { $0.ssh?.reachable == false }.map(\.hostId).sorted()
-        let old = probes.filter { $0.ssh == nil }.map(\.hostId).sorted()
-        var lines: [String] = []
-        if !missed.isEmpty {
-            lines.append("No machine reached SSH at \(address). Check the address, that SSH is on for the node, and that one of these "
-                         + "is on a network that can reach it: \(missed.joined(separator: ", ")).")
-        }
-        if !old.isEmpty { lines.append("Too old to look over SSH: \(old.joined(separator: ", ")). Update one, then ask again.") }
-        return lines.isEmpty ? nil : lines.joined(separator: " ")
-    }
+    /// Why no machine is offered when none reached the node's SSH, in an
+    /// install's words (DeployWords.nobody); nil when one did.
+    static func nobody(_ probes: [Fleet.Probe], address: String) -> String? { DeployWords.nobody(probes, address: address) }
 
     /// The line the machine sealed back, or nil for anything that does not
     /// open under this job and node with this key, or is not a line.

@@ -41,12 +41,10 @@ class XoWatchdogTest {
     }
 
     @Test
-    fun aMachineThatDidNotLookIsSaidAsTooOldForThisJob() {
+    fun aMachineThatDidNotLookIsSaidToNeedAnUpdate() {
         val probe = Fleet.Probe("deb14", reachable = true, xo = false, tls = true, cert = null, version = null, ssh = null)
-        assertEquals("Too old to add the watchdog. Update it, then ask again.", XoWatchdog.describe(probe))
-        assertEquals(
-            "Too old to add the watchdog, so they did not look: deb14. Update one, then ask again.",
-            XoDeploy.nobody(listOf(probe), "xcp1.lan", doing = "add the watchdog"),
-        )
+        // In an install's words: the job reaches the pool master with the same tools.
+        assertEquals("Needs update", XoWatchdog.describe(probe))
+        assertEquals("No machine could check xcp1.lan.\ndeb14 needs an update.", XoDeploy.nobody(listOf(probe), "xcp1.lan"))
     }
 }
