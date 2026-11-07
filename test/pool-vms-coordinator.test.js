@@ -422,6 +422,22 @@ test('a person sees their machines and the networks a new one can go on, and nob
   assert.equal(mine.vmMachines[0].until, 1_800_000_000_000);
 });
 
+// A PROXMOX VE MACHINE SAYS SO, with the node and number its own console
+// opens by; the phone linked Xen Orchestra's page for one without them. A
+// Xen Orchestra machine carries neither, whatever its box wrote.
+test('a Proxmox VE machine carries its kind, node and number, and a bad one carries none', () => {
+  const [entry] = withMachine(ELI);
+  const machine = { ...entry.machines[0], node: 'pve1', vmid: 9004 };
+  /** @param {any} e */
+  const seen = (e) => fleet({ deb14: { xo: [e], protocol: 9 } }).core.snapshot(eli).vmMachines[0];
+  const pve = seen({ ...entry, kind: 'proxmox', machines: [machine] });
+  assert.deepEqual([pve.kind, pve.node, pve.vmid], ['proxmox', 'pve1', 9004]);
+  const xo = seen({ ...entry, machines: [machine] });
+  assert.deepEqual([xo.kind, xo.node, xo.vmid], ['xo', null, null]);
+  const bad = seen({ ...entry, kind: 'proxmox', machines: [{ ...machine, node: 'pve1&console=x', vmid: 12.5 }] });
+  assert.deepEqual([bad.node, bad.vmid], [null, null]);
+});
+
 test('a machine that did not report its end or size is cannot tell, not the epoch or nothing', () => {
   const [entry] = withMachine(ELI);
   const quiet = [{ ...entry, machines: [{ name: 'vm-aaaaaaaaaaaa', vm: null, state: null, ip: null, until: null, madeAt: null, cpus: null, memory: null, image: null, network: null }] }];

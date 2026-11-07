@@ -7155,6 +7155,12 @@ export class CoordinatorCore {
             lab: m.lab && typeof m.lab === 'object' && isLabName(m.lab.name) && typeof m.lab.open === 'boolean' ? { name: String(m.lab.name), open: m.lab.open } : null,
             groupIp: typeof m.groupIp === 'string' && /^10\.200\.\d{1,3}\.\d{1,3}$/.test(m.groupIp) ? m.groupIp : null,
             address: String(e.address || ''),
+            // WHICH HYPERVISOR, and on Proxmox VE the node and number its own
+            // console is opened by (`?console=kvm&vmid=&node=`): the phone
+            // linked Xen Orchestra's page for a Proxmox machine without them.
+            kind: /** @type {any} */ (e).kind === 'proxmox' ? 'proxmox' : 'xo',
+            node: /** @type {any} */ (e).kind === 'proxmox' && typeof m.node === 'string' && /^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$/.test(m.node) ? m.node : null,
+            vmid: /** @type {any} */ (e).kind === 'proxmox' && Number.isInteger(m.vmid) && m.vmid >= 100 && m.vmid <= 999_999_999 ? m.vmid : null,
             hosts: [host.hostId],
             // Kept ready and not yet taken by a session.
             standby: this.vmStandby.isKept(name),
