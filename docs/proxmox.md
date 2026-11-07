@@ -394,6 +394,25 @@ machine, with the version, the fence, the image and the machines on it, and
 reason. Before this page it showed nowhere: the first real node's line sat in
 the vault, refused by every box, and nothing said so.
 
+### A machine's page
+
+A machine made on a cluster has the same page as one on Xen Orchestra
+(`hypervisors.md`, "Working a machine"), with two differences that come from
+Proxmox VE itself:
+
+- **Its console is Proxmox VE's own**, `https://<node>:8006/?console=kvm&novnc=1&vmid=<n>&node=<node>`,
+  opened in the browser, where you sign in to Proxmox VE. The page said "Open
+  its console in Xen Orchestra" and opened Xen Orchestra's path on the
+  Proxmox VE address, which landed on its web interface at no machine at
+  all. The coordinator now passes each machine's `kind`, `node` and `vmid`.
+- **Its address is its guest agent's**, read by the box from
+  `agent/network-get-interfaces` on the interface the fleet put it on, which
+  is what turns "No address yet" into the SSH command. The box never asked,
+  so it stayed for good. Proxmox VE 9 allows that read with
+  `VM.GuestAgent.Audit` (it replaced `VM.Monitor`), now in the fleet's role.
+  **Run the setup again** on a cluster set up before this, so the role has
+  it; until then the address is *cannot tell*, as before.
+
 ### Machine numbers
 
 Asked for: *"vmid range user deserves a choice"*. Add Proxmox VE takes an

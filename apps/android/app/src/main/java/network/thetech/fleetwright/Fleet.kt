@@ -2290,8 +2290,18 @@ class Fleet(
         val groupIp: String? = null,
         /** The lab it is in, and whether that lab is open; null when in none, or from an older coordinator. */
         val lab: InLab? = null,
+        /** `proxmox`, or `xo` for Xen Orchestra; null from a coordinator older than Proxmox VE, which is Xen Orchestra. */
+        val kind: String? = null,
+        /** On Proxmox VE, the node and number its own console is opened by. */
+        val node: String? = null,
+        val vmid: Int? = null,
     ) {
         data class InLab(val name: String, val open: Boolean)
+
+        val onProxmox: Boolean get() = kind == "proxmox"
+
+        /** The hypervisor's own name for itself, which is where its console opens and where you sign in. */
+        val hypervisorName: String get() = if (onProxmox) "Proxmox VE" else "Xen Orchestra"
 
         /**
          * Bytes a second through the machine's network interfaces, one point
@@ -2321,7 +2331,16 @@ class Fleet(
          * where this phone does not hold the pool's token. Where it does, the
          * page opens the console in the app (ConsolePage).
          */
-        val consoleUrl: String? get() = if (vm == null || address.isBlank()) null else "https://$address/#/vms/$vm/console"
+        val consoleUrl: String?
+            get() = when {
+                address.isBlank() -> null
+                // ON PROXMOX VE its own noVNC console, by node and number: Xen
+                // Orchestra's path on a Proxmox VE address opened no machine.
+                onProxmox -> if (node == null || vmid == null) null else
+                    "https://$address/?console=kvm&novnc=1&vmid=$vmid&node=${java.net.URLEncoder.encode(node, "UTF-8")}"
+                vm == null -> null
+                else -> "https://$address/#/vms/$vm/console"
+            }
 
         /** `ssh fleetwright@192.168.1.40`, or null without an address. */
         val sshCommand: String? get() = ip?.let { "ssh fleetwright@$it" }
@@ -2456,6 +2475,9 @@ class Fleet(
                         val name = l.optString("name").takeIf { it.isNotBlank() }
                         if (name == null || !l.has("open")) null else VmMachine.InLab(name, l.optBoolean("open", false))
                     },
+                    kind = o.str("kind"),
+                    node = o.str("node"),
+                    vmid = o.num("vmid")?.toInt(),
                 )
             }
         }

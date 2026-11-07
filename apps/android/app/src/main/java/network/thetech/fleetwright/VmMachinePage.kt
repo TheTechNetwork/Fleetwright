@@ -224,10 +224,10 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                 // IN THE APP where this phone holds the pool's token, for a machine
                 // that is running (a stopped one has no screen); Xen Orchestra's
                 // own page otherwise, where you sign in. The same as iOS.
-                if (holdsHere && m.state == "Running" && m.vm != null) {
+                if (holdsHere && !m.onProxmox && m.state == "Running" && m.vm != null) {
                     OpenRow(Manage.Words.console) { console = true }
                 } else {
-                    m.consoleUrl?.let { page -> OpenRow("Open its console in Xen Orchestra") { uri.openUri(page) } }
+                    m.consoleUrl?.let { page -> OpenRow("Open its console in ${m.hypervisorName}") { uri.openUri(page) } }
                 }
                 // Nothing to add when the console opens in the app; that it is
                 // Xen Orchestra's own page, with its own sign-in, when it does
@@ -235,7 +235,7 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                 // certificate is this file's header, not the hint.
                 Hint(
                     "SSH uses the keys under You › SSH keys, on machines made after you add them." +
-                        if (holdsHere) "" else " The console opens Xen Orchestra, where you sign in.",
+                        if (holdsHere && !m.onProxmox) "" else " The console opens ${m.hypervisorName}, where you sign in.",
                 )
 
                 SectionHead("Work it")
