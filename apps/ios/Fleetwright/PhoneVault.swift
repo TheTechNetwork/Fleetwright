@@ -121,12 +121,15 @@ struct PhoneVault {
     }
 
     /// Keep a hypervisor's token in the fleet: the record setup handed this
-    /// phone, under `hypervisor:<address>`. The minter checks the record
-    /// names that address; the boxes this person approved are handed it and
-    /// hold it in memory only (src/fleet/host/xo-pools.js), and make
-    /// machines on the pool with it.
-    func keepHypervisor(_ fleet: Fleet, address: String, record: String) async throws -> String {
-        try await ask(fleet, op: "put", extra: ["name": "hypervisor:\(address)", "value": record]).text
+    /// phone, under `hypervisor:<address>`, or one box's own user under
+    /// `hypervisor:<address>+<box>` (XOSetupHandoff.keepBoxUsers). The minter
+    /// checks the record names that address, and that box; the boxes this
+    /// person approved are handed the shared one, and a box its own alone,
+    /// hold it in memory only (src/fleet/host/xo-pools.js), and make machines
+    /// on the pool with it.
+    func keepHypervisor(_ fleet: Fleet, address: String, record: String, box: String? = nil) async throws -> String {
+        let name = box.map { "hypervisor:\(address)+\($0)" } ?? "hypervisor:\(address)"
+        return try await ask(fleet, op: "put", extra: ["name": name, "value": record]).text
     }
 
     func forget(_ fleet: Fleet, name: String) async throws -> String {

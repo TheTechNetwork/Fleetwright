@@ -200,6 +200,74 @@ enum XOSetupHandoff {
         return true
     }
 
+    /// EACH BOX'S OWN TOKEN, sealed back beside the shared hand-off under the
+    /// same binding (xo-box-users.js). The record this phone already keeps
+    /// for the pool is copied, with that box's user and token, to be filed
+    /// as `hypervisor:<address>+<box>`. The shared record in the Keychain is
+    /// not touched: this phone still signs in with it to look at the pool.
+    /// `retired` is the machine's word that every named box has its token
+    /// and the machines still on the shared user were handed on, so the
+    /// shared item can leave the vault. Nil for anything that does not open
+    /// under this job and address, or a pool this phone holds no record for.
+    static func boxRecords(_ sealed: String, job: String, address: String, key: Seal.OneUseKey) -> (records: [(box: String, record: String)], retired: Bool)? {
+        let parts = sealed.split(separator: ".").map(String.init)
+        guard parts.count == 3,
+              let opened = try? Seal.open(key, aad: Seal.xosetupHandoffAAD(job: job, address: address),
+                                          sealed: ["epk": parts[0], "iv": parts[1], "ct": parts[2]]),
+              (opened["v"] as? NSNumber)?.intValue == 1, opened["address"] as? String == address,
+              let tokens = opened["boxTokens"] as? [[String: Any]],
+              let raw = Keychain.get(tokenAccount(address)), !raw.isEmpty,
+              let base = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any]
+        else { return nil }
+        var records: [(box: String, record: String)] = []
+        for token in tokens {
+            // The same acceptance the choice uses: an id the host cannot put
+            // in a user name is not filed, and an empty grant is the whole
+            // vault, which is how a token the machine already minted is known
+            // to be for a box this fleet could have named.
+            guard let box = token["box"] as? String,
+                  XOPolicy.boxes(address: address, hosts: [XOPolicy.ApprovedBox(id: box, revoked: false)], grants: [XOPolicy.PoolGrant(label: box, only: [])]).contains(box),
+                  let user = token["user"] as? String, let value = token["token"] as? String, !value.isEmpty
+            else { continue }
+            var record = base
+            record["user"] = user
+            record["token"] = value
+            record["box"] = box
+            if let expires = token["tokenExpires"] as? String { record["tokenExpires"] = expires } else { record.removeValue(forKey: "tokenExpires") }
+            guard let data = try? JSONSerialization.data(withJSONObject: record), let text = String(data: data, encoding: .utf8) else { continue }
+            records.append((box, text))
+        }
+        guard !records.isEmpty else { return nil }
+        let retired = (opened["retiredShared"] as? NSNumber)?.boolValue == true || (opened["retiredShared"] as? Bool) == true
+        return (records, retired)
+    }
+
+    /// Keep each box's token in the vault, and drop the shared item when the
+    /// machine said the hand-over is done. The Keychain copy of the shared
+    /// token stays, so this phone can still open the pool. Nil when there was
+    /// nothing to keep; otherwise what the fleet said, for the screen.
+    static func keepBoxUsers(_ sealed: String, job: String, address: String, key: Seal.OneUseKey, settings: Settings) async -> String? {
+        guard let kept = boxRecords(sealed, job: job, address: address, key: key) else { return nil }
+        let vault = PhoneVault(settings: settings)
+        let fleet = Fleet(settings: settings)
+        var said: [String] = []
+        for one in kept.records {
+            do {
+                said.append(try await vault.keepHypervisor(fleet, address: address, record: one.record, box: one.box))
+            } catch {
+                said.append("\(one.box)’s token was not kept in the fleet: \(error.localizedDescription)")
+            }
+        }
+        if kept.retired {
+            do {
+                said.append(try await vault.forget(fleet, name: "hypervisor:\(address)"))
+            } catch {
+                said.append("The shared token was not dropped from the fleet: \(error.localizedDescription)")
+            }
+        }
+        return said.joined(separator: " ")
+    }
+
     /// WHAT THE POOL'S MACHINES MAY DO FROM THE APP, as this phone last kept
     /// it beside the pool's token, or nil when it never chose. Each machine
     /// made from the record is born with it (src/core/grants.js).

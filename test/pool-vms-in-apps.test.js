@@ -54,7 +54,7 @@ test('iOS: New session offers a machine from each of your images, drawn from the
 });
 
 test('iOS: the pool’s token is kept in the fleet under its address, after setup and on asking', () => {
-  assert.match(IOS_VAULT, /extra: \["name": "hypervisor:\\\(address\)", "value": record\]/);
+  assert.match(IOS_VAULT, /let name = box\.map \{ "hypervisor:\\\(address\)\+\\\(\$0\)" \} \?\? "hypervisor:\\\(address\)"\s*return try await ask\(fleet, op: "put", extra: \["name": name, "value": record\]\)/);
   assert.match(IOS_HANDOFF, /guard outcome == \.kept, let address else \{ return \(outcome, nil\) \}/);
   assert.match(IOS_HANDOFF, /_ = await collectAndKeep\(job: entry\.job, state: state, settings: fleet\.settings\)/);
   assert.match(IOS_SCREEN, /if let pool = policyFor, job == nil \{ fleetSection\(pool\) \}/);
