@@ -856,7 +856,15 @@ enum Manage {
             if let answered { return (edgeNames(answered, refused: blocked ?? 0, since: nil), false) }
             return (edgeDns(dns), false)
         }
-        static func edgeUnreached(_ why: String) -> String { "Unreachable: \(why)" }
+        /// A router no machine reached: the verdict, with the machine's words
+        /// on why under Details (`details`). It was "Unreachable: " and the
+        /// sentence on one line; the sentence is the mechanism.
+        static let edgeUnreached = "Unreachable"
+        /// A router nothing has asked yet: Unknown, never a sentence naming
+        /// what did not answer (docs/design-system.md, Words, §7).
+        static let edgeUnknown = "Unknown"
+        /// The disclosure under a verdict that holds the sentence behind it.
+        static let details = "Details"
         /// Its last log line, as the machine reading it heard it. None is said as none received: whether the router logged nothing or sends its log elsewhere is not known from here.
         static func edgeHeard(_ when: String?) -> String { when.map { "Last log line \($0)" } ?? "No log lines received" }
         /// The way out with dpinger's numbers, once a router measures it (edge-router.js, MEASURED); a router built before that has none, and the flag alone is said.

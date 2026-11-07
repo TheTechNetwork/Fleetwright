@@ -263,6 +263,7 @@ struct MachinesView: View {
             initialReason: reporting?.reason ?? (member?.isRevoked == true
                 ? "Not connected since it was revoked."
                 : "Not connected. If you reinstalled it, use New pairing code."),
+            initialReasonCode: reporting?.reasonCode,
             enrolled: member,
             initialHolder: reporting?.holder == true,
             initialHolds: reporting?.holds,
@@ -297,8 +298,12 @@ struct MachinesView: View {
                     .foregroundStyle(host.state == "healthy" ? Design.Palette.ok : Design.Palette.attention)
             }
             // ONLY WHEN IT IS NEWS. "reporting normally" under "healthy" is the
-            // same fact twice.
-            if let reason = host.reason, !reason.isEmpty, (host.state ?? "") != "healthy" {
+            // same fact twice. THE WORD, NOT THE SENTENCE: the fleet's code
+            // for the reason becomes the row's one to three words
+            // (ReasonWords.host), and the sentence is the page's, under
+            // Details. A coordinator too old to send a code leaves the
+            // sentence here, as before (FleetHost.reasonRow).
+            if let reason = host.reasonRow, !reason.isEmpty, (host.state ?? "") != "healthy" {
                 Text(reason).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
             }
             healthLines(for: host)

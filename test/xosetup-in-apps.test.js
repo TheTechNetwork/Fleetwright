@@ -281,7 +281,10 @@ test('iOS: tapping how a setup ended opens how it ended, in the words it was sen
   // health line and the log was gone. The words are the notification's own:
   // the coordinator puts the host's text in the body (#onSetupProgress).
   assert.match(read('src/fleet/coordinator/core.js'), /const body = progress\.text \|\|/);
-  assert.match(IOS, /if kind == "xosetup", !content\.body\.isEmpty \{\s*open\(setup: SetupResult\(title: content\.title, text: content\.body,/);
+  // The machine's sentence is `text` where the extension worded the alert
+  // itself (SetupNoticeWords, test/reasons-in-apps.test.js), and the body
+  // where no extension ran: either way it is what the page opens with.
+  assert.match(IOS, /if kind == "xosetup", !content\.body\.isEmpty \{\s*open\(setup: SetupResult\(title: content\.title, text: info\["text"\] as\? String \?\? content\.body,/);
   assert.match(IOS, /\.sheet\(item: \$setupResult\) \{ result in\s*SetupResultView\(result: result/);
   // The log is set apart by the two phrases vm-image.js writes around it.
   const image = read('src/fleet/host/vm-image.js');

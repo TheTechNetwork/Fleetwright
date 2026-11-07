@@ -414,8 +414,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     }
                     return open(pool: address)
                 }
+                // THE MACHINE'S SENTENCE IS `text`, kept by the extension
+                // when it worded the alert itself (NotificationService,
+                // SetupNoticeWords); the body where no extension ran, which
+                // is the sentence as the coordinator sent it.
                 if kind == "xosetup", !content.body.isEmpty {
-                    open(setup: SetupResult(title: content.title, text: content.body,
+                    open(setup: SetupResult(title: content.title, text: info["text"] as? String ?? content.body,
                                             state: info["state"] as? String ?? "", host: host))
                 } else if event.hasPrefix("host.") || kind == "xosetup", !host.isEmpty { open(host: host) } else { open(name) }
             }

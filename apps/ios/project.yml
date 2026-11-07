@@ -427,6 +427,10 @@ targets:
     sources:
       - path: FleetwrightPush
       - path: Fleetwright/PushCrypto.swift
+      # The words of a setup's end notification, which the extension draws
+      # itself from the job's state rather than showing the machine's
+      # sentence (NotificationService). Foundation only, for this reason.
+      - path: Fleetwright/SetupNoticeWords.swift
     info:
       path: FleetwrightPush/Info.plist
       properties:

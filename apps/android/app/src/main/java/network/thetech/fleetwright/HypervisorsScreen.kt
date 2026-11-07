@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -269,9 +268,10 @@ private fun HypervisorPage(row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnO
                         },
                     )
                 }
-                // THE MACHINE'S OWN WORDS on why, selectable: they name a path
-                // and a status, which is what gets searched for.
-                box.problem?.let { SelectionContainer { Text(it, style = Design.Style.label, color = Design.Palette.inkDim.now) } }
+                // THE MACHINE'S OWN WORDS on why, under Details: the row's
+                // verdict is the word beside the name, and the sentence is
+                // the mechanism (docs/design-system.md, Words). Same as iOS.
+                box.problem?.takeIf { it.isNotBlank() }?.let { Details(it) }
             }
         }
         row.fleet?.let { f ->
