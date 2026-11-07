@@ -55,13 +55,13 @@ struct PhoneGitHub {
         guard Seal.isKey(p) else { throw Seal.Failure.notAKey }
         let said = try await fleet.claudeLoginKey()
         guard said.ok == true, let key = said.key, !key.isEmpty else {
-            throw FleetError.message(said.text ?? "The fleet did not say which key its minter has.")
+            throw FleetError.message(said.text ?? "Your fleet did not say which key it uses.")
         }
         guard key == p else {
-            throw FleetError.message("The fleet's minter has a different key from the one you were given, so nothing was saved. Ask whoever runs your fleet.")
+            throw FleetError.message("That key does not match your fleet's. Ask whoever runs your fleet for the current one.")
         }
         settings.minterPin = p
-        return "Saved. This phone seals only to that key."
+        return "Key saved."
     }
 
     /// The key everything this phone sends the minter is sealed to: the one
@@ -76,7 +76,7 @@ struct PhoneGitHub {
     func minterKey(_ fleet: Fleet) async throws -> String {
         if let key = await fleet.minterOwnKey() { return key }
         if !settings.minterPin.isEmpty { return settings.minterPin }
-        throw FleetError.message("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
+        throw FleetError.message("Paste the key from whoever runs your fleet.")
     }
 
     /// Sign in to GitHub on this phone. Opens GitHub's page; returns once it comes back.
@@ -85,7 +85,7 @@ struct PhoneGitHub {
         let pin = try await minterKey(fleet)
         let start = try await fleet.githubDeviceStart()
         guard start.ok == true, let clientId = start.clientId, let redirectUri = start.redirectUri else {
-            throw FleetError.message(start.text ?? "The fleet cannot start a GitHub sign-in.")
+            throw FleetError.message(start.text ?? "Your fleet cannot start a GitHub sign-in.")
         }
         let back = try await DeviceSignIn.run(
             authorize: "https://github.com/login/oauth/authorize",
@@ -172,7 +172,7 @@ struct PhoneGitHub {
             // same way on every screen that needs a token; dropped, those
             // screens offer "Sign in to GitHub" instead.
             if (answer["error"] as? [String: Any])?["code"] as? String == "sign_in_again" { signOut() }
-            throw FleetError.message(answer["text"] as? String ?? "The fleet refused the GitHub sign-in.")
+            throw FleetError.message(answer["text"] as? String ?? "Your fleet refused the GitHub sign-in.")
         }
         let token = try Seal.open(reply, aad: Seal.githubReplyAAD, sealed: box)
         guard let access = token["accessToken"] as? String else { throw Seal.Failure.notSealed }
@@ -197,7 +197,7 @@ struct PhoneGitHub {
               let workflow = plan["workflow"] as? String,
               let inputs = plan["inputs"] as? [String: Any]
         else {
-            return Fleet.Reply(ok: false, text: plan["text"] as? String ?? "The fleet would not start a machine.", sessions: nil)
+            return Fleet.Reply(ok: false, text: plan["text"] as? String ?? "Your fleet would not start a machine.", sessions: nil)
         }
         let token = try await accessToken(fleet)
         let about = try await github("GET", "https://api.github.com/repos/\(repo)", token: token, body: nil)
@@ -214,15 +214,15 @@ struct PhoneGitHub {
         case 204:
             return Fleet.Reply(
                 ok: true,
-                text: "Asked GitHub for a \(platform) machine from \(repo), as you. It takes a few minutes to boot and then "
-                    + "appears in the fleet as a host of yours.",
+                text: "Asked GitHub for a \(platform) machine. It takes a few minutes to boot, then appears under Machines.",
                 sessions: nil
             )
         case 422:
+            // GitHub's 422 on a dispatch is a workflow that does not take the
+            // inputs sent: the repository is behind the template.
             return Fleet.Reply(
                 ok: false,
-                text: "GitHub refused the dispatch (422). \(repo) has \(workflow), but it does not take the inputs this fleet "
-                    + "sends. Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.",
+                text: "\(repo) is out of date. Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.",
                 sessions: nil
             )
         default:
@@ -240,7 +240,7 @@ struct PhoneGitHub {
         var payload: [String: Any] = ["v": 1, "github": github, "claude": NSNull(), "at": Int(Date().timeIntervalSince1970 * 1000)]
         if let claude = claudeToken?.trimmingCharacters(in: .whitespacesAndNewlines), !claude.isEmpty { payload["claude"] = claude }
         let answer = try await fleet.depositClaudeLogin(sealed: try Seal.seal(to: pin, aad: Seal.depositAAD, payload: payload))
-        guard answer.ok == true else { throw FleetError.message(answer.text ?? "The minter refused it.") }
+        guard answer.ok == true else { throw FleetError.message(answer.text ?? "Your fleet did not save it.") }
         return answer.text ?? ""
     }
 
@@ -252,7 +252,7 @@ struct PhoneGitHub {
         let github = try await accessToken(fleet)
         let payload: [String: Any] = ["v": 1, "github": github, "signIn": signIn, "at": Int(Date().timeIntervalSince1970 * 1000)]
         let answer = try await fleet.depositClaudeLogin(sealed: try Seal.seal(to: pin, aad: Seal.depositAAD, payload: payload))
-        guard answer.ok == true else { throw FleetError.message(answer.text ?? "The minter refused it.") }
+        guard answer.ok == true else { throw FleetError.message(answer.text ?? "Your fleet did not save it.") }
         return answer.text ?? ""
     }
 
@@ -273,7 +273,7 @@ struct PhoneGitHub {
         }
         guard let token = inside["token"] as? String, !token.isEmpty else { throw Seal.Failure.notSealed }
         let kept = try await depositClaudeLogin(fleet, claudeToken: token)
-        return "\(kept) \(host) is older and made a setup-token, which runs sessions but cannot open Remote Control. Update it and make your login again for Remote Control."
+        return "\(kept) \(host) is out of date, so this login cannot open Remote Control. Update it and sign in again."
     }
 
     private func github(_ method: String, _ url: String, token: String, body: [String: Any]?) async throws -> (status: Int, data: Data) {

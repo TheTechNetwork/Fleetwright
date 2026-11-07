@@ -43,29 +43,31 @@ struct PhoneGitHubSignIn: View {
                 .foregroundStyle(Design.Palette.ink)
             Button("Sign out of GitHub", role: .destructive) {
                 phone.signOut()
-                result = "Signed out of GitHub on this phone. Machines you start now go through a permanent box."
+                result = "Signed out of GitHub."
                 failed = false
             }
             .disabled(busy)
         } else {
-            Text("Sign in to GitHub here and this phone starts your machines itself, with no permanent box. "
-                 + "What this phone sends is sealed to your fleet's minter, so nothing in between can read it.")
+            // What the sign-in is for, said where it is offered and nowhere
+            // else: You's header is just the name. How what this phone sends
+            // is protected is PhoneGitHub's to document, not this line's.
+            Text("Sign in to GitHub to start temporary machines from this phone and reach your saved credentials.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
                 .onAppear { pinDraft = settings.minterPin }
                 .task { minterFound = await Fleet(settings: settings).minterOwnKey() != nil }
 
             if minterFound == nil && settings.minterPin.isEmpty {
-                Text("Looking for your fleet's minter…")
+                Text("Checking…")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
 
             if minterFound == false {
-                Text("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
+                Text("Paste the key from whoever runs your fleet.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
-                TextField("Minter key from whoever runs your fleet", text: $pinDraft)
+                TextField("Key from whoever runs your fleet", text: $pinDraft)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .fleetType(.labelMono)
@@ -164,67 +166,81 @@ struct YourVault: View {
         }.sorted()
     }
 
-    private var heldBy: String {
-        if holders.isEmpty { return "No box holds your credentials yet. Approve one from its page under Machines." }
-        return "Held by \(holders.joined(separator: ", ")). Approve or remove a box from its page under Machines."
-    }
-
     /// Approved, and not in this fleet any more: still removable, because an
     /// approval outlives the box being taken out of the fleet.
     private var strays: [PhoneVault.Grant] {
         (contents?.grants ?? []).filter { inFleet[$0.fingerprint] == nil }
     }
 
+    /// The one word beside a saved credential. A SETUP-TOKEN IS NOT A
+    /// SIGN-IN, and a plain "Claude" let a person think Remote Control would
+    /// work; said only when the minter said which (C-5): nil is a minter from
+    /// before it did, and reads as saved and nothing more.
+    private func status(_ item: PhoneVault.Item) -> String {
+        item.name == "claude" && item.kind == "token" ? "No Remote Control" : "Saved"
+    }
+
     var body: some View {
-        Text("Keep each credential here once. A box you approve gets them when a session needs them, "
-             + "and loses them when you remove it.")
+        Text("Saved once, for your sessions on the machines you approve.")
             .fleetType(.label)
             .foregroundStyle(Design.Palette.inkDim)
             .task { await reload() }
+            .confirmationDialog("Forget \(PhoneVault.label(forgetting ?? ""))?",
+                                isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
+                                titleVisibility: .visible) {
+                Button("Forget", role: .destructive) {
+                    if let name = forgetting {
+                        act { try await vault.forget(Fleet(settings: settings), name: name) }
+                    }
+                }
+            } message: {
+                Text(PhoneVault.forgetting(forgetting ?? ""))
+            }
 
         if let kept = contents {
-            Text(kept.items.isEmpty ? "Nothing kept yet." : "Kept: " + kept.items.map { PhoneVault.label($0.name) }.joined(separator: ", ") + ".")
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.ink)
-                .confirmationDialog("Forget \(PhoneVault.label(forgetting ?? ""))?",
-                                    isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
-                                    titleVisibility: .visible) {
-                    Button("Forget", role: .destructive) {
-                        if let name = forgetting {
-                            act { try await vault.forget(Fleet(settings: settings), name: name) }
-                        }
-                    }
-                } message: {
-                    Text(PhoneVault.forgetting(forgetting ?? ""))
-                }
-            // A SETUP-TOKEN IS NOT A SIGN-IN, and "Kept: Claude" let a person
-            // think Remote Control would work. Said only when the minter said
-            // which (C-5): nil is a minter from before it did.
-            if kept.items.first(where: { $0.name == "claude" })?.kind == "token" {
-                Text("Your Claude login is a setup-token: it runs sessions but cannot open Remote Control. "
-                     + "Make it on a machine below to have Remote Control.")
+            if kept.items.isEmpty {
+                Text("Nothing saved yet.")
                     .fleetType(.label)
-                    .foregroundStyle(Design.Palette.inkDim)
+                    .foregroundStyle(Design.Palette.ink)
             }
-            // TEST, BECAUSE KEPT IS NOT WORKS. A Claude token Claude had
-            // revoked sat here as "Kept" until a runner stopped at its first
+            // ONE ROW PER SAVED CREDENTIAL: its name, one status word, and
+            // its actions on the row. It was a sentence listing the names and
+            // then a column of Test and Forget buttons under it, naming each
+            // again. Borderless, as on Credentials, so each button takes its
+            // own tap inside the row; the row itself is the 44pt target.
+            //
+            // TEST, BECAUSE SAVED IS NOT WORKS. A Claude token Claude had
+            // revoked sat here as saved until a runner stopped at its first
             // message. Offered only where there is a service to ask (C-2).
             //
             // FORGET ASKS FIRST. It was one tap, beside the button people come
             // here to press, and it took the Claude login out from under every
             // runner without a word.
             ForEach(kept.items, id: \.name) { item in
-                if PhoneVault.isTestable(item.name) {
-                    Button("Test \(PhoneVault.label(item.name))") {
-                        act { try await vault.test(Fleet(settings: settings), name: item.name) }
+                HStack(spacing: Design.Space.insideTight) {
+                    Text(PhoneVault.label(item.name))
+                        .fleetType(.body)
+                        .foregroundStyle(Design.Palette.ink)
+                    Spacer()
+                    Text(status(item))
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                    if PhoneVault.isTestable(item.name) {
+                        Button("Test") {
+                            act { try await vault.test(Fleet(settings: settings), name: item.name) }
+                        }
+                        .accessibilityLabel("Test \(PhoneVault.label(item.name))")
+                        .disabled(busy)
                     }
-                    .disabled(busy)
+                    Button("Forget", role: .destructive) { forgetting = item.name }
+                        .accessibilityLabel("Forget \(PhoneVault.label(item.name))")
+                        .disabled(busy)
                 }
-                Button("Forget \(PhoneVault.label(item.name))", role: .destructive) { forgetting = item.name }
-                    .disabled(busy)
+                .frame(minHeight: 44)
+                .buttonStyle(.borderless)
             }
         } else {
-            Text("Loading your vault…")
+            Text("Loading your credentials…")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
         }
@@ -236,11 +252,11 @@ struct YourVault: View {
         // went: it was a second button doing what Forget Claude above does.
         ClaudeSetup(settings: settings) { Task { await reload() } }
 
-        Button("Keep GitHub for my boxes") {
+        Button("Add GitHub") {
             act { try await vault.connect(Fleet(settings: settings), provider: "github") }
         }
         .disabled(busy)
-        Button("Keep Cloudflare for my boxes") {
+        Button("Add Cloudflare") {
             act { try await vault.connect(Fleet(settings: settings), provider: "cloudflare") }
         }
         .disabled(busy)
@@ -251,7 +267,7 @@ struct YourVault: View {
         SecureField("Secret value", text: $secretValue)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-        Button("Keep secret") {
+        Button("Save secret") {
             act {
                 let text = try await vault.keepSecret(Fleet(settings: settings), name: secretName, value: secretValue)
                 secretName = ""
@@ -262,13 +278,17 @@ struct YourVault: View {
         .disabled(busy || secretName.isBlank || secretValue.isEmpty)
 
         if contents != nil {
-            Text("Boxes")
-                .fleetType(.bodyStrong)
-            Text(heldBy)
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.inkDim)
+            // WHICH MACHINES, as one row with their names, and the how-to
+            // once under it. Approving is on each machine's page, beside its
+            // key, because the comparison is what makes it safe.
+            LabeledContent("Machines") {
+                Text(holders.isEmpty ? "none" : holders.joined(separator: ", "))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+                    .multilineTextAlignment(.trailing)
+            }
             ForEach(strays, id: \.key) { grant in
-                Text("\(grant.label.isEmpty ? "A box" : grant.label) · \(grant.fingerprint) · not in this fleet")
+                Text("\(grant.label.isEmpty ? "A machine" : grant.label) · \(grant.fingerprint) · not in this fleet")
                     .fleetType(.labelMono)
                     .foregroundStyle(Design.Palette.inkDim)
                 Button("Remove", role: .destructive) {
@@ -276,6 +296,9 @@ struct YourVault: View {
                 }
                 .disabled(busy)
             }
+            Text("Approve a machine from its page.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
         }
 
         if !result.isBlank {
@@ -347,7 +370,7 @@ struct VaultApproval: View {
             Group {
                 if let fingerprint {
                     if !loaded {
-                        Text("Loading your vault…")
+                        Text("Loading your credentials…")
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.inkDim)
                     } else if let grant {
@@ -365,7 +388,7 @@ struct VaultApproval: View {
                         }
                         .disabled(busy)
                     } else {
-                        Text("Approve a box only if fleetwright-sidecar identity on it prints the same fingerprint.")
+                        Text("Check this matches fleetwright-sidecar identity on the machine before approving.")
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.inkDim)
                         Text(fingerprint)

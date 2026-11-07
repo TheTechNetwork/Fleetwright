@@ -23,9 +23,9 @@ const ANDROID = androidSources();
 
 // The sentences a person reads, the same on both phones.
 const SAID = [
-  'Your Claude login is kept under your GitHub account, so sign in to GitHub on this phone first.',
+  'Sign in to GitHub first.',
   'Token from claude setup-token',
-  'Keep my Claude login',
+  'Save my Claude login',
   'Finish setting up',
   'Set up Claude',
   'Not now',
