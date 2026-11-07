@@ -16,9 +16,17 @@
 // health, where `fleetwright-sidecar` on the box prints it, until somebody
 // deletes the kept file there (`minter-signing.json`) to accept the new one.
 //
-// PHASE 1 ENFORCES NOTHING. Every intent is checked and counted, and the
-// counts go in this box's health, so the fleet can see what enforcement would
-// refuse before anything is refused.
+// CHECKED HERE, REFUSED BY THE SIDECAR. Every intent is checked and counted,
+// and the counts go in this box's health. This file refuses nothing itself:
+// the sidecar does, from the verdict and the box's own switch
+// (FLEETWRIGHT_REQUIRE_SIGNED, Sidecar#enforces). `off` refuses nothing for
+// it; `signers`, what a deployed box reads unless told otherwise, refuses a
+// verb that needs a signature when the actor is nobody or is someone this box
+// has been shown a key for; `all` refuses every such verb. The constructor's
+// own default is `off`, so a test that never sets the switch stays unsigned.
+// A machine that has pinned an admin also refuses the box-wide verbs unless a
+// pinned admin signed, and that check runs whatever the switch says
+// (pinned-admins.js, Sidecar#boxWide).
 
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import path from 'node:path';

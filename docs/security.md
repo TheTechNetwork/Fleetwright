@@ -870,10 +870,12 @@ update §4.1 in the same change.
 *Falsify:* diff the `VERBS` table (`intents.js`) against §4.1's capability list;
 any verb here that is not accounted for above is an unreconciled widening.
 
-**SEC-COORD-2** (OPT-IN, PER BOX) — Device-signed intents, verified host-side
-against a key the coordinator did not vouch for, would reduce this bound to
-"deny service." Until built, no document may claim the coordinator cannot forge
-an instruction. Designed in [`signed-intents.md`](signed-intents.md): the
+**SEC-COORD-2** (PER BOX; ON BY DEFAULT, `signers`) — Device-signed intents,
+verified host-side against a key the coordinator did not vouch for, reduce
+this bound to "deny service" for everyone who signs. For a person who has
+listed no key, and on a box whose operator set the switch to `off`, no
+document may claim the coordinator cannot forge an instruction. Designed in
+[`signed-intents.md`](signed-intents.md): the
 minter, which already decides who a person is from a GitHub sign-in the
 coordinator cannot make, becomes the directory of phone keys, and a box pins
 the minter's own key from an address the coordinator never serves. Phase 1 is
@@ -2013,11 +2015,19 @@ key, and a device table in the relay is what its own retention rules forbid.
 
 Stated plainly, because omission is where a security document lies.
 
-- **A compromised coordinator, today.** It can forge instructions and drive the
-  credential verbs (§4.1). Signed intents would fix it; phones sign and boxes
-  check, and nothing is refused yet ([`signed-intents.md`](signed-intents.md)). If this
-  matters to you, do not deploy the coordinator anywhere you would not deploy the
-  thing it controls.
+- **A compromised coordinator, for a person who does not sign.** It can forge
+  instructions and drive the credential verbs (§4.1) as a person who has listed
+  no key, and as anyone on a box whose operator set `FLEETWRIGHT_REQUIRE_SIGNED`
+  to `off`. On the default, `signers`, a box refuses an unsigned request that
+  names nobody and one that names a person it has been shown a key for
+  ([`signed-intents.md`](signed-intents.md), SEC-COORD-2); `all` refuses every
+  unsigned one. Once a machine has pinned an admin, reboot, upgrade, update,
+  changing its release channel or image, and restoring somebody else's session
+  are refused unless a pinned admin signed, whatever the switch says, and the
+  pin is the machine's own record rather than a name the coordinator supplied
+  (`pinned-admins.js`). If this matters to you, do not deploy the coordinator
+  anywhere you would not deploy the thing it controls, and do not leave a
+  person who can reach a credential without a listed key.
 - **Misuse of legitimately-held access by a session** (§7). Bounded in theft,
   not in use.
 - **Mutually distrusting users on one host** (§4.7). Container filesystems, not
@@ -2106,7 +2116,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 |---|---|
 | SEC-ACTOR-1 | Every component's compromise cost is bounded and written |
 | SEC-COORD-1 | Verb set and the blast-radius sentence stay in sync |
-| SEC-COORD-2 | (Opt-in per box) signed intents reduce coordinator compromise to DoS |
+| SEC-COORD-2 | Signed intents, `signers` by default per box, reduce coordinator compromise to DoS for everyone who signs |
 | SEC-HOST-1 | A host holds credentials for itself and its members only |
 | SEC-HOST-2 | Multi-user hosts token-gate the loopback API |
 | SEC-SESSION-1 | Session identity is the bind-mounted socket |
@@ -2129,7 +2139,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 | SEC-PROTO-1 | The command line is built from literals, never received |
 | SEC-PROTO-2 | The verb allowlist is the defence, re-validated host-side |
 | SEC-PROTO-3 | The five conditions that make a verb safe to add |
-| SEC-PROTO-4 | `promptId` detects shape change, not question change |
+| SEC-PROTO-4 | `promptId` folds the dialog body in for permission and trust, not resume (G3, fixed) |
 | SEC-PROTO-5 | The loopback API and the untokened hook endpoint |
 | SEC-INJECT-1 | No defence against a session misusing what it holds |
 | SEC-INJECT-2 | (Aspirational) default-deny egress bounds misuse |
