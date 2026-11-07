@@ -112,7 +112,7 @@ test('a held command expires rather than surprising somebody a day later, and is
   assert.match(main, /Text\("Not sent: \$\{entry\.summary\}"/);
   assert.match(main, /TextButton\(onClick = \{ outbox\.drop\(entry\.id\)/);
   // Same sentence on both phones.
-  const sentence = 'Held for more than 12 hours while the fleet could not be reached, so it was not sent. Ask again if you still want it.';
+  const sentence = 'Held for more than 12 hours with no connection, so it was not sent. Ask again if you still want it.';
   assert.ok(view.includes(sentence) && main.includes(sentence));
 });
 

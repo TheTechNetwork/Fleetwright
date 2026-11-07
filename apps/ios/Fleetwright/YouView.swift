@@ -239,7 +239,7 @@ struct YouView: View {
             Button("Sign out", role: .destructive) { settings.signOut() }
             // SAID BEFORE THE TAP, because it is the one thing signing out
             // takes that the next sign-in does not give back by itself.
-            Text("Signing out also removes the hypervisor tokens and saved sign-ins this phone holds. A pool whose token you kept in the fleet is still there; one kept only on this phone will need setting up again.")
+            Text("Signing out also removes the hypervisor tokens and saved sign-ins this phone holds. A pool whose token you saved to your fleet is still there; one kept only on this phone will need setting up again.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
         } header: {

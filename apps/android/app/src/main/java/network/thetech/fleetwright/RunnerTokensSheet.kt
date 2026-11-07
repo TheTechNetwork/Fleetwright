@@ -63,7 +63,7 @@ fun RunnerTokensSheet(settings: Settings, onDismiss: () -> Unit) {
         } catch (e: Exception) {
             // The refusal reaches the screen rather than an empty list: an
             // empty list is a lie about a request that did not happen.
-            result = e.message ?: "could not reach the coordinator"
+            result = e.message ?: "could not reach your fleet"
         }
         busy = false
         loaded = true
@@ -149,7 +149,7 @@ fun RunnerTokensSheet(settings: Settings, onDismiss: () -> Unit) {
                 Text("Tokens", style = MaterialTheme.typography.titleSmall)
                 if (tokens.isEmpty() && loaded) {
                     Text(
-                        "No runner tokens. A run the fleet dispatches itself carries a single-use ticket instead, "
+                        "No runner tokens. A run not started by hand carries a single-use ticket instead, "
                             + "and needs none of these.",
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -165,7 +165,7 @@ fun RunnerTokensSheet(settings: Settings, onDismiss: () -> Unit) {
                 // enrolment, and a runner already in the fleet stays until its
                 // job ends.
                 Text(
-                    "Revoking stops the next run from joining. A runner already in the fleet keeps working "
+                    "Revoking stops the next run from joining. A runner already joined keeps working "
                         + "until its job ends.",
                     style = MaterialTheme.typography.bodySmall,
                 )
