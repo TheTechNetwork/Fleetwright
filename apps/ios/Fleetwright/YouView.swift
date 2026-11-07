@@ -154,8 +154,8 @@ struct YouView: View {
     /// Android.
     private func pushDoubtLine(_ doubt: PushKeyRule.Doubt) -> String {
         switch doubt {
-        case .key: return "Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts."
-        case .seal: return "The last notification sealed for this phone arrived without its words. This goes once one arrives with them."
+        case .key: return "Notifications may arrive without their text. Fleetwright tries again each time it starts."
+        case .seal: return "The last notification arrived without its text."
         }
     }
 
@@ -177,7 +177,7 @@ struct YouView: View {
             // and says what the button is waiting for. Blank, not empty, as
             // on Android: a field holding a space is no address either.
             if fleetAddressBlank {
-                Text("Enter your fleet's address first — signing in means signing in to a fleet.")
+                Text("Enter your fleet's address to sign in.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             } else {
@@ -210,8 +210,7 @@ struct YouView: View {
             // Said before somebody hits the button and gets a refusal they
             // cannot interpret: a fleet is a list of allowed addresses, and
             // Hide My Email can never be on it.
-            Text("Choose \"Share My Email\" — a fleet allows people by address, and a hidden one matches nothing. "
-                 + "This device gets a credential of its own, revocable on its own.")
+            Text("Choose Share My Email. A fleet allows people by email address, so a hidden one is refused.")
         }
     }
 
@@ -243,11 +242,12 @@ struct YouView: View {
         }
         // THE OTHER ACCOUNT THIS PHONE HOLDS. It was under Add a machine as
         // "Runners from this phone"; it starts your temporary machines and it
-        // is how your vault knows you.
+        // is how your saved credentials know you. The view says what it is
+        // for when it offers the sign-in, so the header is only the name.
         Section {
             PhoneGitHubSignIn(settings: settings)
         } header: {
-            sectionHead("GitHub on this phone")
+            sectionHead("GitHub")
         }
     }
 
@@ -269,7 +269,7 @@ struct YouView: View {
             if settings.admin == true && !inDemo {
                 Toggle("View as a member", isOn: Bindable(settings).viewAsMember)
                 if settings.viewAsMember {
-                    Text("Every screen shows what a member of this fleet sees: their own sessions, no People, no revoking. Your credential is still an admin's.")
+                    Text("Showing the app as a member sees it. You are still an admin.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
