@@ -50,7 +50,7 @@ test('iOS: a kept acceptance stands for the certificate it was given for and no 
   assert.match(accepts, /return probe\.plainHTTP && accepted\.plain/);
   // A different certificate is asked about in full: the question card and
   // its toggle come back whenever the kept word does not match.
-  assert.match(SCREEN, /if !chosen\.certificateTrusted, rememberedAccepts\(chosen\) \{\s*rememberedLine\("You accepted this certificate before/);
+  assert.match(SCREEN, /if !chosen\.certificateTrusted, rememberedAccepts\(chosen\) \{\s*rememberedLine\("Trusted before\."\)/);
   assert.match(SCREEN, /\} else if !chosen\.certificateTrusted \{\s*Toggle\(isOn: \$acknowledged\)/);
 });
 
@@ -93,36 +93,39 @@ test('iOS: the machine that got through last time is tried first, and every mach
   // Remembered only once it got through.
   assert.match(bare(fn(SCREEN, 'notePath')), /if past \{\s*if !hostId\.isEmpty \{ XOSaved\.rememberMachine\(hostId, for: trimmedAddress\) \}/);
   // And it claims nothing it did not ask this time.
-  assert.ok(SCREEN.includes('Got through last time, so it is tried first'));
-  assert.ok(SCREEN.includes('Its certificate checked out when this pool was set up, and \\(probe.hostId) checks it again before signing in.'));
+  assert.ok(SCREEN.includes('Worked last time'));
+  assert.ok(SCREEN.includes('Certificate trusted at setup. \\(probe.hostId) checks it again before signing in.'));
 });
 
-test('iOS: the sign-in footer says who keeps it, for the switch as it stands', () => {
+test('iOS: the sign-in footer says who keeps it, for the switch as it stands, and the rest is behind one disclosure', () => {
+  assert.ok(SCREEN.includes('if keep, let biometry { return "Kept on this phone behind \\(biometry) once \\(chosen.hostId) has signed in." }'));
+  assert.ok(SCREEN.includes('return "Used once by \\(chosen.hostId) and not kept."'));
   assert.ok(SCREEN.includes('This phone keeps it\\(word) in its '));
-  assert.ok(SCREEN.includes('Keychain behind \\(biometry), once \\(chosen.hostId) has signed in with it; the fleet never keeps it.'));
-  assert.ok(SCREEN.includes('and neither this phone nor the fleet keeps it.'));
+  assert.ok(SCREEN.includes('Keychain behind \\(biometry), once \\(chosen.hostId) has signed in with it. Nothing else keeps it.'));
+  assert.ok(SCREEN.includes('Once \\(chosen.hostId) has used it, nothing keeps it.'));
+  assert.match(SCREEN, /Text\("How your password is protected"\)/);
 });
 
-test('iOS: the way out names the router it is for, and offers to build it only where it can be built', () => {
-  assert.ok(SCREEN.includes('The network the edge router, an OPNsense VM, will put its WAN on'));
+test('iOS: internet access says what it is, and offers to build the router only where it can be built', () => {
+  assert.ok(SCREEN.includes('The uplink: the network VMs reach the internet through'));
   // Offered by a machine that said it can, and only with a way out (C-2).
   assert.match(SCREEN, /canEdge: begun\.can\.contains\("edge"\)/);
   assert.match(SCREEN, /if canEdge, choice\.egress != nil \{\s*Toggle\(isOn: \$choice\.edge\)/);
   assert.match(SCREEN, /\.onChange\(of: choice\.egress\) \{ _, way in\s*if way == nil \{ choice\.edge = false; choice\.image = false; choice\.images = \[\]; choice\.holder = false \}/);
   // Built where there is none, kept where there is, and the cost said first.
   assert.ok(SCREEN.includes('there == nil ? "Build the edge router on it" : "Keep the edge router on it"'));
-  assert.ok(SCREEN.includes('downloads OPNsense once, about 470 MB, and builds it while you wait.'));
-  assert.ok(SCREEN.includes('is too old to build the router; update it to have it built from here.'));
+  assert.ok(SCREEN.includes('2 vCPU · 2 GiB · 3 GiB disk · 470 MB download'));
+  assert.ok(SCREEN.includes('needs an update to build the router.'));
   // Any of the pool's networks as the way out, from a machine that takes it,
   // and only the fleet's from one that does not (checkPolicy).
   assert.match(SCREEN, /anyWayOut: begun\.can\.contains\("egress-any"\)/);
   // Less the pool's group networks, which are no way out (vm-groups-in-apps).
   assert.match(SCREEN, /ForEach\(inv\.choosable\.filter \{ anyWayOut \|\| choice\.networks\.contains\(\$0\.id\) \}\)/);
-  assert.ok(SCREEN.includes('Any of the pool’s networks can be it. One the fleet’s VMs may not use is the better, so no lab can skip the router.'));
+  assert.ok(SCREEN.includes('Pick one the VMs are not on themselves.'));
   // What goes to the machine, which checkPolicy reads, and its one rule.
   const POLICY = read('apps/ios/Fleetwright/XOPolicy.swift');
   assert.match(POLICY, /"edge": edge,/);
-  assert.ok(POLICY.includes('The edge router needs a way out: choose the network its WAN goes on.'));
+  assert.ok(POLICY.includes('The edge router needs an uplink: choose the network its WAN goes on.'));
 });
 
 // ─── Android ────────────────────────────────────────────────────────────────
@@ -154,7 +157,7 @@ test('Android: what is kept opens after a strong fingerprint or face, under a ke
 test('Android: a kept acceptance stands for the certificate it was given for and no other', () => {
   assert.match(SAVED_KT, /if \(cert != null\) return acceptedPin == cert\s*return XoSetup\.plain\(probe\) && acceptedPlain/);
   // The box comes back whenever the kept word does not match.
-  assert.match(SHEET, /if \(kept\) \{\s*Text\(\s*"You accepted this certificate before, and this phone kept that behind your fingerprint or face\."/);
+  assert.match(SHEET, /if \(kept\) \{\s*Text\(\s*"Trusted before\."/);
   assert.match(SHEET, /\} else \{\s*Row\([\s\S]{0,300}?toggleable\(value = acknowledged/);
   assert.match(kfn('begin'), /val trust = if \(plain\) null else XoSetup\.trustFor\(p\.certificate, acknowledged \|\| kept\)/);
 });
@@ -201,17 +204,17 @@ test('both phones begin by themselves once Face ID or a fingerprint opened a kep
 
 test('both phones say the same things about what is remembered', () => {
   for (const words of [
-    'Got through last time, so it is tried first',
+    'Worked last time',
     ' got through last time and did not this time.',
     'The kept sign-in did not work, so this phone no longer keeps it.',
     ' Your other machines were asked instead.',
     'checks it again before signing in.',
-    'The network the edge router, an OPNsense VM, will put its WAN on',
-    'downloads OPNsense once, about 470 MB, and builds it while you wait.',
-    'It is there and running. Apply keeps its WAN on this network.',
-    'It is there and stopped. Apply keeps its WAN on this network and starts it.',
-    'is too old to build the router; update it to have it built from here.',
-    'Any of the pool’s networks can be it. One the fleet’s VMs may not use is the better, so no lab can skip the router.',
+    'The uplink: the network VMs reach the internet through',
+    '2 vCPU · 2 GiB · 3 GiB disk · 470 MB download',
+    '"Running"',
+    'Stopped · Apply starts it',
+    'needs an update to build the router.',
+    'Pick one the VMs are not on themselves.',
   ]) {
     assert.ok(SCREEN.includes(words), `iOS: ${words}`);
     assert.ok(SHEET.includes(words) || read(`${KT}PolicyForm.kt`).includes(words), `Android: ${words}`);

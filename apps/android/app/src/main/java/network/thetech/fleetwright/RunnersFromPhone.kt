@@ -84,27 +84,27 @@ internal fun PhoneGitHubSignIn(settings: Settings, onChanged: () -> Unit = {}) {
                     phone.signOut()
                     signedIn = false
                     signedInAs = null
-                    result = "Signed out of GitHub on this phone. Machines you start now go through a permanent box."
+                    result = "Signed out of GitHub."
                     failed = false
                     onChanged()
                 },
             ) { Text("Sign out of GitHub") }
         } else {
-            Hint(
-                "Sign in to GitHub here and this phone starts your machines itself, with no permanent box. " +
-                    "What this phone sends is sealed to your fleet's minter, so nothing in between can read it.",
-            )
+            // What the sign-in is for, said where it is offered and nowhere
+            // else: You's header is just the name. How what this phone sends
+            // is protected is PhoneGitHub's to document, not this line's.
+            Hint("Sign in to GitHub to start temporary machines from this phone and reach your saved credentials.")
 
             if (minterFound == null && pin.isBlank()) {
-                Hint("Looking for your fleet's minter…")
+                Hint("Checking…")
             }
 
             if (minterFound == false) {
-                Hint("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
+                Hint("Paste the key from whoever runs your fleet.")
                 OutlinedTextField(
                     value = pinDraft,
                     onValueChange = { pinDraft = it.trim() },
-                    label = { Text("Minter key from whoever runs your fleet") },
+                    label = { Text("Key from whoever runs your fleet") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.None,

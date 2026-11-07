@@ -85,17 +85,14 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         val signedIn = remember(generation) { phone.signedIn }
         if (!signedIn) {
-            Hint("Your Claude login is kept under your GitHub account, so sign in to GitHub on this phone first.")
+            Hint("Sign in to GitHub first.")
             PhoneGitHubSignIn(settings, onChanged = { generation++ })
         } else {
             LaunchedEffect(Unit) {
                 machines = Fleet(settings).fleetHosts().filter { it.state != "offline" }.map { it.hostId }.sorted()
                 if (machine.isBlank()) machine = machines.firstOrNull().orEmpty()
             }
-            Hint(
-                "Sessions run on your own Claude subscription. Keep your login once, and every runner you start, " +
-                    "and every box you approve, uses it.",
-            )
+            Hint("Sessions run on your Claude subscription. Add it once.")
             val opened = page
             if (opened != null) {
                 // A MACHINE IS MAKING IT. The page opened by itself; the button
@@ -138,7 +135,7 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                             }
                         },
                         modifier = Modifier.heightIn(min = 48.dp),
-                    ) { Text(if (busy) "Keeping…" else "3. Keep my Claude login") }
+                    ) { Text(if (busy) "Saving…" else "3. Save my Claude login") }
                     TextButton(onClick = { page = null; code = "" }, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Cancel")
                     }
@@ -178,16 +175,17 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                         },
                         modifier = Modifier.heightIn(min = 48.dp),
                     ) { Text(if (busy) "Starting…" else "Make it on $machine") }
-                    Hint(
-                        "$machine signs you in to Claude, the kind of login Remote Control needs. It comes back " +
-                            "sealed to this phone, and the machine keeps no copy.",
-                    )
+                    Hint("Works with Remote Control. $machine keeps no copy.")
                 }
+                // THE LIMIT IS SAID ONCE. With a machine offered, the line
+                // above says which kind works with Remote Control, so this one
+                // does not say it again; with none, this is the only path and
+                // the only place to say it.
                 Hint(
                     if (machines.isEmpty()) {
-                        "On a computer, run claude setup-token, sign in, and paste the line it prints here. It runs sessions but cannot open Remote Control."
+                        "Paste a token from claude setup-token. It cannot open Remote Control."
                     } else {
-                        "Or, on a computer, run claude setup-token, sign in, and paste the line it prints here. It runs sessions but cannot open Remote Control."
+                        "Or paste a token from claude setup-token."
                     },
                 )
                 OutlinedTextField(
@@ -210,7 +208,7 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                             busy = true
                             val r = phone.depositClaudeLogin(Fleet(settings), draft)
                             failed = r.isFailure
-                            result = r.getOrElse { it.message ?: "The minter did not keep it." }
+                            result = r.getOrElse { it.message ?: "Your fleet did not save it." }
                             if (r.isSuccess) {
                                 draft = ""
                                 onKept()
@@ -219,7 +217,7 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                         }
                     },
                     modifier = Modifier.heightIn(min = 48.dp),
-                ) { Text(if (busy) "Keeping…" else "Keep my Claude login") }
+                ) { Text(if (busy) "Saving…" else "Save my Claude login") }
             }
         }
         if (result.isNotBlank()) {
@@ -240,8 +238,7 @@ internal fun ClaudeSetupCard(onSetUp: () -> Unit, onPutOff: () -> Unit) {
     ) {
         Text("Finish setting up", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
         Text(
-            "Sessions run on your own Claude account. Keep your Claude login once, and every runner " +
-                "you start can use it.",
+            "Add your Claude account so sessions can start.",
             style = Design.Style.bodySmall,
             color = Design.Palette.inkDim.now,
         )

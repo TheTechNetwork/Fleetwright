@@ -26,17 +26,14 @@ const I_PAGE = IOS('VMMachineView.swift');
 const SHARED = [
   'Machines that work together',
   'Groups',
-  'Every machine the fleet starts here reaches the internet and nothing else: not your network, and not the other machines. ',
-  'A group is for machines that need to talk to each other, like the nodes of a cluster you are testing. ',
-  'Machines in the same group share a private network and keep their way to the internet. ',
-  'You choose the group when you start a session, under Where. A group stays once it is made, because a machine may be on it.',
+  'VMs in the same group can reach each other. Pick a group when you start a session.',
   'None, so every machine is on its own',
   ' made when you apply',
   ' there now, ',
-  'Group networks are made in the way out’s pool: choose the way out. Nothing was changed.',
+  'Group networks are made in the uplink’s pool: choose the uplink. Nothing was changed.',
   'Work with others on',
   'No group',
-  'an address not reported',
+  'address unknown',
 ];
 
 test('iOS: the policy holds the host’s numbers and sends groups only to a machine that makes them', () => {

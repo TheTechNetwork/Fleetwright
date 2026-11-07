@@ -80,14 +80,14 @@ enum ProxmoxThroughHandoff {
               let record = ProxmoxThroughWords.open(handoff, job: job, address: entry.address, key: Seal.OneUseKey(privateKey: privateKey))
         else {
             forget(job: job)
-            return .failed("The node is set up, and what the machine handed back is not a line this phone can open. Run the setup again; it finds what it made.", again: false)
+            return .failed("The node is set up, but what came back couldn’t be read. Run the setup again; it finds what it made.", again: false)
         }
         do {
             _ = try await PhoneVault(settings: settings).keepHypervisor(Fleet(settings: settings), address: record.address, record: record.json)
             forget(job: job)
             return .kept(record.address)
         } catch {
-            return .failed("The node is set up, and its line was not kept yet: \(error.localizedDescription) This phone tries again when Fleetwright is next open.", again: true)
+            return .failed("The node is set up, but its access isn’t saved yet: \(error.localizedDescription) This phone tries again when it is next open.", again: true)
         }
     }
 

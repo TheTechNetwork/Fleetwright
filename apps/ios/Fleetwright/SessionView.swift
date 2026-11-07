@@ -45,7 +45,7 @@ struct SessionView: View {
     /// The pane, as the host last drew it. Nil until the first peek answers;
     /// after that always a string, and a blank one is said in words.
     @State private var pane: String?
-    /// When the pane above was read, so "as of 14:02:31" can be true.
+    /// When the pane above was read, so "Updated 14:02" can be true.
     @State private var paneAt: Date?
     /// The watch has run its course. What is on screen is still what the
     /// host said; it is simply no longer being asked.
@@ -157,10 +157,20 @@ struct SessionView: View {
                 }
                 .listRowBackground(Design.Palette.card)
             } else if session.prompt != nil {
+                // A QUESTION THIS APP CANNOT SHOW: a permission dialog names a
+                // command, and without the fleet switch its words do not leave
+                // the machine. The one action is the link under it, where the
+                // question can be read and answered.
                 Section {
-                    Text("Waiting for an answer. The options are not shown because this fleet does not send prompt text off the box.")
+                    Text("It's asking something this app can't show.")
                         .fleetType(.bodySmall)
                         .foregroundStyle(Design.Palette.inkDim)
+                    if let url = session.rcUrl, let link = URL(string: url) {
+                        Link(destination: link) {
+                            Label("Continue in Remote Control", systemImage: "arrow.up.forward.app")
+                                .frame(minHeight: 44)
+                        }
+                    }
                 } header: {
                     sectionHead("It is asking")
                 }
@@ -176,7 +186,7 @@ struct SessionView: View {
                             .frame(minHeight: 44)
                     }
                 } footer: {
-                    Text("Your shell on this session, in the browser. Anything typed there goes to the session as if you were at the box.")
+                    Text("Opens this session in Claude, where you can type to it.")
                 }
                 .listRowBackground(Design.Palette.card)
             }
@@ -206,21 +216,23 @@ struct SessionView: View {
                         .fleetType(.bodySmall)
                         .foregroundStyle(Design.Palette.inkDim)
                 } else {
-                    // Resume is promised only where it is offered.
-                    Text(resumeKept == nil
-                         ? "Not running, so there is no screen to read. Output has what it printed; Resume brings the conversation back."
-                         : "Not running, so there is no screen to read. Output has what it printed.")
+                    // No screen to read: the buttons below say what there is
+                    // to do about it, and promise nothing this one does not.
+                    Text("Not running.")
                         .fleetType(.bodySmall)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
             } header: {
                 sectionHead("On its screen")
             } footer: {
+                // LIVE WHILE IT IS WATCHED, and when it was last read once it
+                // is not, with the button that reads it again. The schedule
+                // is this page's business (see the header), not the footer's.
                 if let paneAt {
                     HStack {
                         Text(watchEnded
-                             ? "As of \(paneAt.formatted(date: .omitted, time: .standard)). No longer watching."
-                             : "As of \(paneAt.formatted(date: .omitted, time: .standard)). Watching.")
+                             ? "Updated \(paneAt.formatted(date: .omitted, time: .shortened))"
+                             : "Live")
                         Spacer()
                         if watchEnded {
                             Button("Look again") { watchGeneration += 1 }
@@ -249,7 +261,7 @@ struct SessionView: View {
                 // output outlives the pane, and "why did it stop" is a question
                 // asked after it has.
                 Button("Output") {
-                    act(nothingSaid: "\(session.label) has printed nothing that this machine could read.") {
+                    act(nothingSaid: "No output yet.") {
                         try await fleet.logs(host: session.hostId, session: session.name)
                     }
                 }
@@ -262,7 +274,7 @@ struct SessionView: View {
             }
             .listRowBackground(Design.Palette.card)
             .confirmationDialog("Forget \(session.label)?", isPresented: $confirmingForget, titleVisibility: .visible) {
-                Button("Forget — move it to the bin", role: .destructive) {
+                Button("Move to bin", role: .destructive) {
                     act { try await fleet.forget(session.name, host: session.hostId) }
                 }
             } message: {
@@ -280,7 +292,7 @@ struct SessionView: View {
                         .foregroundStyle(Design.Palette.ink)
                         .textSelection(.enabled)
                 } header: {
-                    sectionHead("Reply")
+                    sectionHead("Result")
                 }
                 .listRowBackground(Design.Palette.inner)
             }

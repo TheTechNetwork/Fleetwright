@@ -100,6 +100,8 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
     var installedAt by remember { mutableStateOf<String?>(null) }
     var cancelling by remember { mutableStateOf(false) }
     var cancelAccepted by rememberSaveable { mutableStateOf(false) }
+    // The custody of the passwords, folded away until asked for.
+    var custodyOpen by remember { mutableStateOf(false) }
 
     val addressOk = XoSetup.ADDRESS_RE.matches(address.trim())
     val able = probes.orEmpty().filter { XoDeploy.canInstall(it) }
@@ -118,7 +120,7 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
                 // One machine that can is not a choice, so it is chosen.
                 r.probes.filter { XoDeploy.canInstall(it) }.singleOrNull()?.let { chosen = it.hostId }
             } else {
-                probeText = r.text.ifBlank { "The fleet did not try that address." }
+                probeText = r.text.ifBlank { "No machine tried that address." }
             }
             probing = false
         }
@@ -161,7 +163,7 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
                 setup.key == null || !XoSetup.verifyKeySig(setup.hostKey, setup.keySig, runCatching { XoDeploy.signingInput(where, setup.job, setup.key, pin) }.getOrDefault(ByteArray(0))) -> {
                     rootPassword = ""
                     adminPassword = ""
-                    refusal = "That key did not come from $hostId. Nothing was sent. Something between this phone and that machine is not what it says it is, so check the fleet before trying again."
+                    refusal = "That key did not come from $hostId. Nothing was sent. Something between this phone and that machine is not what it says it is, so check your machines before trying again."
                     runCatching { fleet.xosetup("cancel", job = setup.job) }
                 }
                 else -> {
@@ -184,7 +186,7 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
                         listed != null && listed != fingerprint -> {
                             rootPassword = ""
                             adminPassword = ""
-                            refusal = "That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent."
+                            refusal = "That key did not come from $hostId: a different key is listed for it. Nothing was sent."
                             runCatching { fleet.xosetup("cancel", job = setup.job) }
                         }
                         // Approved under another key: a machine that was
@@ -252,7 +254,7 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
                 continue
             }
             unanswered++
-            refusal = r.text.ifBlank { "The fleet did not answer about the install." }
+            refusal = r.text.ifBlank { "No answer about the install." }
             if (r.code == "unknown_job" || unanswered >= 5) break
         }
     }
@@ -266,7 +268,7 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
                 if (runningOn.isNotBlank()) Hint("On $runningOn", color = Design.Palette.ink.now)
                 if (setup == null) Hint("Asking where it has got to…") else DeployProgress(setup)
                 when (val outcome = handedBack) {
-                    XoHandoff.Outcome.Kept -> Hint("The token is kept on this phone now, encrypted. No machine in the fleet keeps it on disk.")
+                    XoHandoff.Outcome.Kept -> Hint("Access saved on this phone. No machine keeps it on disk.")
                     is XoHandoff.Outcome.Failed -> Hint(outcome.why, color = Design.Palette.bad.now)
                     null -> {}
                 }
@@ -286,10 +288,7 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
             }
             waitingOn != null -> {
                 SectionHead("Is that ${waitingOn.hostId}'s key?")
-                Hint(
-                    "This phone has not approved ${waitingOn.hostId} before. On it, fleetwright-sidecar identity prints its " +
-                        "fingerprint; send the passwords only if it is this one.",
-                )
+                Hint("First time using ${waitingOn.hostId}. On it, run `fleetwright-sidecar identity` and check it shows this:")
                 SelectionContainer {
                     Text(PhoneVault.fingerprint(waitingOn.setup.hostKey!!), style = Design.Style.title, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
                 }
@@ -407,7 +406,11 @@ internal fun XoDeploySheet(settings: Settings, startAddress: String, startProbes
                     if (adminPassword.isNotEmpty() && !XoDeploy.adminPasswordOk(adminPassword)) {
                         Hint(XoDeploy.ADMIN_PASSWORD_SHORT, color = Design.Palette.attention.now)
                     }
-                    Hint(XoDeploy.passwordsFooter(pick.hostId))
+                    Hint(XoDeploy.PASSWORDS_FOOTER)
+                    // THE CUSTODY, ONCE, BEHIND A DISCLOSURE: who holds what
+                    // for how long, for whoever asks.
+                    OpenRow(if (custodyOpen) "${XoDeploy.CUSTODY_TITLE} ▾" else XoDeploy.CUSTODY_TITLE) { custodyOpen = !custodyOpen }
+                    if (custodyOpen) Hint(XoDeploy.custody(pick.hostId))
                     OutlinedButton(
                         enabled = !beginning && matched && rootPassword.isNotEmpty() && XoDeploy.adminPasswordOk(adminPassword),
                         onClick = { begin() },

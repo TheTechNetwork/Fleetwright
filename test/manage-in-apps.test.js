@@ -80,17 +80,19 @@ test('the table offers nothing a server does not list, and nothing for a state i
   }
 });
 
-test('cannot tell is said as cannot tell, never as zero', () => {
+test('cannot tell is said as Unknown, never as zero', () => {
   // C-5, in the rows a person reads: a host with no numbers, a VM with no
-  // state, storage with no size.
+  // state, storage with no size. The word is Unknown (docs/design-system.md,
+  // Words): §7 kept, as a word rather than a sentence naming what did not
+  // answer.
   const rows = Object.fromEntries(TABLE.components.map((/** @type {any} */ c) => [c.id, c]));
-  assert.equal(rows['0f1e2d3c4b5a'].state, 'cannot tell');
-  assert.match(rows['0f1e2d3c4b5a'].numbers, /cores: cannot tell · memory: cannot tell/);
-  assert.equal(rows['vm-7'].state, 'cannot tell');
-  assert.equal(rows['sr-3'].numbers, 'space: cannot tell');
-  for (const c of TABLE.components) assert.doesNotMatch(`${c.what} ${c.numbers}`, /\b0 (GiB|vCPUs|cores)\b|undefined|null|NaN/);
-  // A token that cannot see a host says so rather than naming none.
-  assert.equal(rows['vm-6'].what, 'VM on a host this token cannot see');
+  assert.equal(rows['0f1e2d3c4b5a'].state, 'Unknown');
+  assert.match(rows['0f1e2d3c4b5a'].numbers, /cores: Unknown · memory: Unknown/);
+  assert.equal(rows['vm-7'].state, 'Unknown');
+  assert.equal(rows['sr-3'].numbers, 'space: Unknown');
+  for (const c of TABLE.components) assert.doesNotMatch(`${c.what} ${c.numbers}`, /\b0 (GiB|vCPUs|cores)\b|undefined|null|NaN|cannot tell/);
+  // A host the pool's account cannot see is unknown, never none.
+  assert.equal(rows['vm-6'].what, 'VM on an unknown host');
 });
 
 test('iOS: the pin is checked in the TLS challenge, and nothing is sent to any other certificate', () => {
@@ -165,12 +167,14 @@ test('iOS: the page is under Machines, on the row that names the pool, and says 
   assert.match(IOS_HYPERVISORS, /if row\.onPhone, let pool = held\.first\(where: \{ \$0\.address == row\.address \}\) \{\s*PoolManageView\(settings: settings, pool: pool\)/);
   assert.match(IOS_SCREEN, /if settings\.showsAdmin \{\s*NavigationLink \{\s*AddHypervisorView\(settings: settings, policyFor: pool\.address\)/);
   // The row says how current the page will be: when, or never.
-  assert.match(IOS_HYPERVISORS, /Manage\.lastLooked\(row\.address\)\.map \{ Manage\.Words\.rowLooked\([^\n]*\n\s*\?\? Manage\.Words\.never\)/);
-  // And the page: watching (or read through a machine, at a time), or the
-  // last time, and that nothing watches while closed.
+  assert.match(IOS_HYPERVISORS, /Manage\.lastLooked\(row\.address\)\.map \{ HypervisorWords\.updated\([^\n]*\n\s*\?\? HypervisorWords\.neverOpened\)/);
+  // And the page: Live, or read through a machine at a time, or when it was
+  // last updated, in a row's words (docs/reviews/copy-2026-11-06.md, 104 and
+  // 105). That nothing watches while the app is closed is docs/manage.md's
+  // to say, not every page's.
   assert.match(bare(IOS_SCREEN), /case \.live: return watch\.currentLine/);
-  assert.match(IOS_MODEL, /static func lookedAt\(_ when: String\) -> String \{ "Last looked at \\\(when\)\. \\\(closed\)" \}/);
-  assert.ok(TABLE.words.closed === 'Nothing watches while the app is closed.');
+  assert.match(IOS_MODEL, /static func lookedAt\(_ when: String\) -> String \{ "Updated \\\(when\)" \}/);
+  assert.ok(TABLE.words.never === 'Not checked yet.');
   // The socket closes when the app leaves the foreground, said as such.
   assert.match(bare(IOS_SCREEN), /if now == \.background \{\s*watch\.stop\(\)/);
 });
@@ -277,9 +281,9 @@ test('Android: the page is under Machines, on the row that names the pool, and s
   assert.match(KT_MACHINES, /PoolPage\(settings, pool, admin, onChangePolicy = \{ policyFor = address \}, onDismiss = \{ managing = null \}, onReconnect = \{ reconnectVia = null; reconnectFor = address \}, onAddWatchdog = \{ watchdogFor = address \}\)/);
   // Machines → Hypervisors → the pool: the list closes and the page opens.
   assert.match(KT_MACHINES, /onOpenPool = \{ listingHypervisors = false; managing = it \}/);
-  assert.match(KT_HYPERVISORS, /Manage\.lastLooked\(settings, row\.address\)\?\.let \{ Manage\.Words\.rowLooked\(relative\(it\)\.toString\(\)\) \} \?: Manage\.Words\.never/);
+  assert.match(KT_HYPERVISORS, /Manage\.lastLooked\(settings, row\.address\)\?\.let \{ HypervisorWords\.updated\(relative\(it\)\.toString\(\)\) \} \?: HypervisorWords\.NEVER_OPENED/);
   assert.match(bare(KT_SCREEN), /PoolWatch\.Phase\.Live -> watch\.currentLine/);
-  assert.match(KT_MODEL, /fun lookedAt\(time: String\) = "Last looked at \$time\. \$closed"/);
+  assert.match(KT_MODEL, /fun lookedAt\(time: String\) = "Updated \$time"/);
   // The socket closes when the app stops, said as such.
   assert.match(bare(KT_SCREEN), /if \(event == Lifecycle\.Event\.ON_STOP\) watch\.stop\(\)/);
 });
@@ -383,13 +387,15 @@ test('both phones keep the routers’ key a policy job seals back, beside the po
   assert.match(bare(read('apps/android/app/src/main/java/network/thetech/fleetwright/XoHandoff.kt')), /record\.put\("edge", JSONObject\(\)\.put\("key", edgeKey\)\.put\("secret", secret\)\.put\("pin", pin\)\.put\("routers", routers\)\)/);
   // The card, under the status, on both; only once the fleet was asked, and not from a coordinator too old to say.
   assert.match(bare(IOS_SCREEN), /statusCard\s*\.fleetRow\(\)\s*if edgesAsked && edgesKnown \{\s*edgeCard/);
-  assert.match(bare(KT_SCREEN), /StatusCard\(watch, masters\)\s*if \(edgesAsked && edgesKnown\) EdgeCard\(edges, edgesFailed\)/);
+  assert.match(bare(KT_SCREEN), /StatusCard\(watch, masters, onSetUpAgain = [^\n]*\)\s*if \(edgesAsked && edgesKnown\) EdgeCard\(edges, edgesFailed\) \{ showingEdges = true \}/);
   // MEASURED (edge-router.js): the way out with its numbers, names by count
-  // and what was refused most, and a machine that cannot listen, on both.
+  // and what was refused most, and a machine that cannot listen, on both: on
+  // the routers' own page, which the card on the pool's page opens, since the
+  // card says one word per router (docs/reviews/copy-2026-11-06.md, 113).
   for (const [screen, who] of [[bare(IOS_SCREEN), 'iOS'], [bare(KT_SCREEN), 'Android']]) {
     for (const word of ['edgeWayOut', 'edgeNames', 'edgeRefused', 'edgeNotListening']) assert.ok(screen.includes(`Manage.Words.${word}`), `${who} does not draw ${word}`);
   }
-  assert.match(bare(IOS_SCREEN), /if e\.listening == false \{\s*Text\(Manage\.Words\.edgeNotListening\)[\s\S]*?Design\.Palette\.attention/, 'iOS: not listening is said in the attention tone');
+  assert.match(bare(IOS_SCREEN), /if edges\.listening == false \{\s*Text\(Manage\.Words\.edgeNotListening\)[\s\S]*?Design\.Palette\.attention/, 'iOS: not listening is said in the attention tone');
   assert.match(bare(KT_SCREEN), /if \(e\.listening == false\) Text\(Manage\.Words\.edgeNotListening, style = Design\.Style\.label, color = Design\.Palette\.attention\.now\)/);
 });
 
@@ -401,17 +407,18 @@ test('a quiet router is said as quiet, and a count not read as not read, in the 
   // quiet case as quiet, say what is not known as not known (a lease count
   // that was not read used to vanish, which is "nothing" by C-5's rule),
   // and put the way out first, since it is what the machines behind the
-  // router have or have not.
+  // router have or have not. Since then the sentences became a row's words
+  // (docs/reviews/copy-2026-11-06.md, 113); the rule is the same.
   const ios = bare(IOS_MODEL);
   const kt = bare(read('apps/android/app/src/main/java/network/thetech/fleetwright/Manage.kt'));
   for (const words of [
-    'Answering names; none counted so far',
-    'Cannot tell how many DHCP leases it has out',
-    'No DHCP leases out',
-    '1 DHCP lease out',
-    'No log line has reached this machine',
-    ', no pings lost',
-    'Its way out is up, ',
+    'DNS up',
+    'Leases: Unknown',
+    'No leases',
+    '1 lease',
+    'No log lines received',
+    ', no loss',
+    'Internet up · ',
   ]) {
     assert.ok(ios.includes(words), `iOS: ${words}`);
     assert.ok(kt.includes(words), `Android: ${words}`);

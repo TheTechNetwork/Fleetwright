@@ -1676,7 +1676,7 @@ export class XoSetups {
         const tagged = (ctx.networks || []).filter((/** @type {any} */ n) => Array.isArray(n?.tags) && n.tags.includes(EGRESS_TAG)).map((/** @type {any} */ n) => n.id);
         const changes = tagged.filter((/** @type {string} */ id) => id !== p.egress).length + (p.egress && !tagged.includes(p.egress) ? 1 : 0);
         if (changes && !(Object.hasOwn(ctx.methods, 'tag.add') && Object.hasOwn(ctx.methods, 'tag.remove'))) {
-          said.push('This Xen Orchestra cannot tag a network, so the way out was not recorded.');
+          said.push('This Xen Orchestra cannot tag a network, so the uplink was not recorded.');
         } else {
           for (const id of tagged) if (id !== p.egress) await ctx.admin.call('tag.remove', { id, tag: EGRESS_TAG });
           if (p.egress && !tagged.includes(p.egress)) await ctx.admin.call('tag.add', { id: p.egress, tag: EGRESS_TAG });
@@ -1684,7 +1684,7 @@ export class XoSetups {
             const name = (ctx.networks || []).find((/** @type {any} */ n) => n?.id === p.egress)?.name_label;
             said.push(`Labs leave through ${name ? String(name).slice(0, 80) : 'the network you chose'}.`);
           } else {
-            said.push('No network is the way out yet, so labs have none.');
+            said.push('No network is the uplink yet, so labs have none.');
           }
         }
         ctx.summary = said.join(' ');
@@ -1692,7 +1692,7 @@ export class XoSetups {
         // routers from before carry the pair's password and the key in their
         // xenStoreData, which every signed-in user reads. Taken off every one
         // now, whatever else this job does or fails to do; and where the edge
-        // is on the way out's pool it is built again with new ones even when
+        // is on the uplink's pool it is built again with new ones even when
         // the phone did not ask for the edge, so upgrading closes it.
         const exposedPools = new Set((ctx.edges || []).filter(exposedOn).map((/** @type {any} */ v) => v.$pool));
         await clearExposed(ctx.admin, ctx.edges || []);
@@ -1732,7 +1732,7 @@ export class XoSetups {
           if (!before || before.stage !== part.stage || before.doing !== part.doing || Math.floor(before.fill / 50) !== Math.floor(part.fill / 50)) this.#report(rec);
         };
         const way = (ctx.networks || []).find((/** @type {any} */ n) => n?.id === p.egress);
-        if (!way?.$pool) throw new Error('the way out is not in a pool this Xen Orchestra listed. The policy was applied; nothing was built.');
+        if (!way?.$pool) throw new Error('the uplink is not in a pool this Xen Orchestra listed. The policy was applied; nothing was built.');
         /** @type {string[]} */
         const built = [];
         ctx.built = built;
@@ -1851,7 +1851,7 @@ export class XoSetups {
           built.push(await ensureHolder({
             admin: ctx.admin,
             pool: way.$pool,
-            egress: { id: String(way.id), name: String(way.name_label || 'the way out').slice(0, 80) },
+            egress: { id: String(way.id), name: String(way.name_label || 'the uplink').slice(0, 80) },
             address: rec.address,
             coordinatorUrl: /** @type {string} */ (this.coordinatorUrl),
             askPin: () => /** @type {(job: string, address: string) => Promise<any>} */ (this.holderPin)(rec.job, rec.address),
@@ -2169,7 +2169,7 @@ export class XoSetups {
     return ensureEdge({
       admin: ctx.admin,
       pool: way.$pool,
-      egress: { id: p.egress, name: String(way.name_label || 'the way out').slice(0, 80) },
+      egress: { id: p.egress, name: String(way.name_label || 'the uplink').slice(0, 80) },
       uplink,
       srs: ctx.srs || [],
       fleetSrs: p.srs,
@@ -2914,7 +2914,7 @@ export const PVE_STEP_WORDS = Object.freeze(/** @type {Record<string, string>} *
   fence: 'Making the firewall group',
   networks: 'Making lab and group networks',
   image: 'Building the machine image',
-  line: 'Handing over the line',
+  line: 'Sending the token to this phone',
 }));
 
 /**
@@ -3147,12 +3147,12 @@ export function checkPolicy(p, choices) {
   }
   const egress = p.egress === null || p.egress === undefined ? null : String(p.egress);
   if (egress !== null && !choices.networks.has(egress)) {
-    return { ok: false, text: 'The way out has to be a network this pool listed. Nothing was changed.' };
+    return { ok: false, text: 'The uplink has to be a network this pool listed. Nothing was changed.' };
   }
   const edge = p.edge === true;
-  if (edge && egress === null) return { ok: false, text: 'The edge router needs a way out: choose the network its WAN goes on.' };
+  if (edge && egress === null) return { ok: false, text: 'The edge router needs an uplink: choose the network its WAN goes on.' };
   // WHERE ITS DISK GOES, when the phone asked: storage the pool listed. That
-  // it is in the way out's pool and has room is checked where it is used.
+  // it is in the uplink's pool and has room is checked where it is used.
   const edgeSr = p.edgeSr === null || p.edgeSr === undefined ? null : String(p.edgeSr);
   if (edgeSr !== null && !choices.srs.has(edgeSr)) return { ok: false, text: 'The edge router’s disk has to go on storage this pool listed. Nothing was changed.' };
   if (p.edgeBlock !== undefined && p.edgeBlock !== null && typeof p.edgeBlock !== 'boolean') return { ok: false, text: 'Whether the edge blocks is yes or no. Nothing was changed.' };
@@ -3166,13 +3166,13 @@ export function checkPolicy(p, choices) {
     return { ok: false, text: 'That names a machine image this machine cannot build. Nothing was changed.' };
   }
   const image = asked.length > 0;
-  // GROUP NETWORKS, in the way out's pool: how many to have, 0 to MAX_GROUPS.
+  // GROUP NETWORKS, in the uplink's pool: how many to have, 0 to MAX_GROUPS.
   const groups = p.groups === undefined || p.groups === null ? 0 : p.groups;
   if (typeof groups !== 'number' || !Number.isInteger(groups) || groups < 0 || groups > MAX_GROUPS) {
     return { ok: false, text: `Between 0 and ${MAX_GROUPS} group networks. Nothing was changed.` };
   }
-  if (groups && egress === null) return { ok: false, text: 'Group networks are made in the way out’s pool: choose the way out. Nothing was changed.' };
-  if (image && egress === null) return { ok: false, text: 'The machine image is built behind the edge router: choose the way out it leaves through.' };
+  if (groups && egress === null) return { ok: false, text: 'Group networks are made in the uplink’s pool: choose the uplink. Nothing was changed.' };
+  if (image && egress === null) return { ok: false, text: 'The machine image is built behind the edge router: choose the uplink it leaves through.' };
   if (image && !edge && !choices.edgePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
     return { ok: false, text: 'The machine image is built behind the edge router, and that pool has none yet. Build the router with it. Nothing was changed.' };
   }
@@ -3184,7 +3184,7 @@ export function checkPolicy(p, choices) {
     const closed = p.labs?.closed;
     const whole = (/** @type {unknown} */ n) => typeof n === 'number' && Number.isInteger(n) && n >= 0;
     if (!whole(open) || !whole(closed) || open + closed > LAB.max) return { ok: false, text: `Between 0 and ${LAB.max} labs in all. Nothing was changed.` };
-    if (egress === null) return { ok: false, text: 'Labs are on the edge router: choose the way out it is on. Nothing was changed.' };
+    if (egress === null) return { ok: false, text: 'Labs are on the edge router: choose the uplink it is on. Nothing was changed.' };
     if (!edge && !choices.edgePools?.has(choices.networkPools?.get(egress))) {
       return { ok: false, text: 'Labs are on the edge router, and that pool has none yet. Build the router with them. Nothing was changed.' };
     }
@@ -3202,14 +3202,14 @@ export function checkPolicy(p, choices) {
     }
     labsEach = n;
   }
-  // REBUILT OR REMOVED: images the way out's pool has, by key, each kept,
+  // REBUILT OR REMOVED: images the uplink's pool has, by key, each kept,
   // rebuilt or removed and never two of those. A phone that predates the
   // choice sends neither, and every image stays as it is.
   const keys = (/** @type {unknown} */ v) => (v === undefined || v === null ? [] : Array.isArray(v) && v.every((x) => typeof x === 'string') ? [...new Set(/** @type {string[]} */ (v))] : null);
   const rebuild = keys(p.rebuild);
   const remove = keys(p.remove);
   if (!rebuild || !remove) return { ok: false, text: 'Which images to rebuild or remove is a list of them. Nothing was changed.' };
-  if ((rebuild.length || remove.length) && egress === null) return { ok: false, text: 'Machine images are rebuilt and removed on the way out’s pool: choose the way out. Nothing was changed.' };
+  if ((rebuild.length || remove.length) && egress === null) return { ok: false, text: 'Machine images are rebuilt and removed on the uplink’s pool: choose the uplink. Nothing was changed.' };
   const present = egress === null ? new Set() : choices.imagesOn?.get(choices.networkPools?.get(egress) ?? null) ?? new Set();
   if ([...rebuild, ...remove].some((k) => !present.has(k))) return { ok: false, text: 'That names a machine image this pool does not have. Nothing was changed.' };
   if ([...rebuild, ...asked].some((k) => remove.includes(k)) || rebuild.some((k) => asked.includes(k))) {
@@ -3259,7 +3259,7 @@ export function checkPolicy(p, choices) {
   const imageChannel = p.imageChannel === undefined || p.imageChannel === null ? null : String(p.imageChannel);
   if (imageChannel !== null && !IMAGE_CHANNELS.includes(imageChannel)) return { ok: false, text: 'A machine image is built from released versions or from the newest build of main. Nothing was changed.' };
   if (holder && remove.includes('debian-13')) return { ok: false, text: 'The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for. Nothing was changed.' };
-  if (holder && egress === null) return { ok: false, text: 'The pool’s own machine goes on the way out: choose the network it is on.' };
+  if (holder && egress === null) return { ok: false, text: 'The pool’s own machine goes on the uplink: choose the network it is on.' };
   if (holder && !image && !choices.imagePools?.has(choices.networkPools?.get(/** @type {string} */ (egress)))) {
     return { ok: false, text: 'The pool’s own machine is made from its machine image, and that pool has none yet. Build one with it. Nothing was changed.' };
   }

@@ -420,7 +420,9 @@ fun FleetScreen(
         // held leaves it unheard, and said.
         runCatching { fleet.fleetHosts() }
             .onSuccess { binHosts = it; hostsHeard = true }
-            .onFailure { if (!hostsHeard && status.isBlank()) status = "The fleet did not say which machines report: ${it.message ?: "no answer"}" }
+            // The verdict, then the error on its own line: it is quoted
+            // evidence, not the sentence.
+            .onFailure { if (!hostsHeard && status.isBlank()) status = "Couldn't load machines.\n${it.message ?: "no answer"}" }
         pending = outbox.waiting.size
         expired = outbox.expired
         busy = false
@@ -460,11 +462,11 @@ fun FleetScreen(
             val label = request.imageLabel ?: newMachineChoices.firstOrNull { it.platform == platform }?.label ?: "New machine"
             val lowered = label.replaceFirstChar { it.lowercase() }
             status = if (platform == "lab") {
-                "Asking your hypervisor for a $lowered, in a lab of its own. The session starts on it when it joins."
+                "Making a $lowered in a lab of its own. Your session starts when it's ready."
             } else if (platform == "vm") {
-                "Asking your hypervisor for a $lowered. The session starts on it when it joins."
+                "Making a $lowered. Your session starts when it's ready."
             } else {
-                "Asking GitHub for a $lowered. The session starts on it when it joins."
+                "Starting a $lowered on GitHub. Your session starts when it's ready."
             }
             val start = buildMap {
                 request.title?.let { put("title", it) }
@@ -513,7 +515,7 @@ fun FleetScreen(
                 val message = e.message.orEmpty()
                 val timedOut = e is java.net.SocketTimeoutException || message.contains("timeout", true)
                 val out = if (timedOut) {
-                    "Still starting, or started — the answer did not come back in time. Pull to refresh to see."
+                    "Not sure it started. Pull to refresh."
                 } else {
                     message.ifBlank { "could not start" }
                 }
@@ -869,11 +871,12 @@ fun FleetScreen(
                                 )
                             }
                             // WHAT IS WAITING, because a queue nobody can see is
-                            // a surprise arriving later.
+                            // a surprise arriving later. Where it waits and what
+                            // sends it (Outbox) is mechanism, not news.
                             if (pending > 0) {
                                 Text(
-                                    if (pending == 1) "1 command is held on this phone and will be sent when the fleet answers."
-                                    else "$pending commands are held on this phone and will be sent when the fleet answers.",
+                                    if (pending == 1) "1 action waiting to send."
+                                    else "$pending actions waiting to send.",
                                     Modifier
                                         .fillMaxWidth()
                                         .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
@@ -901,7 +904,7 @@ fun FleetScreen(
                                     Column(Modifier.weight(1f)) {
                                         Text("Not sent: ${entry.summary}", style = Design.Style.bodySmall, color = Design.Palette.attention.now)
                                         Text(
-                                            "Held for more than 12 hours while the fleet could not be reached, so it was not sent. Ask again if you still want it.",
+                                            "Held for more than 12 hours with no connection, so it was not sent. Ask again if you still want it.",
                                             style = Design.Style.label,
                                             color = Design.Palette.inkDim.now,
                                         )
@@ -979,16 +982,15 @@ private fun EmptySessions(
                 OutlinedButton(onClick = onSignIn) { Text("Go to You") }
             }
             needsSetup -> {
-                Text("Nothing set up yet", style = Design.Style.section, color = Design.Palette.ink.now)
-                Hint("A session runs on YOUR Claude account. Keep your login in your vault once, and every machine you approve uses it.")
+                Text("Set up Claude to start sessions", style = Design.Style.section, color = Design.Palette.ink.now)
+                Hint("Sessions use your Claude account. You sign in once.")
                 // THE VAULT'S CLAUDE ROWS, the same as Set up Claude everywhere
                 // else: one login a person, not one a machine.
                 OutlinedButton(onClick = onSetUp) { Text("Set up Claude") }
             }
-            else -> {
-                Text("No sessions", style = Design.Style.section, color = Design.Palette.ink.now)
-                Hint("Nothing is running on any machine in this fleet. Tap “New session” to start one.")
-            }
+            // The title is the whole of it: the reassurance line above has
+            // already said nothing is running, and New session is on screen.
+            else -> Text("No sessions", style = Design.Style.section, color = Design.Palette.ink.now)
         }
     }
 }
@@ -1120,8 +1122,12 @@ private fun SessionCard(
                     }
                 }
             } else {
+                // A permission dialog names a command, so without the fleet
+                // switch its labels do not leave the machine. The card says
+                // the state; the sheet says that this app cannot show the
+                // question, with Remote Control under it.
                 Text(
-                    "Waiting for an answer. The options are not shown because this fleet does not send prompt text off the box.",
+                    "Waiting for you",
                     style = Design.Style.bodySmall,
                     color = Design.Palette.inkDim.now,
                 )
@@ -1139,10 +1145,11 @@ private fun SessionCard(
                     TextButton(onClick = { onOpen(url) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Continue in Remote Control") }
                 }
             } else if (session.resumable && resumeKept != null) {
-                // WHY, IN PLACE OF A BUTTON THE FLEET WOULD REFUSE (C-2): the
-                // machine runs sessions without the sandbox, or has not said,
-                // and this person does not administer it.
-                Text(resumeKept, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
+                // THE VERDICT, IN PLACE OF A BUTTON THE FLEET WOULD REFUSE
+                // (C-2): the machine runs sessions without the sandbox, or has
+                // not said, and this person does not administer it. The
+                // sentence (resumeKept) is the sheet's.
+                Text(Fleet.FleetHost.RESUME_KEPT_ROW, style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
             } else if (session.resumable) {
                 TextButton(onClick = onResume, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Resume") }
             }

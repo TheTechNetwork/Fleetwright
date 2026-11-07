@@ -163,6 +163,13 @@ fun StartSheet(
     var permission by remember {
         mutableStateOf(kind?.mode?.takeIf { it == "safe" }.orEmpty())
     }
+    // Somebody reached for "Permissions bypassed" and it was not there: a
+    // shortcut's kind saved with it, a kind chosen with it on a machine that
+    // does not allow it, or the choice taken away under them when the machine
+    // changed. Only then does the line under the choices say how to get it; a
+    // person who never asked is not told why a choice they did not want is
+    // missing. The same rule as iOS's askedBypass.
+    var askedBypass by remember { mutableStateOf(kind?.mode == "dangerous") }
     var host by remember { mutableStateOf("") }
     var hosts by remember { mutableStateOf(listOf<String>()) }
     // The same machines as `hosts`, with what each last reported, so the
@@ -284,9 +291,13 @@ fun StartSheet(
     // judge, a new one or a kind's host that is not offered, is the same. The
     // box default covers all of these.
     val bypassAllowed = reachableHosts.isNotEmpty() && reachableHosts.all { it.permissions == "bypassed" }
-    // A choice that vanished cannot stay chosen.
+    // A choice that vanished cannot stay chosen, and losing it is the asking
+    // that earns the hint.
     LaunchedEffect(bypassAllowed) {
-        if (!bypassAllowed && permission == "dangerous") permission = ""
+        if (!bypassAllowed && permission == "dangerous") {
+            permission = ""
+            askedBypass = true
+        }
     }
 
     AlertDialog(
@@ -344,7 +355,7 @@ fun StartSheet(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     if (offered.isNotEmpty() && platform.isEmpty() && task.isBlank()) {
-                        Text("Or one written on a host", style = MaterialTheme.typography.labelMedium)
+                        Text("Or a saved task", style = MaterialTheme.typography.labelMedium)
                         AssistChip(
                             onClick = { profile = "" },
                             label = { Text(if (profile.isEmpty()) "None \u2713" else "None") },
@@ -377,7 +388,7 @@ fun StartSheet(
                             task.isNotBlank() ->
                                 "It starts with these words and gets to work. Say what to do, where, and what to report back: nothing can be added once it is going."
                             profile.isEmpty() -> "Leave it empty and it starts idle, waiting for you."
-                            else -> "It starts with this as its first message. The words are kept on the host."
+                            else -> "It starts with this as its first message."
                         },
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -407,11 +418,10 @@ fun StartSheet(
                                 label = { Text(if (secret == s.name) "${s.name} ✓" else s.name) },
                             )
                         }
+                        // Where the value lives (on the machine, never here) is
+                        // the comment above this section's, not the line's.
                         Text(
-                            if (secret.isEmpty())
-                                "Optional. Grant a named secret and the session can fetch its value at runtime."
-                            else
-                                "It may fetch this secret's value while it runs. The value stays on the host — this app never sees it.",
+                            if (secret.isEmpty()) "Optional. The session can use this secret." else "The session can use this secret.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -431,9 +441,13 @@ fun StartSheet(
                                         if (chosen.host.isNotBlank()) host = chosen.host
                                         // A kind that saved a mode fills that
                                         // too. One that saved none leaves the
-                                        // choice where it is, which is the box
-                                        // default unless somebody moved it.
+                                        // choice where it is, which is the
+                                        // machine's setting unless somebody
+                                        // moved it. One that saved a bypass no
+                                        // machine here allows is the asking
+                                        // that earns the hint.
                                         chosen.mode?.takeIf { it == "safe" || (it == "dangerous" && bypassAllowed) }?.let { permission = it }
+                                        if (chosen.mode == "dangerous" && !bypassAllowed) askedBypass = true
                                         // Only if the fleet still has it — a
                                         // kind naming a deleted profile would
                                         // otherwise pre-fill a refused start.
@@ -515,10 +529,11 @@ fun StartSheet(
                             Text("Network", style = MaterialTheme.typography.labelMedium)
                             AssistChip(
                                 onClick = { vmNetwork = "" },
-                                label = {
-                                    val behind = if (images.firstOrNull { it.template == template }?.onProxmox == true) "Behind the cluster’s firewall" else "Behind the edge router"
-                                    Text(if (vmNetwork.isEmpty()) "$behind \u2713" else behind)
-                                },
+                                // The default is named by what it gives the
+                                // machine, not by the router or firewall that
+                                // gives it: that is the pool page's word. The
+                                // same words as iOS.
+                                label = { Text(if (vmNetwork.isEmpty()) "Default (internet only) \u2713" else "Default (internet only)") },
                             )
                             networks.forEach { n ->
                                 AssistChip(
@@ -567,7 +582,7 @@ fun StartSheet(
                                 if (closed) {
                                     AssistChip(
                                         onClick = { vmLab = if (vmLab == "closed") "" else "closed"; vmNetwork = ""; vmGroup = "" },
-                                        label = { Text(if (vmLab == "closed") "Closed: only the fleet and Claude \u2713" else "Closed: only the fleet and Claude") },
+                                        label = { Text(if (vmLab == "closed") "Closed: only Fleetwright and Claude \u2713" else "Closed: only Fleetwright and Claude") },
                                     )
                                 }
                             } else {
@@ -600,44 +615,29 @@ fun StartSheet(
                                 Text("For $machineMinutes minutes", style = MaterialTheme.typography.bodyMedium)
                                 TextButton(enabled = machineMinutes < 350, onClick = { machineMinutes += 5 }) { Text("More") }
                             }
-                            // NO LINK PROMISED. A runner's credential cannot open
-                            // Remote Control, so the notification that matters
-                            // is the one when its task is done.
+                            // HOW LONG, AND WHAT HAPPENS AT THE END: the two
+                            // facts somebody choosing a new machine needs.
+                            // Whether the session starts idle is the Task
+                            // line's sentence, and no link is promised: a
+                            // runner's credential cannot open Remote Control.
+                            // A lab says what it gives the machine, in the same
+                            // words as iOS, wherever the lab lives.
                             if (platform == "vm" && vmLab.isNotEmpty()) {
-                                val pve = images.firstOrNull { it.template == template }?.onProxmox == true
                                 Text(
-                                    (if (pve) "A lab is a network of its own on your cluster, and this machine is alone on it. "
-                                    else "A lab is a network of its own on your edge router, and this machine is alone on it. ") +
-                                        (if (vmLab == "open") (if (pve) "It reaches the internet and nothing private: not your network, not the cluster's other machines, not another lab."
-                                        else "It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab.")
-                                        else "It reaches the fleet and Claude and nothing else, so the session still runs, and everything else it tries is blocked.") +
-                                        (if (pve) " It costs no extra machine: the lab is a network the setup made on the cluster, and the cluster's firewall holds it there."
-                                        else " It costs no extra machine: the lab is an interface on the router you already have.") +
-                                        " When its time runs out, or you end it on its page, the machine is removed and the lab is free for the next one.",
+                                    if (vmLab == "open") "Alone on its own network. Reaches the internet only."
+                                    else "Alone on its own network. Reaches only Fleetwright and Claude.",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             } else if (platform == "vm") {
-                                Text(
-                                    "It is cloned from your machine image and joins in a minute or two. The session starts on it then" +
-                                        (if (task.isBlank()) ", idle, with nothing to do. Give it a task above to put it to work."
-                                        else " and works on your task. You get a notification when it is back at its prompt.") +
-                                        " It powers off when the time runs out and is removed, with everything on it.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+                                Text("Ready in about 2 minutes. Deleted with its files when time runs out.", style = MaterialTheme.typography.bodySmall)
                             } else {
-                                Text(
-                                    "It takes a few minutes to boot. The session starts on it when it joins" +
-                                        (if (task.isBlank()) ", idle, with nothing to do. Give it a task above to put it to work."
-                                        else " and works on your task. You get a notification when it is back at its prompt.") +
-                                        " Everything on it is gone when the time runs out.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+                                Text("Ready in a few minutes. Deleted with its files when time runs out.", style = MaterialTheme.typography.bodySmall)
                             }
                             // SAID OUT LOUD, as docs/runner-central.md says it:
                             // the Windows runner is written and not yet proven.
                             if (platform == "windows") {
                                 Text(
-                                    "Windows runners are written and not yet proven.",
+                                    "Windows machines are new and may not work yet.",
                                     style = Design.Style.bodySmall,
                                     color = Design.Palette.attention.now,
                                 )
@@ -646,19 +646,20 @@ fun StartSheet(
                     }
                 }
                 // HOW IT RUNS, after Where because the answer depends on it.
-                // The box's own default comes first and is selected: it sends
-                // no mode, so the operator's setting decides, and it is named
-                // from what the machine reported, or not at all when it has
-                // not (C-5). Bypassing is offered only where every machine
-                // this could land on has said it bypasses, because a box set
-                // to ask refuses it (C-2) and one that has not said may be set
-                // to ask (C-5), and the sentence below says why it is missing.
+                // The machine's own setting comes first and is selected: it
+                // sends no mode, so the operator's setting decides, and it is
+                // named from what the machine reported, or not at all when it
+                // has not (C-5). Bypassing is offered only where every machine
+                // this could land on has said it bypasses, because a machine
+                // set to ask refuses it (C-2) and one that has not said may be
+                // set to ask (C-5). Why it is missing is said only to somebody
+                // who reached for it (askedBypass).
                 Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
                     Text("Permissions", style = MaterialTheme.typography.labelMedium)
                     val boxDefault = when (boxPermissions) {
-                        "asks" -> "Box default — asks before each tool"
-                        "bypassed" -> "Box default — permissions bypassed"
-                        else -> "Box default"
+                        "asks" -> "Machine's setting (asks first)"
+                        "bypassed" -> "Machine's setting (no prompts)"
+                        else -> "Machine's setting"
                     }
                     AssistChip(
                         onClick = { permission = "" },
@@ -675,7 +676,7 @@ fun StartSheet(
                         )
                     }
                     Text(
-                        permissionLine(permission, boxPermissions, bypassAllowed, reachableHosts, fleetPicks = host.isEmpty()),
+                        permissionLine(permission, boxPermissions, askedBypass && !bypassAllowed),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -683,14 +684,13 @@ fun StartSheet(
                 // login when it joins, and nothing said so until after it had.
                 if (platform.isNotEmpty() && (claude == ClaudeKept.Missing || claude == ClaudeKept.NeedsGitHub)) {
                     SectionHead("Claude")
+                    // "May not" for a runner, which can fall back on the runner
+                    // repository's API key; "can't" for a machine from your
+                    // hypervisor, which has nothing to fall back on. The
+                    // fallback itself is Set up Claude's to explain.
                     Text(
-                        if (platform == "vm") {
-                            "No Claude login is kept in your vault, so a machine from your hypervisor has nothing to run " +
-                                "its session on. Keep one here first."
-                        } else {
-                            "No Claude login is kept for your runners, so this one runs on the runner repository's " +
-                                "API key if it has one, and cannot start the session if it does not."
-                        },
+                        if (platform == "vm") "Set up Claude first, or this session can't start."
+                        else "Set up Claude first, or this session may not start.",
                         style = Design.Style.bodySmall,
                         color = Design.Palette.attention.now,
                     )
@@ -753,38 +753,20 @@ fun StartSheet(
 
 /**
  * The sentence under the permission choice, the same words as the iOS sheet.
- * The selected choice still has to say what it does, and the box default says
- * it only when the box has said.
+ * The selected choice still has to say what it does, and the machine's setting
+ * says it only when the machine has said (C-5). What to do about a bypass that
+ * is not offered is added only for somebody who reached for it; which machine
+ * refused, or has not said, is the machine's page's business.
  */
-private fun permissionLine(
-    permission: String,
-    boxPermissions: String?,
-    bypassAllowed: Boolean,
-    reachableHosts: List<Fleet.FleetHost>,
-    fleetPicks: Boolean,
-): String {
+private fun permissionLine(permission: String, boxPermissions: String?, askedBypass: Boolean): String {
     val line = when (permission) {
-        "safe" -> "It stops and asks before each tool, whatever its machine is set to."
-        "dangerous" -> "It runs each tool without asking first."
+        "safe" -> "Asks before each tool, on any machine."
+        "dangerous" -> "Runs each tool without asking."
         else -> when (boxPermissions) {
-            "asks" -> "It asks before each tool, because that is how its machine is set."
-            "bypassed" -> "It runs each tool without asking, because that is how its machine is set."
-            else -> "It runs the way its machine is set."
+            "asks" -> "Asks before each tool."
+            "bypassed" -> "Runs each tool without asking."
+            else -> "Runs the way the machine is set."
         }
     }
-    if (bypassAllowed) return line
-    // Why it is missing, said as what the machines told us: one set to ask,
-    // or one that has not said.
-    if (reachableHosts.isEmpty()) {
-        return line + " Permissions bypassed is not offered: no machine this could start on has said what it allows."
-    }
-    val asks = reachableHosts.any { it.permissions == "asks" }
-    return line + when {
-        fleetPicks && asks ->
-            " Permissions bypassed is not offered while the fleet picks the machine: one of them is set to ask before each tool."
-        fleetPicks ->
-            " Permissions bypassed is not offered while the fleet picks the machine: one of them has not said what it allows."
-        asks -> " Permissions bypassed is not offered here: this machine is set to ask before each tool."
-        else -> " Permissions bypassed is not offered here: this machine has not said what it allows."
-    }
+    return if (askedBypass) "$line To skip permission prompts, pick a machine that allows it." else line
 }

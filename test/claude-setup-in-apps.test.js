@@ -23,9 +23,9 @@ const ANDROID = androidSources();
 
 // The sentences a person reads, the same on both phones.
 const SAID = [
-  'Your Claude login is kept under your GitHub account, so sign in to GitHub on this phone first.',
+  'Sign in to GitHub first.',
   'Token from claude setup-token',
-  'Keep my Claude login',
+  'Save my Claude login',
   'Finish setting up',
   'Set up Claude',
   'Not now',
@@ -72,6 +72,7 @@ test('Android: a refused start is not announced as a ready session', () => {
 });
 
 test('the runner warning in New session is one sentence on both phones', () => {
-  const warning = 'No Claude login is kept for your runners, so this one runs on the runner repository';
+  // "May not": a runner can fall back on the runner repository's API key, which Set up Claude explains.
+  const warning = 'Set up Claude first, or this session may not start.';
   assert.ok(IOS.includes(warning) && ANDROID.includes(warning));
 });

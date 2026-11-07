@@ -102,17 +102,17 @@ test('iOS: the machine is asked whether it can open a policy sign-in before anyt
   const askAt = begin.indexOf('if isPolicy, let why = XOPolicy.refusal(can: can, machine: machine) {');
   assert.ok(askAt > 0, 'begin does not ask the machine');
   assert.ok(askAt < begin.indexOf('await send()'), 'send is reachable before the machine is asked');
-  assert.match(begin.slice(askAt), /^if isPolicy, let why = XOPolicy\.refusal\(can: can, machine: machine\) \{\s*_ = try\? await fleet\.cancelSetup\(job: begunJob\)\s*refuse\("\\\(why\) Update that machine, then try again\."\)\s*return/);
+  assert.match(begin.slice(askAt), /^if isPolicy, let why = XOPolicy\.refusal\(can: can, machine: machine\) \{\s*_ = try\? await fleet\.cancelSetup\(job: begunJob\)\s*refuse\(why\)\s*return/);
   // And again where the seal is.
   const send = fn(SCREEN, 'sendForPolicy');
   const refusedAt = send.indexOf('if let why = XOPolicy.refusal(can: begun.can, machine: begun.hostId) {');
   assert.ok(refusedAt > 0 && refusedAt < send.indexOf('Seal.seal('), 'the seal is reachable before the machine is asked');
-  assert.match(send.slice(refusedAt), /refuse\("\\\(why\) Update that machine, then try again\."\)/);
+  assert.match(send.slice(refusedAt), /refuse\(why\)/);
   // `policy` alone is refused, in words that say to update that machine: a
   // relay can add it to a machine from before policy jobs. Which list gets
   // which sentence is run by XOPolicyTests.swift.
   const refusal = POLICY.slice(POLICY.indexOf('static func refusal(can: [String], machine: String) -> String? {'));
-  assert.match(bare(refusal), /^static func refusal\(can: \[String\], machine: String\) -> String\? \{\s*if !can\.contains\("policy"\) \{\s*return "\\\(machine\) is older than changing what the fleet may use, so the sign-in was not sent\."\s*\}\s*if !can\.contains\("policy-signin"\) \{\s*return "\\\(machine\) is too old to open the sign-in this app seals for a policy change, so the sign-in was not sent\."\s*\}\s*return nil/);
+  assert.match(bare(refusal), /^static func refusal\(can: \[String\], machine: String\) -> String\? \{\s*if !can\.contains\("policy"\) \{\s*return "\\\(machine\) needs an update to change this\. Nothing was sent\."\s*\}\s*if !can\.contains\("policy-signin"\) \{\s*return "\\\(machine\) needs an update to take the sign-in\. Nothing was sent\."\s*\}\s*return nil/);
   // A machine that did not say is a machine that cannot.
   assert.match(SCREEN, /let can = setup\.can \?\? \[\]/);
 });

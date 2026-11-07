@@ -41,13 +41,13 @@ struct AddMachineView: View {
                 // TEMPORARY IS A PROPERTY OF THE PIN, not of the box. Without it
                 // every CI runner enrolled as permanent and left its entry
                 // behind when the job ended.
-                Toggle("Temporary host (CI runner)", isOn: $ephemeralPin)
+                Toggle("Temporary machine (CI runner)", isOn: $ephemeralPin)
                 if ephemeralPin {
-                    Text("Retired the moment it disconnects, and its key revoked. Never chosen automatically for work — it has the most free capacity in the fleet precisely because it is about to disappear.")
+                    Text("Removed the moment it disconnects. Never chosen for work automatically.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
-                Button("Mint a pin for a new host") { Task { await mint() } }
+                Button("New pairing code") { Task { await mint() } }
                 if !pin.isEmpty {
                     VStack(alignment: .leading, spacing: Design.Space.hair) {
                         Text(formattedPin)
@@ -55,9 +55,9 @@ struct AddMachineView: View {
                             .monospaced()
                             .textSelection(.enabled)
                         if let install = pinInstall {
-                            // THE LINE IS THE PRODUCT. On a fresh box this is
-                            // the whole join.
-                            Text("On a fresh box, as root — installs it and joins it:")
+                            // THE LINE IS THE PRODUCT. On a fresh machine this
+                            // is the whole join.
+                            Text("On a fresh machine, as root — installs it and joins it:")
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
                             Text(install)
@@ -67,7 +67,7 @@ struct AddMachineView: View {
                                 .fleetType(.microMono)
                                 .foregroundStyle(Design.Palette.inkDim)
                         } else {
-                            Text("On that box: fleetwright-sidecar enrol \(pin)")
+                            Text("On that machine: fleetwright-sidecar enrol \(pin)")
                                 .fleetType(.microMono)
                                 .foregroundStyle(Design.Palette.inkDim)
                         }
@@ -77,9 +77,9 @@ struct AddMachineView: View {
                     Text(result).fleetType(.label).foregroundStyle(Design.Palette.bad)
                 }
             } header: {
-                sectionHead("A box you have")
+                sectionHead("A machine you have")
             } footer: {
-                Text("A pin is good for ten minutes, once. It needs a shell on the box to type it.")
+                Text("A pairing code works once, for ten minutes, typed on the machine.")
             }
 
             if runnersAnswered {
@@ -88,11 +88,11 @@ struct AddMachineView: View {
                         // SAID ONCE, IN THE WORDS NEW SESSION USES. The start
                         // sheet is where a temporary machine is asked for,
                         // because it arrives with the work already on it.
-                        Text("Under New session, pick a new machine in Where. It comes from \(repo), boots in a few minutes, and the session starts on it when it joins.")
+                        Text("Under New session, pick a new machine in Where. It comes from \(repo) and is ready in a few minutes.")
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.ink)
                     } else {
-                        Text("This fleet cannot start one yet. Set up temporary machines under You first.")
+                        Text("Set up temporary machines under You first.")
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.inkDim)
                     }
@@ -109,7 +109,7 @@ struct AddMachineView: View {
             } header: {
                 sectionHead("A repository's workflow")
             } footer: {
-                Text("A machine started from New session needs no token. A workflow you start yourself needs one, minted here for its repository.")
+                Text("Only a workflow you start yourself needs one, for its repository.")
             }
         }
         .scrollContentBackground(.hidden)

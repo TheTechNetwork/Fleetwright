@@ -68,7 +68,8 @@ What it costs, said plainly:
 - **Nothing watches while the app is closed.** A phone-direct component has no
   server to push from, so an alert for a failed backup or a host going down
   needs the fleet path below. The app does not pretend otherwise: a
-  phone-direct component says when it was last looked at.
+  phone-direct component's row says when it was last read ("Updated 3
+  hours ago"), or that it never has been ("Never opened").
 
 **Through the fleet, per component.** The credential is a vault item granted
 to a machine that can reach the provider, and the phone reaches it through the
@@ -91,9 +92,9 @@ is at the end of the section, under "Left from the first slice".
 it opened the change to what the fleet may use there. A pool is a machine of a
 kind, and what is on it is what somebody opens Machines to look at, so its
 page is one more page under the row that names it rather than a tab or an app
-of its own. The row now says when this phone last looked at the pool, or that
-it never has, because the page cannot be current about a pool nobody was
-watching.
+of its own. The row now says when this phone last read the pool ("Updated 3
+hours ago"), or "Never opened", because the page cannot be current about a pool
+nobody was watching.
 
 On that page, in the Machines tab's own card shape: how current it is first,
 then **Pools**, **Hosts**, **VMs** and **Storage**, each a heading only when
@@ -267,13 +268,13 @@ what typing its name makes impossible. A machine's reboot on iOS asks for
 Face ID instead, because on that machine's own page the wrong one is already
 impossible (`HostView.swift`).
 
-### When it was last looked at
+### When it was last updated
 
 Nothing watches a phone-direct pool while the app is closed, so the page
-opens on "Last looked at 10:42, 3 hours ago. Nothing watches while the app is
-closed." and changes to "Watching now. Changes arrive as Xen Orchestra makes
-them." once it is connected. The time is kept per address, and is the only
-thing these screens write.
+opens on "Updated 10:42, 3 hours ago" (or "Not checked yet." for a pool this
+phone has never read) and changes to "Live" once it is connected, when
+changes arrive as Xen Orchestra makes them. The time is kept per address, and
+is the only thing these screens write.
 
 ### Opening fast
 
@@ -284,8 +285,8 @@ six object types one at a time. Nothing was kept between visits, so every
 visit opened on a blank page.
 
 - **It opens on the page it showed last time.** The rows are drawn at once
-  from a file on the phone, and the status says "Showing the page as it was
-  at 14:02 until the pool answers." No row action is offered until the pool
+  from a file on the phone, and the status says "Showing the page from
+  14:02." until the pool answers. No row action is offered until the pool
   has answered (C-5). The file holds the page alone and never the token. On
   iOS it sits in Application Support with complete file protection and is
   left out of backups. On Android it sits in `noBackupFilesDir`.
@@ -306,9 +307,9 @@ pool's network it reaches nothing. Asked for: "Direct line of sight vs on
 5g", then "Both, in that order": first say why, then load it anyway.
 
 **What happens.** When the socket cannot open (it never opened, as opposed to
-opening and then dropping, which still says "The connection ended"), the page
-says "This phone cannot reach xo.lan from here, so it is asking one of your
-machines that can." and asks the fleet with `xolook`:
+opening and then dropping, which still says "Connection ended: …"), the page
+says "Can't reach xo.lan from here. Asking one of your machines…" and asks
+the fleet with `xolook`:
 
 1. The phone makes a P-256 key for this one look and sends its public half
    as `reply`, with the pool's address.
@@ -328,10 +329,9 @@ machines that can." and asks the fleet with `xolook`:
 
 **It is read, not watched.** Nothing pushes Xen Orchestra's notifications this
 way, so the page is read again every 20 seconds while it is open, and the
-status says so with the machine and the time: "Read through rpi-7550 at
-14:02. This phone cannot reach the pool from here, so the page is read there
-again every 20 seconds while it is open." Never "Watching now" (C-5). Leaving
-the page or the app stops the reads.
+status names the machine and the time: "Via rpi-7550 · updated 14:02". Never
+"Live" (C-5): the polling itself is not on the screen. Leaving the page or
+the app stops the reads.
 
 **Its actions go the same way** (`xoact`): the method and the JSON the page
 would have sent, which the coordinator and then the machine each hold to the

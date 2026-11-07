@@ -27,10 +27,10 @@ final class LinkedReposTests: XCTestCase {
     }
 
     func testNothingLinkedIsSaidPerRole() {
-        XCTAssertEqual(describeLinkedRole("archive", linked: nil, fleetRunners: nil), "Nothing linked. Sessions you start are not pushed anywhere when they stop.")
+        XCTAssertEqual(describeLinkedRole("archive", linked: nil, fleetRunners: nil), "Nothing linked. Session work is not saved.")
         XCTAssertEqual(describeLinkedRole("templates", linked: "eli/presets", fleetRunners: nil), "Linked: eli/presets.")
         XCTAssertEqual(describeLinkedRole("runners", linked: nil, fleetRunners: "fleet/runners"),
-                       "Your machines come from the fleet's repository, fleet/runners. Set your own to use your free Actions minutes.")
+                       "Using the fleet's: fleet/runners")
         XCTAssertEqual(describeLinkedRepos(0), "none linked")
         XCTAssertEqual(describeLinkedRepos(2), "2 of 3 linked")
     }
@@ -40,7 +40,7 @@ final class LinkedReposTests: XCTestCase {
             try JSONDecoder().decode(Fleet.Session.self, from: Data(#"{"name":"job","status":"running"\#(extra)}"#.utf8))
         }
         XCTAssertNil(try session("").archiveLine)
-        XCTAssertEqual(try session(#","archive":"Eli/Work""#).archiveLine, "Pushed to Eli/Work before it stops. Nothing has been pushed yet.")
+        XCTAssertEqual(try session(#","archive":"Eli/Work""#).archiveLine, "Saves to Eli/Work when it stops. Not saved yet.")
         XCTAssertEqual(
             try session(#","archive":"Eli/Work","archiveAt":1,"archiveOk":true,"archiveText":"Archived to Eli/Work on fleetwright/deb14/job-x.""#).archiveLine,
             "Archived to Eli/Work on fleetwright/deb14/job-x."

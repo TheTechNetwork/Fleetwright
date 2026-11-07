@@ -141,7 +141,7 @@ class XoPolicyTest {
         assertEquals(null, dropped.egress)
         assertFalse("a router with no way out was left asked for", dropped.edge)
         assertEquals(
-            "The edge router needs a way out: choose the network its WAN goes on.",
+            "The edge router needs an uplink: choose the network its WAN goes on.",
             XoPolicy.problem(inv, dropped.copy(edge = true)),
         )
     }
@@ -453,14 +453,14 @@ class XoPolicyTest {
         assertNull(XoPolicy.problem(inv, off))
         assertEquals("net-lab", XoPolicy.payload(inv, off).getString("egress"))
         assertEquals(
-            "The way out has to be a network this pool listed. Nothing was changed.",
+            "The uplink has to be a network this pool listed. Nothing was changed.",
             XoPolicy.problem(inv, off.copy(egress = "net-elsewhere")),
         )
     }
 
     /**
      * Asked for: "which disk did it put it on?" The router's disk goes on the
-     * storage picked, any in the way out's pool with room; unpicked, the
+     * storage picked, any in the uplink's pool with room; unpicked, the
      * fleet's there with the most room; and it is sent only to a machine
      * that reads it.
      */
@@ -482,7 +482,7 @@ class XoPolicyTest {
     fun applyWaitsForWhatTheMachineWouldTake() {
         val inv = inventory()
         val ok = XoPolicy.defaults(inv)
-        assertEquals("The way out has to be one of the networks the fleet may use.", XoPolicy.problem(inv, ok.copy(egress = "net-mgmt")))
+        assertEquals("The uplink has to be one of the networks the fleet may use.", XoPolicy.problem(inv, ok.copy(egress = "net-mgmt")))
         assertEquals("That names storage or a network this pool did not list. Nothing was changed.", XoPolicy.problem(inv, ok.copy(srs = setOf("sr-x"))))
         assertEquals("vCPUs are between 1 and 16, what the pool has.", XoPolicy.problem(inv, ok.copy(cpus = 17)))
         assertEquals("vCPUs are between 1 and 16, what the pool has.", XoPolicy.problem(inv, ok.copy(cpus = 0)))
@@ -582,7 +582,7 @@ class XoPolicyTest {
     fun groupNetworksNeedAWayOutToBeMadeIn() {
         val inv = inventory(inventoryJson().put("groups", JSONArray()))
         val c = XoPolicy.defaults(inv).copy(groupsChoice = true, groups = 2, egress = null)
-        assertEquals("Group networks are made in the way out’s pool: choose the way out. Nothing was changed.", XoPolicy.problem(inv, c))
+        assertEquals("Group networks are made in the uplink’s pool: choose the uplink. Nothing was changed.", XoPolicy.problem(inv, c))
         assertFalse(XoPolicy.payload(inv, c).has("groups"))
     }
 

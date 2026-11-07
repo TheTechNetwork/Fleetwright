@@ -126,8 +126,10 @@ test('both apps say what to do about it, not what we deleted', () => {
     ['Android', read('apps/android/app/src/main/java/network/thetech/fleetwright/CredentialsSheet.kt')],
   ]) {
     assert.match(src, /needsReconnect/, `${name} does not read the flag`);
-    assert.match(src, /still works/, `${name} does not say the token still works, which is why it is confusing`);
+    assert.match(src, /still works/i, `${name} does not say the token still works, which is why it is confusing`);
     assert.match(src, /eight hours/, `${name} does not say when it stops`);
-    assert.match(src, /nothing to copy or paste/i, `${name} does not say how small the fix is`);
+    // The fix is the button under the row; the row's one line names it
+    // (docs/reviews/copy-2026-11-06.md, 127).
+    assert.match(src, /"Reconnect needed"/, `${name} does not name the one thing to do`);
   }
 });

@@ -89,14 +89,14 @@ enum XOSetupHandoff {
             // DONE AND NOTHING HANDED BACK is a machine older than the
             // hand-off, which kept the token where the first version did.
             forget(job: job)
-            return (.failed("The machine finished but handed no token back; it is older than this app and kept the token itself. Update it and run the setup again."), nil)
+            return (.failed("The machine needs an update. Then run the setup again."), nil)
         }
         guard let raw = Keychain.get(replyAccount(job)).flatMap({ Data(base64Encoded: $0) }),
               let privateKey = try? P256.KeyAgreement.PrivateKey(rawRepresentation: raw),
               let text = open(handoff, job: job, address: entry.address, key: Seal.OneUseKey(privateKey: privateKey))
         else {
             forget(job: job)
-            return (.failed("The token the machine handed back did not open with this phone's key, so it was not kept. Run the setup again to make a new one."), nil)
+            return (.failed("Could not save the token. Run the setup again."), nil)
         }
         let at = recordAddress(text) ?? entry.address
         Keychain.set(text, for: tokenAccount(at))
@@ -312,15 +312,15 @@ enum XOSetupHandoff {
     /// show: what the fleet said, or what stood in the way.
     static func keepInFleet(settings: Settings, address: String) async -> String {
         guard let record = Keychain.get(tokenAccount(address)), !record.isEmpty else {
-            return "This phone holds no token for \(address) to keep in the fleet."
+            return "This phone has no saved token for \(address)."
         }
         guard PhoneGitHub(settings: settings).signedIn else {
-            return "Sign in to GitHub under You › Credentials to keep its token in the fleet: your vault is kept under your GitHub account."
+            return "Sign in to GitHub under You › Credentials first."
         }
         do {
             return try await PhoneVault(settings: settings).keepHypervisor(Fleet(settings: settings), address: address, record: record)
         } catch {
-            return "Its token was not kept in the fleet: \(error.localizedDescription)"
+            return "Not done: \(error.localizedDescription)"
         }
     }
 

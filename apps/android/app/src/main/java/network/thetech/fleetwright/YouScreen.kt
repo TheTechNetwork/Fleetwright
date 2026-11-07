@@ -176,7 +176,7 @@ fun YouScreen(
             // WHY IT IS GREY, SAID OUT LOUD, about the field that really is just
             // above it now. Sign-in exchanges an identity with one fleet.
             if (url.isBlank()) {
-                Hint("Enter your fleet's address first — signing in means signing in to a fleet.")
+                Hint("Enter your fleet's address to sign in.")
             }
             if (signInResult.isNotBlank()) Hint(signInResult)
             // ONE TAP INTO A FLEET THAT ISN'T REAL. The real coordinator is
@@ -193,10 +193,10 @@ fun YouScreen(
                 signedIn = true
                 onSignedIn()
             }) { Text("Look around the demo fleet") }
-            Hint(
-                "This device gets a credential of its own, kept encrypted with a key that never leaves " +
-                    "the phone's keystore. A fleet allows people by email address.",
-            )
+            // Said before somebody taps and gets a refusal they cannot
+            // interpret. What this device is given, and how it is kept, is
+            // Devices' to say.
+            Hint("A fleet allows people by email address.")
         } else if (inDemo) {
             SectionHead("You")
             // Said plainly, and never as "signed in".
@@ -216,11 +216,13 @@ fun YouScreen(
             // SAID BEFORE THE TAP, because it is the one thing signing out
             // takes that the next sign-in does not give back by itself.
             // Same words as iOS.
-            Hint("Signing out also removes the hypervisor tokens and saved sign-ins this phone holds. A pool whose token you kept in the fleet is still there; one kept only on this phone will need setting up again.")
+            Hint("Signing out also removes the hypervisor tokens and saved sign-ins this phone holds. A pool whose token you saved to your fleet is still there; one kept only on this phone will need setting up again.")
 
             // THE OTHER ACCOUNT THIS PHONE HOLDS. It starts your temporary
-            // machines and it is how your vault knows you.
-            SectionHead("GitHub on this phone")
+            // machines and it is how your saved credentials know you. The
+            // view says what it is for when it offers the sign-in, so the
+            // header is only the name.
+            SectionHead("GitHub")
             PhoneGitHubSignIn(settings)
 
             Column {
@@ -287,7 +289,7 @@ fun YouScreen(
                     Switch(checked = viewAsMember, onCheckedChange = onViewAsMember)
                 }
                 if (viewAsMember) {
-                    Hint("Every screen shows what a member of this fleet sees: their own sessions, no People, no revoking. Your credential is still an admin's.")
+                    Hint("Showing the app as a member sees it. You are still an admin.")
                 }
             }
             Hint("Sign out to point this app at a different fleet.")
@@ -465,7 +467,7 @@ internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
                 Hint(runnerRepoMessage, color = if (runnerCheck?.ok == false) Design.Palette.bad.now else Design.Palette.ink.now)
             }
         } else {
-            Hint("Asking the fleet…")
+            Hint("Loading…")
         }
 
         val saved = runnerRepoSaved
@@ -499,20 +501,20 @@ internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
             if (largeMessage.isNotBlank()) Hint(largeMessage)
             Hint(
                 "GitHub's larger macOS machines, 5 cores and 14 GB instead of 3 and 7, are billed by the minute to $saved's owner on every plan. " +
-                    "Off, New session does not offer them and the fleet refuses one.",
+                    "Off, New session does not offer them and a request for one is refused.",
             )
         } else if (runnerRepoAnswered && saved == null && fleetRepo != null && fleetAllowed != null) {
             SectionHead("Larger machines")
             Hint(
                 if (fleetAllowed) "Machines from $fleetRepo may be GitHub's larger ones, which its operator allowed."
-                else "Machines from $fleetRepo are standard ones. Its operator decides about larger ones, since the fleet pays for them.",
+                else "Machines from $fleetRepo are standard ones. Its operator decides about larger ones, since they are billed to its owner.",
             )
         }
 
         SectionHead("Who starts them")
         Hint(
             if (phone.signedIn) "This phone starts them itself, as ${phone.signIn?.login ?: "you"} on GitHub."
-            else "A permanent box with your GitHub connection starts them. Sign in to GitHub on this phone under You, and the phone starts them itself.",
+            else "A machine with your GitHub connection starts them. Sign in to GitHub on this phone under You, and the phone starts them itself.",
         )
         Hint(
             "Ask for one under New session, in Where. Sessions on it are lost when it goes, and it spends Actions minutes. " +
@@ -534,8 +536,8 @@ internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
  * sentences as YouView.swift.
  */
 internal fun describePushDoubt(doubt: PushKeyRule.Doubt): String = when (doubt) {
-    PushKeyRule.Doubt.KEY -> "Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts."
-    PushKeyRule.Doubt.SEAL -> "The last notification sealed for this phone arrived without its words. This goes once one arrives with them."
+    PushKeyRule.Doubt.KEY -> "Notifications may arrive without their text. Fleetwright tries again each time it starts."
+    PushKeyRule.Doubt.SEAL -> "The last notification arrived without its text."
 }
 
 /** "from owner/repo", or how it is not set up, for the row under You. */
@@ -596,7 +598,7 @@ private fun DevicesSheet(settings: Settings, admin: Boolean?, onDismiss: () -> U
             if (canRevoke) "Each sign-in mints a credential for that device alone, so revoking one leaves the others working."
             else "Each sign-in mints a credential for that device alone. Lost one? This fleet's admin can revoke it.",
         )
-        if (clients.isEmpty()) Hint(if (loaded) "No devices reported." else "Asking the fleet…")
+        if (clients.isEmpty()) Hint(if (loaded) "No devices reported." else "Loading…")
         // IN USE FIRST, newest first; the abandoned ones last.
         val ordered = clients.filter { it.lastSeenAt != null }.sortedByDescending { it.lastSeenAt } +
             clients.filter { it.lastSeenAt == null }
@@ -639,7 +641,7 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
     suspend fun load() {
         Fleet(settings).delegations()
             .onSuccess { delegations = it }
-            .onFailure { if (delegations.isEmpty()) result = it.message ?: "could not reach the coordinator" }
+            .onFailure { if (delegations.isEmpty()) result = it.message ?: "could not reach your fleet" }
         loaded = true
     }
     LaunchedEffect(Unit) { load() }
@@ -648,7 +650,7 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirmRevoke = null },
             title = { Text("Revoke this delegation?") },
-            text = { Text("Boxes refuse it from the next key list they take, within ten minutes. What it was for asks you to sign again.") },
+            text = { Text("Machines refuse it from the next key list they take, within ten minutes. What it was for asks you to sign again.") },
             confirmButton = {
                 TextButton(onClick = {
                     val target = d
@@ -665,9 +667,9 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
     }
 
     FullScreen(title = "Delegations", onDismiss = onDismiss) {
-        Hint("A box that takes only what you signed takes these in your name until they run out.")
+        Hint("A machine that takes only what you signed takes these in your name until they run out.")
         if (delegations.isEmpty()) {
-            Hint(if (loaded) "Nothing is delegated. What the app sends now, it signs as it sends it." else "Asking the fleet…")
+            Hint(if (loaded) "Nothing is delegated. What the app sends now, it signs as it sends it." else "Loading…")
         }
         for (d in delegations) {
             Row(
@@ -685,8 +687,8 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
 
         Text("An MCP client", style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.padding(top = 16.dp))
         Hint(
-            "Lets an MCP client signed in as you start, read, stop and resume sessions and make machines, on any box, until it runs out. " +
-                "It cannot reboot or upgrade a box, or move your credentials.",
+            "Lets an MCP client signed in as you start, read, stop and resume sessions and make machines, on any machine, until it runs out. " +
+                "It cannot reboot or upgrade a machine, or move your credentials.",
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((label, days) in listOf("Allow for a day" to 1, "Allow for a week" to 7)) {
@@ -713,14 +715,14 @@ internal fun describeDelegation(d: Fleet.Delegation): String = when {
     d.verbs == listOf("vmctl") -> "Ending machines kept ready"
     d.verbs == listOf("provision") && d.expires - d.issuedAt > 24L * 3600 * 1000 -> "Making machines kept ready"
     d.verbs.size > 8 -> "An MCP client"
-    else -> "A request the fleet places: ${d.verbs.joinToString(", ")}"
+    else -> "Sent in your name: ${d.verbs.joinToString(", ")}"
 }
 
 /** Where, and until when. */
 private fun delegationScope(d: Fleet.Delegation): String {
     val until = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(d.expires))
-    val boxes = if (d.hosts == listOf("*")) "any box" else d.hosts.joinToString(", ")
-    return "$boxes · until $until"
+    val machines = if (d.hosts == listOf("*")) "any machine" else d.hosts.joinToString(", ")
+    return "$machines · until $until"
 }
 
 /**

@@ -701,7 +701,7 @@ test('a later choice withdraws the shared token once every box has its own, and 
   assert.deepEqual(xo.tokens.get('fleetwright-box-deb14'), [kept.boxTokens[0].token]);
 });
 
-test('the machine image is built after the policy, on the way out’s pool, behind its router, and said in the end', { skip }, async (t) => {
+test('the machine image is built after the policy, on the uplink’s pool, behind its router, and said in the end', { skip }, async (t) => {
   // ASKED FOR: "Still can't run sessions on it". The image sessions' machines
   // are cloned from is built by the job that already holds the admin sign-in.
   const xo = await standIn(t, {
@@ -934,7 +934,7 @@ test('an Apply that stops partway says what it had done by then, and one that st
   }
 });
 
-test('group networks are made by the policy job in the way out’s pool, put in the set, and nothing is built', { skip }, async (t) => {
+test('group networks are made by the policy job in the uplink’s pool, put in the set, and nothing is built', { skip }, async (t) => {
   // ASKED FOR: "the 3 VMs need to reach each other". A network with no way
   // off the pool, made with the admin sign-in the fleet's user does not have.
   const xo = await standIn(t, { sets: [chosenBefore()], more: ['network.create', 'resourceSet.addObject'] });
@@ -1142,13 +1142,13 @@ test('a choice is held to what the pool has, and the way out to a network it lis
   assert.equal(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['deb14'], retireShared: true }, choices)).policy.retireShared, true);
   assert.equal(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['deb14'] }, choices)).policy.retireShared, undefined, 'naming the boxes does not withdraw the shared token');
 
-  // THE MACHINE IMAGE is built behind the edge router, on the way out's pool:
+  // THE MACHINE IMAGE is built behind the edge router, on the uplink's pool:
   // with the router asked for, or where that pool already has one.
   const pooled = { ...choices, networkPools: new Map([['n1', 'p1'], ['n2', 'p2']]), edgePools: new Set(['p2']) };
   assert.equal(checkPolicy({ ...ok, image: true, edge: true }, pooled).ok, true);
   assert.equal(checkPolicy({ ...ok, image: true, egress: 'n2' }, pooled).ok, true, 'that pool has its router');
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, image: true }, pooled)).text, /has none yet/);
-  assert.match(/** @type {any} */ (checkPolicy({ ...ok, image: true, egress: null }, pooled)).text, /choose the way out/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, image: true, egress: null }, pooled)).text, /choose the uplink/);
   // ASKED FOR: "os selection not just Debian". Any of the catalogue, together.
   const both = /** @type {any} */ (checkPolicy({ ...ok, images: ['ubuntu-24.04', 'debian-13', 'ubuntu-24.04'], edge: true }, pooled));
   assert.deepEqual(both.policy.images, ['ubuntu-24.04', 'debian-13']);
@@ -1163,7 +1163,7 @@ test('a choice is held to what the pool has, and the way out to a network it lis
   assert.equal(imaged.policy.edgeSr, 'b', 'where the disks go');
 
   // REBUILT OR REMOVED, asked for: "There is no rebuild button or delete
-  // button". Only an image the way out's pool has, and each one thing.
+  // button". Only an image the uplink's pool has, and each one thing.
   const there = { ...pooled, edgePools: new Set(['p1']), imagesOn: new Map([['p1', new Set(['debian-13', 'ubuntu-24.04'])]]) };
   const changed = /** @type {any} */ (checkPolicy({ ...ok, rebuild: ['debian-13'], remove: ['ubuntu-24.04'], images: ['ubuntu-26.04'] }, there));
   assert.equal(changed.ok, true, changed.text);
@@ -1176,7 +1176,7 @@ test('a choice is held to what the pool has, and the way out to a network it lis
     [{ ...ok, rebuild: ['debian-13'], images: ['debian-13'] }, /one of those/],
     [{ ...ok, remove: ['debian-13'], holder: true }, /Debian 13 image, so that one stays/],
     [{ ...ok, remove: 'debian-13' }, /a list of them/],
-    [{ ...ok, rebuild: ['debian-13'], egress: null }, /choose the way out/],
+    [{ ...ok, rebuild: ['debian-13'], egress: null }, /choose the uplink/],
     [{ ...ok, rebuild: ['debian-13'] }, /behind the edge router/, { ...there, edgePools: new Set() }],
   ])) {
     const r = /** @type {any} */ (checkPolicy(p, against));
@@ -1305,7 +1305,7 @@ test('labs are 0 to 4 in all, on the edge, and a phone that says nothing leaves 
   for (const labs of [{ open: 4, closed: 1 }, { open: -1, closed: 0 }, { open: 1.5, closed: 0 }, { open: '1', closed: 0 }, { open: 1 }, true]) {
     assert.match(/** @type {any} */ (checkPolicy({ ...ok, labs }, choices)).text ?? '', /Between 0 and 4 labs/, JSON.stringify(labs));
   }
-  assert.match(/** @type {any} */ (checkPolicy({ ...ok, egress: null, labs: { open: 1, closed: 0 } }, choices)).text, /choose the way out/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, egress: null, labs: { open: 1, closed: 0 } }, choices)).text, /choose the uplink/);
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, egress: 'n2', labs: { open: 1, closed: 0 } }, choices)).text, /has none yet/);
   assert.equal(checkPolicy({ ...ok, egress: 'n2', edge: true, labs: { open: 1, closed: 0 } }, choices).ok, true, 'with the router asked for');
 
@@ -1321,7 +1321,7 @@ test('labs are 0 to 4 in all, on the edge, and a phone that says nothing leaves 
   assert.match(/** @type {any} */ (checkPolicy({ ...ok, labsEach: 1 }, choices)).text, /goes with the labs it limits/);
 });
 
-test('group networks are 0 to 4, in the way out’s pool, and a phone that says nothing asks for none', () => {
+test('group networks are 0 to 4, in the uplink’s pool, and a phone that says nothing asks for none', () => {
   const choices = { srs: new Map([['a', 100 * 1024 ** 3]]), networks: new Set(['n1']), capacity: { cpus: 8, memory: 32 * 1024 ** 3 } };
   const ok = { v: 1, srs: ['a'], networks: ['n1'], egress: 'n1', limits: { cpus: 2, memory: 4 * 1024 ** 3, disk: 50 * 1024 ** 3 } };
   assert.equal(/** @type {any} */ (checkPolicy(ok, choices)).policy.groups, 0);
@@ -1329,7 +1329,7 @@ test('group networks are 0 to 4, in the way out’s pool, and a phone that says 
   for (const groups of [5, -1, 1.5, '2', true]) {
     assert.match(/** @type {any} */ (checkPolicy({ ...ok, groups }, choices)).text ?? '', /Between 0 and 4/, String(groups));
   }
-  assert.match(/** @type {any} */ (checkPolicy({ ...ok, groups: 1, egress: null }, choices)).text, /choose the way out/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, groups: 1, egress: null }, choices)).text, /choose the uplink/);
 });
 
 /**

@@ -143,13 +143,13 @@ internal object XoHandoff {
             // DONE AND NOTHING HANDED BACK is a machine older than the
             // hand-off, which kept the token where the first version did.
             forget(settings, job)
-            return Outcome.Failed("The machine finished but handed no token back; it is older than this app and kept the token itself. Update it and run the setup again.") to null
+            return Outcome.Failed("The machine needs an update. Then run the setup again.") to null
         }
         val key = settings.secret(replyName(job))?.let { restore(it) }
         val record = key?.let { open(handoff, job, entry.address, it) }
         forget(settings, job)
         if (record == null) {
-            return Outcome.Failed("The token the machine handed back did not open with this phone's key, so it was not kept. Run the setup again to make a new one.") to null
+            return Outcome.Failed("Could not save the token. Run the setup again.") to null
         }
         val at = recordAddress(record) ?: entry.address
         settings.putSecret(tokenName(at), record)
@@ -340,12 +340,12 @@ internal object XoHandoff {
 
     suspend fun keepInFleet(settings: Settings, fleet: Fleet, address: String): String {
         val record = settings.secret(tokenName(address))
-        if (record.isNullOrBlank()) return "This phone holds no token for $address to keep in the fleet."
+        if (record.isNullOrBlank()) return "This phone has no saved token for $address."
         if (!PhoneGitHub(settings).signedIn) {
-            return "Sign in to GitHub under You › Credentials to keep its token in the fleet: your vault is kept under your GitHub account."
+            return "Sign in to GitHub under You › Credentials first."
         }
         return PhoneVault(settings).keepHypervisor(fleet, address, record)
-            .getOrElse { "Its token was not kept in the fleet: ${it.message ?: "that did not work"}" }
+            .getOrElse { "Not done: ${it.message ?: "that did not work"}" }
     }
 
     /**

@@ -114,6 +114,9 @@ struct HostView: View {
     /// The address being typed to pin as an admin here. Cleared when it is
     /// sent, as a label is.
     @State private var newAdmin = ""
+    /// Whether the one explanation on this page, under Allowed from the app,
+    /// is open. Closed by default: it is the mechanism, read once.
+    @State private var howGrantsWork = false
 
     /// UPDATE, UPGRADE, REBOOT, THE CHANNEL AND THE IMAGE ONLY WHERE THE
     /// MACHINE WILL TAKE THEM FROM THIS PERSON (C-2): the coordinator's rule
@@ -191,7 +194,7 @@ struct HostView: View {
                 // Said once, at the top, so the settings further down read as
                 // answers and not as controls that went missing.
                 if !mayAdminister {
-                    Text("Only this fleet’s admin, or the one person this machine works for, can update it, reboot it or change how it is set up.")
+                    Text("Only an admin can change this machine.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
@@ -323,19 +326,19 @@ struct HostView: View {
             }
             if let waiting = health?.version?.restartWaitingFor {
                 // The gap, in the attention colour: this is the one line on the
-                // page that says the box is not running what it holds.
-                Text("\(waiting) is on this box and not yet running. A restart applies it.")
+                // page that says the machine is not running what it holds.
+                Text("\(waiting) is installed and not yet running. A restart applies it.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.attention)
             }
             if health?.version?.rootHalfBehind == true {
                 // ROOT'S HALF, in the same colour and for the same reason: a
-                // fact about this box that the fleet could only learn from a
-                // journal. What still works comes first, so it reads as one
-                // command and not a broken box; Check carries the command
+                // fact about this machine that the fleet could only learn from
+                // a journal. What still works comes first, so it reads as one
+                // command and not a broken machine; Check carries the command
                 // itself, with the real path, because the host knows it and
                 // this screen does not.
-                Text("The update helper on this box is older than the release it runs. Updates still land and the services restart, but nothing root owns is refreshed. Check shows the one command that fixes it, once.")
+                Text("The update helper is out of date. Updates still apply; Check for updates shows the fix.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.attention)
             }
@@ -350,7 +353,7 @@ struct HostView: View {
                 // the box's environment is forcing it and a picker that refuses
                 // is worse than a sentence.
                 LabeledContent("Channel") {
-                    Text("\(channel ?? "stable"), set on the box").fleetType(.label)
+                    Text("\(channel ?? "stable"), fixed on this machine").fleetType(.label)
                 }
             } else if let now = channel, !mayActOnBox {
                 LabeledContent("Channel") { Text(now).fleetType(.label) }
@@ -386,7 +389,7 @@ struct HostView: View {
                     // segment for a state it cannot switch to, or silently
                     // round the box to one of the two it is not on.
                     LabeledContent("Image") {
-                        Text(now.pinned == true ? "set on the box" : "not one of ours")
+                        Text(now.pinned == true ? "Fixed on this machine" : "Custom image")
                             .fleetType(.label)
                     }
                     if let image = now.image, !image.isEmpty {
@@ -410,17 +413,18 @@ struct HostView: View {
                     .pickerStyle(.segmented)
                 }
             } else {
-                // NIL IS CANNOT TELL. A host older than this verb sends nothing,
-                // and a control defaulted to "No browser" would tell somebody
-                // their box has no Chromium when it might.
-                Text("This host has not said which image it runs sessions in.")
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.inkDim)
+                // NIL IS CANNOT TELL (§7). A host older than this verb sends
+                // nothing, and a control defaulted to "No browser" would tell
+                // somebody their machine has no Chromium when it might. One
+                // word, as a value: never "none".
+                LabeledContent("Image") {
+                    Text("Unknown").fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                }
             }
         } header: {
             sectionHead("Session image")
         } footer: {
-            Text("The browser image is the same one with Chromium in it, for a session that has to look at a page it built. Running sessions keep the image they started in.")
+            Text("Browser includes Chromium. Running sessions keep the image they started in.")
         }
         .listRowBackground(Design.Palette.card)
     }
@@ -434,7 +438,7 @@ struct HostView: View {
     @ViewBuilder private var labelsSection: some View {
         Section {
             if labels.isEmpty {
-                Text("No labels, so only work that names this host can land here.")
+                Text("No labels")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
@@ -446,7 +450,7 @@ struct HostView: View {
                         // WHY IT CANNOT COME OFF, next to it. Without this the
                         // only difference between the two kinds is a missing
                         // swipe, which reads as a bug.
-                        Text("from the machine")
+                        Text("automatic")
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.inkDim)
                     }
@@ -476,7 +480,7 @@ struct HostView: View {
         } header: {
             sectionHead("Labels")
         } footer: {
-            Text("Labels are how work is aimed: a session asked for with a tag lands on a host carrying it. The ones the machine works out about itself cannot be removed.")
+            Text("Sessions asked for with a label run on machines that have it.")
         }
         .listRowBackground(Design.Palette.card)
     }
@@ -498,18 +502,18 @@ struct HostView: View {
         if let houseRules {
             Section {
                 if houseRules == 0 {
-                    Text("A rules file is on this box and is not being used. The box's /profiles says why.")
+                    Text("The house rules file is not being used.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.attention)
                 } else {
-                    Text("Every new session here starts with \(houseRules) characters of house rules, read on every turn.")
+                    Text("\(houseRules) characters, added to every new session.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
             } header: {
                 sectionHead("House rules")
             } footer: {
-                Text("One file on the box, written into each new session as its CLAUDE.md. Changing it needs a shell there, and reaches the next session rather than a running one.")
+                Text("Edit it on the machine. New sessions pick it up.")
             }
             .listRowBackground(Design.Palette.card)
         }
@@ -532,7 +536,7 @@ struct HostView: View {
         Section {
             if let logs {
                 if logs.isEmpty {
-                    Text("None of the services this app knows are installed here.")
+                    Text("No logs here")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
@@ -540,18 +544,19 @@ struct HostView: View {
                     Button(logName(source)) { run { try await fleet.logs(host: hostId, service: source) } }
                 }
             } else {
-                // NIL IS CANNOT TELL. A host older than this field still
+                // NIL IS CANNOT TELL (§7). A host older than this field still
                 // answers the verb, but this screen has not been told which of
                 // the three journals exist here, and three buttons where one
-                // is dead is the thing the field was added to prevent.
-                Text("This host has not said which logs it can read.")
+                // is dead is the thing the field was added to prevent. One
+                // word, never "none".
+                Text("Unknown")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
         } header: {
             sectionHead("Logs")
         } footer: {
-            Text("The last forty lines of a service's journal. A session's own output is under the session, as Output.")
+            Text("The last 40 lines. A session's own output is on its page, as Output.")
         }
         .listRowBackground(Design.Palette.card)
     }
@@ -563,7 +568,7 @@ struct HostView: View {
         switch source {
         case "hub": return "The session manager"
         case "coordinator": return "The fleet coordinator"
-        case "sidecar": return "This box as a fleet host"
+        case "sidecar": return "Fleetwright host"
         default: return source
         }
     }
@@ -578,13 +583,14 @@ struct HostView: View {
         run { try await fleet.labels(host: hostId, add: wanted) }
     }
 
-    /// The one line on the box that turns a grant on. The app never runs it:
-    /// it is shown to be typed by somebody with a shell there.
+    /// The one line on the machine that turns a grant on. The app never runs
+    /// it: it is shown to be typed by somebody with a shell there.
     private func grantLine(_ name: String) -> String { "sudo fleetwright grant \(name) on" }
 
     /// A grant that is off: the fact, then the line, selectable so it can be
     /// copied into a terminal. Dim, not attention — this is an answer, not a
-    /// fault; the box is doing what somebody decided.
+    /// fault; the machine is doing what somebody decided. Drawn once per
+    /// grant, under its row in Allowed from the app, and nowhere else.
     @ViewBuilder private func grantOff(_ fact: String, line: String) -> some View {
         VStack(alignment: .leading, spacing: Design.Space.hair) {
             Text(fact).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
@@ -639,58 +645,66 @@ struct HostView: View {
                         }
                     }
                     HStack {
-                        TextField("Address to pin", text: $newAdmin)
+                        TextField("Email address", text: $newAdmin)
                             .keyboardType(.emailAddress)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .fleetType(.label)
-                        Button("Pin") {
+                        Button("Add") {
                             let email = newAdmin.trimmingCharacters(in: .whitespacesAndNewlines)
                             newAdmin = ""
                             run { try await fleet.pinAdmin(host: hostId, email: email, add: true) }
                         }
                         .disabled(busy || !newAdmin.contains("@"))
                     }
-                    Text("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.")
+                    Text("Only these people can update or reboot this machine. The last one is removed on the machine itself.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 } else if admins.left == nil && admins.count != nil {
-                    Text("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from the admins pinned on it, and you are not one of them.")
+                    Text("Only this machine’s admins can change it, and you are not one of them.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
             } header: {
-                sectionHead("Pinned admins")
+                sectionHead("This machine’s admins")
             }
             .listRowBackground(Design.Palette.card)
         }
     }
 
-    /// WHAT THIS BOX ALLOWS FROM THE APP, said before a button is pressed.
+    /// WHAT THIS MACHINE ALLOWS FROM THE APP, said before a button is pressed.
     ///
     /// Two rows, the same shape, one per grant, and only when the host said —
-    /// an older host sends nothing and gets no section, because "not allowed"
+    /// an older host sends nothing and gets no section, because "Off"
     /// invented from silence would send somebody to a terminal for nothing.
-    /// A grant that is off carries the line that turns it on.
+    /// A grant that is off carries the line that turns it on, HERE AND ONLY
+    /// HERE: the reboot grant used to be said again, command and all, under
+    /// This machine, which was the same fact twice on one page. The mechanism
+    /// (a root-owned rule, sudo fleetwright grant) is the one explanation on
+    /// this page, behind How this works.
     @ViewBuilder private var allowedSection: some View {
         if let grants = health?.updates?.grants {
             Section {
                 if let upgrades = grants.upgrades {
                     LabeledContent("System upgrades") {
-                        Text(upgrades ? "allowed" : "not allowed").fleetType(.label)
+                        Text(upgrades ? "On" : "Off").fleetType(.label)
                     }
-                    if !upgrades { grantOff("Turning it on is one line on the box:", line: grantLine("upgrades")) }
+                    if !upgrades { grantOff("To turn it on, run this on the machine:", line: grantLine("upgrades")) }
                 }
                 if let reboot = grants.reboot {
                     LabeledContent("Reboot") {
-                        Text(reboot ? "allowed" : "not allowed").fleetType(.label)
+                        Text(reboot ? "On" : "Off").fleetType(.label)
                     }
-                    if !reboot { grantOff("Turning it on is one line on the box:", line: grantLine("reboot")) }
+                    if !reboot { grantOff("To turn it on, run this on the machine:", line: grantLine("reboot")) }
                 }
+                DisclosureGroup("How this works", isExpanded: $howGrantsWork) {
+                    Text("Each one is a root-owned rule on the machine, set by somebody with a shell there. Nothing on a phone can change it; sudo fleetwright grant does, and sessions keep running.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+                .fleetType(.label)
             } header: {
                 sectionHead("Allowed from the app")
-            } footer: {
-                Text("Each one is a root-owned rule on the machine, given by somebody with a shell there. Nothing here can change it; sudo fleetwright grant does, and keeps every session running.")
             }
             .listRowBackground(Design.Palette.card)
         }
@@ -730,12 +744,13 @@ struct HostView: View {
                     // Pinned admins section already said so.
                     EmptyView()
                 } else if health?.updates?.grants?.reboot == false {
-                    // NO BUTTON FOR A THING THE BOX REFUSES. The grant is a
-                    // root-owned rule on the machine and nothing on a phone can
-                    // write it, so the honest control is the sentence and the
-                    // one line that changes it. Same words as Android, held
-                    // equal by test/grants-in-apps.test.js.
-                    grantOff("Reboot from the app is off on this box.", line: grantLine("reboot"))
+                    // NO BUTTON FOR A THING THE MACHINE REFUSES, and nothing
+                    // in its place: the grant is a root-owned rule nothing on
+                    // a phone can write, and Allowed from the app above
+                    // already says Reboot: Off with the one line that changes
+                    // it. Saying it here again was the same fact twice on one
+                    // page. Held by test/grants-in-apps.test.js.
+                    EmptyView()
                 } else {
                     Button("Reboot", role: .destructive) {
                         rebootStage = .asking
@@ -785,17 +800,21 @@ struct HostView: View {
             // anybody else, and the refusal used to arrive after the
             // confirmation dialog.
             if enrolled?.isRevoked == false && settings.showsAdmin {
-                Button("Revoke this host", role: .destructive) { confirmingRevoke = true }
+                Button("Remove this machine", role: .destructive) { confirmingRevoke = true }
             }
             if !pin.isEmpty {
-                LabeledContent("Pin") { Text(pin).fleetType(.labelMono).textSelection(.enabled) }
+                LabeledContent("Pairing code") { Text(pin).fleetType(.labelMono).textSelection(.enabled) }
                 // NAMED, because a bound pin is refused anywhere else and the
-                // refusal arrives on the box rather than here.
-                Text("for \(hostId) only — on that box: fleetwright-sidecar enrol \(pin)")
+                // refusal arrives on the machine rather than here.
+                Text("Run on \(hostId): fleetwright-sidecar enrol \(pin)")
                     .fleetType(.micro)
                     .foregroundStyle(Design.Palette.attention)
             }
-            Button(enrolled?.isRevoked == true ? "Readmit" : "Replace key") {
+            // LET IT BACK IN for a revoked machine, A NEW PAIRING CODE for one
+            // that was reinstalled: two different refusals from the
+            // coordinator, two remedies, and the wrong word would send
+            // somebody to a code it declines (test/bound-pin.test.js).
+            Button(enrolled?.isRevoked == true ? "Let it back in" : "New pairing code") {
                 Task {
                     busy = true
                     defer { busy = false }
@@ -807,9 +826,9 @@ struct HostView: View {
             sectionHead("This machine")
         }
         .listRowBackground(Design.Palette.card)
-        .alert("Revoke \(hostId)?", isPresented: $confirmingRevoke) {
+        .alert("Remove \(hostId)?", isPresented: $confirmingRevoke) {
             Button("Cancel", role: .cancel) {}
-            Button("Revoke", role: .destructive) {
+            Button("Remove", role: .destructive) {
                 Task {
                     busy = true
                     defer { busy = false }
@@ -849,7 +868,7 @@ struct HostView: View {
             }
         } message: {
             Text("It is disconnected immediately, and its sessions keep running without it. "
-                 + "Getting it back means a new pin, typed on that box.")
+                 + "Getting it back means a new pairing code, typed on it.")
         }
     }
 

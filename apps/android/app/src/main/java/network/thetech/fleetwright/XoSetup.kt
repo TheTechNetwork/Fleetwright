@@ -53,7 +53,7 @@ internal object XoSetup {
         "resource-set" to "Setting what it may use",
         "token" to "Making its token",
         "updates" to "Turning on updates",
-        "hand-off" to "Handing over",
+        "hand-off" to "Sending the token",
     )
 
     /**
@@ -105,15 +105,15 @@ internal object XoSetup {
         val edge = build == "edge"
         return when (key) {
             "download" -> if (edge) "Downloading OPNsense" else "Downloading the image"
-            "read" -> "Reading the blocks the configuration goes in"
-            "keep" -> if (edge) "Writing OPNsense to the pool, to keep" else "Writing the image to the pool, to keep"
+            "read" -> "Configuring"
+            "keep" -> if (edge) "Saving OPNsense to the pool" else "Saving the image to the pool"
             "write" -> if (edge) "Writing the edge router’s disk" else "Writing the disk"
             else -> null
         }
     }
 
     /**
-     * "Reading the blocks the configuration goes in: 192 of 2238 MB" while
+     * "Configuring: 192 of 2238 MB" while
      * a part's bytes move: the machine's sentence says the same with the
      * release and the storage named, which the notification is never sent.
      * Null while none move; a key never met still says "192 of 2238 MB".
@@ -244,27 +244,27 @@ internal object XoSetup {
     fun plain(probe: Fleet.Probe): Boolean = probe.reachable && !probe.tls
 
     /**
-     * How a probe reads to a person. `xo` is three-valued and said as such:
-     * null is cannot tell, never rounded to yes or no (C-5). The words are
-     * iOS's.
+     * How a probe reads to a person: a row's verdict, what answered, then
+     * how it was reached when that is not HTTPS with a certificate, because
+     * the path is what the person is choosing between. `xo` is three-valued
+     * and said as such: null is Unknown, never rounded to yes or no (C-5).
+     * The words are iOS's (AddHypervisorView.describe).
      */
-    fun describe(probe: Fleet.Probe): String = when {
-        !probe.reachable -> "Could not reach it"
-        // THROUGH THIS PHONE, in iOS's words for it.
-        probe.through == "phone" -> when (probe.xo) {
-            true -> "Reached Xen Orchestra through this phone"
-            false -> "Reached something through this phone, and it does not look like Xen Orchestra"
-            null -> "Reached something through this phone; cannot tell whether it is Xen Orchestra"
+    fun describe(probe: Fleet.Probe): String {
+        if (!probe.reachable) return "Could not reach it"
+        val what = when (probe.xo) {
+            true -> "Xen Orchestra" + (probe.version?.let { " $it" } ?: "")
+            false -> "Not Xen Orchestra"
+            null -> "Unknown"
         }
-        !probe.tls -> when (probe.xo) {
-            true -> "Reached Xen Orchestra over plain HTTP"
-            false -> "Reached something over plain HTTP, and it does not look like Xen Orchestra"
-            null -> "Reached something over plain HTTP; cannot tell whether it is Xen Orchestra"
+        return when {
+            probe.through == "phone" -> "$what · via this phone"
+            !probe.tls -> "$what · no HTTPS"
+            // Reached over TLS with no readable certificate: nothing to pin
+            // to, so it is listed and not offered.
+            probe.cert == null -> "$what · certificate not read"
+            else -> what
         }
-        probe.cert == null -> "Reached it over HTTPS, but could not read its certificate, so there is nothing to pin the sign-in to"
-        probe.xo == true -> "Reached it over HTTPS" + (probe.version?.let { ". Xen Orchestra $it" } ?: ". Looks like Xen Orchestra")
-        probe.xo == false -> "Reached it over HTTPS, but it does not look like Xen Orchestra"
-        else -> "Reached it over HTTPS. Cannot tell what is answering"
     }
 
     /**
@@ -342,7 +342,7 @@ internal object XoSetup {
     fun trustedLine(c: Fleet.Certificate, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String {
         val who = listOfNotNull(c.subject?.let { "issued to $it" }, c.issuer?.let { "by $it" }).joinToString(" ")
         val parts = listOfNotNull(who.ifBlank { null }, c.notAfter?.let { "valid until ${mediumDate(it, zone, locale)}" })
-        return if (parts.isEmpty()) "Its certificate checks out." else "Its certificate checks out: ${parts.joinToString(", ")}."
+        return if (parts.isEmpty()) "Certificate trusted." else "Certificate trusted: ${parts.joinToString(", ")}."
     }
 
     /**

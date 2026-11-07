@@ -31,37 +31,35 @@ const I_POLICY = IOS('XOPolicy.swift');
 /** What both phones say, word for word. */
 /** What Apply does to an image that is there, in the words both phones use. */
 const IMAGE_ACTION_WORDS = [
-  'Apply builds a new one beside it from the newest image, then removes this one. ',
-  'Apply removes it, and New session stops offering it. ',
-  'If a machine was made from this one, it is kept until that machine is gone.',
-  'If a machine was made from it, it is kept until that machine is gone.',
+  'Rebuilt on Apply from the newest image',
+  'Removed on Apply',
   'The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for.',
   'A machine image is rebuilt behind the edge router, and that pool has none. Build the router with it.',
 ];
 
 const SHARED = [
-  'The fleet has no report of this machine. The box holding your pool may not have looked yet, or it has been removed.',
-  'No address reported yet. Its guest agent says it once it has booted.',
+  // The machine's page, in one sentence each (docs/reviews/copy-2026-11-06.md, 43 to 48).
+  'No report of this machine yet.',
+  'No address yet. It appears once the machine boots.',
   'Open its console in Xen Orchestra',
-  'The console is Xen Orchestra’s own page, which asks you to sign in there: this phone does not hold the pool’s token.',
-  'The console opens in the app with the pool’s token this phone holds, on the pool’s own network or through one of your machines from away; the page that draws it never sees the token.',
+  'SSH uses the keys under You › SSH keys, on machines made after you add them.',
+  ' The console opens Xen Orchestra, where you sign in.',
   'Give it longer',
   'Restart with this size',
   'End it now',
   '? It is stopped and removed with its disk, and anything on it is lost.',
   '? A session running on it ends.',
-  'held to your pool’s limits, and the machine restarts at its old size if the pool refuses.',
+  'Machines last up to ',
   'On your hypervisor',
   'On your hypervisor: console, SSH, size and end',
-  'Behind the edge router',
+  'Default (internet only)',
   'SSH keys',
   'Keep in your vault',
   'Only public keys, one a line, starting ssh-ed25519, ssh-rsa or ecdsa-sha2. This line is not one: ',
   'A machine made on your hypervisor after you keep them lets you in as fleetwright, with sudo: ',
-  'It is there. New session › Where offers machines from it.',
+  '"Ready"',
   ...IMAGE_ACTION_WORDS,
-  ' with Fleetwright installed, on a 20 GiB disk on the storage chosen. ',
-  'image once, converts it to a disk, and installs Fleetwright on it, which takes about ten minutes. Sessions can ',
+  ' · 20 GiB disk · about 10 min',
 ];
 
 test('iOS: the machines on your pools are read from the snapshot, and worked through the fleet, never held for later', () => {

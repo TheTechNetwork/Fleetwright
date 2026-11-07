@@ -1146,7 +1146,7 @@ export function edgeStorage({ pool, srs, fleetSrs, sr = null }) {
   const fits = (/** @type {any} */ s) => s?.$pool === pool && room(s) > EDGE_IMAGE.rawSize;
   if (sr) {
     const chosen = srs.find((s) => s?.id === sr);
-    if (!chosen || chosen.$pool !== pool) throw new Error('the storage chosen for the edge router is not in the way out’s pool. Nothing was built');
+    if (!chosen || chosen.$pool !== pool) throw new Error('the storage chosen for the edge router is not in the uplink’s pool. Nothing was built');
     if (!fits(chosen)) throw new Error(`${srName(chosen)} has no 3 GiB free for the edge router. Nothing was built`);
     return chosen;
   }

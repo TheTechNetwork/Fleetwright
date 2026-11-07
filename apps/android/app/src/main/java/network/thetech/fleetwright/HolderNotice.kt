@@ -70,7 +70,7 @@ internal object HolderNotice {
 
         context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
             NotificationChannel(CHANNEL, "Pools’ own machines", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                description = "A pool’s own machine asking to join, and the word that it did."
+                description = "A pool’s own machine waiting to join, and the word that it did."
             },
         )
         // ONE PER NAME: the word that it joined replaces the ask.

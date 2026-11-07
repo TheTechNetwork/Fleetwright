@@ -35,18 +35,20 @@ test('the words about runners from a phone are the same on both', () => {
   // "Runners from this phone" was the heading over all of this, inside the
   // section for adding a machine. The sign-in is an account the phone holds
   // now, under You, and neither app draws that heading.
+  // What the sign-in is for and what to do, in person-words: no minter and
+  // no box on screen (docs/reviews/copy-2026-11-06.md, 137 to 139, 147, 148).
   for (const words of [
-    'Sign in to GitHub here and this phone starts your machines itself, with no permanent box. ',
-    'What this phone sends is sealed to your fleet\'s minter, so nothing in between can read it.',
-    'Looking for your fleet\'s minter…',
-    'This fleet\'s minter does not answer for its own key. Paste the key whoever runs your fleet gave you.',
-    'Minter key from whoever runs your fleet',
+    'Sign in to GitHub to start temporary machines from this phone and reach your saved credentials.',
+    'Checking…',
+    'Paste the key from whoever runs your fleet.',
+    'Key from whoever runs your fleet',
     'Check and save key',
     'Sign in to GitHub',
     'Sign out of GitHub',
-    'Signed out of GitHub on this phone. Machines you start now go through a permanent box.',
-    'The fleet\'s minter has a different key from the one you were given, so nothing was saved. Ask whoever runs your fleet.',
-    'It takes a few minutes to boot and then ',
+    'Signed out of GitHub.',
+    'That key does not match your fleet\'s. Ask whoever runs your fleet for the current one.',
+    'Key saved.',
+    'It takes a few minutes to boot, then appears under Machines.',
     'Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.',
   ]) {
     assert.ok(IOS.includes(words), `iOS lost: ${words}`);
@@ -63,7 +65,7 @@ test('a phone finds the minter key at the fleet address, and offers to paste one
     assert.ok(src.includes('/.well-known/fleetwright-minter'), `${name} does not look the minter key up`);
     const gate = src.indexOf('minterFound == false');
     assert.ok(gate > 0, `${name} draws the key field whether or not the minter answered`);
-    assert.ok(src.indexOf('Minter key from whoever runs your fleet', gate) > gate, `${name} draws the key field outside the fallback`);
+    assert.ok(src.indexOf('Key from whoever runs your fleet', gate) > gate, `${name} draws the key field outside the fallback`);
   }
 });
 
@@ -105,25 +107,28 @@ test('the GitHub sign-in is PKCE with a state the phone checks, and the code goe
 });
 
 test('the words about a vault are the same on both phones', () => {
+  // A LIST, not prose: one row per saved credential with a status word and
+  // its actions on the row, the approved machines as one row of names, and
+  // the how-to once under it (docs/reviews/copy-2026-11-06.md, 140 to 150).
   for (const words of [
     'Your vault',
-    'Keep each credential here once. A box you approve gets them when a session needs them, ',
-    'and loses them when you remove it.',
-    'Nothing kept yet.',
-    'Kept: ',
-    'Loading your vault…',
-    'Keep GitHub for my boxes',
-    'Keep Cloudflare for my boxes',
+    'Saved once, for your sessions on the machines you approve.',
+    'Nothing saved yet.',
+    'No Remote Control',
+    'Loading your credentials…',
+    'Add GitHub',
+    'Add Cloudflare',
     'Secret name',
     'Secret value',
-    'Keep secret',
-    'Boxes',
-    'Approve a box only if fleetwright-sidecar identity on it prints the same fingerprint.',
+    'Save secret',
+    'Machines',
+    'Approve a machine from its page.',
+    'Check this matches fleetwright-sidecar identity on the machine before approving.',
     'Approved',
     'Approve',
     'Remove',
     'no key listed',
-    'This phone does not know which fleet account it is signed in as. Sign in to the fleet again.',
+    'Sign in to your fleet again.',
   ]) {
     assert.ok(IOS.includes(words), `iOS lost: ${words}`);
     assert.ok(ANDROID.includes(words), `Android lost: ${words}`);

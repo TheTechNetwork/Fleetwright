@@ -19,9 +19,11 @@ import SwiftUI
 /// row wears a ring: nothing here is asking anything, and the ring is spent on
 /// the card that is (docs/design-system.md, "One card at a time wears a tone").
 ///
-/// THE FIRST LINE SAYS HOW CURRENT IT IS. Watching now while the socket is
-/// open, and otherwise when it was last looked at, because nothing watches a
-/// phone-direct pool while the app is closed (PoolWatch).
+/// THE FIRST LINE SAYS HOW CURRENT IT IS, in a row's words: Live while the
+/// socket is open, Via a machine and when otherwise, and when it was last
+/// updated when nothing is, because nothing watches a phone-direct pool while
+/// the app is closed (PoolWatch). The why of each is in docs/manage.md, not
+/// on every page.
 ///
 /// MOTION: a row arriving, leaving or moving settles on the spring, and a
 /// state word that changes crossfades, which is all that moves (MOTION 2).
@@ -157,101 +159,73 @@ struct PoolManageView: View {
         edgesAsked = true
     }
 
+    /// THE CARD IS THE VERDICT, AND THE PAGE IS THE REST (docs/reviews/copy-2026-11-06.md,
+    /// "The rule to adopt"): one word per router, its DNS beneath, and a tap
+    /// through to EdgeRoutersView for the numbers, the log and what was
+    /// refused. Before any machine has read them, what is known is said.
     private var edgeCard: some View {
+        Group {
+            if let e = edges {
+                NavigationLink {
+                    EdgeRoutersView(edges: e)
+                } label: {
+                    edgeSummary(e)
+                }
+                .fleetCard(radius: Design.Radius.cardSmall)
+            } else {
+                VStack(alignment: .leading, spacing: Design.Space.insideTight) {
+                    Text(Manage.Words.edgeHeading)
+                        .fleetType(.section)
+                        .foregroundStyle(Design.Palette.ink)
+                        .accessibilityAddTraits(.isHeader)
+                    Text(edgesFailed ? Manage.Words.edgeUnasked : Manage.Words.edgeNobody)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fleetCard(radius: Design.Radius.cardSmall)
+            }
+        }
+    }
+
+    /// One row per router: its name, the one word for it on the right, and
+    /// its DNS under that. What is wrong is the one thing set in the
+    /// attention tone, and the word carries it without the colour.
+    private func edgeSummary(_ e: Fleet.VMEdges) -> some View {
         VStack(alignment: .leading, spacing: Design.Space.insideTight) {
             Text(Manage.Words.edgeHeading)
                 .fleetType(.section)
                 .foregroundStyle(Design.Palette.ink)
                 .accessibilityAddTraits(.isHeader)
-            if let e = edges {
-                Text(Manage.Words.edgeRead(e.hostId, relativeTime(e.at)))
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.inkDim)
-                if e.listening == false {
-                    Text(Manage.Words.edgeNotListening)
-                        .fleetType(.label)
-                        .foregroundStyle(Design.Palette.attention)
-                }
-                ForEach(e.routers, id: \.name) { r in
-                    routerRows(r)
-                }
-                if !e.events.isEmpty {
-                    Text(Manage.Words.edgeEvents)
-                        .fleetType(.label)
-                        .foregroundStyle(Design.Palette.inkDim)
-                        .padding(.top, Design.Space.insideTight)
-                    // NEWEST FIRST, eight of them: what changed last is what
-                    // a person troubleshooting reads first.
-                    ForEach(Array(e.events.suffix(8).reversed().enumerated()), id: \.offset) { _, ev in
-                        Text("\(Date(timeIntervalSince1970: ev.at / 1000).formatted(date: .omitted, time: .standard))  \(ev.router)  \(ev.text)")
-                            .fleetType(.labelMono)
-                            .foregroundStyle(ev.kind == "carp" ? Design.Palette.ink : Design.Palette.inkDim)
-                            .textSelection(.enabled)
+            Text(Manage.Words.edgeRead(e.hostId, relativeTime(e.at)))
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+            ForEach(e.routers, id: \.name) { r in
+                let status = Manage.Words.edgeStatus(reached: r.reached, problem: r.problem, gateway: r.gateway, role: r.role)
+                VStack(alignment: .leading, spacing: Design.Space.hair) {
+                    HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                        Text(r.name)
+                            .fleetType(.bodyStrong)
+                            .foregroundStyle(Design.Palette.ink)
+                        Spacer(minLength: 0)
+                        Text(status.word)
+                            .fleetType(.label)
+                            .foregroundStyle(status.trouble ? Design.Palette.attention : Design.Palette.ink)
+                            .contentTransition(.opacity)
+                            .animation(Design.Motion.change, value: status.word)
+                    }
+                    if let dns = Manage.Words.edgeDnsLine(reached: r.reached, dns: r.dns, answered: r.answered, blocked: r.blocked) {
+                        Text(dns.word)
+                            .fleetType(.label)
+                            .foregroundStyle(dns.trouble ? Design.Palette.attention : Design.Palette.inkDim)
                     }
                 }
-            } else {
-                Text(edgesFailed ? Manage.Words.edgeUnasked : Manage.Words.edgeNobody)
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.inkDim)
+                .accessibilityElement(children: .combine)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .fleetCard(radius: Design.Radius.cardSmall)
-    }
-
-    /// One router: its name, then each thing known of it, a line each. What
-    /// is wrong is the one thing set in the attention tone.
-    @ViewBuilder
-    private func routerRows(_ r: Fleet.VMEdges.Router) -> some View {
-        VStack(alignment: .leading, spacing: Design.Space.hair) {
-            Text(r.name)
-                .fleetType(.bodyStrong)
-                .foregroundStyle(Design.Palette.ink)
-            if r.reached == false, let problem = r.problem {
-                Text(Manage.Words.edgeUnreached(problem))
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.attention)
-            } else if r.reached == nil, let problem = r.problem {
-                Text(problem)
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.inkDim)
-            } else {
-                if let role = Manage.Words.edgeRole(r.role) {
-                    Text(role).fleetType(.label).foregroundStyle(Design.Palette.ink)
-                }
-                // THE WAY OUT FIRST: it is what the machines behind the router
-                // have or have not, and the one line read when something is
-                // wrong. Names, leases and the log follow, in that order.
-                Text(Manage.Words.edgeWayOut(r.gateway, ms: r.delay, loss: r.loss))
-                    .fleetType(.label)
-                    .foregroundStyle(r.gateway == false ? Design.Palette.attention : Design.Palette.ink)
-                // NAMES BY COUNT where the router keeps one (edge-router.js,
-                // MEASURED): what it answered and what the lists refused; the
-                // flag alone before that, and not answering is still the news.
-                if r.dns != false, let answered = r.answered {
-                    Text(Manage.Words.edgeNames(answered, refused: r.blocked ?? 0, since: r.since.map { relativeTime($0) }))
-                        .fleetType(.label)
-                        .foregroundStyle(Design.Palette.ink)
-                } else {
-                    Text(Manage.Words.edgeDns(r.dns))
-                        .fleetType(.label)
-                        .foregroundStyle(r.dns == false ? Design.Palette.attention : Design.Palette.ink)
-                }
-                if let top = r.topBlocked, !top.isEmpty {
-                    Text(Manage.Words.edgeRefused(top.map { ($0.name, $0.count) }))
-                        .fleetType(.micro)
-                        .foregroundStyle(Design.Palette.inkDim)
-                }
-                // ALWAYS, nil included: a count not read is cannot tell, and
-                // a line that vanished read as nothing to say (C-5).
-                Text(Manage.Words.edgeLeases(r.leases)).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
-            }
-            Text(Manage.Words.edgeHeard(r.heardAt.map { relativeTime($0) }))
-                .fleetType(.micro)
-                .foregroundStyle(Design.Palette.inkDim)
-        }
-        .accessibilityElement(children: .combine)
-        .padding(.top, Design.Space.hair)
+        .frame(minHeight: 44, alignment: .leading)
+        .accessibilityHint("Opens the routers’ page")
     }
 
     // MARK: How current it is
@@ -293,6 +267,18 @@ struct PoolManageView: View {
                 Button(Manage.Words.lookAgain) { Task { await watch.start() } }
                     .fleetType(.body)
                     .frame(minHeight: 44)
+            }
+            // THE REMEDY AS A BUTTON (§6): access this phone can only get by
+            // setting the pool up again is offered as that, to an admin,
+            // rather than as an instruction inside the sentence.
+            if watch.needsSetup, settings.showsAdmin {
+                NavigationLink {
+                    AddHypervisorView(settings: settings, startAt: pool.address)
+                } label: {
+                    Text(Manage.Words.setUpAgain)
+                        .fleetType(.body)
+                        .frame(minHeight: 44, alignment: .leading)
+                }
             }
         }
         .fleetCard(radius: Design.Radius.cardSmall)
@@ -468,7 +454,7 @@ struct ComponentView: View {
             fact("Kind", Manage.Words.kindTitle(c.kind))
             fact("Where", Manage.what(c, in: watch.snapshot))
             if c.kind == .vm || c.kind == .host {
-                fact("Address", c.address ?? "cannot tell")
+                fact("Address", c.address ?? "Unknown")
             }
         } header: {
             sectionHead(Manage.Words.whatItIs)
@@ -494,8 +480,6 @@ struct ComponentView: View {
             }
         } header: {
             sectionHead(Manage.Words.howItIs)
-        } footer: {
-            Text(watch.currentLine)
         }
     }
 
@@ -527,7 +511,7 @@ struct ComponentView: View {
         let disks = grow == nil ? [] : watch.snapshot.attachedDisks(c.id).filter { $0.size != nil }
         Section {
             if watch.phase != .live {
-                note(Manage.Words.lost("this phone is not connected"))
+                note(Manage.Words.notConnected)
             } else if c.holder {
                 note(Manage.Words.holder(c.name))
             } else if methods == nil {
@@ -557,10 +541,6 @@ struct ComponentView: View {
             }
         } header: {
             sectionHead(Manage.Words.whatItCanDo)
-        } footer: {
-            if !offered.isEmpty || resize || !disks.isEmpty {
-                Text(disks.isEmpty ? Manage.Words.actionsFooter : "\(Manage.Words.actionsFooter) \(Manage.Words.growNote)")
-            }
         }
     }
 
@@ -718,5 +698,113 @@ struct TypedConfirm: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+/// THE ROUTERS' OWN PAGE: everything the machine read of them, which the card
+/// on the pool's page says in one word per router. Which machine read them
+/// and when, the log port, then each router in full, then what they logged
+/// lately. The only place the numbers are, so the card stays a verdict.
+struct EdgeRoutersView: View {
+    let edges: Fleet.VMEdges
+
+    var body: some View {
+        List {
+            Text(Manage.Words.edgeRead(edges.hostId, relativeTime(edges.at)))
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+                .fleetRow()
+            if edges.listening == false {
+                Text(Manage.Words.edgeNotListening)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+                    .fleetRow()
+            }
+            ForEach(edges.routers, id: \.name) { r in
+                routerRows(r)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fleetCard(radius: Design.Radius.cardSmall)
+                    .fleetRow()
+            }
+            if !edges.events.isEmpty {
+                VStack(alignment: .leading, spacing: Design.Space.hair) {
+                    Text(Manage.Words.edgeEvents)
+                        .fleetType(.section)
+                        .foregroundStyle(Design.Palette.ink)
+                        .accessibilityAddTraits(.isHeader)
+                    // NEWEST FIRST, eight of them: what changed last is what
+                    // a person troubleshooting reads first.
+                    ForEach(Array(edges.events.suffix(8).reversed().enumerated()), id: \.offset) { _, ev in
+                        Text("\(Date(timeIntervalSince1970: ev.at / 1000).formatted(date: .omitted, time: .standard))  \(ev.router)  \(ev.text)")
+                            .fleetType(.labelMono)
+                            .foregroundStyle(ev.kind == "carp" ? Design.Palette.ink : Design.Palette.inkDim)
+                            .textSelection(.enabled)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fleetCard(radius: Design.Radius.cardSmall)
+                .fleetRow()
+            }
+        }
+        .listStyle(.plain)
+        .listRowSpacing(Design.Space.groupTight)
+        .scrollContentBackground(.hidden)
+        .background(Design.Palette.bg)
+        .navigationTitle(Manage.Words.edgeHeading)
+    }
+
+    /// One router: its name, then each thing known of it, a line each. What
+    /// is wrong is the one thing set in the attention tone.
+    @ViewBuilder
+    private func routerRows(_ r: Fleet.VMEdges.Router) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            Text(r.name)
+                .fleetType(.bodyStrong)
+                .foregroundStyle(Design.Palette.ink)
+            if r.reached == false, let problem = r.problem {
+                Text(Manage.Words.edgeUnreached(problem))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+            } else if r.reached == nil, let problem = r.problem {
+                Text(problem)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            } else {
+                if let role = Manage.Words.edgeRole(r.role) {
+                    Text(role).fleetType(.label).foregroundStyle(Design.Palette.ink)
+                }
+                // THE WAY OUT FIRST: it is what the machines behind the router
+                // have or have not, and the one line read when something is
+                // wrong. Names, leases and the log follow, in that order.
+                Text(Manage.Words.edgeWayOut(r.gateway, ms: r.delay, loss: r.loss))
+                    .fleetType(.label)
+                    .foregroundStyle(r.gateway == false ? Design.Palette.attention : Design.Palette.ink)
+                // NAMES BY COUNT where the router keeps one (edge-router.js,
+                // MEASURED): what it answered and what the lists refused; the
+                // flag alone before that, and not answering is still the news.
+                if r.dns != false, let answered = r.answered {
+                    Text(Manage.Words.edgeNames(answered, refused: r.blocked ?? 0, since: r.since.map { relativeTime($0) }))
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.ink)
+                } else {
+                    Text(Manage.Words.edgeDns(r.dns))
+                        .fleetType(.label)
+                        .foregroundStyle(r.dns == false ? Design.Palette.attention : Design.Palette.ink)
+                }
+                if let top = r.topBlocked, !top.isEmpty {
+                    Text(Manage.Words.edgeRefused(top.map { ($0.name, $0.count) }))
+                        .fleetType(.micro)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+                // ALWAYS, nil included: a count not read is Unknown, and a
+                // line that vanished read as nothing to say (C-5).
+                Text(Manage.Words.edgeLeases(r.leases)).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+            }
+            Text(Manage.Words.edgeHeard(r.heardAt.map { relativeTime($0) }))
+                .fleetType(.micro)
+                .foregroundStyle(Design.Palette.inkDim)
+        }
+        .accessibilityElement(children: .combine)
+        .padding(.top, Design.Space.hair)
     }
 }

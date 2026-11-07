@@ -24,17 +24,18 @@ const IOS_POLICY = read('apps/ios/Fleetwright/XOPolicy.swift');
 
 /** What both phones say, word for word. */
 const SHARED = [
-  'Keep its token in the fleet',
+  'Let my machines use this pool',
   'Machines from this pool',
-  'The boxes you approved can then make machines on it for your sessions. They hold its token in memory only, ',
+  'Your approved machines can then create VMs here.',
   'Make the machine image for sessions',
-  'about 220 MB, and installs Fleetwright on it, which takes about ten minutes. Sessions can then start on a new ',
-  'Nothing in the way out’s pool has 20 GiB free for the machine image’s disk.',
+  'Debian 13 · 20 GiB disk · 220 MB download · about 10 min',
+  'Nothing in the uplink’s pool has 20 GiB free for the machine image’s disk.',
   'The machine image is built behind the edge router, and that pool has none yet. Build the router with it.',
-  'It is cloned from your machine image and joins in a minute or two. The session starts on it then',
-  ' It powers off when the time runs out and is removed, with everything on it.',
-  'No Claude login is kept in your vault, so a machine from your hypervisor has nothing to run ',
-  'Asking your hypervisor for a ',
+  // New session's footer and the start's status, in one sentence each
+  // (docs/reviews/copy-2026-11-06.md, 6, 39, 40).
+  'Ready in about 2 minutes. Deleted with its files when time runs out.',
+  "Set up Claude first, or this session can't start.",
+  "Your session starts when it's ready.",
 ];
 
 test('iOS: a machine from your hypervisor is asked of the fleet, never of GitHub, with the image it is cloned from', () => {

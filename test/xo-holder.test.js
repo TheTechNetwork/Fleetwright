@@ -226,7 +226,7 @@ test('the policy asks for one only on a way out, from an image there or built wi
   const base = { v: 1, srs: ['sr1'], networks: ['n1'], limits: { cpus: 2, memory: 4 * GiB, disk: 20 * GiB } };
   const ok = checkPolicy({ ...base, egress: 'n1', holder: true }, /** @type {any} */ (choices));
   assert.equal(ok.ok && ok.policy.holder, true, 'p1 has an image');
-  assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: null, holder: true }, /** @type {any} */ (choices))).text, /goes on the way out/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: null, holder: true }, /** @type {any} */ (choices))).text, /goes on the uplink/);
   assert.match(/** @type {any} */ (checkPolicy({ ...base, egress: 'n2', holder: true }, /** @type {any} */ (choices))).text, /has none yet/);
   const built = checkPolicy({ ...base, egress: 'n2', edge: true, images: ['debian-13'], holder: true }, /** @type {any} */ (choices));
   assert.equal(built.ok && built.policy.holder, true, 'an image built with it will do');

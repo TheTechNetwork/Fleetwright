@@ -44,7 +44,7 @@ test('iOS: Apply update and Apply system upgrade only where this person may', ()
   // Check stays: asking what is waiting changes nothing.
   assert.match(PAGE, /Button\("Check for updates"\) \{ run \{ try await fleet\.updates\(host: hostId\) \} \}\s*if mayActOnBox/);
   // Why the rest of the page reads as answers, said once.
-  assert.match(PAGE, /if !mayAdminister \{\s*Text\("Only this fleet’s admin, or the one person this machine works for, can update it, reboot it or change how it is set up\."\)/);
+  assert.match(PAGE, /if !mayAdminister \{\s*Text\("Only an admin can change this machine\."\)/);
 });
 
 test('iOS: the channel and the image are said, not offered, where this person may not change them', () => {

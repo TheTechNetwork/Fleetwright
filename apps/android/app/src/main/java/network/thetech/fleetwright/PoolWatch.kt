@@ -88,6 +88,10 @@ internal class PoolWatch(val settings: Settings, val address: String, private va
     var via by mutableStateOf<String?>(null)
         private set
 
+    /** Stopped for want of access this phone can only get by setting the pool up again: no record, one that ran out, a certificate that is not the pinned one, or a sign-in refused. The page draws Set up again for an admin on it (§6). */
+    var needsSetup by mutableStateOf(false)
+        private set
+
     private var link: XoLink? = null
     private var polling: Job? = null
 
@@ -110,9 +114,11 @@ internal class PoolWatch(val settings: Settings, val address: String, private va
     /** Connect, sign in with the token, read the method list and the pool. A second call while connecting or connected does nothing. */
     suspend fun start() {
         if (phase == Phase.Connecting || phase == Phase.Relaying || phase == Phase.Live) return
+        needsSetup = false
         val record = settings.secret(XoHandoff.tokenName(address))?.let { Manage.record(it, address) }
         if (record == null) {
             phase = Phase.Stopped(Manage.Words.noToken(address), retry = false)
+            needsSetup = true
             return
         }
         user = record.user
@@ -125,6 +131,7 @@ internal class PoolWatch(val settings: Settings, val address: String, private va
         if (expires != null && expires < System.currentTimeMillis()) {
             val on = java.text.DateFormat.getDateInstance(java.text.DateFormat.LONG).format(java.util.Date(expires))
             phase = Phase.Stopped(Manage.Words.expired(address, on), retry = false)
+            needsSetup = true
             return
         }
         phase = Phase.Connecting
@@ -148,6 +155,7 @@ internal class PoolWatch(val settings: Settings, val address: String, private va
                 early.cancel()
                 generation++
                 phase = Phase.Stopped(Manage.Words.wrongCertificate(address), retry = false)
+                needsSetup = true
             } else {
                 if (!relayingNow) early.cancel()
                 socketWhy = e.message
@@ -186,6 +194,7 @@ internal class PoolWatch(val settings: Settings, val address: String, private va
             // A MACHINE ALREADY SHOWING THE PAGE goes on showing it.
             if (via != null) return
             phase = Phase.Stopped(Manage.Words.signInRefused(address, e.message ?: "no reason given"), retry = false)
+            needsSetup = true
             return
         }
         // ALL AT ONCE on the one socket, answered by id: the method list and
@@ -274,7 +283,7 @@ internal class PoolWatch(val settings: Settings, val address: String, private va
     suspend fun run(method: String, params: Map<String, Any>, done: String): Pair<Boolean, String> {
         if (via != null && phase == Phase.Live) return runThrough(method, params, done)
         val open = link
-        if (open == null || phase != Phase.Live) return false to Manage.Words.lost("this phone is not connected")
+        if (open == null || phase != Phase.Live) return false to Manage.Words.notConnected
         return try {
             open.call(method, JSONObject(params), timeoutMs = 300_000)
             touch()
@@ -332,7 +341,7 @@ internal class PoolWatch(val settings: Settings, val address: String, private va
         try {
             val r = Fleet(settings).xolook(address, key.publicKey)
             val sealed = r.sealed
-            if (!r.ok || sealed == null) throw IllegalStateException(r.text.ifBlank { "the fleet sent no page" })
+            if (!r.ok || sealed == null) throw IllegalStateException(r.text.ifBlank { "no page came back" })
             val page = Seal.open(key, Seal.xolookAad(address), sealed)
             if (asked != generation) return
             // NULL IS CANNOT TELL, as over the socket: no action is drawn.
@@ -387,7 +396,7 @@ internal class PoolWatch(val settings: Settings, val address: String, private va
         try {
             val r = Fleet(settings).xoact(address, method, JSONObject(params).toString())
             if (!r.ok) {
-                false to r.text.ifBlank { Manage.Words.refused("the fleet refused it") }
+                false to r.text.ifBlank { Manage.Words.machineRefused }
             } else {
                 readThrough("")
                 true to done

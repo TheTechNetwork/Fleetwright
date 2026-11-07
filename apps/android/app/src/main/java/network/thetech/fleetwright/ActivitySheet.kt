@@ -30,7 +30,7 @@ fun ActivitySheet(settings: Settings, onDismiss: () -> Unit) {
         loaded = true
     }
     FullScreen(title = "Recent activity", onDismiss = onDismiss) {
-        if (events.isEmpty()) Hint(if (loaded) "Nothing recorded yet." else "Asking the fleet…")
+        if (events.isEmpty()) Hint(if (loaded) "Nothing recorded yet." else "Loading…")
         // NEWEST FIRST HERE, and consecutive repeats collapsed to one row and a
         // count: nine lines reading "asked for connect" is one fact.
         for (run in runsOf(events)) {

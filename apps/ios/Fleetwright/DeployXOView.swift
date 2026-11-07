@@ -268,17 +268,27 @@ struct DeployXOView: View {
                     .disabled(busy || !matched || rootPassword.isEmpty || !DeployWords.adminPasswordOK(adminPassword))
                     .frame(minHeight: 44)
             }
+            // THE CUSTODY, ONCE, BEHIND A DISCLOSURE: the footer says the
+            // result in a sentence, and who holds what for how long is here
+            // for whoever asks (docs/reviews/copy-2026-11-06.md, "The rule to adopt").
+            DisclosureGroup {
+                Text(DeployWords.custody(probe.hostId))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            } label: {
+                Text(DeployWords.custodyTitle).frame(minHeight: 44, alignment: .leading)
+            }
+            .disabled(busy)
         } header: {
             sectionHead("Passwords")
         } footer: {
-            Text(DeployWords.passwordsFooter(probe.hostId))
+            Text(DeployWords.passwordsFooter)
         }
     }
 
     /// The same comparison Add a hypervisor asks for, in the same words.
     @ViewBuilder private func compareRows(_ fingerprint: String) -> some View {
-        Text("This phone has not approved \(begun?.hostId ?? "that machine") before. On it, fleetwright-sidecar identity "
-             + "prints its fingerprint; send the passwords only if it is this one.")
+        Text("First time using \(begun?.hostId ?? "that machine"). On it, run `fleetwright-sidecar identity` and check it shows this:")
             .fleetType(.label)
             .foregroundStyle(Design.Palette.ink)
         Text(fingerprint)
@@ -319,7 +329,7 @@ struct DeployXOView: View {
                 }
                 switch handedBack {
                 case .kept:
-                    Text("The token is in this phone’s Keychain now. No machine in the fleet keeps it on disk.")
+                    Text("Access saved on this phone. No machine keeps it on disk.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 case .failed(let why):
@@ -387,7 +397,7 @@ struct DeployXOView: View {
         do {
             let reply = try await fleet.xoprobe(address: trimmedAddress)
             guard reply.ok != false else {
-                probeText = reply.text ?? "The fleet did not try that address."
+                probeText = reply.text ?? "No machine tried that address."
                 return
             }
             guard let found = reply.probes else {
@@ -555,7 +565,7 @@ struct DeployXOView: View {
             if let state = reply.xosetup {
                 await apply(state)
             } else if reply.ok == false {
-                await apply(Fleet.SetupState(job: job, state: "failed", text: reply.text ?? "The fleet no longer knows this job."))
+                await apply(Fleet.SetupState(job: job, state: "failed", text: reply.text ?? "This job is no longer listed."))
             }
         }
     }
@@ -628,50 +638,47 @@ enum DeployWords {
         }
     }
 
-    /// What one machine found over SSH. Nil is cannot tell, said as that
-    /// (C-5), and an answer with no `ssh` is a machine too old to have looked.
+    /// What one machine found over SSH, as a row's word. Nil is cannot tell,
+    /// said as Can’t check and never as unreachable (C-5); an answer with no
+    /// `ssh` is a machine too old to have looked, which an update mends. The
+    /// same words for the watchdog and for Proxmox VE through a machine.
     static func describe(_ probe: Fleet.Probe) -> String {
-        guard let ssh = probe.ssh else { return "Too old to install Xen Orchestra. Update it, then ask again." }
+        guard let ssh = probe.ssh else { return "Needs update" }
         switch ssh.reachable {
         case true?:
-            if ssh.deploy == true, hostKey(probe) != nil { return "Reached its SSH server" }
+            if ssh.deploy == true, hostKey(probe) != nil { return "Ready" }
             let missing = ssh.missing ?? []
-            if ssh.deploy == false, !missing.isEmpty {
-                return "Reached its SSH server, and has no \(missing.joined(separator: ", ")) to install with"
-            }
-            return "Reached its SSH server, and cannot tell whether it can install from there"
+            if ssh.deploy == false, !missing.isEmpty { return "Missing \(missing.joined(separator: ", "))" }
+            return "Can’t check"
         case false?:
-            return "Could not reach its SSH server"
+            return "Unreachable"
         case nil:
-            return "Cannot tell: it has no ssh-keyscan to look with"
+            return "Can’t check"
         }
     }
 
-    /// Why no machine is offered when none reached the SSH server, with what
-    /// to check; nil when one did, and its row says the rest. Machines too
-    /// old to look did not find it unreachable, and are named as that.
+    /// Why no machine is offered when none reached the SSH server; nil when
+    /// one did, and its row says the rest. The verdict first, then one quiet
+    /// line naming the machines that could not check and the ones that need
+    /// an update: they did not find it unreachable, and are not said to have.
     static func nobody(_ probes: [Fleet.Probe], address: String) -> String? {
-        if probes.isEmpty {
-            return "No permanent machine is connected, so nothing could try \(address). A machine has to be in the fleet to install Xen Orchestra."
-        }
+        if probes.isEmpty { return "No machines online. Add or start one first." }
         if probes.contains(where: { $0.ssh?.reachable == true }) { return nil }
-        let missed = probes.filter { $0.ssh?.reachable == false }.map(\.hostId).sorted()
+        let missed = probes.contains { $0.ssh?.reachable == false }
         let unsure = probes.filter { $0.ssh != nil && $0.ssh?.reachable == nil }.map(\.hostId).sorted()
         let old = probes.filter { $0.ssh == nil }.map(\.hostId).sorted()
-        var lines: [String] = []
-        if !missed.isEmpty {
-            lines.append("No machine reached SSH at \(address). Check the address, that SSH is on for the pool master, and that one of these "
-                         + "is on a network that can reach it: \(missed.joined(separator: ", ")).")
-        }
-        if !unsure.isEmpty { lines.append("Cannot tell from \(unsure.joined(separator: ", ")), which has no ssh-keyscan to look with.") }
-        if !old.isEmpty { lines.append("Too old to install Xen Orchestra, so they did not look: \(old.joined(separator: ", ")). Update one, then ask again.") }
-        return lines.joined(separator: " ")
+        var lines = [missed ? "Couldn’t reach \(address) over SSH." : "No machine could check \(address)."]
+        if !unsure.isEmpty { lines.append("\(unsure.joined(separator: ", ")) couldn’t check.") }
+        if !old.isEmpty { lines.append("\(old.joined(separator: ", ")) need\(old.count == 1 ? "s" : "") an update.") }
+        return lines.joined(separator: "\n")
     }
 
-    static func passwordsFooter(_ host: String) -> String {
-        "The root password signs in to the pool master over SSH once, and \(host) forgets it as soon as it has. Xen Orchestra’s admin is "
-            + "admin@admin.net, and its default password is replaced with this one before anything else uses it. Both are sealed on "
-            + "this phone to a key only \(host) holds."
+    /// The footer says the result; the custody is behind the disclosure.
+    static let passwordsFooter = "Sets the password for admin@admin.net. Neither password is stored."
+    static let custodyTitle = "How your password is protected"
+    static func custody(_ host: String) -> String {
+        "The root password signs in to the pool master over SSH once, and \(host) forgets it as soon as it has. "
+            + "Both passwords are encrypted on this phone so that only \(host) can read them."
     }
 
     /// "Step 4 of 17", and "Step 4 of 17 · 42%" while the download says how far.

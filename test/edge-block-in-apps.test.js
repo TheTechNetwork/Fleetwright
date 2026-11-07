@@ -22,16 +22,17 @@ const A_SHEET = A('HypervisorSheet.kt');
 const A_FORM = A('PolicyForm.kt');
 const HOST = read('src/fleet/host/xo-setup.js');
 
-/** What both phones say, word for word. */
+/** What both phones say, word for word: the row's verdict as the switch stands. */
 const SHARED = [
   'Drop what the threat rules match',
-  'On: Suricata drops it, and while it cannot inspect, nothing leaves.',
-  'Off: Suricata logs it by machine and lets it through.',
-  // The rebuild's cost, as the box says it: the new router is built beside
-  // the old one (ONE_BOOT in src/fleet/host/edge-router.js), so the way out
-  // is gone for one boot and not for the whole build.
-  ' Apply rebuilds the edge router to change this: machines behind it keep their way out while the new one is built, and have none while it starts.',
+  'Blocks matched traffic',
+  'Logs only',
 ];
+// The rebuild's cost, said once beside Apply and not on the row, as the box
+// says it: the new router is built beside the old one (ONE_BOOT in
+// src/fleet/host/edge-router.js), so internet access is gone for one boot
+// and not for the whole build.
+const REBUILD = 'Applying rebuilds the router. VMs behind it lose internet while the new one starts.';
 
 test('offered only by a machine whose `can` says so, and only with the router asked for', () => {
   assert.ok(HOST.includes("'edge-block'"), 'the machine does not say it can');
@@ -59,5 +60,13 @@ test('both phones say it in the same words', () => {
   }
   for (const [name, form] of [['iOS', I_FORM], ['Android', A_FORM]]) {
     assert.ok(!form.includes('no way out until the new one is up'), `${name}: the rebuild still says the way out is gone for the whole build`);
+    assert.ok(!form.includes('Apply rebuilds the edge router to change this'), `${name}: the rebuild is still said on the row`);
   }
+  // Once, beside Apply, where the choice is sent (iOS's applySection, the
+  // sheet's Apply row on Android), and only when a router there would change.
+  assert.match(I_FORM, /if choice\.rebuildsRouter\(in: inv\) \{\s*Text\("Applying rebuilds the router\./);
+  assert.match(A_SHEET, /if \(XoPolicy\.rebuildsRouter\(inv, c\)\) \{\s*Hint\("Applying rebuilds the router\./);
+  assert.ok(I_FORM.includes(REBUILD) && A_SHEET.includes(REBUILD));
+  assert.match(I_POLICY, /func rebuildsRouter\(in inv: Inventory\) -> Bool \{\s*guard edge, let there = inv\.edge\(on: egress\) else \{ return false \}\s*return \(there\.blocks \?\? false\) != edgeBlock \|\| \(there\.ha \?\? false\) != edgeHa \|\| labsChanged\(in: inv\)/);
+  assert.match(A_POLICY, /fun rebuildsRouter\(inv: Inventory, c: Choice\): Boolean \{\s*if \(!c\.edge\) return false\s*val there = edgeOn\(inv, c\.egress\) \?: return false\s*return \(there\.blocks \?: false\) != c\.edgeBlock \|\| \(there\.ha \?: false\) != c\.edgeHa \|\| labsChanged\(inv, c\)/);
 });

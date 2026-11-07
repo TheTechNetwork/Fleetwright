@@ -76,7 +76,7 @@ internal object ProxmoxThroughHandoff {
         if (record == null) {
             forget(settings, job)
             return@withLock Outcome.Failed(
-                "The node is set up, and what the machine handed back is not a line this phone can open. Run the setup again; it finds what it made.",
+                "The node is set up, but what came back couldn’t be read. Run the setup again; it finds what it made.",
                 again = false,
             )
         }
@@ -87,8 +87,8 @@ internal object ProxmoxThroughHandoff {
             },
             onFailure = {
                 Outcome.Failed(
-                    "The node is set up, and its line was not kept yet: ${it.message ?: "the vault would not keep it."} " +
-                        "This phone tries again when Fleetwright is next open.",
+                    "The node is set up, but its access isn’t saved yet: ${it.message ?: "it couldn’t be saved."} " +
+                        "This phone tries again when it is next open.",
                     again = true,
                 )
             },

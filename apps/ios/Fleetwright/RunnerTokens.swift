@@ -60,7 +60,7 @@ struct RunnerTokensView: View {
 
             Section {
                 if tokens.isEmpty && loaded {
-                    Text("No runner tokens. A run the fleet dispatches itself carries a single-use ticket instead, "
+                    Text("No runner tokens. A run not started by hand carries a single-use ticket instead, "
                          + "and needs none of these.")
                         .fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                 }
@@ -81,7 +81,7 @@ struct RunnerTokensView: View {
                 // SAID BEFORE IT MATTERS: revoking is refused at the next
                 // enrolment, and a runner already in the fleet stays until its
                 // job ends.
-                Text("Revoking stops the next run from joining. A runner already in the fleet keeps working until "
+                Text("Revoking stops the next run from joining. A runner already joined keeps working until "
                      + "its job ends.")
             }
 

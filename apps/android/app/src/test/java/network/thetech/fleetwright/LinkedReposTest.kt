@@ -48,10 +48,10 @@ class LinkedReposTest {
 
     @Test
     fun nothingLinkedIsSaidPerRole() {
-        assertEquals("Nothing linked. Sessions you start are not pushed anywhere when they stop.", describeLinkedRole("archive", null, null))
+        assertEquals("Nothing linked. Session work is not saved.", describeLinkedRole("archive", null, null))
         assertEquals("Linked: eli/presets.", describeLinkedRole("templates", "eli/presets", null))
         assertEquals(
-            "Your machines come from the fleet's repository, fleet/runners. Set your own to use your free Actions minutes.",
+            "Using the fleet's: fleet/runners",
             describeLinkedRole("runners", null, "fleet/runners"),
         )
         assertEquals("none linked", describeLinkedRepos(0))
@@ -66,7 +66,7 @@ class LinkedReposTest {
                 archive = archive, archiveAt = at, archiveOk = ok, archiveText = text,
             )
         assertNull(session(null).archiveLine)
-        assertEquals("Pushed to Eli/Work before it stops. Nothing has been pushed yet.", session("Eli/Work").archiveLine)
+        assertEquals("Saves to Eli/Work when it stops. Not saved yet.", session("Eli/Work").archiveLine)
         assertEquals(
             "Archived to Eli/Work on fleetwright/deb14/job-x.",
             session("Eli/Work", 1, true, "Archived to Eli/Work on fleetwright/deb14/job-x.").archiveLine,

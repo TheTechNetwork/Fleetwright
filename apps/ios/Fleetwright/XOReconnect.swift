@@ -79,10 +79,10 @@ enum XOReconnect {
     /// machine a seal it cannot open.
     static func refusal(can: [String], machine: String) -> String? {
         if !can.contains("reconnect") {
-            return "\(machine) is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent."
+            return "\(machine) needs an update to reconnect servers. Nothing was sent."
         }
         if !can.contains("reconnect-signin") {
-            return "\(machine) is too old to open the sign-in this app seals for a reconnect, so the sign-in was not sent."
+            return "\(machine) needs an update to take the sign-in. Nothing was sent."
         }
         return nil
     }

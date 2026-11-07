@@ -46,8 +46,7 @@ class AnswerReceiver : BroadcastReceiver() {
                 LocalNotice.post(
                     context,
                     decision.name,
-                    "That question is more than an hour old, so it was not answered from here. " +
-                        "Open the session to see what it is asking now.",
+                    "Not answered: the question is over an hour old. Tap to see it now.",
                 )
                 open(context, decision.name)
             }
@@ -90,7 +89,7 @@ class AnswerReceiver : BroadcastReceiver() {
                 LocalNotice.post(
                     context,
                     decision.name,
-                    "The fleet could not be reached, so that answer was not sent. Open the session to try again.",
+                    "Answer not sent. Could not reach your fleet.",
                 )
                 open(context, decision.name)
             } finally {

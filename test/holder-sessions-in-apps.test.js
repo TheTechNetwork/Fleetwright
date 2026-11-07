@@ -24,7 +24,8 @@ const PHONES = [
   { name: 'Android', lines: A('Screens.kt'), fleet: A('Fleet.kt'), start: A('StartSheet.kt') },
 ];
 
-const SAID = 'This pool’s own machine. It holds the pool for the fleet and runs no sessions.';
+// The verdict (docs/reviews/copy-2026-11-06.md, 11): what it does, in two short sentences.
+const SAID = 'Manages this pool. Runs no sessions.';
 
 test('both phones name the pool’s own machine in the same words', () => {
   for (const p of PHONES) assert.ok(p.lines.includes(`"${SAID}"`), p.name);
@@ -54,11 +55,12 @@ test('the pool’s own machine’s page offers Make it again, which does the res
   // on the page and the sign-in were the asking, and the form with Apply at
   // the bottom of it was a scroll nobody came for.
   const title = 'Make it again';
-  const line = 'Removes this machine, disk and all, and makes a new one from the newest build of its suite, which asks to join; this phone lets it in. '
-    + 'It asks for the pool’s admin sign-in, or opens the one this phone kept, and does the rest by itself.';
+  // What it does and what it costs; the sign-in it may ask for is the
+  // policy screen's to say (docs/reviews/copy-2026-11-06.md, 12).
+  const line = 'Replaces this machine with a fresh one. Its disk is erased.';
   // iOS
   assert.ok(PHONES[0].lines.includes(`let holderAgainTitle = "${title}"`), 'iOS title');
-  assert.ok(PHONES[0].lines.includes(`let holderAgainLine = "${line.slice(0, line.indexOf('It asks'))}"\n    + "${line.slice(line.indexOf('It asks'))}"`), 'iOS line');
+  assert.ok(PHONES[0].lines.includes(`let holderAgainLine = "${line}"`), 'iOS line');
   assert.match(PHONES[0].fleet, /var holder: Bool\?[\s\S]{0,400}var holds: String\?/, 'iOS decodes holds');
   const host = I('HostView.swift');
   assert.match(host, /if holder, let holds, holdsHere, settings\.showsAdmin \{[\s\S]{0,200}AddHypervisorView\(settings: settings, policyFor: holds, makeHolderAgain: true\)[\s\S]{0,400}Text\(holderAgainTitle\)[\s\S]{0,80}Text\(holderAgainLine\)/, 'iOS offers it only then');
@@ -67,7 +69,7 @@ test('the pool’s own machine’s page offers Make it again, which does the res
   assert.match(form, /if makeHolderAgain, choice\.holderAskChoice, opened\.holder\(on: choice\.egress\) != nil \{ choice\.holderAgain = true \}/, 'iOS opens with the switch on');
   // Android
   assert.ok(PHONES[1].lines.includes(`const val HOLDER_AGAIN_TITLE = "${title}"`), 'Android title');
-  assert.ok(PHONES[1].lines.includes(`const val HOLDER_AGAIN_LINE = "${line.slice(0, line.indexOf('It asks'))}" +\n    "${line.slice(line.indexOf('It asks'))}"`), 'Android line');
+  assert.ok(PHONES[1].lines.includes(`const val HOLDER_AGAIN_LINE = "${line}"`), 'Android line');
   assert.match(PHONES[1].fleet, /holds = o\.optString\("holds"\)\.takeIf \{ it\.isNotBlank\(\) && it != "null" \}/, 'Android parses holds');
   const page = A('MachinesScreen.kt');
   assert.match(page, /if \(h\?\.holder == true && holds != null && holdsHere && admin == true\) \{\s*SectionHead\(holds\)\s*OpenRow\(HOLDER_AGAIN_TITLE\) \{ onMakeAgain\(holds\) \}\s*Hint\(HOLDER_AGAIN_LINE\)/, 'Android offers it only then');
@@ -86,14 +88,14 @@ test('the pool’s own machine’s page offers Make it again, which does the res
   // which machine goes and where the new one is made, in the same words.
   assert.match(form, /if choosing, let inventory, !straightThrough \{\s*policySections\(inventory, job: job\)/, 'iOS draws progress, not the form');
   assert.match(sheet, /straight -> \{\}\s*inv != null && c != null -> \{/, 'Android draws no form while it goes');
-  const said = 'Removing \\(name), disk and all, and making a new one on \\(straightWayOut), which asks to join; this phone lets it in.';
+  const said = 'Replacing \\(name) with a new one on \\(straightWayOut).';
   assert.ok(form.includes(`"${said}"`), 'iOS says what went');
-  assert.ok(sheet.includes('"Removing $name, disk and all, and making a new one on $wayOut, which asks to join; this phone lets it in."'), 'Android says what went');
+  assert.ok(sheet.includes('"Replacing $name with a new one on $wayOut."'), 'Android says what went');
   // And when it could not, the form, with why, in the same words.
   const whyNot = [
-    'cannot make a machine that asks to join, so nothing was made again by itself. Update it, or choose below.',
-    'has no machine of its own on the way out any more, so there is nothing to make again. This is what the fleet may use there, as it stands.',
-    'Nothing was made again by itself: ',
+    'needs an update to do this. Choose below instead.',
+    'has no managing VM to replace.',
+    'Not done by itself: ',
   ];
   for (const why of whyNot) {
     assert.ok(form.includes(why), `iOS says why not: ${why.slice(0, 30)}`);
