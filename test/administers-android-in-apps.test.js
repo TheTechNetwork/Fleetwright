@@ -45,7 +45,9 @@ test('Android: a machine’s update, upgrade, releases, image, labels and reboot
   assert.match(APP, /if \(label in setLabels\) \{\s*if \(administers\) \{\s*InputChip\([\s\S]{0,300}?run \{ it\.labels\(hostId, remove = label\) \}/);
   assert.match(APP, /if \(administers\) Row\(Modifier\.fillMaxWidth\(\), verticalAlignment = Alignment\.CenterVertically\) \{\s*OutlinedTextField\(\s*value = newLabel,/);
   // Reboot, both steps, inside the one gate.
-  const gate = APP.indexOf('if (h != null && actsOnBox) {');
+  // And not where the machine refuses it: Reboot: Off is said once, under
+  // Software, with the line that turns it on (test/grants-in-apps.test.js).
+  const gate = APP.indexOf('if (h != null && actsOnBox && h.grantReboot != false) {');
   assert.ok(gate > 0, 'the reboot section is gated');
   const end = APP.indexOf('if (member != null) {', gate);
   for (const call of ['run { it.reboot(hostId) }', 'run { it.reboot(hostId, rebootPin, rebootConfirm) }']) {
@@ -55,5 +57,5 @@ test('Android: a machine’s update, upgrade, releases, image, labels and reboot
 });
 
 test('Android: a member who sees none of them is told why, once', () => {
-  assert.match(APP, /if \(!administers\) \{\s*Hint\("Only this fleet’s admin, or the one person this machine works for, can update it, reboot it or change how it is set up\."\)/);
+  assert.match(APP, /if \(!administers\) \{\s*Hint\("Only an admin can change this machine\."\)/);
 });

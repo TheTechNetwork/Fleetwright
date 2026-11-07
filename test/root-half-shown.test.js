@@ -16,9 +16,7 @@ import assert from 'node:assert/strict';
 import { iosSources } from './helpers/ios-sources.js';
 import { androidSources } from './helpers/android-sources.js';
 
-const HOST_LINE =
-  'The update helper on this box is older than the release it runs. Updates still land and the services restart, ' +
-  'but nothing root owns is refreshed. Check shows the one command that fixes it, once.';
+const HOST_LINE = 'The update helper is out of date. Updates still apply; Check for updates shows the fix.';
 
 test('iOS reads whether root’s half is the release’s, and only ever says so when told', () => {
   const swift = iosSources();
@@ -79,11 +77,7 @@ test('both phones say the helper is out of date beside what runs, in the same wo
 
 test('the Android machine page carries the same sentence as the iOS one, and no command', () => {
   const kotlin = androidSources();
-  // The Kotlin literal is split across two lines by `+`, so it is checked in
-  // the two halves it is written in; the whole is HOST_LINE.
-  const [a, b] = ['The update helper on this box is older than the release it runs. Updates still land and the services restart, ', 'but nothing root owns is refreshed. Check shows the one command that fixes it, once.'];
-  assert.equal(a + b, HOST_LINE);
-  assert.ok(kotlin.includes(a) && kotlin.includes(b), 'the machine page line changed');
+  assert.ok(kotlin.includes(HOST_LINE), 'the machine page line changed');
   // The palette's attention, not Material's error: Design.kt is what the
   // parity test can see, and colorScheme.error was a colour it could not.
   assert.match(kotlin, /rootHalfBehind == true\) \{[\s\S]{0,900}Design\.Palette\.attention/, 'in the attention colour, like the restart line');

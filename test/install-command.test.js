@@ -132,7 +132,7 @@ test('the iOS app reads the line off the reply and shows it beside the pin, and 
   // Shown only when the coordinator offered one — an older coordinator or one
   // with no installer gets the two-step form, never a line that would 404.
   assert.match(IOS_VIEW, /if let install = pinInstall \{[\s\S]{0,600}?Text\(install\)[\s\S]{0,200}?\.textSelection\(\.enabled\)/);
-  assert.match(IOS_VIEW, /\} else \{\n\s+Text\("On that box: fleetwright-sidecar enrol \\\(pin\)"\)/);
+  assert.match(IOS_VIEW, /\} else \{\n\s+Text\("On that machine: fleetwright-sidecar enrol \\\(pin\)"\)/);
   // A bound pin re-keys a box that exists, on that box's page; no install line
   // for it, only the code.
   assert.match(IOS_HOST, /pin = try await fleet\.mintHostPin\(hostId: hostId, readmit: enrolled\?\.isRevoked == true\)\.code/);
@@ -146,7 +146,7 @@ test('the Android app reads the line off the reply and shows it beside the pin, 
   assert.match(DROID_CLIENT, /if \(json\.isNull\("install"\)\) null else json\.optString\("install"\)\.ifBlank \{ null \}/);
   assert.match(DROID_VIEW, /\.onSuccess \{ pinInstall = it\.install \?: "" \}/);
   assert.match(DROID_VIEW, /if \(pinInstall\.isNotBlank\(\)\) \{[\s\S]{0,700}?SelectionContainer \{\n\s+Text\(pinInstall/);
-  assert.match(DROID_VIEW, /\} else \{\n\s+Text\(\n\s+"On that box: fleetwright-sidecar enrol \$pin/);
+  assert.match(DROID_VIEW, /\} else \{\n\s+Text\(\n\s+"On that machine: fleetwright-sidecar enrol \$pin/);
   // A bound pin re-keys a box that exists; no install line for it.
   // On the machine's own page, which has no install line to show.
   assert.match(DROID_VIEW, /pin = runCatching \{ Fleet\(settings\)\.mintHostPin\(hostId = hostId, readmit = member\.revoked\) \}\n\s+\.map \{ it\.code \}/);
