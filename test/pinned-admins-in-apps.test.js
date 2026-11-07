@@ -27,10 +27,10 @@ const ANDROID = bare(androidSources());
 
 /** The same sentences on both phones. */
 const WORDS = [
-  'Pinned admins',
-  'Address to pin',
-  'This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.',
-  'This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from the admins pinned on it, and you are not one of them.',
+  'This machine’s admins',
+  'Email address',
+  'Only these people can update or reboot this machine. The last one is removed on the machine itself.',
+  'Only this machine’s admins can change it, and you are not one of them.',
 ];
 
 /** Nothing a phone says may promise that somebody can pin this person (C-5): on a stranded machine nobody can. */

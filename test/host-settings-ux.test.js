@@ -37,7 +37,10 @@ test('both phones can ask for either image and neither invents a default', () =>
     // NULL IS CANNOT TELL, and this is the whole reason the field is optional.
     // A host older than the verb sends nothing, and a control defaulted to
     // "minimal" would tell somebody their box has no Chromium when it might.
-    assert.match(src, /has not said which image it runs sessions in/, `${name} guesses at an unanswered host`);
+    // Shown as a value, `Unknown`, never as "none" or a default (§7).
+    assert.match(src, name === 'iOS'
+      ? /\} else \{\s*LabeledContent\("Image"\) \{\s*Text\("Unknown"\)/
+      : /v == null -> Hint\("Unknown"\)/, `${name} guesses at an unanswered host`);
   }
 });
 
@@ -47,7 +50,7 @@ test('a box whose image is named in its environment is told, not offered a picke
   assert.match(code(iosSources()), /pinned == true/);
   assert.match(code(kotlin()), /\bpinned\b/);
   for (const [name, src] of [['iOS', code(iosSources())], ['Android', code(kotlin())]]) {
-    assert.match(src, /set on the box/, `${name} does not say who set the image`);
+    assert.match(src, /[Ff]ixed on this machine/, `${name} does not say who set the image`);
   }
 });
 
@@ -69,7 +72,7 @@ test('Remove is offered on exactly the labels it works for', () => {
   // first version of this test asserted that `setLabels.contains(label)`
   // appeared and that a Remove button appeared, and it passed with the guard
   // replaced by `true` — because the same expression is also used, negated, to
-  // draw the "from the machine" note beside the other chips.
+  // draw the "automatic" note beside the other chips.
   const ios = code(iosSources());
   assert.match(
     ios,
@@ -85,7 +88,7 @@ test('Remove is offered on exactly the labels it works for', () => {
   // AND IT SAYS WHY, on both. Without a reason, the only difference between the
   // two kinds is a missing control, which reads as a bug.
   for (const [name, src] of [['iOS', ios], ['Android', kt]]) {
-    assert.match(src, /from the machine/, `${name} does not say why a label cannot be removed`);
+    assert.match(src, /"automatic"/, `${name} does not say why a label cannot be removed`);
   }
 });
 
