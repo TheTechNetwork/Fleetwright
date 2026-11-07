@@ -32,8 +32,8 @@ test('iOS draws the two states that mean something and nothing for the third', (
   assert.match(swift, /if let houseRules \{/, 'nil draws nothing');
   assert.match(swift, /houseRules == 0/, 'zero is its own state');
   assert.match(swift, /is not being used/, 'and it is the one worth attention');
-  assert.match(swift, /characters of house rules, read on every turn/, 'the count says what it costs');
-  assert.match(swift, /Design\.Palette\.attention[\s\S]{0,400}characters of house rules/s,
+  assert.match(swift, /characters, added to every new session/, 'the count says what it costs');
+  assert.match(swift, /Design\.Palette\.attention[\s\S]{0,400}characters, added to every new session/s,
     'the attention colour is on the fault, not on the count');
 });
 
@@ -49,9 +49,9 @@ test('both phones say the same thing about house rules, in the same two states',
   const swift = iosSources();
   const kotlin = androidSources();
   for (const sentence of [
-    'A rules file is on this box and is not being used.',
-    'characters of house rules, read on every turn.',
-    'One file on the box, written into each new session as its CLAUDE.md.',
+    'The house rules file is not being used.',
+    'characters, added to every new session.',
+    'Edit it on the machine. New sessions pick it up.',
   ]) {
     assert.ok(swift.includes(sentence), `iOS lost: ${sentence}`);
     assert.ok(kotlin.includes(sentence), `Android lost: ${sentence}`);
