@@ -485,13 +485,13 @@ final class XOPolicyTests: XCTestCase {
     func testOnlyAMachineThatOpensThatBindingIsSentTheSignIn() {
         XCTAssertNil(XOPolicy.refusal(can: ["policy", "policy-signin", "edge"], machine: "deb132"))
         XCTAssertEqual(XOPolicy.refusal(can: ["edge"], machine: "deb132"),
-                       "deb132 is older than changing what the fleet may use, so the sign-in was not sent.")
+                       "deb132 needs an update to change this. Nothing was sent.")
         // `policy` alone is what a relay can add to a machine from before
         // policy jobs, so it is not enough.
         XCTAssertEqual(XOPolicy.refusal(can: ["policy", "edge"], machine: "deb132"),
-                       "deb132 is too old to open the sign-in this app seals for a policy change, so the sign-in was not sent.")
+                       "deb132 needs an update to take the sign-in. Nothing was sent.")
         XCTAssertEqual(XOPolicy.refusal(can: ["policy-signin"], machine: "deb132"),
-                       "deb132 is older than changing what the fleet may use, so the sign-in was not sent.")
+                       "deb132 needs an update to change this. Nothing was sent.")
     }
 
     func testTheInventoryOpensOnlyUnderItsJobItsAddressAndThisKey() throws {
@@ -557,13 +557,13 @@ final class XOPolicyTests: XCTestCase {
         building.doing = "read"
         building.done = 192
         building.total = 2238
-        XCTAssertEqual(XOSetupWords.bytes(building), "Reading the blocks the configuration goes in: 192 of 2238 MB")
+        XCTAssertEqual(XOSetupWords.bytes(building), "Configuring: 192 of 2238 MB")
         building.doing = "download"
         XCTAssertEqual(XOSetupWords.bytes(building), "Downloading OPNsense: 192 of 2238 MB")
         building.build = "image"
         XCTAssertEqual(XOSetupWords.bytes(building), "Downloading the image: 192 of 2238 MB", "the image is whichever was chosen, which is not pushed")
         building.doing = "keep"
-        XCTAssertEqual(XOSetupWords.bytes(building), "Writing the image to the pool, to keep: 192 of 2238 MB")
+        XCTAssertEqual(XOSetupWords.bytes(building), "Saving the image to the pool: 192 of 2238 MB")
         building.doing = "something-newer"
         XCTAssertEqual(XOSetupWords.bytes(building), "192 of 2238 MB", "the numbers are still known; the words are not made up")
         building.state = "done"

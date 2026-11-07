@@ -157,6 +157,11 @@ struct AddHypervisorView: View {
     /// means for the password and the token, and said to send it anyway.
     /// Reset on the same changes as `acknowledged`, for the same reason.
     @State private var plainAccepted = false
+    /// The two disclosures on the sign-in step, open or shut: how the
+    /// password is protected, and how to give the server HTTPS. The
+    /// mechanism lives behind them and nowhere else on the screen.
+    @State private var protectionOpen = false
+    @State private var httpsHowOpen = false
     /// Cancel was pressed and the machine said it would stop after the step
     /// it is on: the button is not offered twice.
     @State private var cancelRequested = false
@@ -319,10 +324,8 @@ struct AddHypervisorView: View {
             // is where somebody who typed its address ends up.
             if policyFor == nil && reconnectFor == nil && job == nil {
                 Section {
-                    NavigationLink("It is Proxmox VE") { AddProxmoxView(settings: settings) }
+                    NavigationLink("Proxmox VE? Set it up here") { AddProxmoxView(settings: settings) }
                         .frame(minHeight: 44)
-                } footer: {
-                    Text("This screen is for Xen Orchestra. A Proxmox VE cluster is added with one command on the node and the line it prints.")
                 }
             }
             whereSection
@@ -389,7 +392,7 @@ struct AddHypervisorView: View {
     /// this is for a pool set up before that, and for keeping it again.
     private func fleetSection(_ pool: String) -> some View {
         Section {
-            Button(keepingInFleet ? "Keeping…" : "Keep its token in the fleet") {
+            Button(keepingInFleet ? "Keeping…" : "Let my machines use this pool") {
                 Task {
                     keepingInFleet = true
                     fleetNote = await XOSetupHandoff.keepInFleet(settings: settings, address: pool)
@@ -406,8 +409,7 @@ struct AddHypervisorView: View {
         } header: {
             sectionHead("Machines from this pool")
         } footer: {
-            Text("The boxes you approved can then make machines on it for your sessions. They hold its token in memory only, "
-                 + "and stop being given it when you remove them from your vault.")
+            Text("Your approved machines can then create VMs here.")
         }
     }
 
@@ -437,8 +439,8 @@ struct AddHypervisorView: View {
                     endRelay()
                 }
             if askFirst {
-                Text("This phone has not set up \(trimmedAddress), kept a sign-in for it or pinned its certificate. "
-                     + "The address came from one of your machines, so none of them is asked to reach it until you say so.")
+                Text(preferred.map { "New address, from \($0). Connect only if you recognise it." }
+                     ?? "New address from one of your machines. Connect only if you recognise it.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.ink)
             }
@@ -454,18 +456,12 @@ struct AddHypervisorView: View {
         } header: {
             sectionHead("Where")
         } footer: {
-            if isPolicy {
-                Text("The pool this phone holds a token for. The change runs from one of your permanent machines, "
-                     + "so one of them has to be on a network that reaches it.")
-            } else if isReconnect {
-                // WHAT THE MACHINE WILL DO WITH AN ADMIN SIGN-IN, said before
-                // it is asked for, in the terms it keeps to.
-                Text("One of your permanent machines signs in to Xen Orchestra here as you, reconnects the servers that are not "
-                     + "connected, leaves any that are turned off as they are, and changes nothing else. It holds the signed-in "
-                     + "session for ten minutes at most and keeps nothing afterwards.")
-            } else {
-                Text("A host name or address, with a port if it is not 443, and no https:// in front. "
-                     + "The setup runs from one of your permanent machines, so one of them has to be on a network that reaches it.")
+            // A policy's address is filled in and disabled, so nothing is
+            // said under it. A reconnect says what it does in one sentence.
+            if isReconnect {
+                Text("Reconnects disconnected servers. Nothing else changes.")
+            } else if !isPolicy {
+                Text("For example xo.lan or 10.0.0.5:8443.")
             }
         }
     }
@@ -480,6 +476,11 @@ struct AddHypervisorView: View {
                 Text(nobodyReached)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.ink)
+                if let tried = triedFrom {
+                    Text(tried)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
                 // THE WAY ROUND IT, offered only when the fleet named a
                 // machine that can take it (C-2).
                 if let via = throughOffer, job == nil {
@@ -522,28 +523,24 @@ struct AddHypervisorView: View {
         .frame(minHeight: 44)
     }
 
-    /// What this machine found, in its own three answers, over HTTPS or over
-    /// plain HTTP. `xo` nil is cannot tell and is said as that, never rounded
-    /// to yes or no (C-5). The same words as Android (XoSetup.describe).
+    /// What this machine found, as a row's verdict: what answered, then how
+    /// it was reached when that is not HTTPS, because the path is what the
+    /// person is choosing between. `xo` nil is cannot tell and is said as
+    /// Unknown, never rounded to yes or no (C-5). The same words as Android
+    /// (XoSetup.describe).
     private func describe(_ probe: Fleet.Probe) -> String {
         // NOT ASKED THIS TIME, so nothing it found is claimed: only that it
         // got through last time, which is why it is tried first.
         if viaMemory, chosen?.hostId == probe.hostId {
-            return "Got through last time, so it is tried first"
+            return "Worked last time"
         }
-        if probe.throughPhone {
-            if probe.xo == true { return "Reached Xen Orchestra through this phone" }
-            if probe.xo == false { return "Reached something through this phone, and it does not look like Xen Orchestra" }
-            return "Reached something through this phone; cannot tell whether it is Xen Orchestra"
-        }
-        if probe.plainHTTP {
-            if probe.xo == true { return "Reached Xen Orchestra over plain HTTP" }
-            if probe.xo == false { return "Reached something over plain HTTP, and it does not look like Xen Orchestra" }
-            return "Reached something over plain HTTP; cannot tell whether it is Xen Orchestra"
-        }
-        if probe.xo == true { return "Reached Xen Orchestra" + (probe.version.map { " \($0)" } ?? "") }
-        if probe.xo == false { return "Reached something there over HTTPS, and it does not look like Xen Orchestra" }
-        return "Reached something there over HTTPS; cannot tell whether it is Xen Orchestra"
+        let what: String
+        if probe.xo == true { what = "Xen Orchestra" + (probe.version.map { " \($0)" } ?? "") }
+        else if probe.xo == false { what = "Not Xen Orchestra" }
+        else { what = "Unknown" }
+        if probe.throughPhone { return "\(what) · via this phone" }
+        if probe.plainHTTP { return "\(what) · no HTTPS" }
+        return what
     }
 
     /// Nothing is offered. Plain HTTP is offered now, so the only machine
@@ -552,14 +549,21 @@ struct AddHypervisorView: View {
     private var nobodyReached: String {
         let all = probes ?? []
         if all.isEmpty {
-            return "No permanent machine is connected, so nothing could try \(trimmedAddress). A machine has to be in the fleet to run the setup."
+            return "No machines online. Add or start one first."
         }
         if let odd = all.first(where: { $0.reachable == true }) {
-            return "\(odd.hostId) reached \(trimmedAddress), but did not say whether it was over HTTPS or show a certificate, "
-                + "so setup cannot run from it. Update that machine, then ask again."
+            return "\(odd.hostId) needs an update to set this up."
         }
-        return "No machine reached \(trimmedAddress). Check the address and the port, that Xen Orchestra is up, and that one "
-            + "of these is on a network that can reach it: \(all.map(\.hostId).sorted().joined(separator: ", "))."
+        return "Could not reach \(trimmedAddress)."
+    }
+
+    /// Which machines tried and did not get through, quietly under the
+    /// sentence above, so the person can see whether the one on the right
+    /// network was among them.
+    private var triedFrom: String? {
+        let tried = (probes ?? []).filter { $0.reachable != true }
+        guard !tried.isEmpty else { return nil }
+        return "Tried from \(tried.map(\.hostId).sorted().joined(separator: ", "))."
     }
 
     /// EVERY MACHINE THAT ANSWERED FOUND NO XEN ORCHESTRA: reached nothing,
@@ -582,22 +586,21 @@ struct AddHypervisorView: View {
             NavigationLink {
                 DeployXOView(settings: settings, address: trimmedAddress, probes: probes)
             } label: {
-                Text("This pool has no Xen Orchestra yet")
+                Text("Install Xen Orchestra")
                     .fleetType(.bodyStrong)
                     .foregroundStyle(Design.Palette.ink)
                     .frame(minHeight: 44, alignment: .leading)
             }
         } footer: {
-            Text("None of your machines found Xen Orchestra at \(trimmedAddress). One of them can install it on the pool, from the pool "
-                 + "master’s root password, and then add it.")
+            Text("Needs the pool master’s root password.")
         }
     }
 
-    /// What working through this phone is, before it is asked for. The same
-    /// words as Android (XoRelay.kt).
+    /// What working through this phone is, before it is asked for. What is
+    /// encrypted, and by whom, is under "How your password is protected"
+    /// once a machine is chosen. The same words as Android (XoRelayWords).
     private func throughLine(_ via: String) -> String {
-        "This phone may be on a network that reaches it. \(via) can work through this phone: it opens HTTPS to Xen Orchestra "
-            + "itself, and this phone and the fleet carry only that encrypted connection. Keep this screen open while it runs."
+        "This phone may be on a network that reaches it. Keep this screen open while \(via) works through it."
     }
 
     // MARK: Sign in
@@ -613,11 +616,7 @@ struct AddHypervisorView: View {
                     // certificate the person already accepted (directPath).
                     certificateQuestion(chosen)
                 }
-                Text(viaMemory
-                     ? "SHA-256, as it was last time. The sign-in goes only to a server that answers with this certificate."
-                     : chosen.throughPhone
-                     ? "SHA-256, as \(chosen.hostId) saw it through this phone and this phone sees it itself. The sign-in goes only to a server that answers with this certificate."
-                     : "SHA-256, as \(chosen.hostId) saw it. The sign-in goes only to a server that answers with this certificate.")
+                Text("Certificate SHA-256")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
                 Text(XOSetupKey.grouped(cert))
@@ -625,7 +624,7 @@ struct AddHypervisorView: View {
                     .foregroundStyle(Design.Palette.ink)
                     .textSelection(.enabled)
                 if !chosen.certificateTrusted, rememberedAccepts(chosen) {
-                    rememberedLine("You accepted this certificate before, and this phone kept that behind \(biometry ?? "Face ID").")
+                    rememberedLine("Trusted before.")
                 } else if !chosen.certificateTrusted {
                     Toggle(isOn: $acknowledged) {
                         Text("I checked this certificate and trust it")
@@ -639,7 +638,7 @@ struct AddHypervisorView: View {
             } else if chosen.plainHTTP {
                 plainQuestion(chosen)
                 if rememberedAccepts(chosen) {
-                    rememberedLine("You chose to send it without HTTPS before, and this phone kept that behind \(biometry ?? "Face ID").")
+                    rememberedLine("You chose no HTTPS before.")
                 } else {
                     Toggle(isOn: $plainAccepted) {
                         Text("Send it without HTTPS anyway")
@@ -680,6 +679,21 @@ struct AddHypervisorView: View {
                     keepLoaded = false
                 }
             }
+            // THE MECHANISM, once per screen, behind one disclosure: the seal,
+            // the pin, the path through this phone, and who keeps it. The
+            // footer under this section says only who keeps it.
+            DisclosureGroup(isExpanded: $protectionOpen) {
+                ForEach(protectionLines(chosen), id: \.self) { line in
+                    Text(line)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+            } label: {
+                Text("How your password is protected")
+                    .fleetType(.bodyStrong)
+                    .foregroundStyle(Design.Palette.ink)
+            }
+            .frame(minHeight: 44)
             if let toCompare {
                 compareRows(toCompare)
             } else {
@@ -693,24 +707,35 @@ struct AddHypervisorView: View {
         }
     }
 
-    /// What happens to the sign-in, in the words that are true for the
-    /// switch as it stands: kept behind Face ID on this phone, or by nobody.
-    /// The fleet never keeps it either way. The same words as Android.
+    /// Who keeps the sign-in, in the words that are true for the switch as
+    /// it stands: this phone behind Face ID, or nobody. One sentence; the
+    /// rest is under the disclosure (protectionLines). The same words as
+    /// Android.
     private func signInFooter(_ chosen: Fleet.Probe) -> String {
-        let use = isPolicy ? "to read the pool and apply what you choose"
-            : isReconnect ? "to reconnect Xen Orchestra’s servers that are not connected"
-            : "to make a limited fleetwright user and its token"
-        let sealed = "It is sealed on this phone to a key only that machine holds, so the fleet relays it and cannot read it"
-        // THROUGH THIS PHONE, where it crosses as well as what it crosses as.
-        let path = chosen.throughPhone
-            ? " It then crosses this phone inside the HTTPS connection \(chosen.hostId) opens to Xen Orchestra, which neither this phone nor the fleet can read."
-            : ""
-        if keep, let biometry {
-            let word = chosen.certificateTrusted ? "" : ", and your word for the certificate,"
-            return "Used by \(chosen.hostId) \(use). \(sealed). This phone keeps it\(word) in its "
-                + "Keychain behind \(biometry), once \(chosen.hostId) has signed in with it; the fleet never keeps it." + path
+        if keep, let biometry { return "Kept on this phone behind \(biometry) once \(chosen.hostId) has signed in." }
+        return "Used once by \(chosen.hostId) and not kept."
+    }
+
+    /// The custody chain, in full, behind the one disclosure on this step:
+    /// the seal, the pin, the path through this phone, and who keeps it.
+    /// Nothing in the fleet can read or keep it on any path. The same words
+    /// as Android (XoRelayWords.protection).
+    private func protectionLines(_ chosen: Fleet.Probe) -> [String] {
+        var lines = ["It is encrypted on this phone to a key only \(chosen.hostId) holds, so nothing between them can read it."]
+        if chosen.cert != nil {
+            lines.append("\(chosen.hostId) sends it only to a server that answers with the certificate above.")
         }
-        return "Used once, by \(chosen.hostId), \(use), and not kept. \(sealed), and neither this phone nor the fleet keeps it." + path
+        // THROUGH THIS PHONE, where it crosses as well as what it crosses as.
+        if chosen.throughPhone {
+            lines.append("Through this phone, it travels inside the HTTPS connection \(chosen.hostId) opens to Xen Orchestra, which neither this phone nor anything in between can read.")
+        }
+        if keep, let biometry {
+            let word = chosen.certificateTrusted ? "" : ", and your answer above,"
+            lines.append("This phone keeps it\(word) in its Keychain behind \(biometry), once \(chosen.hostId) has signed in with it. Nothing else keeps it.")
+        } else {
+            lines.append("Once \(chosen.hostId) has used it, nothing keeps it.")
+        }
+        return lines
     }
 
     /// The person's earlier word, said in place of the question it answers.
@@ -727,12 +752,12 @@ struct AddHypervisorView: View {
         // FROM MEMORY, said as when it was checked: nothing was asked this
         // time, and the machine checks it again before it signs in.
         if viaMemory {
-            return Text("Its certificate checked out when this pool was set up, and \(probe.hostId) checks it again before signing in.")
+            return Text("Certificate trusted at setup. \(probe.hostId) checks it again before signing in.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.ink)
         }
         let c = probe.certificate
-        var line = "Its certificate checks out"
+        var line = "Certificate trusted"
         if let subject = c?.subject, !subject.isBlank { line += ": issued to \(subject)" }
         if let issuer = c?.issuer, !issuer.isBlank { line += " by \(issuer)" }
         if let until = CertificateWords.date(c?.notAfter) { line += ", valid until \(until)" }
@@ -769,40 +794,29 @@ struct AddHypervisorView: View {
 
     /// THE OTHER QUESTION, for an address with no HTTPS at all. The same
     /// emphasis as the certificate question and never both at once, since a
-    /// machine either saw a certificate or did not. Said in the concrete: the
-    /// two things that would travel in the clear, between which two machines,
-    /// and the lines of xo-install.cfg that would make it HTTPS instead, so
-    /// the person is choosing between two things they can picture. The same
-    /// words as Android.
+    /// machine either saw a certificate or did not. One headline and one
+    /// sentence that names both ends, because "the network" is nobody's
+    /// network; the lines of xo-install.cfg that would make it HTTPS are
+    /// behind a disclosure, because the fix is on the far side and the
+    /// person may well go and do it. The same words as Android.
     @ViewBuilder private func plainQuestion(_ probe: Fleet.Probe) -> some View {
         VStack(alignment: .leading, spacing: Design.Space.insideTight) {
-            Text("This Xen Orchestra answers without HTTPS")
+            Text("No HTTPS")
                 .fleetType(.bodyStrong)
                 .foregroundStyle(Design.Palette.attention)
-            if isReconnect {
-                // No token is made by a reconnect either; what crosses is the
-                // password and which servers Xen Orchestra has, and where.
-                Text("The admin password you type, and the names and addresses of Xen Orchestra’s servers, would cross the network "
-                     + "between \(probe.hostId) and \(trimmedAddress) unencrypted. Anything on that network could read them.")
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.ink)
-            } else if isPolicy {
-                // No token is made by a policy change; what crosses is the
-                // password and what the pool is made of.
-                Text("The admin password you type, and the pool's storage and networks, would cross the network between "
-                     + "\(probe.hostId) and \(trimmedAddress) unencrypted. Anything on that network could read them.")
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.ink)
-            } else {
-                Text("The admin password you type, and the token the fleet keeps afterwards, would cross the network between "
-                     + "\(probe.hostId) and \(trimmedAddress) unencrypted. Anything on that network could read them.")
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.ink)
-            }
-            Text("To give it HTTPS instead: in the installer's xo-install.cfg, set PORT=\"443\", PATH_TO_HTTPS_CERT, "
-                 + "PATH_TO_HTTPS_KEY and AUTOCERT=\"true\", then run it again.")
+            Text("Your password would cross the network between \(probe.hostId) and \(trimmedAddress) unencrypted.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.ink)
+            DisclosureGroup(isExpanded: $httpsHowOpen) {
+                Text("In the installer's xo-install.cfg, set PORT=\"443\", PATH_TO_HTTPS_CERT, PATH_TO_HTTPS_KEY and AUTOCERT=\"true\", then run it again.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+            } label: {
+                Text("How to turn on HTTPS")
+                    .fleetType(.bodyStrong)
+                    .foregroundStyle(Design.Palette.ink)
+            }
+            .frame(minHeight: 44)
         }
         .padding(.vertical, Design.Space.hair)
     }
@@ -841,8 +855,7 @@ struct AddHypervisorView: View {
     /// for their vault: by comparing the fingerprint with the one the box
     /// prints. "They match" is the claim being made, in those words.
     @ViewBuilder private func compareRows(_ fingerprint: String) -> some View {
-        Text("This phone has not approved \(begun?.hostId ?? "that machine") before. On it, fleetwright-sidecar identity "
-             + "prints its fingerprint; send the sign-in only if it is this one.")
+        Text("First time using \(begun?.hostId ?? "that machine"). On it, run fleetwright-sidecar identity and check it shows this:")
             .fleetType(.label)
             .foregroundStyle(Design.Palette.ink)
         Text(fingerprint)
@@ -900,7 +913,7 @@ struct AddHypervisorView: View {
                 // machine says it kept none, and this says whether it is here.
                 switch handedBack {
                 case .kept:
-                    Text("The token is in this phone’s Keychain now. No machine in the fleet keeps it on disk.")
+                    Text("Saved on this phone.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 case .failed(let why):
@@ -918,7 +931,7 @@ struct AddHypervisorView: View {
                 // THROUGH THIS PHONE: what it is doing while the job runs,
                 // and why it stopped if it stopped first.
                 if relay != nil, running {
-                    Text("This phone is carrying \(hostId)’s connection to Xen Orchestra. Keep this screen open until it is done.")
+                    Text("Keep this screen open until it is done.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.ink)
                 }
@@ -977,7 +990,7 @@ struct AddHypervisorView: View {
     /// where the new one is made. The same words as Android.
     private var straightLine: String? {
         guard let name = straightName else { return nil }
-        return "Removing \(name), disk and all, and making a new one on \(straightWayOut), which asks to join; this phone lets it in."
+        return "Replacing \(name) with a new one on \(straightWayOut)."
     }
 
     /// A reconnect's words, which end on the pools. Done with what came back
@@ -1039,8 +1052,7 @@ struct AddHypervisorView: View {
             }
         } else if outcomeUnopened {
             Section {
-                Text("What \(hostId) sent back did not open with this phone’s key, so what it did to each server is not shown. "
-                     + "The pool’s page shows what Xen Orchestra lists now.")
+                Text("Could not read the results. The pool’s page shows what Xen Orchestra lists now.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
@@ -1091,7 +1103,7 @@ struct AddHypervisorView: View {
             if inv.srs.isEmpty {
                 // Said, because nothing can be applied without one and an
                 // empty section would leave Apply greyed out for no reason.
-                Text("This pool listed no storage a VM’s disk can go on, so there is nothing to choose here.")
+                Text("This pool lists no storage for VM disks.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.ink)
             } else {
@@ -1192,7 +1204,7 @@ struct AddHypervisorView: View {
             // intrusion detection, which only ever logged.
             if choice.edgeBlockChoice, canEdge, choice.edge, choice.egress != nil {
                 Toggle(isOn: $choice.edgeBlock) {
-                    policyRow("Drop what the threat rules match", edgeBlockLine(there))
+                    policyRow("Drop what the threat rules match", edgeBlockLine)
                 }
                 .tint(Design.Palette.accent)
                 .frame(minHeight: 44)
@@ -1203,7 +1215,7 @@ struct AddHypervisorView: View {
             // will allow maintenance".
             if choice.edgeHaChoice, canEdge, choice.edge, choice.egress != nil {
                 Toggle(isOn: $choice.edgeHa) {
-                    policyRow("Two edge routers", edgeHaLine(there))
+                    policyRow("Two edge routers", edgeHaLine)
                 }
                 .tint(Design.Palette.accent)
                 .frame(minHeight: 44)
@@ -1217,7 +1229,7 @@ struct AddHypervisorView: View {
                 imageChannelRow(inv: inv)
             } else if policyJob?.canImage == true, choice.egress != nil {
                 if let image = inv.image(on: choice.egress) {
-                    policyRow("Machine image", "\(image.name) is there. New session › Where offers machines from it.")
+                    policyRow("Machine image", "\(image.name) · Ready")
                 } else {
                     Toggle(isOn: $choice.image) {
                         policyRow("Make the machine image for sessions", imageLine)
@@ -1270,46 +1282,28 @@ struct AddHypervisorView: View {
                 edgeDiskRow(inv)
             }
         } header: {
-            sectionHead("Way out")
+            sectionHead("Internet access")
         } footer: {
             Text(wayOutFooter(canEdge: canEdge, anyWayOut: anyWayOut))
         }
     }
 
-    /// What the switch does, in the concrete: what it costs when there is no
-    /// router, and what Apply does to the one that is there. The same words
-    /// as Android (PolicyForm.kt).
-    /// What blocking does, and what changing it costs on a router that is
-    /// there: it has no login, so it is rebuilt. The same words on Android.
-    private func edgeBlockLine(_ there: XOPolicy.Inventory.Edge?) -> String {
-        let what = choice.edgeBlock
-            ? "On: Suricata drops it, and while it cannot inspect, nothing leaves."
-            : "Off: Suricata logs it by machine and lets it through."
-        guard let there, (there.blocks ?? false) != choice.edgeBlock else { return what }
-        return "\(what) Apply rebuilds the edge router to change this: machines behind it keep their way out while the new one is built, and have none while it starts."
-    }
+    /// What blocking does, as the switch stands. What changing it costs on a
+    /// router that is there (it has no login, so it is rebuilt) is said once,
+    /// beside Apply (applySection), not here. The same words on Android.
+    private var edgeBlockLine: String { choice.edgeBlock ? "Blocks matched traffic" : "Logs only" }
 
-    /// What a pair does, and what changing it costs on a router that is
-    /// there. The same words on Android.
-    private func edgeHaLine(_ there: XOPolicy.Inventory.Edge?) -> String {
-        let what = choice.edgeHa
-            ? "On: they share the way out, so one carries the machines while the other restarts for an update."
-            : "Off: one router, and when it restarts for an update, machines behind it have no way out for those minutes."
-        guard let there, (there.ha ?? false) != choice.edgeHa else { return what }
-        return choice.edgeHa
-            ? "\(what) Apply makes the second and hands over to it: machines behind it have no way out while it starts."
-            : "\(what) Apply removes the second and rebuilds the first: machines behind it keep their way out while the new one is built, and have none while it starts."
-    }
+    /// What a pair buys, as the switch stands; the cost of changing it is
+    /// beside Apply. The same words on Android.
+    private var edgeHaLine: String { choice.edgeHa ? "No downtime during updates" : "Brief outage during updates" }
 
+    /// The router's spec when there is none to keep, and its state when
+    /// there is: a row's line, not a paragraph. The same words as Android
+    /// (PolicyForm.kt).
     private func edgeLine(_ there: XOPolicy.Inventory.Edge?) -> String {
-        guard let there else {
-            return "An OPNsense VM with 2 vCPUs, 2 GiB of memory and a 3 GiB disk on the storage chosen. "
-                + "\(hostId) downloads OPNsense once, about 470 MB, and builds it while you wait."
-        }
-        let state = there.running
-            ? "It is there and running. Apply keeps its WAN on this network."
-            : "It is there and stopped. Apply keeps its WAN on this network and starts it."
-        return there.sr.map { "\(state) Its disk is on \($0)." } ?? state
+        guard let there else { return "2 vCPU · 2 GiB · 3 GiB disk · 470 MB download" }
+        let state = there.running ? "Running" : "Stopped · Apply starts it"
+        return there.sr.map { "\(state) · disk on \($0)" } ?? state
     }
 
     /// ONE ROW PER OPERATING SYSTEM the machine can make an image of: a
@@ -1387,14 +1381,9 @@ struct AddHypervisorView: View {
     /// (PolicyForm.kt).
     private func imageThereLine(_ action: XOPolicy.ImageAction) -> String {
         switch action {
-        case .keep:
-            return "It is there. New session › Where offers machines from it."
-        case .rebuild:
-            return "Apply builds a new one beside it from the newest image, then removes this one. "
-                + "If a machine was made from this one, it is kept until that machine is gone."
-        case .remove:
-            return "Apply removes it, and New session stops offering it. "
-                + "If a machine was made from it, it is kept until that machine is gone."
+        case .keep: return "Ready"
+        case .rebuild: return "Rebuilt on Apply from the newest image"
+        case .remove: return "Removed on Apply"
         }
     }
 
@@ -1402,28 +1391,20 @@ struct AddHypervisorView: View {
     /// (PolicyForm.kt).
     private func imageLine(_ kind: XOPolicy.Inventory.ImageKind) -> String {
         if kind.key == XOPolicy.debianKey { return imageLine }
-        return "\(kind.os) with Fleetwright installed, on a 20 GiB disk on the storage chosen. \(hostId) downloads its cloud "
-            + "image once, converts it to a disk, and installs Fleetwright on it, which takes about ten minutes. Sessions can "
-            + "then start on a new machine from it."
+        return "\(kind.os) · 20 GiB disk · about 10 min"
     }
 
     /// What the pool's own machine is, before it is asked for. The same words
     /// as Android (PolicyForm.kt).
     private var holderLine: String {
-        choice.holderAskChoice
-            ? "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the "
-                + "fleet may use, so the pool does not need \(hostId) to be awake. Once it is up it asks to join, and this phone "
-                + "lets it in to hold the pool by itself, as the phone that made it."
-            : "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the "
-                + "fleet may use, so the pool does not need \(hostId) to be awake. Once it joins, approve it under Machines and it "
-                + "holds the pool."
+        "An always-on VM that manages this pool, so \(hostId) need not stay awake."
     }
 
     /// The one there, and what Apply does to it. The same words as Android.
     private func holderThereLine(_ mine: XOPolicy.Inventory.Holder) -> String {
         mine.running
-            ? "\(mine.name) is there and running. It holds the pool once you have approved it under Machines."
-            : "\(mine.name) is there and stopped. Apply starts it."
+            ? "Running. Approve it under Machines if you have not yet."
+            : "Stopped · Apply starts it"
     }
 
     /// Why Make it again from the machine's page did nothing by itself, and
@@ -1432,26 +1413,22 @@ struct AddHypervisorView: View {
     private func straightRefusal(_ inv: XOPolicy.Inventory) -> String {
         let pool = policyFor ?? trimmedAddress
         if !choice.holderAskChoice {
-            return "\(hostId) cannot make a machine that asks to join, so nothing was made again by itself. Update it, or choose below."
+            return "\(hostId) needs an update to do this. Choose below instead."
         }
         if inv.holder(on: choice.egress) == nil {
-            return "\(pool) has no machine of its own on the way out any more, so there is nothing to make again. This is what the fleet may use there, as it stands."
+            return "\(pool) has no managing VM to replace."
         }
-        return "Nothing was made again by itself: \(choice.problem(in: inv) ?? "the choice as it stands would be refused"). Choose below."
+        return "Not done by itself: \(choice.problem(in: inv) ?? "the choice as it stands would be refused"). Choose below."
     }
 
     /// What making it again does. The same words as Android.
     private func againLine(_ mine: XOPolicy.Inventory.Holder) -> String {
-        "Removes \(mine.name), disk and all, and makes a new one that asks to join. For one that never joined the fleet."
+        "Removes \(mine.name) and makes a new one. For one that never joined."
     }
 
     /// What making the image costs, before it is asked for. The same words as
     /// Android (PolicyForm.kt).
-    private var imageLine: String {
-        "Debian 13 with Fleetwright installed, on a 20 GiB disk on the storage chosen. \(hostId) downloads Debian once, "
-            + "about 220 MB, and installs Fleetwright on it, which takes about ten minutes. Sessions can then start on a new "
-            + "machine from it."
-    }
+    private var imageLine: String { "Debian 13 · 20 GiB disk · 220 MB download · about 10 min" }
 
     /// The storage the disks being built go on, with the room each has.
     /// Nothing to pick from is said, and Apply waits (XOPolicy.Choice.problem).
@@ -1461,8 +1438,8 @@ struct AddHypervisorView: View {
         let fits = inv.edgeDisks(for: choice.egress, need: choice.diskNeed(in: inv))
         if fits.isEmpty {
             Text(build.image
-                 ? "Nothing in the way out’s pool has 20 GiB free for the machine image’s disk."
-                 : "Nothing in the way out’s pool has 3 GiB free for its disk.")
+                 ? "Nothing in that network’s pool has 20 GiB free for the image’s disk."
+                 : "Nothing in that network’s pool has 3 GiB free for its disk.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.bad)
         } else {
@@ -1482,12 +1459,10 @@ struct AddHypervisorView: View {
     }
 
     private func wayOutFooter(canEdge: Bool, anyWayOut: Bool) -> String {
-        let what = "The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not "
-            + "your LAN. It is recorded in Xen Orchestra as the fleetwright-egress tag on that network. "
-            + (anyWayOut
-                ? "Any of the pool’s networks can be it. One the fleet’s VMs may not use is the better, so no lab can skip the router."
-                : "Only a network chosen above can be the way out.")
-        return canEdge ? what : what + " \(hostId) is too old to build the router; update it to have it built from here."
+        let what = anyWayOut
+            ? "The network VMs reach the internet through. Pick one the VMs are not on themselves."
+            : "The network VMs reach the internet through, from those chosen above."
+        return canEdge ? what : what + " \(hostId) needs an update to build the router."
     }
 
     /// GROUP NETWORKS, in the way out's pool: how many to have, from the
@@ -1505,26 +1480,23 @@ struct AddHypervisorView: View {
         } header: {
             sectionHead("Machines that work together")
         } footer: {
-            Text("Every machine the fleet starts here reaches the internet and nothing else: not your network, and not the other machines. "
-                 + "A group is for machines that need to talk to each other, like the nodes of a cluster you are testing. "
-                 + "Machines in the same group share a private network and keep their way to the internet. "
-                 + "You choose the group when you start a session, under Where. A group stays once it is made, because a machine may be on it.")
+            Text("VMs in the same group can reach each other. Pick a group when you start a session.")
         }
     }
 
     /// LABS, on the edge router: how many of each kind, four in all at
     /// most. Each is a network of its own with one machine at a time, and
-    /// costs no machine of its own, which is the first thing said. Changing
-    /// them rebuilds the router, said before Apply as blocking mode says it.
+    /// costs no machine of its own. Changing them rebuilds the router, which
+    /// is said once, beside Apply (applySection).
     private func labsSection(_ inv: XOPolicy.Inventory) -> some View {
         Section {
             Stepper(value: $choice.labsOpen, in: 0...(XOPolicy.maxLabs - choice.labsClosed)) {
-                policyRow("Open labs", "\(choice.labsOpen): each reaches the internet and nothing private")
+                policyRow("Open labs", "\(choice.labsOpen) · internet only")
             }
             .frame(minHeight: 44)
             .disabled(busy)
             Stepper(value: $choice.labsClosed, in: 0...(XOPolicy.maxLabs - choice.labsOpen)) {
-                policyRow("Closed labs", "\(choice.labsClosed): each reaches the fleet and Claude and nothing else")
+                policyRow("Closed labs", "\(choice.labsClosed) · Claude and Fleetwright only")
             }
             .frame(minHeight: 44)
             .disabled(busy)
@@ -1542,17 +1514,11 @@ struct AddHypervisorView: View {
                 .frame(minHeight: 44)
                 .disabled(busy)
             }
-            if choice.labsChanged(in: inv) {
-                Text("Apply rebuilds the edge router to change the labs: machines behind it keep their way out while the new one is built, and have none while it starts.")
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.attention)
-            }
         } header: {
             sectionHead("Labs")
         } footer: {
-            Text("A lab is a network of its own on the edge router, for one machine at a time: New session › Where puts a machine in one. "
-                 + "It costs no extra machine, only an interface on the router. Up to four in all."
-                 + (choice.labsEachChoice ? " Labs per person is how many one person may hold at once. With no limit, one person may take every lab that is free." : ""))
+            Text("One VM per lab. Up to four labs."
+                 + (choice.labsEachChoice ? " Labs per person caps how many one person holds at once." : ""))
         }
     }
 
@@ -1627,9 +1593,16 @@ struct AddHypervisorView: View {
     private func applySection(_ inv: XOPolicy.Inventory, job: String) -> some View {
         let problem = choice.problem(in: inv)
         return Section {
-            Text("\(hostId) waits ten minutes for this from when it read the pool, then lets go of the sign-in without changing anything.")
+            Text("Apply within ten minutes, or nothing changes.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
+            // THE ROUTER'S REBUILD, said once, here, beside the button that
+            // causes it: blocking, the pair and the labs each used to say it.
+            if choice.rebuildsRouter(in: inv) {
+                Text("Applying rebuilds the router. VMs behind it lose internet while the new one starts.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+            }
             if let problem {
                 Text(problem)
                     .fleetType(.label)
@@ -1747,8 +1720,7 @@ struct AddHypervisorView: View {
         // CANNOT TELL IS SAID AS THAT (C-5): no certificate seen here is no
         // reason to take the machine's word for one.
         guard let own = await PhoneRelay.ownLook(address: target) else {
-            probeText = "This phone could not reach \(target) over HTTPS itself, so nothing can reach it through this phone either. "
-                + "Check that this phone is on the pool’s network."
+            probeText = "This phone cannot reach \(target) either. Join the pool’s network and try again."
             return
         }
         carrier.onClose = { text in Task { @MainActor in relayClosed(text) } }
@@ -1909,7 +1881,7 @@ struct AddHypervisorView: View {
         guard now == "failed" else { return }
         pendingSave = nil
         if phase == "connect", viaMemory {
-            keepNote = "\(hostId) got through last time and did not this time. Try again asks all your machines and shows the certificate in full."
+            keepNote = "\(hostId) got through last time and did not this time. Try again asks every machine."
         } else if phase == "sign-in", keepLoaded {
             XOSaved.forget(trimmedAddress)
             remembered = nil
@@ -1964,7 +1936,7 @@ struct AddHypervisorView: View {
         // A MACHINE THAT REACHED IT THROUGH THIS PHONE begins only while this
         // phone still carries the relay it reached it through.
         if probe.throughPhone, relayId == nil {
-            refuse("This phone is no longer carrying the connection \(probe.hostId) reached Xen Orchestra through. Try through this phone again.")
+            refuse("The connection through this phone closed. Try through this phone again.")
             return
         }
         busy = true
@@ -2006,7 +1978,7 @@ struct AddHypervisorView: View {
             // a relay can add (XOPolicy.refusal).
             if isPolicy, let why = XOPolicy.refusal(can: can, machine: machine) {
                 _ = try? await fleet.cancelSetup(job: begunJob)
-                refuse("\(why) Update that machine, then try again.")
+                refuse(why)
                 return
             }
             // THE SAME FOR A RECONNECT: an older machine would run onboarding
@@ -2021,7 +1993,7 @@ struct AddHypervisorView: View {
                     refuse("\(why) Your other machines were asked instead.")
                     return
                 }
-                refuse("\(why) Update that machine, then try again.")
+                refuse(why)
                 return
             }
             // AND A SETUP GOES ONLY TO A MACHINE NEW ENOUGH TO HAND THE TOKEN
@@ -2033,7 +2005,7 @@ struct AddHypervisorView: View {
             // hand-off, so a machine that sends none is older than both.
             if !isPolicy, can.isEmpty {
                 _ = try? await fleet.cancelSetup(job: begunJob)
-                refuse("\(machine) is running a Fleetwright older than this app, and an older machine keeps the pool’s token itself instead of handing it to this phone. Nothing was sent. Update that machine (Update, then Restart to apply), then try again.")
+                refuse("\(machine) needs an update. Nothing was sent.")
                 return
             }
             // THE KEY IS CHECKED BEFORE ANYTHING IS SEALED TO IT. A bad
@@ -2043,7 +2015,7 @@ struct AddHypervisorView: View {
             // what is checked: `"pin":""` in the bytes, not a missing key.
             guard XOSetupKey.isSigned(key: key, keySig: keySig, hostKey: hostKey, address: target, job: begunJob, pin: pin ?? "") else {
                 _ = try? await fleet.cancelSetup(job: begunJob)
-                refuse("The key \(machine) answered with did not come from that machine, so the sign-in was not sent.")
+                refuse("That key did not come from \(machine). Nothing was sent.")
                 return
             }
             // The fingerprint is worked out here from the key, never read off
@@ -2059,7 +2031,7 @@ struct AddHypervisorView: View {
                 // would have been re-approved. Hard stop.
                 _ = try? await fleet.cancelSetup(job: begunJob)
                 begun = nil
-                refuse("The key \(machine) answered with did not come from that machine: it is not the key this phone approved for it. The sign-in was not sent.")
+                refuse("\(machine)’s key is not the one this phone approved. The sign-in was not sent.")
             case .none:
                 toCompare = fingerprint
             }
@@ -2184,7 +2156,7 @@ struct AddHypervisorView: View {
         if let why = XOPolicy.refusal(can: begun.can, machine: begun.hostId) {
             _ = try? await fleet.cancelSetup(job: begun.job)
             self.begun = nil
-            refuse("\(why) Update that machine, then try again.")
+            refuse(why)
             return
         }
         busy = true
@@ -2254,7 +2226,7 @@ struct AddHypervisorView: View {
         if let why = XOReconnect.refusal(can: begun.can, machine: begun.hostId) {
             _ = try? await fleet.cancelSetup(job: begun.job)
             self.begun = nil
-            refuse("\(why) Update that machine, then try again.")
+            refuse(why)
             return
         }
         busy = true
@@ -2362,7 +2334,7 @@ struct AddHypervisorView: View {
                 if makeHolderAgain {
                     if choice.holderAgain, choice.problem(in: opened) == nil, let mine = opened.holder(on: choice.egress) {
                         straightName = mine.name
-                        straightWayOut = opened.networks.first { $0.id == choice.egress }?.name ?? "the way out"
+                        straightWayOut = opened.networks.first { $0.id == choice.egress }?.name ?? "its network"
                         straightThrough = true
                         await applyPolicy(opened, job: job)
                     } else {
@@ -2374,8 +2346,7 @@ struct AddHypervisorView: View {
                 // NOT SHOWN, AND LET GO: a pool this phone cannot read is not
                 // one it can choose for, and the machine is holding a signed-in
                 // session open waiting.
-                refuse("What \(hostId) read did not open with this phone’s key, so it is not shown and nothing was changed. "
-                       + "It has been asked to stop; try again.")
+                refuse("Could not read the pool. Nothing was changed; try again.")
                 _ = try? await fleet.cancelSetup(job: job)
                 cancelRequested = true
             }

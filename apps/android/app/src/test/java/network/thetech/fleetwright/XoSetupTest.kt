@@ -162,12 +162,14 @@ class XoSetupTest {
         assertFalse(XoSetup.plain(noCert))
         assertFalse(XoSetup.pinned(unreached))
         assertFalse(XoSetup.plain(unreached))
-        // What was found over plain HTTP, with `xo` kept three-valued: null is
-        // cannot tell, and is never rounded to no.
-        assertEquals("Reached Xen Orchestra over plain HTTP", XoSetup.describe(plain))
-        assertEquals("Reached something over plain HTTP, and it does not look like Xen Orchestra", XoSetup.describe(plain.copy(xo = false)))
-        assertEquals("Reached something over plain HTTP; cannot tell whether it is Xen Orchestra", XoSetup.describe(plain.copy(xo = null)))
-        assertEquals("Reached it over HTTPS. Xen Orchestra 5.100.0", XoSetup.describe(https))
+        // What was found, as a row's verdict, then the path when it is not
+        // HTTPS with a certificate; `xo` kept three-valued: null is Unknown,
+        // and is never rounded to no.
+        assertEquals("Xen Orchestra · no HTTPS", XoSetup.describe(plain))
+        assertEquals("Not Xen Orchestra · no HTTPS", XoSetup.describe(plain.copy(xo = false)))
+        assertEquals("Unknown · no HTTPS", XoSetup.describe(plain.copy(xo = null)))
+        assertEquals("Xen Orchestra 5.100.0", XoSetup.describe(https))
+        assertEquals("Xen Orchestra 5.100.0 · certificate not read", XoSetup.describe(noCert))
         assertEquals("Could not reach it", XoSetup.describe(unreached))
     }
 
@@ -199,7 +201,7 @@ class XoSetupTest {
     @Test
     fun stepWordsAreTheStepsWordsAndANumberOtherwise() {
         assertEquals("Reaching Xen Orchestra", XoSetup.stepWords("connect", 0, 8))
-        assertEquals("Handing over", XoSetup.stepWords("hand-off", 7, 8))
+        assertEquals("Sending the token", XoSetup.stepWords("hand-off", 7, 8))
         assertEquals("Done", XoSetup.stepWords("done", 8, 8))
         // A key this app has never heard of: the number, one-based.
         assertEquals("Step 3 of 9", XoSetup.stepWords("new-step", 2, 9))
@@ -220,10 +222,10 @@ class XoSetupTest {
     fun whatTheBytesAreDoingIsWordedFromTheKeyAndTheCountIsSaidEitherWay() {
         // The machine's sentence names the release and the storage and is
         // never sent to the notification; the key and the megabytes are.
-        assertEquals("Reading the blocks the configuration goes in: 192 of 2238 MB", XoSetup.bytesLine("read", "edge", 192, 2238))
+        assertEquals("Configuring: 192 of 2238 MB", XoSetup.bytesLine("read", "edge", 192, 2238))
         assertEquals("Downloading OPNsense: 1 of 468 MB", XoSetup.bytesLine("download", "edge", 1, 468))
         assertEquals("Downloading the image: 1 of 468 MB", XoSetup.bytesLine("download", "image", 1, 468))
-        assertEquals("Writing the image to the pool, to keep: 700 of 2048 MB", XoSetup.bytesLine("keep", "image", 700, 2048))
+        assertEquals("Saving the image to the pool: 700 of 2048 MB", XoSetup.bytesLine("keep", "image", 700, 2048))
         // A key this app has never met: the numbers are known, the words are not made up.
         assertEquals("192 of 2238 MB", XoSetup.bytesLine("something-newer", "edge", 192, 2238))
         assertEquals(null, XoSetup.bytesLine("read", "edge", null, null))
@@ -292,8 +294,8 @@ class XoSetupTest {
         // A trusted one has nothing to say here, and one calm line elsewhere.
         val fine = c.copy(trusted = true, problems = emptyList())
         assertEquals(emptyList<String>(), XoSetup.problemLines(fine, address, zone, uk))
-        assertEquals("Its certificate checks out: issued to CN=xo by CN=Example CA, valid until 4 Mar 2026.", XoSetup.trustedLine(fine, zone, uk))
-        assertEquals("Its certificate checks out.", XoSetup.trustedLine(fine.copy(subject = null, issuer = null, notAfter = null), zone, uk))
+        assertEquals("Certificate trusted: issued to CN=xo by CN=Example CA, valid until 4 Mar 2026.", XoSetup.trustedLine(fine, zone, uk))
+        assertEquals("Certificate trusted.", XoSetup.trustedLine(fine.copy(subject = null, issuer = null, notAfter = null), zone, uk))
     }
 
     @Test

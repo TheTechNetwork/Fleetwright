@@ -31,8 +31,7 @@ const SAID = [
   'Sessions keep running while it updates.',
   'Reboot from the app',
   'A reboot ends every session on that machine.',
-  'Each machine made on this pool from now on starts with these answers, the pool’s own machine included. ',
-  'One already running keeps what it has. To change it, run sudo fleetwright grant upgrades on, or reboot on, on that machine.',
+  'Applies to new VMs. Existing ones keep their setting.',
 ];
 
 test('both phones say it in the same words', () => {

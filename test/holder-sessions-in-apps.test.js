@@ -88,14 +88,14 @@ test('the pool’s own machine’s page offers Make it again, which does the res
   // which machine goes and where the new one is made, in the same words.
   assert.match(form, /if choosing, let inventory, !straightThrough \{\s*policySections\(inventory, job: job\)/, 'iOS draws progress, not the form');
   assert.match(sheet, /straight -> \{\}\s*inv != null && c != null -> \{/, 'Android draws no form while it goes');
-  const said = 'Removing \\(name), disk and all, and making a new one on \\(straightWayOut), which asks to join; this phone lets it in.';
+  const said = 'Replacing \\(name) with a new one on \\(straightWayOut).';
   assert.ok(form.includes(`"${said}"`), 'iOS says what went');
-  assert.ok(sheet.includes('"Removing $name, disk and all, and making a new one on $wayOut, which asks to join; this phone lets it in."'), 'Android says what went');
+  assert.ok(sheet.includes('"Replacing $name with a new one on $wayOut."'), 'Android says what went');
   // And when it could not, the form, with why, in the same words.
   const whyNot = [
-    'cannot make a machine that asks to join, so nothing was made again by itself. Update it, or choose below.',
-    'has no machine of its own on the way out any more, so there is nothing to make again. This is what the fleet may use there, as it stands.',
-    'Nothing was made again by itself: ',
+    'needs an update to do this. Choose below instead.',
+    'has no managing VM to replace.',
+    'Not done by itself: ',
   ];
   for (const why of whyNot) {
     assert.ok(form.includes(why), `iOS says why not: ${why.slice(0, 30)}`);

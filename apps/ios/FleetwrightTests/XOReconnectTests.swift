@@ -48,13 +48,13 @@ final class XOReconnectTests: XCTestCase {
     func testOnlyAMachineThatOpensThatBindingIsSentTheSignIn() {
         XCTAssertNil(XOReconnect.refusal(can: ["policy", "reconnect", "reconnect-signin"], machine: "deb132"))
         XCTAssertEqual(XOReconnect.refusal(can: ["policy"], machine: "deb132"),
-                       "deb132 is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent.")
+                       "deb132 needs an update to reconnect servers. Nothing was sent.")
         // `reconnect` alone is what a relay can add to a machine too old to
         // know it, so it is not enough.
         XCTAssertEqual(XOReconnect.refusal(can: ["policy", "reconnect"], machine: "deb132"),
-                       "deb132 is too old to open the sign-in this app seals for a reconnect, so the sign-in was not sent.")
+                       "deb132 needs an update to take the sign-in. Nothing was sent.")
         XCTAssertEqual(XOReconnect.refusal(can: ["reconnect-signin"], machine: "deb132"),
-                       "deb132 is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent.")
+                       "deb132 needs an update to reconnect servers. Nothing was sent.")
     }
 
     // MARK: - what comes back
