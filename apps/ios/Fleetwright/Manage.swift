@@ -360,8 +360,10 @@ enum Manage {
         return "\(b) byte\(b == 1 ? "" : "s")"
     }
 
+    /// Nil is cannot tell, said as the one word a row has room for (C-5):
+    /// `Unknown`, never a blank and never a state.
     static func stateWords(_ state: State?) -> String {
-        guard let state else { return "cannot tell" }
+        guard let state else { return "Unknown" }
         switch state {
         case .running: return "running"
         case .stopped: return "stopped"
@@ -378,7 +380,8 @@ enum Manage {
 
     static func poolWords(_ id: String?, in s: Snapshot) -> String {
         if let id, let p = s.components[id], p.kind == .pool { return "pool \(p.name)" }
-        return "a pool this token cannot see"
+        // A pool this phone's access does not reach is unknown, not none.
+        return "an unknown pool"
     }
 
     /// What it is: its kind, and where it lives.
@@ -392,7 +395,7 @@ enum Manage {
             return c.software.map { "\(place) · \($0)" } ?? place
         case .vm:
             if let hostId = s.hostId(of: c) {
-                guard let host = s.components[hostId], host.kind == .host else { return "VM on a host this token cannot see" }
+                guard let host = s.components[hostId], host.kind == .host else { return "VM on an unknown host" }
                 return "VM on \(host.name) in \(poolWords(c.poolId, in: s))"
             }
             return "VM in \(poolWords(c.poolId, in: s)), not on a host"
@@ -403,7 +406,7 @@ enum Manage {
                 if let host = s.components[hostId], host.kind == .host {
                     parts.append("on \(host.name)")
                 } else {
-                    parts.append("on a host this token cannot see")
+                    parts.append("on an unknown host")
                 }
             } else if c.shared == true || c.containerId != nil {
                 parts.append("shared by \(poolWords(c.poolId, in: s))")
@@ -413,7 +416,7 @@ enum Manage {
     }
 
     /// The numbers behind how it is. Each one Xen Orchestra did not send is
-    /// said as cannot tell, in its place.
+    /// said as Unknown, in its place (C-5).
     static func numbers(_ c: Component, in s: Snapshot) -> String {
         switch c.kind {
         case .pool:
@@ -421,25 +424,25 @@ enum Manage {
             let running = vms.filter { $0.state == .running }.count
             return vms.isEmpty ? "No VMs" : "\(running) of \(vms.count) VMs running"
         case .host:
-            let cores = c.cpus.map { "\($0) core\($0 == 1 ? "" : "s")" } ?? "cores: cannot tell"
+            let cores = c.cpus.map { "\($0) core\($0 == 1 ? "" : "s")" } ?? "cores: Unknown"
             let memory: String
             if let size = c.memory, let used = c.memoryUsed {
                 memory = "\(bytes(used)) of \(bytes(size)) in use"
             } else if let size = c.memory {
-                memory = "\(bytes(size)), use cannot tell"
+                memory = "\(bytes(size)), in use: Unknown"
             } else {
-                memory = "memory: cannot tell"
+                memory = "memory: Unknown"
             }
             let n = s.runningOn(c.id)
             let vms = n == 0 ? "no VMs running" : "\(n) VM\(n == 1 ? "" : "s") running"
             return [cores, memory, vms].joined(separator: " · ")
         case .vm:
-            var parts = [c.cpus.map { "\($0) vCPU\($0 == 1 ? "" : "s")" } ?? "vCPUs: cannot tell",
-                         c.memory.map { bytes($0) } ?? "memory: cannot tell"]
+            var parts = [c.cpus.map { "\($0) vCPU\($0 == 1 ? "" : "s")" } ?? "vCPUs: Unknown",
+                         c.memory.map { bytes($0) } ?? "memory: Unknown"]
             if let address = c.address { parts.append(address) }
             return parts.joined(separator: " · ")
         case .sr:
-            guard let size = c.size, let used = c.used else { return "space: cannot tell" }
+            guard let size = c.size, let used = c.used else { return "space: Unknown" }
             return "\(bytes(max(0, size - used))) free of \(bytes(size))"
         }
     }
@@ -747,105 +750,115 @@ enum Manage {
     /// Every sentence the screens say about a pool, in one place, held equal
     /// to Manage.kt's by the shared table.
     enum Words {
-        static let watching = "Watching now. Changes arrive as Xen Orchestra makes them."
+        // HOW CURRENT THE PAGE IS, in a row's words (docs/reviews/copy-2026-11-06.md,
+        // "The rule to adopt"): a verdict and a time, never the polling.
+        static let watching = "Live"
         static func connecting(_ address: String) -> String { "Connecting to \(address)…" }
-        static func savedPage(_ when: String) -> String { "Showing the page as it was at \(when) until the pool answers." }
+        static func savedPage(_ when: String) -> String { "Showing the page from \(when)." }
         /// Why a machine was asked while the socket was still opening.
         static let notYet = "it had not answered yet"
-        static let never = "Not looked at from this phone yet."
-        static let closed = "Nothing watches while the app is closed."
-        static func lookedAt(_ when: String) -> String { "Last looked at \(when). \(closed)" }
-        static func rowLooked(_ when: String) -> String { "Last looked at \(when)" }
-        static func plainPool(_ address: String) -> String {
-            "\(address) was set up over plain HTTP. This phone manages a pool only over HTTPS, with the certificate pinned at setup, "
-                + "so it does not connect to this one."
-        }
-        static func noToken(_ address: String) -> String {
-            "This phone holds no token for \(address) any more. Run Add a hypervisor again for it."
-        }
-        static func expired(_ address: String, on date: String) -> String {
-            "Its token ran out on \(date). Run Add a hypervisor again for \(address) to make a new one."
-        }
-        static func wrongCertificate(_ address: String) -> String {
-            "\(address) answered with a different certificate from the one pinned when it was set up. Nothing was sent. "
-                + "If Xen Orchestra’s certificate changed, run Add a hypervisor again for it."
-        }
-        static func signInRefused(_ address: String, _ why: String) -> String {
-            "Xen Orchestra refused this phone’s token for \(address): \(why). If it ran out or was revoked, run Add a hypervisor again for it."
-        }
-        static let noObjects = "This Xen Orchestra does not offer xo.getAllObjects, so nothing can be listed."
-        static func lost(_ why: String) -> String { "The connection ended: \(why). Look again to reconnect." }
+        static let never = "Not checked yet."
+        static func lookedAt(_ when: String) -> String { "Updated \(when)" }
+        static func rowLooked(_ when: String) -> String { "Updated \(when)" }
+        /// Said when nothing is connected, in place of the actions.
+        static let notConnected = "Not connected."
+        // WHY IT STOPPED. Each is the result in one sentence; the remedy,
+        // where there is one, is the Set up again button beside it (§6), not
+        // a clause in the text. The refusal of a certificate that is not the
+        // pinned one stays what it was; only its words are shorter.
+        static func plainPool(_ address: String) -> String { "Can’t connect: \(address) doesn’t use HTTPS." }
+        static func noToken(_ address: String) -> String { "No access saved for \(address)." }
+        static func expired(_ address: String, on date: String) -> String { "Access to \(address) expired on \(date)." }
+        static func wrongCertificate(_ address: String) -> String { "The certificate at \(address) changed, so nothing was sent." }
+        static func signInRefused(_ address: String, _ why: String) -> String { "\(address) refused this phone’s access: \(why)." }
+        static let noObjects = "This Xen Orchestra version isn’t supported."
+        static func lost(_ why: String) -> String { "Connection ended: \(why)." }
         /// AWAY FROM THE POOL'S NETWORK, said as that rather than as a
         /// connection that ended: on 5G the page sat at "Connecting…" and
-        /// then gave a bare network error, with nothing to say why or what
-        /// still works from where the phone is.
-        static func unreachable(_ address: String, _ why: String) -> String {
-            "This phone could not reach \(address): \(why). The pool’s page works from the pool’s own network or over a VPN to it; "
-                + "changing what the fleet may use works from anywhere, through one of your machines."
-        }
+        /// then gave a bare network error. The error is its own line.
+        static func unreachable(_ address: String, _ why: String) -> String { "Can’t reach \(address) from here.\n\(why)" }
         /// WHILE A MACHINE IS ASKED to read it instead.
-        static func askingFleet(_ address: String) -> String {
-            "This phone cannot reach \(address) from here, so it is asking one of your machines that can."
-        }
+        static func askingFleet(_ address: String) -> String { "Can’t reach \(address) from here. Asking one of your machines…" }
         /// READ THROUGH A MACHINE, said with when: nothing pushes changes that
-        /// way, so "Watching now" would claim what is not happening (C-5).
-        static func through(_ host: String, at time: String) -> String {
-            "Read through \(host) at \(time). This phone cannot reach the pool from here, so the page is read there again every 20 seconds while it is open."
-        }
-        static func throughLost(_ host: String, _ why: String) -> String {
-            "\(host) stopped reading this pool for the phone: \(why). What is shown is from the last time it did."
-        }
+        /// way, so "Live" would claim what is not happening (C-5).
+        static func through(_ host: String, at time: String) -> String { "Via \(host) · updated \(time)" }
+        static func throughLost(_ host: String, _ why: String) -> String { "\(host) stopped reading the pool: \(why)." }
+        /// Neither this phone nor a machine could read it: the machines'
+        /// reason is the one that says what to do, on its own line.
         static func unreachableEverywhere(_ address: String, _ why: String, _ fleetWhy: String) -> String {
-            "This phone could not reach \(address): \(why). None of your machines could read it for the phone either: \(fleetWhy)"
+            "Can’t reach \(address) from here or through your machines.\n\(fleetWhy)"
         }
         /// When the fleet did not say which machine read it.
         static let oneOfYours = "one of your machines"
 
         // THE EDGE ROUTERS, as the machine reading them last did
-        // (src/fleet/host/edge-watch.js). Cannot tell is said as that.
+        // (src/fleet/host/edge-watch.js). The card says one word per router;
+        // the numbers, the log and what was refused are on its own page.
+        // Cannot tell is said as Unknown, never as none (C-5).
         static let edgeHeading = "Edge routers"
-        static let edgeNobody = "No machine reads this pool’s edge routers yet. Change what the fleet may use from this phone once, and the machines holding this pool read them from then on."
-        static let edgeUnasked = "Could not ask the fleet how the edge routers are."
-        static let edgeEvents = "What they logged lately"
-        static func edgeRead(_ host: String, _ when: String) -> String { "Read by \(host) \(when)." }
+        static let edgeNobody = "No router data yet. Use Change what the fleet may use once to start it."
+        static let edgeUnasked = "Couldn’t check the edge routers."
+        static let edgeEvents = "Recent log lines"
+        static func edgeRead(_ host: String, _ when: String) -> String { "Via \(host) · \(when)" }
         /// The router's part in the uplink's shared address, when there are two.
         static func edgeRole(_ role: String?) -> String? {
             switch role {
-            case "master"?: return "Holds the gateway address, 10.254.0.1"
-            case "backup"?: return "Standing by for the other router"
-            case "init"?: return "Starting its share of the gateway address"
+            case "master"?: return "Primary"
+            case "backup"?: return "Standby"
+            case "init"?: return "Starting"
             default: return nil
             }
         }
         static func edgeDns(_ answering: Bool?) -> String {
             switch answering {
             // RUNNING, UNCOUNTED: a router built before it counted, or one whose
-            // count has nothing in it yet (edge-watch.js, statusOf). Said as
-            // uncounted, which is true of both, and not as counting none.
-            case true?: return "Answering names; none counted so far"
-            case false?: return "Not answering names"
-            case nil: return "Cannot tell whether it answers names"
+            // count has nothing in it yet (edge-watch.js, statusOf). "DNS up"
+            // is true of both, and claims no count.
+            case true?: return "DNS up"
+            case false?: return "DNS down"
+            case nil: return "DNS: Unknown"
             }
         }
         static func edgeGateway(_ up: Bool?) -> String {
             switch up {
-            case true?: return "Its way out is up"
-            case false?: return "Its way out is down"
-            case nil: return "Cannot tell whether its way out is up"
+            case true?: return "Internet up"
+            case false?: return "Internet down"
+            case nil: return "Internet: Unknown"
             }
         }
         /// What dnsmasq has out. Nil is the count not read, and is said (C-5): a quiet pool has none out, which is a different thing.
         static func edgeLeases(_ n: Int?) -> String {
             switch n {
-            case nil: return "Cannot tell how many DHCP leases it has out"
-            case 0?: return "No DHCP leases out"
-            case 1?: return "1 DHCP lease out"
-            case let n?: return "\(n) DHCP leases out"
+            case nil: return "Leases: Unknown"
+            case 0?: return "No leases"
+            case 1?: return "1 lease"
+            case let n?: return "\(n) leases"
             }
         }
-        static func edgeUnreached(_ why: String) -> String { "Could not read it: \(why)" }
-        /// Its last log line, as the machine reading it heard it. None is said as none having reached that machine: whether the router logged nothing or sends its log elsewhere is not known from here.
-        static func edgeHeard(_ when: String?) -> String { when.map { "Last log line \($0)" } ?? "No log line has reached this machine" }
+        /// The card's word for a router no machine reached; the why is on its page.
+        static let edgeUnreachable = "Unreachable"
+        /// THE CARD'S ONE WORD FOR A ROUTER, and whether it is trouble: not
+        /// reached first, then its way out when that is down, then its part in
+        /// the shared address, then its way out. A read that could not tell
+        /// is Unknown (C-5).
+        static func edgeStatus(reached: Bool?, problem: String?, gateway: Bool?, role: String?) -> (word: String, trouble: Bool) {
+            if reached == false { return (edgeUnreachable, true) }
+            if reached == nil, problem != nil { return ("Unknown", false) }
+            if gateway == false { return (edgeGateway(false), true) }
+            if let role = edgeRole(role) { return (role, false) }
+            return (edgeGateway(gateway), false)
+        }
+        /// The card's second line: names by count where the router keeps one,
+        /// the flag alone before that; nil for a router nobody reached.
+        static func edgeDnsLine(reached: Bool?, dns: Bool?, answered: Int?, blocked: Int?) -> (word: String, trouble: Bool)? {
+            if reached != true { return nil }
+            if dns == false { return (edgeDns(false), true) }
+            if let answered { return (edgeNames(answered, refused: blocked ?? 0, since: nil), false) }
+            return (edgeDns(dns), false)
+        }
+        static func edgeUnreached(_ why: String) -> String { "Unreachable: \(why)" }
+        /// Its last log line, as the machine reading it heard it. None is said as none received: whether the router logged nothing or sends its log elsewhere is not known from here.
+        static func edgeHeard(_ when: String?) -> String { when.map { "Last log line \($0)" } ?? "No log lines received" }
         /// The way out with dpinger's numbers, once a router measures it (edge-router.js, MEASURED); a router built before that has none, and the flag alone is said.
         static func edgeWayOut(_ up: Bool?, ms: Double?, loss: Double?) -> String {
             guard up == true, let ms else { return edgeGateway(up) }
@@ -853,29 +866,25 @@ enum Manage {
             // NO LOSS IS SAID, not left out: a measured way out with nothing
             // lost is the good case, and silence read as the number missing.
             let l = loss ?? 0
-            let lost = l <= 0 ? ", no pings lost" : Int(l.rounded()) >= 1 ? ", losing \(Int(l.rounded()))% of pings" : ", losing under 1% of pings"
-            return "Its way out is up, \(latency)\(lost)"
+            let lost = l <= 0 ? ", no loss" : Int(l.rounded()) >= 1 ? ", \(Int(l.rounded()))% loss" : ", under 1% loss"
+            return "Internet up · \(latency)\(lost)"
         }
-        /// Names by Unbound's own count since it started keeping one; refused is what the threat lists stopped.
+        /// Names by Unbound's own count since it started keeping one; blocked is what the threat lists stopped. `since` is said on the routers' page and not on the card.
         static func edgeNames(_ answered: Int, refused: Int, since: String?) -> String {
-            let names = answered == 0 ? "no names" : answered == 1 ? "1 name" : "\(answered) names"
-            let stopped = refused == 0 ? "none" : "\(refused)"
-            return "Answered \(names) and refused \(stopped) since it started counting" + (since.map { ", \($0)" } ?? "")
+            "DNS: \(answered) answered, \(refused) blocked" + (since.map { " · started counting \($0)" } ?? "")
         }
-        /// The names the lists refused most, each with how often.
-        static func edgeRefused(_ names: [(String, Int)]) -> String { "Refused most: " + names.map { "\($0.0) (\($0.1))" }.joined(separator: ", ") }
-        static let edgeNotListening = "This machine cannot listen for their log lines: another program has the port they are sent to."
-        static let methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
-        static let nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
+        /// The names the lists blocked most, each with how often.
+        static func edgeRefused(_ names: [(String, Int)]) -> String { "Blocked most: " + names.map { "\($0.0) (\($0.1))" }.joined(separator: ", ") }
+        static let edgeNotListening = "Router logs not received: another program has the port."
+        /// The methods could not be read: unknown, which is not none (C-5).
+        static let methodsUnknown = "Couldn’t read which actions this Xen Orchestra offers."
+        static let nothingOffered = "Nothing can be done to it in this state."
         /// In place of the actions on the pool's own machine. The same words as Android.
         static func holder(_ name: String) -> String {
-            "\(name) is this pool’s own Fleetwright machine. It was made with the admin sign-in, outside what the limited user may "
-                + "change, so nothing can be done to it from here. To replace it, use Make it again in the pool’s policy."
+            "\(name) is the pool’s own machine; to replace it, use Make it again under Change what the fleet may use."
         }
-        static let seesNothing = "This token sees nothing on the pool."
-        static func limitedUser(_ user: String) -> String {
-            "Signed in as \(user), the limited user setup made, so only what its resource set allows is listed."
-        }
+        static let seesNothing = "Nothing to show."
+        static func limitedUser(_ user: String) -> String { "Signed in as \(user): showing only what Fleetwright may use." }
         /// The pool master's addresses as setup saw them, the management one
         /// first: what to try when it stops answering on one. The same words
         /// as Android.
@@ -885,26 +894,30 @@ enum Manage {
             return "Pool master: \(first)" + (rest.isEmpty ? "" : ", also \(rest.joined(separator: ", "))")
         }
         static let tuneNeedsStopped = "vCPUs and memory change only while it is stopped."
-        static let growNote = "A disk can grow while the VM runs. It cannot be made smaller again."
+        /// WHO REFUSED. Xen Orchestra's own refusal carries its name; one
+        /// that never reached it does not, because saying it did would
+        /// misattribute it.
         static func refused(_ why: String) -> String { "Xen Orchestra refused: \(why)" }
-        static let slow = "Xen Orchestra did not answer in time. It may still be doing it; the list shows what it reports."
+        static let couldNotSend = "Couldn’t send the action."
+        static let machineRefused = "One of your machines refused the action."
+        static let slow = "Xen Orchestra didn’t answer in time. It may still be doing it."
         static func typePrompt(_ name: String) -> String { "Type \(name) to confirm." }
-        static let actionsFooter = "Each action is here only because this Xen Orchestra lists its method. Shutting down, rebooting, "
-            + "pausing and suspending ask first; forcing a VM off or deleting one asks for its name typed back."
         /// THE CONSOLE (VMConsoleView): offered for a running VM while this
-        /// phone watches the pool itself. docs/manage.md, "The console".
+        /// phone watches the pool itself. docs/manage.md, "The console". From
+        /// away it is a chip naming the machine; the encryption is in the docs.
         static let console = "Console"
-        static func consoleAwayVia(_ host: String) -> String { "Through \(host): this phone cannot reach the pool from here. The screen is encrypted from this phone to Xen Orchestra, so \(host) and the fleet carry it without being able to read it." }
-        static let consoleAwayOpening = "This phone cannot reach the pool from here, so it is opening the console through one of your machines…"
+        static func consoleAwayVia(_ host: String) -> String { "Via \(host)" }
+        static let consoleAwayOpening = "Connecting through one of your machines…"
         static func consoleOpening(_ name: String) -> String { "Opening the console of \(name)…" }
-        static let consoleShut = "Xen Orchestra closed the console before it showed anything. The pool’s limited user may not be allowed to operate this machine."
+        static let consoleShut = "Console closed. Your pool account may not have access to this machine."
         static let consoleEnded = "The console closed."
-        static func consoleRefused(_ why: String) -> String { "Xen Orchestra would not open the console: \(why)." }
+        static func consoleRefused(_ why: String) -> String { "Couldn’t open the console: \(why)." }
         static let openAgain = "Open again"
         static let keyboard = "Keyboard"
         static let ctrlAltDel = "Ctrl-Alt-Del"
-        static let gone = "Xen Orchestra no longer lists it. It may have been deleted, or this token can no longer see it."
+        static let gone = "No longer listed. It may have been deleted or hidden from this account."
         static let lookAgain = "Look again"
+        static let setUpAgain = "Set up again"
         static let changePolicy = "Change what the fleet may use"
         static let reconnectServers = "Reconnect its servers"
         static let whatItIs = "What it is"
@@ -938,8 +951,8 @@ enum Manage {
 
     /// A disk, as its row says it: its size and where it is kept.
     static func diskLine(_ d: Disk, in s: Snapshot) -> String {
-        let size = d.size.map { bytes($0) } ?? "size cannot tell"
+        let size = d.size.map { bytes($0) } ?? "size: Unknown"
         if let id = d.storageId, let sr = s.components[id], sr.kind == .sr { return "\(size) on \(sr.name)" }
-        return "\(size) on storage this token cannot see"
+        return "\(size) on unknown storage"
     }
 }

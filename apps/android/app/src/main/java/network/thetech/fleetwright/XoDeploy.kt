@@ -75,52 +75,50 @@ internal object XoDeploy {
     }
 
     /**
-     * What one machine found over SSH. Null is cannot tell, said as that
-     * (C-5), and an answer with no `ssh` is a machine too old to have looked.
+     * What one machine found over SSH, as a row's word. Null is cannot tell,
+     * said as Can’t check and never as unreachable (C-5); an answer with no
+     * `ssh` is a machine too old to have looked, which an update mends. The
+     * same words for the watchdog and for Proxmox VE through a machine.
      */
     fun describe(probe: Fleet.Probe): String {
-        val ssh = probe.ssh ?: return "Too old to install Xen Orchestra. Update it, then ask again."
+        val ssh = probe.ssh ?: return "Needs update"
         return when (ssh.reachable) {
             true -> when {
-                ssh.deploy == true && hostKey(probe) != null -> "Reached its SSH server"
-                ssh.deploy == false && ssh.missing.isNotEmpty() ->
-                    "Reached its SSH server, and has no ${ssh.missing.joinToString(", ")} to install with"
-                else -> "Reached its SSH server, and cannot tell whether it can install from there"
+                ssh.deploy == true && hostKey(probe) != null -> "Ready"
+                ssh.deploy == false && ssh.missing.isNotEmpty() -> "Missing ${ssh.missing.joinToString(", ")}"
+                else -> "Can’t check"
             }
-            false -> "Could not reach its SSH server"
-            null -> "Cannot tell: it has no ssh-keyscan to look with"
+            false -> "Unreachable"
+            null -> "Can’t check"
         }
     }
 
     /**
-     * Why no machine is offered when none reached the SSH server, with what
-     * to check; null when one did, and its row says the rest. Machines too
-     * old to look did not find it unreachable, and are named as that.
-     * [doing] is the job in a few words, for adding the watchdog (XoWatchdog),
-     * which asks the same of the same probe.
+     * Why no machine is offered when none reached the SSH server; null when
+     * one did, and its row says the rest. The verdict first, then one quiet
+     * line naming the machines that could not check and the ones that need
+     * an update: they did not find it unreachable, and are not said to have.
+     * Adding the watchdog and Proxmox VE through a machine ask the same of
+     * the same probe, in the same words.
      */
-    fun nobody(probes: List<Fleet.Probe>, address: String, doing: String = "install Xen Orchestra"): String? {
-        if (probes.isEmpty()) {
-            return "No permanent machine is connected, so nothing could try $address. A machine has to be in the fleet to $doing."
-        }
+    fun nobody(probes: List<Fleet.Probe>, address: String): String? {
+        if (probes.isEmpty()) return "No machines online. Add or start one first."
         if (probes.any { it.ssh?.reachable == true }) return null
-        val missed = probes.filter { it.ssh?.reachable == false }.map { it.hostId }.sorted()
+        val missed = probes.any { it.ssh?.reachable == false }
         val unsure = probes.filter { p -> p.ssh?.let { it.reachable == null } == true }.map { it.hostId }.sorted()
         val old = probes.filter { it.ssh == null }.map { it.hostId }.sorted()
-        val lines = mutableListOf<String>()
-        if (missed.isNotEmpty()) {
-            lines += "No machine reached SSH at $address. Check the address, that SSH is on for the pool master, and that one of these " +
-                "is on a network that can reach it: ${missed.joinToString(", ")}."
-        }
-        if (unsure.isNotEmpty()) lines += "Cannot tell from ${unsure.joinToString(", ")}, which has no ssh-keyscan to look with."
-        if (old.isNotEmpty()) lines += "Too old to $doing, so they did not look: ${old.joinToString(", ")}. Update one, then ask again."
-        return lines.joinToString(" ")
+        val lines = mutableListOf(if (missed) "Couldn’t reach $address over SSH." else "No machine could check $address.")
+        if (unsure.isNotEmpty()) lines += "${unsure.joinToString(", ")} couldn’t check."
+        if (old.isNotEmpty()) lines += "${old.joinToString(", ")} need${if (old.size == 1) "s" else ""} an update."
+        return lines.joinToString("\n")
     }
 
-    fun passwordsFooter(host: String): String =
-        "The root password signs in to the pool master over SSH once, and $host forgets it as soon as it has. Xen Orchestra’s admin is " +
-            "admin@admin.net, and its default password is replaced with this one before anything else uses it. Both are sealed on " +
-            "this phone to a key only $host holds."
+    /** The footer says the result; the custody is behind the disclosure (docs/reviews/copy-2026-11-06.md, "The rule to adopt"). */
+    const val PASSWORDS_FOOTER = "Sets the password for admin@admin.net. Neither password is stored."
+    const val CUSTODY_TITLE = "How your password is protected"
+    fun custody(host: String): String =
+        "The root password signs in to the pool master over SSH once, and $host forgets it as soon as it has. " +
+            "Both passwords are encrypted on this phone so that only $host can read them."
 
     /** "Step 4 of 17", and "Step 4 of 17 · 42%" while the download says how far. */
     fun stepLine(step: Int, of: Int, fill: Int?): String {

@@ -331,7 +331,8 @@ internal object Manage {
         State.SUSPENDED -> "suspended"
         State.PAUSED -> "paused"
         State.MAINTENANCE -> "in maintenance mode"
-        null -> "cannot tell"
+        // Null is cannot tell, said as the one word a row has room for (C-5): Unknown, never a blank and never a state.
+        null -> "Unknown"
     }
 
     /** The state word a row carries, or null for a kind that has no state. */
@@ -340,7 +341,8 @@ internal object Manage {
 
     fun poolWords(id: String?, s: Snapshot): String {
         val p = id?.let { s.components[it] }
-        return if (p != null && p.kind == Kind.POOL) "pool ${p.name}" else "a pool this token cannot see"
+        // A pool this phone's access does not reach is unknown, not none.
+        return if (p != null && p.kind == Kind.POOL) "pool ${p.name}" else "an unknown pool"
     }
 
     /** What it is: its kind, and where it lives. */
@@ -357,7 +359,7 @@ internal object Manage {
             val hostId = s.hostId(c)
             if (hostId != null) {
                 val host = s.components[hostId]
-                if (host == null || host.kind != Kind.HOST) "VM on a host this token cannot see"
+                if (host == null || host.kind != Kind.HOST) "VM on an unknown host"
                 else "VM on ${host.name} in ${poolWords(c.poolId, s)}"
             } else {
                 "VM in ${poolWords(c.poolId, s)}, not on a host"
@@ -369,7 +371,7 @@ internal object Manage {
             val hostId = s.hostId(c)
             if (hostId != null) {
                 val host = s.components[hostId]
-                parts.add(if (host != null && host.kind == Kind.HOST) "on ${host.name}" else "on a host this token cannot see")
+                parts.add(if (host != null && host.kind == Kind.HOST) "on ${host.name}" else "on an unknown host")
             } else if (c.shared == true || c.containerId != null) {
                 parts.add("shared by ${poolWords(c.poolId, s)}")
             }
@@ -377,7 +379,7 @@ internal object Manage {
         }
     }
 
-    /** The numbers behind how it is. Each one Xen Orchestra did not send is said as cannot tell, in its place. */
+    /** The numbers behind how it is. Each one Xen Orchestra did not send is said as Unknown, in its place (C-5). */
     fun numbers(c: Component, s: Snapshot): String = when (c.kind) {
         Kind.POOL -> {
             val vms = s.components.values.filter { it.kind == Kind.VM && it.poolId == c.id }
@@ -385,13 +387,13 @@ internal object Manage {
             if (vms.isEmpty()) "No VMs" else "$running of ${vms.size} VMs running"
         }
         Kind.HOST -> {
-            val cores = c.cpus?.let { "$it core${if (it == 1) "" else "s"}" } ?: "cores: cannot tell"
+            val cores = c.cpus?.let { "$it core${if (it == 1) "" else "s"}" } ?: "cores: Unknown"
             val size = c.memory
             val used = c.memoryUsed
             val memory = when {
                 size != null && used != null -> "${bytes(used)} of ${bytes(size)} in use"
-                size != null -> "${bytes(size)}, use cannot tell"
-                else -> "memory: cannot tell"
+                size != null -> "${bytes(size)}, in use: Unknown"
+                else -> "memory: Unknown"
             }
             val n = s.runningOn(c.id)
             val vms = if (n == 0) "no VMs running" else "$n VM${if (n == 1) "" else "s"} running"
@@ -399,8 +401,8 @@ internal object Manage {
         }
         Kind.VM -> {
             val parts = mutableListOf(
-                c.cpus?.let { "$it vCPU${if (it == 1) "" else "s"}" } ?: "vCPUs: cannot tell",
-                c.memory?.let { bytes(it) } ?: "memory: cannot tell",
+                c.cpus?.let { "$it vCPU${if (it == 1) "" else "s"}" } ?: "vCPUs: Unknown",
+                c.memory?.let { bytes(it) } ?: "memory: Unknown",
             )
             c.address?.let { parts.add(it) }
             parts.joinToString(" · ")
@@ -408,15 +410,15 @@ internal object Manage {
         Kind.SR -> {
             val size = c.size
             val used = c.used
-            if (size == null || used == null) "space: cannot tell" else "${bytes(maxOf(0L, size - used))} free of ${bytes(size)}"
+            if (size == null || used == null) "space: Unknown" else "${bytes(maxOf(0L, size - used))} free of ${bytes(size)}"
         }
     }
 
     /** A disk, as its row says it: its size and where it is kept. */
     fun diskLine(d: Disk, s: Snapshot): String {
-        val size = d.size?.let { bytes(it) } ?: "size cannot tell"
+        val size = d.size?.let { bytes(it) } ?: "size: Unknown"
         val sr = d.storageId?.let { s.components[it] }
-        return if (sr != null && sr.kind == Kind.SR) "$size on ${sr.name}" else "$size on storage this token cannot see"
+        return if (sr != null && sr.kind == Kind.SR) "$size on ${sr.name}" else "$size on unknown storage"
     }
 
     // --- What it can do ---------------------------------------------------
@@ -744,77 +746,94 @@ internal object Manage {
 
     /** Every sentence the screens say about a pool, in one place, held equal to Manage.swift's by the shared table. */
     object Words {
-        const val watching = "Watching now. Changes arrive as Xen Orchestra makes them."
+        // How current the page is, in a row's words (docs/reviews/copy-2026-11-06.md, "The rule to adopt"): a verdict and a time, never the polling.
+        const val watching = "Live"
         fun connecting(address: String) = "Connecting to $address…"
-        fun savedPage(time: String) = "Showing the page as it was at $time until the pool answers."
+        fun savedPage(time: String) = "Showing the page from $time."
 
         /** Why a machine was asked while the socket was still opening. */
         const val notYet = "it had not answered yet"
-        const val never = "Not looked at from this phone yet."
-        const val closed = "Nothing watches while the app is closed."
-        fun lookedAt(time: String) = "Last looked at $time. $closed"
-        fun rowLooked(time: String) = "Last looked at $time"
-        fun plainPool(address: String) =
-            "$address was set up over plain HTTP. This phone manages a pool only over HTTPS, with the certificate pinned at setup, " +
-                "so it does not connect to this one."
-        fun noToken(address: String) = "This phone holds no token for $address any more. Run Add a hypervisor again for it."
-        fun expired(address: String, date: String) = "Its token ran out on $date. Run Add a hypervisor again for $address to make a new one."
-        fun wrongCertificate(address: String) =
-            "$address answered with a different certificate from the one pinned when it was set up. Nothing was sent. " +
-                "If Xen Orchestra’s certificate changed, run Add a hypervisor again for it."
-        fun signInRefused(address: String, why: String) =
-            "Xen Orchestra refused this phone’s token for $address: $why. If it ran out or was revoked, run Add a hypervisor again for it."
-        const val noObjects = "This Xen Orchestra does not offer xo.getAllObjects, so nothing can be listed."
-        fun lost(why: String) = "The connection ended: $why. Look again to reconnect."
-        /** Away from the pool's network, said as that rather than as a connection that ended (Manage.swift says why). */
-        fun unreachable(address: String, why: String) =
-            "This phone could not reach $address: $why. The pool’s page works from the pool’s own network or over a VPN to it; " +
-                "changing what the fleet may use works from anywhere, through one of your machines."
+        const val never = "Not checked yet."
+        fun lookedAt(time: String) = "Updated $time"
+        fun rowLooked(time: String) = "Updated $time"
+        /** Said when nothing is connected, in place of the actions. */
+        const val notConnected = "Not connected."
+        // Why it stopped. Each is the result in one sentence; the remedy, where there is one, is the Set up again button beside it (§6), not a clause in the text. The refusal of a certificate that is not the pinned one stays what it was; only its words are shorter.
+        fun plainPool(address: String) = "Can’t connect: $address doesn’t use HTTPS."
+        fun noToken(address: String) = "No access saved for $address."
+        fun expired(address: String, date: String) = "Access to $address expired on $date."
+        fun wrongCertificate(address: String) = "The certificate at $address changed, so nothing was sent."
+        fun signInRefused(address: String, why: String) = "$address refused this phone’s access: $why."
+        const val noObjects = "This Xen Orchestra version isn’t supported."
+        fun lost(why: String) = "Connection ended: $why."
+        /** Away from the pool's network, said as that rather than as a connection that ended (Manage.swift says why). The error is its own line. */
+        fun unreachable(address: String, why: String) = "Can’t reach $address from here.\n$why"
         /** While a machine is asked to read it instead. */
-        fun askingFleet(address: String) = "This phone cannot reach $address from here, so it is asking one of your machines that can."
-        /** Read through a machine, said with when: nothing pushes changes that way, so "Watching now" would claim what is not happening (C-5). */
-        fun through(host: String, time: String) =
-            "Read through $host at $time. This phone cannot reach the pool from here, so the page is read there again every 20 seconds while it is open."
-        fun throughLost(host: String, why: String) = "$host stopped reading this pool for the phone: $why. What is shown is from the last time it did."
+        fun askingFleet(address: String) = "Can’t reach $address from here. Asking one of your machines…"
+        /** Read through a machine, said with when: nothing pushes changes that way, so "Live" would claim what is not happening (C-5). */
+        fun through(host: String, time: String) = "Via $host · updated $time"
+        fun throughLost(host: String, why: String) = "$host stopped reading the pool: $why."
+        /** Neither this phone nor a machine could read it: the machines' reason is the one that says what to do, on its own line. */
+        @Suppress("UNUSED_PARAMETER")
         fun unreachableEverywhere(address: String, why: String, fleetWhy: String) =
-            "This phone could not reach $address: $why. None of your machines could read it for the phone either: $fleetWhy"
+            "Can’t reach $address from here or through your machines.\n$fleetWhy"
         /** When the fleet did not say which machine read it. */
         const val oneOfYours = "one of your machines"
 
-        // The edge routers, as the machine reading them last did (src/fleet/host/edge-watch.js). Cannot tell is said as that.
+        // The edge routers, as the machine reading them last did (src/fleet/host/edge-watch.js). The card says one word per router; the numbers, the log and what was refused are on its own page. Cannot tell is said as Unknown, never as none (C-5).
         const val edgeHeading = "Edge routers"
-        const val edgeNobody = "No machine reads this pool’s edge routers yet. Change what the fleet may use from this phone once, and the machines holding this pool read them from then on."
-        const val edgeUnasked = "Could not ask the fleet how the edge routers are."
-        const val edgeEvents = "What they logged lately"
-        fun edgeRead(host: String, time: String) = "Read by $host $time."
+        const val edgeNobody = "No router data yet. Use Change what the fleet may use once to start it."
+        const val edgeUnasked = "Couldn’t check the edge routers."
+        const val edgeEvents = "Recent log lines"
+        fun edgeRead(host: String, time: String) = "Via $host · $time"
         /** The router's part in the uplink's shared address, when there are two. */
         fun edgeRole(role: String?): String? = when (role) {
-            "master" -> "Holds the gateway address, 10.254.0.1"
-            "backup" -> "Standing by for the other router"
-            "init" -> "Starting its share of the gateway address"
+            "master" -> "Primary"
+            "backup" -> "Standby"
+            "init" -> "Starting"
             else -> null
         }
         fun edgeDns(answering: Boolean?) = when (answering) {
-            // Running, uncounted: a router built before it counted, or one whose count has nothing in it yet (edge-watch.js, statusOf). Said as uncounted, true of both, not as counting none.
-            true -> "Answering names; none counted so far"
-            false -> "Not answering names"
-            null -> "Cannot tell whether it answers names"
+            // Running, uncounted: a router built before it counted, or one whose count has nothing in it yet (edge-watch.js, statusOf). "DNS up" is true of both, and claims no count.
+            true -> "DNS up"
+            false -> "DNS down"
+            null -> "DNS: Unknown"
         }
         fun edgeGateway(up: Boolean?) = when (up) {
-            true -> "Its way out is up"
-            false -> "Its way out is down"
-            null -> "Cannot tell whether its way out is up"
+            true -> "Internet up"
+            false -> "Internet down"
+            null -> "Internet: Unknown"
         }
         /** What dnsmasq has out. Null is the count not read, and is said (C-5): a quiet pool has none out, which is a different thing. */
         fun edgeLeases(n: Int?) = when (n) {
-            null -> "Cannot tell how many DHCP leases it has out"
-            0 -> "No DHCP leases out"
-            1 -> "1 DHCP lease out"
-            else -> "$n DHCP leases out"
+            null -> "Leases: Unknown"
+            0 -> "No leases"
+            1 -> "1 lease"
+            else -> "$n leases"
         }
-        fun edgeUnreached(why: String) = "Could not read it: $why"
-        /** Its last log line, as the machine reading it heard it. None is said as none having reached that machine: whether the router logged nothing or sends its log elsewhere is not known from here. */
-        fun edgeHeard(time: String?) = time?.let { "Last log line $it" } ?: "No log line has reached this machine"
+        /** The card's word for a router no machine reached; the why is on its page. */
+        const val edgeUnreachable = "Unreachable"
+        /** The card's one word for a router, and whether it is trouble: not reached first, then its way out when that is down, then its part in the shared address, then its way out. A read that could not tell is Unknown (C-5). */
+        fun edgeStatus(reached: Boolean?, problem: String?, gateway: Boolean?, role: String?): Pair<String, Boolean> {
+            val part = edgeRole(role)
+            return when {
+                reached == false -> edgeUnreachable to true
+                reached == null && problem != null -> "Unknown" to false
+                gateway == false -> edgeGateway(false) to true
+                part != null -> part to false
+                else -> edgeGateway(gateway) to false
+            }
+        }
+        /** The card's second line: names by count where the router keeps one, the flag alone before that; null for a router nobody reached. */
+        fun edgeDnsLine(reached: Boolean?, dns: Boolean?, answered: Int?, blocked: Int?): Pair<String, Boolean>? = when {
+            reached != true -> null
+            dns == false -> edgeDns(false) to true
+            answered != null -> edgeNames(answered, blocked ?: 0, null) to false
+            else -> edgeDns(dns) to false
+        }
+        fun edgeUnreached(why: String) = "Unreachable: $why"
+        /** Its last log line, as the machine reading it heard it. None is said as none received: whether the router logged nothing or sends its log elsewhere is not known from here. */
+        fun edgeHeard(time: String?) = time?.let { "Last log line $it" } ?: "No log lines received"
         /** The way out with dpinger's numbers, once a router measures it (edge-router.js, MEASURED); a router built before that has none, and the flag alone is said. */
         fun edgeWayOut(up: Boolean?, ms: Double?, loss: Double?): String {
             if (up != true || ms == null) return edgeGateway(up)
@@ -822,35 +841,26 @@ internal object Manage {
             val l = loss ?: 0.0
             // No loss is said, not left out: a measured way out with nothing lost is the good case, and silence read as the number missing.
             val lost = when {
-                l <= 0 -> ", no pings lost"
-                Math.round(l) >= 1 -> ", losing ${Math.round(l)}% of pings"
-                else -> ", losing under 1% of pings"
+                l <= 0 -> ", no loss"
+                Math.round(l) >= 1 -> ", ${Math.round(l)}% loss"
+                else -> ", under 1% loss"
             }
-            return "Its way out is up, $latency$lost"
+            return "Internet up · $latency$lost"
         }
-        /** Names by Unbound's own count since it started keeping one; refused is what the threat lists stopped. */
-        fun edgeNames(answered: Int, refused: Int, since: String?): String {
-            val names = when (answered) {
-                0 -> "no names"
-                1 -> "1 name"
-                else -> "$answered names"
-            }
-            val stopped = if (refused == 0) "none" else "$refused"
-            return "Answered $names and refused $stopped since it started counting" + (since?.let { ", $it" } ?: "")
-        }
-        /** The names the lists refused most, each with how often. */
-        fun edgeRefused(names: List<Pair<String, Int>>) = "Refused most: " + names.joinToString(", ") { "${it.first} (${it.second})" }
-        const val edgeNotListening = "This machine cannot listen for their log lines: another program has the port they are sent to."
-        const val methodsUnknown = "Cannot tell which actions this Xen Orchestra offers, so none are drawn."
-        const val nothingOffered = "Nothing Xen Orchestra offers can be done to it in the state it is in."
+        /** Names by Unbound's own count since it started keeping one; blocked is what the threat lists stopped. [since] is said on the routers' page and not on the card. */
+        fun edgeNames(answered: Int, refused: Int, since: String?): String =
+            "DNS: $answered answered, $refused blocked" + (since?.let { " · started counting $it" } ?: "")
+        /** The names the lists blocked most, each with how often. */
+        fun edgeRefused(names: List<Pair<String, Int>>) = "Blocked most: " + names.joinToString(", ") { "${it.first} (${it.second})" }
+        const val edgeNotListening = "Router logs not received: another program has the port."
+        /** The methods could not be read: unknown, which is not none (C-5). */
+        const val methodsUnknown = "Couldn’t read which actions this Xen Orchestra offers."
+        const val nothingOffered = "Nothing can be done to it in this state."
 
         /** In place of the actions on the pool's own machine. The same words as iOS. */
-        fun holder(name: String) =
-            "$name is this pool’s own Fleetwright machine. It was made with the admin sign-in, outside what the limited user may " +
-                "change, so nothing can be done to it from here. To replace it, use Make it again in the pool’s policy."
-        const val seesNothing = "This token sees nothing on the pool."
-        fun limitedUser(user: String) =
-            "Signed in as $user, the limited user setup made, so only what its resource set allows is listed."
+        fun holder(name: String) = "$name is the pool’s own machine; to replace it, use Make it again under Change what the fleet may use."
+        const val seesNothing = "Nothing to show."
+        fun limitedUser(user: String) = "Signed in as $user: showing only what Fleetwright may use."
         /**
          * The pool master's addresses as setup saw them, the management one
          * first: what to try when it stops answering on one. The same words
@@ -862,25 +872,26 @@ internal object Manage {
             return "Pool master: $first" + (if (rest.isEmpty()) "" else ", also ${rest.joinToString(", ")}")
         }
         const val tuneNeedsStopped = "vCPUs and memory change only while it is stopped."
-        const val growNote = "A disk can grow while the VM runs. It cannot be made smaller again."
+        /** Who refused. Xen Orchestra's own refusal carries its name; one that never reached it does not, because saying it did would misattribute it. */
         fun refused(why: String) = "Xen Orchestra refused: $why"
-        const val slow = "Xen Orchestra did not answer in time. It may still be doing it; the list shows what it reports."
+        const val couldNotSend = "Couldn’t send the action."
+        const val machineRefused = "One of your machines refused the action."
+        const val slow = "Xen Orchestra didn’t answer in time. It may still be doing it."
         fun typePrompt(name: String) = "Type $name to confirm."
-        const val actionsFooter = "Each action is here only because this Xen Orchestra lists its method. Shutting down, rebooting, " +
-            "pausing and suspending ask first; forcing a VM off or deleting one asks for its name typed back."
-        /** THE CONSOLE (ConsolePage): offered for a running VM while this phone watches the pool itself. docs/manage.md, "The console". */
+        /** THE CONSOLE (ConsolePage): offered for a running VM while this phone watches the pool itself. docs/manage.md, "The console". From away it is a chip naming the machine; the encryption is in the docs. */
         const val console = "Console"
-        fun consoleAwayVia(host: String) = "Through $host: this phone cannot reach the pool from here. The screen is encrypted from this phone to Xen Orchestra, so $host and the fleet carry it without being able to read it."
-        const val consoleAwayOpening = "This phone cannot reach the pool from here, so it is opening the console through one of your machines…"
+        fun consoleAwayVia(host: String) = "Via $host"
+        const val consoleAwayOpening = "Connecting through one of your machines…"
         fun consoleOpening(name: String) = "Opening the console of $name…"
-        const val consoleShut = "Xen Orchestra closed the console before it showed anything. The pool’s limited user may not be allowed to operate this machine."
+        const val consoleShut = "Console closed. Your pool account may not have access to this machine."
         const val consoleEnded = "The console closed."
-        fun consoleRefused(why: String) = "Xen Orchestra would not open the console: $why."
+        fun consoleRefused(why: String) = "Couldn’t open the console: $why."
         const val openAgain = "Open again"
         const val keyboard = "Keyboard"
         const val ctrlAltDel = "Ctrl-Alt-Del"
-        const val gone = "Xen Orchestra no longer lists it. It may have been deleted, or this token can no longer see it."
+        const val gone = "No longer listed. It may have been deleted or hidden from this account."
         const val lookAgain = "Look again"
+        const val setUpAgain = "Set up again"
         const val changePolicy = "Change what the fleet may use"
         /** An admin's row, when the page shows none of the pool's pools or not every one this phone kept (XoReconnect.offered). */
         const val reconnectServers = "Reconnect its servers"

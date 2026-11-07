@@ -247,17 +247,18 @@ final class ManageParityTests: XCTestCase {
         func int(_ key: String, _ i: Int) -> Int { (one(key)[i] as? NSNumber)?.intValue ?? 0 }
 
         let fixed: [String: String] = [
-            "watching": Manage.Words.watching, "never": Manage.Words.never, "closed": Manage.Words.closed,
+            "watching": Manage.Words.watching, "never": Manage.Words.never, "notConnected": Manage.Words.notConnected,
             "noObjects": Manage.Words.noObjects, "methodsUnknown": Manage.Words.methodsUnknown,
             "nothingOffered": Manage.Words.nothingOffered, "seesNothing": Manage.Words.seesNothing,
-            "tuneNeedsStopped": Manage.Words.tuneNeedsStopped, "growNote": Manage.Words.growNote, "slow": Manage.Words.slow,
-            "actionsFooter": Manage.Words.actionsFooter, "gone": Manage.Words.gone, "lookAgain": Manage.Words.lookAgain,
+            "tuneNeedsStopped": Manage.Words.tuneNeedsStopped, "couldNotSend": Manage.Words.couldNotSend, "machineRefused": Manage.Words.machineRefused, "slow": Manage.Words.slow,
+            "setUpAgain": Manage.Words.setUpAgain, "gone": Manage.Words.gone, "lookAgain": Manage.Words.lookAgain,
             "changePolicy": Manage.Words.changePolicy, "reconnectServers": Manage.Words.reconnectServers, "whatItIs": Manage.Words.whatItIs, "howItIs": Manage.Words.howItIs,
             "whatItCanDo": Manage.Words.whatItCanDo, "oneOfYours": Manage.Words.oneOfYours, "notYet": Manage.Words.notYet,
             "console": Manage.Words.console, "consoleAwayOpening": Manage.Words.consoleAwayOpening, "consoleShut": Manage.Words.consoleShut,
             "consoleEnded": Manage.Words.consoleEnded, "openAgain": Manage.Words.openAgain, "keyboard": Manage.Words.keyboard, "ctrlAltDel": Manage.Words.ctrlAltDel,
             "edgeHeading": Manage.Words.edgeHeading, "edgeNobody": Manage.Words.edgeNobody,
             "edgeUnasked": Manage.Words.edgeUnasked, "edgeEvents": Manage.Words.edgeEvents, "edgeNotListening": Manage.Words.edgeNotListening,
+            "edgeUnreachable": Manage.Words.edgeUnreachable,
         ]
         for (key, value) in fixed { XCTAssertEqual(value, str(key), key) }
 
@@ -299,6 +300,18 @@ final class ManageParityTests: XCTestCase {
         }
         let refused = one("edgeRefused")
         XCTAssertEqual(Manage.Words.edgeRefused((refused.first as? [[Any]] ?? []).map { ($0[0] as? String ?? "", ($0[1] as? NSNumber)?.intValue ?? 0) }), refused.last as? String)
+        // THE CARD'S WORD PER ROUTER, and its DNS line: the same verdict from
+        // the same facts on both phones, trouble included.
+        for c in one("edgeStatus").compactMap({ $0 as? [Any] }) {
+            let got = Manage.Words.edgeStatus(reached: c[0] as? Bool, problem: c[1] as? String, gateway: c[2] as? Bool, role: c[3] as? String)
+            XCTAssertEqual(got.word, c[4] as? String)
+            XCTAssertEqual(got.trouble, c[5] as? Bool)
+        }
+        for c in one("edgeDnsLine").compactMap({ $0 as? [Any] }) {
+            let got = Manage.Words.edgeDnsLine(reached: c[0] as? Bool, dns: c[1] as? Bool, answered: (c[2] as? NSNumber)?.intValue, blocked: (c[3] as? NSNumber)?.intValue)
+            XCTAssertEqual(got?.word, c[4] as? String)
+            XCTAssertEqual(got?.trouble, c[5] as? Bool)
+        }
         for c in one("resizeButton").compactMap({ $0 as? [Any] }) {
             let cpus = (c[0] as? NSNumber)?.intValue ?? 0
             let gib = (c[1] as? NSNumber)?.intValue ?? 0
@@ -317,7 +330,7 @@ final class ManageParityTests: XCTestCase {
         let checked = Set(fixed.keys).union(single.keys)
             .union(["expired", "signInRefused", "unreachable", "through", "throughLost", "unreachableEverywhere",
                     "edgeRead", "edgeRole", "edgeDns", "edgeGateway", "edgeLeases", "edgeHeard", "edgeWayOut", "edgeNames", "edgeRefused",
-                    "resizeButton", "growButton", "heading", "kindTitle"])
+                    "edgeStatus", "edgeDnsLine", "resizeButton", "growButton", "heading", "kindTitle"])
         XCTAssertEqual(Set(words.keys), checked)
     }
 }

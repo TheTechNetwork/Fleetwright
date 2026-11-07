@@ -47,12 +47,14 @@ const DEPLOY_SENTENCES = Object.freeze([
   'Root password of the pool master',
   'New password for Xen Orchestra’s admin',
   'At least 12 characters.',
-  'Reached its SSH server',
-  'Could not reach its SSH server',
-  'Cannot tell: it has no ssh-keyscan to look with',
-  'Too old to install Xen Orchestra. Update it, then ask again.',
+  // A machine's row, in a word (docs/reviews/copy-2026-11-06.md, 99); the
+  // quotes keep a word this short from matching anywhere.
+  '"Ready"',
+  '"Unreachable"',
+  '"Can’t check"',
+  '"Needs update"',
   'ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub',
-  'admin@admin.net, and its default password is replaced with this one before anything else uses it.',
+  'Sets the password for admin@admin.net. Neither password is stored.',
   'as admin@admin.net with the password you chose.',
 ]);
 
@@ -73,10 +75,11 @@ test('iOS: the probe’s SSH answer is what is offered, and only a machine that 
   // what answered SSH wherever Xen Orchestra did not.
   assert.match(SCREEN, /let reply = try await fleet\.xoprobe\(address: trimmedAddress\)/);
   assert.match(SCREEN, /probe\.ssh\?\.reachable == true && probe\.ssh\?\.deploy == true && hostKey\(probe\) != nil/);
-  // An answer with no `ssh` is a machine that did not look, said as that.
-  assert.match(SCREEN, /guard let ssh = probe\.ssh else \{ return "Too old to install Xen Orchestra\. Update it, then ask again\." \}/);
+  // An answer with no `ssh` is a machine that did not look, said as the
+  // update that would let it.
+  assert.match(SCREEN, /guard let ssh = probe\.ssh else \{ return "Needs update" \}/);
   // Cannot tell is said as cannot tell, never as unreachable (C-5).
-  assert.match(SCREEN, /case nil:\s*return "Cannot tell: it has no ssh-keyscan to look with"/);
+  assert.match(SCREEN, /case nil:\s*return "Can’t check"/);
 });
 
 test('iOS: the host key is asked about every time, and Install waits for the answer and both passwords', () => {

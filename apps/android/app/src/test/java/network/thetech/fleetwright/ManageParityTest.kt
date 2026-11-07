@@ -261,17 +261,18 @@ class ManageParityTest {
         fun arg(key: String, i: Int) = words.getJSONArray(key).getString(i)
 
         val fixed = mapOf(
-            "watching" to Manage.Words.watching, "never" to Manage.Words.never, "closed" to Manage.Words.closed,
+            "watching" to Manage.Words.watching, "never" to Manage.Words.never, "notConnected" to Manage.Words.notConnected,
             "noObjects" to Manage.Words.noObjects, "methodsUnknown" to Manage.Words.methodsUnknown,
             "nothingOffered" to Manage.Words.nothingOffered, "seesNothing" to Manage.Words.seesNothing,
-            "tuneNeedsStopped" to Manage.Words.tuneNeedsStopped, "growNote" to Manage.Words.growNote, "slow" to Manage.Words.slow,
-            "actionsFooter" to Manage.Words.actionsFooter, "gone" to Manage.Words.gone, "lookAgain" to Manage.Words.lookAgain,
+            "tuneNeedsStopped" to Manage.Words.tuneNeedsStopped, "couldNotSend" to Manage.Words.couldNotSend, "machineRefused" to Manage.Words.machineRefused, "slow" to Manage.Words.slow,
+            "setUpAgain" to Manage.Words.setUpAgain, "gone" to Manage.Words.gone, "lookAgain" to Manage.Words.lookAgain,
             "changePolicy" to Manage.Words.changePolicy, "reconnectServers" to Manage.Words.reconnectServers, "whatItIs" to Manage.Words.whatItIs, "howItIs" to Manage.Words.howItIs,
             "whatItCanDo" to Manage.Words.whatItCanDo, "oneOfYours" to Manage.Words.oneOfYours, "notYet" to Manage.Words.notYet,
             "console" to Manage.Words.console, "consoleAwayOpening" to Manage.Words.consoleAwayOpening, "consoleShut" to Manage.Words.consoleShut,
             "consoleEnded" to Manage.Words.consoleEnded, "openAgain" to Manage.Words.openAgain, "keyboard" to Manage.Words.keyboard, "ctrlAltDel" to Manage.Words.ctrlAltDel,
             "edgeHeading" to Manage.Words.edgeHeading, "edgeNobody" to Manage.Words.edgeNobody,
             "edgeUnasked" to Manage.Words.edgeUnasked, "edgeEvents" to Manage.Words.edgeEvents, "edgeNotListening" to Manage.Words.edgeNotListening,
+            "edgeUnreachable" to Manage.Words.edgeUnreachable,
         )
         for ((key, value) in fixed) assertEquals(key, words.getString(key), value)
 
@@ -323,6 +324,28 @@ class ManageParityTest {
         val refused = words.getJSONArray("edgeRefused")
         val top = refused.getJSONArray(0).let { a -> (0 until a.length()).map { a.getJSONArray(it).getString(0) to a.getJSONArray(it).getInt(1) } }
         assertEquals(refused.getString(1), Manage.Words.edgeRefused(top))
+        // THE CARD'S WORD PER ROUTER, and its DNS line: the same verdict from
+        // the same facts on both phones, trouble included.
+        val status = words.getJSONArray("edgeStatus")
+        for (i in 0 until status.length()) {
+            val c = status.getJSONArray(i)
+            val (word, trouble) = Manage.Words.edgeStatus(
+                if (c.isNull(0)) null else c.getBoolean(0), if (c.isNull(1)) null else c.getString(1),
+                if (c.isNull(2)) null else c.getBoolean(2), if (c.isNull(3)) null else c.getString(3),
+            )
+            assertEquals(c.getString(4), word)
+            assertEquals(c.getBoolean(5), trouble)
+        }
+        val dnsLine = words.getJSONArray("edgeDnsLine")
+        for (i in 0 until dnsLine.length()) {
+            val c = dnsLine.getJSONArray(i)
+            val got = Manage.Words.edgeDnsLine(
+                if (c.isNull(0)) null else c.getBoolean(0), if (c.isNull(1)) null else c.getBoolean(1),
+                if (c.isNull(2)) null else c.getInt(2), if (c.isNull(3)) null else c.getInt(3),
+            )
+            assertEquals(if (c.isNull(4)) null else c.getString(4), got?.first)
+            assertEquals(if (c.isNull(5)) null else c.getBoolean(5), got?.second)
+        }
         val resize = words.getJSONArray("resizeButton")
         for (i in 0 until resize.length()) {
             val c = resize.getJSONArray(i)
@@ -343,7 +366,7 @@ class ManageParityTest {
             setOf(
                 "expired", "signInRefused", "unreachable", "through", "throughLost", "unreachableEverywhere",
                 "edgeRead", "edgeRole", "edgeDns", "edgeGateway", "edgeLeases", "edgeHeard", "edgeWayOut", "edgeNames", "edgeRefused",
-                "resizeButton", "growButton", "heading", "kindTitle",
+                "edgeStatus", "edgeDnsLine", "resizeButton", "growButton", "heading", "kindTitle",
             )
         assertEquals(checked, words.keys().asSequence().toSet())
         assertFalse(checked.isEmpty())
