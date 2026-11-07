@@ -362,7 +362,7 @@ final class PoolWatch {
         do {
             let r = try await fleet.xolook(address, reply: key.publicKey)
             guard r.ok != false, let sealed = r.sealed else {
-                throw FleetError.message(r.text ?? "the fleet sent no page")
+                throw FleetError.message(r.text ?? "no page came back")
             }
             let page = try Seal.open(key, aad: Seal.xolookAAD(address: address), sealed: sealed)
             if asked != generation { return }

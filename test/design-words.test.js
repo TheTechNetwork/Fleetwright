@@ -41,7 +41,9 @@ const RETIRED = [
   [/\b(?:the|its|a new|that) line\b|\bhand(?:s|ed|ing)? (?:over|back)\b/, 'the token, under a disclosure; on the page, "added"'],
   [/\bcannot tell\b/, 'Unknown'],
   [/\breadmit/, 'let it back in'],
-  [/\b(?:asks?|asked|asking) to join\b|\blets? it in\b/, 'joins / approve'],
+  // "Let it in" stays as the button's verb: it names the one action. The
+  // narration ("asks to join", "lets it in by itself") is what goes.
+  [/\b(?:asks?|asked|asking) to join\b|\blets it in\b/, 'joins / approve'],
 ];
 
 /** Sentences allowed to keep a retired word, each with its reason. Exact strings, after unescaping nothing. */

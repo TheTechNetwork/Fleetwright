@@ -341,7 +341,7 @@ internal class PoolWatch(val settings: Settings, val address: String, private va
         try {
             val r = Fleet(settings).xolook(address, key.publicKey)
             val sealed = r.sealed
-            if (!r.ok || sealed == null) throw IllegalStateException(r.text.ifBlank { "the fleet sent no page" })
+            if (!r.ok || sealed == null) throw IllegalStateException(r.text.ifBlank { "no page came back" })
             val page = Seal.open(key, Seal.xolookAad(address), sealed)
             if (asked != generation) return
             // NULL IS CANNOT TELL, as over the socket: no action is drawn.

@@ -154,7 +154,7 @@ internal object Seal {
         val epk = sealed.optString("epk")
         val iv = b64d(sealed.optString("iv"))
         val ct = b64d(sealed.optString("ct"))
-        require(iv.size == 12 && ct.isNotEmpty()) { "not a sealed message" }
+        require(iv.size == 12 && ct.isNotEmpty()) { "not an encrypted message" }
         val aes = aeadKey(key.privateKey, decodePublic(epk), b64d(epk) + b64d(key.publicKey))
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(aes, "AES"), GCMParameterSpec(128, iv))

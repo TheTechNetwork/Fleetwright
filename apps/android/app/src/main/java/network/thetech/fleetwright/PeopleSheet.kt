@@ -69,7 +69,7 @@ fun PeopleSheet(settings: Settings, onDismiss: () -> Unit) {
             // The refusal reaches the screen rather than an empty list. A
             // member asking this gets "needs an admin credential", which is
             // an answer; an empty list is a lie.
-            result = e.message ?: "could not reach the coordinator"
+            result = e.message ?: "could not reach your fleet"
         }
         busy = false
         loaded = true
