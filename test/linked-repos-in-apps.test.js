@@ -34,7 +34,7 @@ test('the words about each role, and about a session’s archive, are the same o
     'Could not load your repositories.',
     'Try again',
     // What is linked, and what a check found.
-    'Nothing linked. Session work is not saved.',
+    'Nothing linked. Session work is not saved. Start a private one from github.com/TheTechNetwork/Fleetwright-Archive.',
     'Nothing linked. Start one from github.com/TheTechNetwork/Fleetwright-Templates.',
     'Linked: ',
     'Private: ',

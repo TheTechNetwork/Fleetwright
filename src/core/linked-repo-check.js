@@ -240,7 +240,8 @@ function publicArchive(out) {
     ...out,
     message:
       `${out.repo} is public. An archive holds what a session read and wrote — your work, and possibly a ` +
-      "client's — so it has to be private. Make it private on github.com, or link a private one.",
+      "client's — so it has to be private. Make it private on github.com, or link a private one: " +
+      'github.com/TheTechNetwork/Fleetwright-Archive is a starter to make one from, private from its first commit.',
   };
 }
 

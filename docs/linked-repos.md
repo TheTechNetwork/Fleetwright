@@ -144,6 +144,21 @@ hub, no clone of a repository that only grows, and no credential on a command
 line. An empty repository refuses blobs, so it is given one commit first, a
 README on its default branch saying what the branches are.
 
+### The starter
+
+[`Fleetwright-Archive`](https://github.com/TheTechNetwork/Fleetwright-Archive)
+is an archive to start from: a public GitHub template whose copies are made
+**private** from their first commit, which is the reason it is a template
+rather than a repository to fork. Nothing in it is needed for a push, since each
+session's branch is an orphan commit and an empty repository is seeded, so
+what it carries is the setup and, once sessions land, the map: the branch
+names, what each file is and when it is missing, and how to put a workspace
+back. It has no workflow, because Actions minutes are metered in a private
+repository. Linking the starter itself is refused like any public repository,
+and the refusal names it as the thing to make a private copy from. One
+repository, like the templates starter: an archive is per person and the
+fleet keeps none.
+
 ### What it cannot do
 
 - **A runner on an owner outside `FLEETWRIGHT_GITHUB_MINT_OWNERS`** has no token

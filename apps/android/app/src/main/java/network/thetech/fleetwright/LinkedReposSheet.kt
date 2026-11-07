@@ -194,7 +194,7 @@ fun linkedRoleField(role: String): String =
 fun describeLinkedRole(role: String, linked: String?, fleetRunners: String?): String = when {
     role == "runners" -> describeRunnerRepoSetting(linked, fleetRunners)
     linked != null -> "Linked: $linked."
-    role == "archive" -> "Nothing linked. Session work is not saved."
+    role == "archive" -> "Nothing linked. Session work is not saved. Start a private one from github.com/TheTechNetwork/Fleetwright-Archive."
     // Where to start one: the starter is the one repository for that role
     // (docs/linked-repos.md, "The starter").
     role == "templates" -> "Nothing linked. Start one from github.com/TheTechNetwork/Fleetwright-Templates."

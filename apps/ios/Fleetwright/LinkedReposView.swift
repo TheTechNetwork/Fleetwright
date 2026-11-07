@@ -200,7 +200,7 @@ func describeLinkedRole(_ role: String, linked: String?, fleetRunners: String?) 
     if role == "runners" { return describeRunnerRepoSetting(saved: linked, fleet: fleetRunners) }
     if let linked { return "Linked: \(linked)." }
     switch role {
-    case "archive": return "Nothing linked. Session work is not saved."
+    case "archive": return "Nothing linked. Session work is not saved. Start a private one from github.com/TheTechNetwork/Fleetwright-Archive."
     case "templates": return "Nothing linked. Start one from github.com/TheTechNetwork/Fleetwright-Templates."
     default: return "Nothing linked."
     }
