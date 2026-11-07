@@ -144,6 +144,16 @@ enum HolderJoin {
         SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account] as CFDictionary)
     }
 
+    /// Every secret this phone would let a pool's machine in with, for
+    /// every address, in both places they are kept: what signing out does
+    /// (Settings.signOut). A machine made for the last person must not be
+    /// let in by the next one's phone.
+    static func forgetAll() {
+        for place in [service, faceService] {
+            SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: place] as CFDictionary)
+        }
+    }
+
     /// Whether this phone keeps a secret for `address`: whether it made a
     /// machine there it would let in by itself. Needs no reading.
     static func made(_ address: String) -> Bool {

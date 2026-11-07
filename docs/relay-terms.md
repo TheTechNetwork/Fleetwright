@@ -70,6 +70,14 @@ practice is a session name, a short line of text, and a list of options. **It
 is not scrubbed by the relay**, because a relay that edited a notification
 would be a relay that could change what somebody is agreeing to.
 
+What ours puts there today is in `#notify` (`src/fleet/coordinator/core.js`):
+the title, the body, the category that names the buttons, and in `data` the
+event, the session name, the host, a link and, only when there is something to
+answer, `promptId`, `promptKind` and `answers`. When this document was first
+written the options were described here and not yet sent
+([#350](https://github.com/TheTechNetwork/Fleetwright/issues/350), point 5);
+they are sent now, and this table is what they are.
+
 ### What is not shared
 
 - **No email address, and no account of any kind.** There is nothing to sign in
@@ -111,7 +119,8 @@ otherwise would be worse than saying it.
 Everything above is a promise kept by not writing a log line. The stronger
 version encrypts the payload on the coordinator to a key held by one phone, so
 the relay forwards bytes it cannot read — and neither can Apple or Google, which
-is a bigger change than the relay was ever about.
+is a bigger change than the relay was ever about. Cannot read is the whole of
+the claim: what it can still *send* is the next section.
 
 **Both halves are in the tree.** Before the phones' half was built this
 section said every notification took the plaintext fallback; it changed here
@@ -134,6 +143,80 @@ does not log a body, sealed or not. A Live Activity is not sealed. Until a
 given install has registered, what a provider sees of that install is the
 plaintext. What a provider always sees, sealed or not, is that a notification
 was sent, when, and to which device.
+
+### What the relay can originate, which no seal bounds
+
+The seal bounds what the relay can **read**. It does nothing about what the
+relay can **send**, and that is the higher-impact direction here. The relay
+holds our APNs key and our Firebase service account, and anything holding those
+can address a notification to any device token it has been shown, with our
+app's identity on it, and the phone renders it. On iOS `push.js` always sends an alert
+in the clear beside an envelope, because it is what iOS shows when the
+extension fails; and a notification with no envelope at all is drawn as it
+arrives — on iOS with whatever category it names
+(`PushCrypto.categoryUnopened` keeps a clear category when there is no `e`,
+because a coordinator from before encryption sends none), on Android from its
+data (`Messaging.kt` reads the fields in the clear when there is no `e`). So a
+relay, or whoever has taken it over, needs to decrypt nothing to put *"cc-brave-otter
+on deb132 — Overwrite src/index.js?"* on a lock screen with two buttons under
+it. The product is built on acting from that lock screen without opening the
+app ([`psychology.md`](./psychology.md)), which is why this is worse than
+disclosure.
+
+What it buys, exactly:
+
+- **A question nobody asked, read as ours.** That is the whole of it on a phone
+  with a key, and it is enough.
+- **Not an answer.** A press answers only what `NotificationAnswers.decide` can
+  name from the notification's own data, over the phone's own credential to its
+  own coordinator, and the host takes an answer only for a live `promptId` it
+  issued. A forger that never saw a live id gets a press that answers nothing.
+- **On a phone with no key, a swapped answer.** Its notifications pass the
+  relay in the clear, `promptId` and all, so the relay can send the same prompt
+  again with the buttons' labels swapped against the digits — the swap the
+  sealed category exists to refuse, and on a keyless phone nothing refuses it.
+- **Not a sealed envelope.** The phone's public key goes to its coordinator at
+  registration and never to the relay, and sealing needs it. So on a phone with
+  a key a forgery is a notification that arrives *without* an envelope, or with
+  one that does not open: a detectable shape, and not yet detected.
+
+This was raised in
+[#350](https://github.com/TheTechNetwork/Fleetwright/issues/350) before the
+relay was built, and the relay was built without it, so it is recorded as a gap
+and not as a property: [`security.md`](./security.md) §4.10 is the bound and
+§9-G15 tracks it. **What closes it:** a phone that has registered a key treats a
+notification with no envelope, or one its key does not open, as unauthenticated
+— no buttons, and a sentence that says it could not be read rather than the
+fallback that says something needs you — and the coordinator stops sending the
+plaintext path to a phone that has a key, once the phones that do this are the
+phones there are. Both phones and the coordinator in one round, because a
+coordinator that stops first strands the phones that have not changed. Until
+then the seal is privacy from Apple, Google and the relay, and is not integrity
+against the relay, and nothing in this document claims the second.
+
+### A device token is not bound to a fleet
+
+The relay keeps no table of which devices exist, by the rules above, and a
+consequence follows that this document did not state: it also does not know
+which fleet a device belongs to. Any registered fleet that holds a device token
+can post to it, and with no delivery history there is nothing afterwards that
+says a notification came from a fleet other than the one the phone registered
+with. The relay authenticates the **fleet** (`Authorization: Bearer
+<fleet>.<secret>`), for the rate limit, and that is all it authenticates.
+
+Decided rather than left open: **accepted, and bounded as follows.** A device
+token is issued by Apple or Google to one install and is not guessable, and it
+reaches a coordinator only because the phone registered there; a fleet that
+holds another fleet's token was given it by that phone or took it from that
+coordinator, and either is a larger problem than the relay. On a phone with a
+key, a stranger's notification arrives without an envelope that key opens,
+which is the shape the section above says should be refused and is not yet. On
+a phone with no key it is rendered, which is the same gap and not a second one.
+The alternative — the relay remembering which fleet registered which device and
+refusing the rest — is a table keyed by device token, which is the thing *"no
+metrics keyed by device token"* above forbids, and it would still not stop a
+fleet forging to its own phones. So the binding belongs on the phone, where the
+key already is, and not in the relay.
 
 ---
 
@@ -300,4 +383,10 @@ always sends with them, so ours never goes through the relay it runs.
   into a coordinator, and nothing here has delivered through Apple or Google
   or exchanged a real GitHub code via the relay. The relay's callback also has
   to be added to the App's list of callback URLs before the first sign-in.
+- **A notification is not authenticated as its coordinator's.** The seal gives
+  the relay nothing to read; it gives the phone nothing that says who sealed
+  it, and a notification with no seal is drawn as it arrives, buttons included.
+  "What the relay can originate" above says what that is worth to an attacker
+  and what closes it; `security.md` G15 tracks it. Written 6 November 2026,
+  two months after #350 asked for it to be written before the code.
 

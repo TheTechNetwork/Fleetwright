@@ -899,6 +899,24 @@ const STALL_MS = 3 * 60_000;
 const DONE_GRACE_MS = 2 * 60_000;
 
 /**
+ * Why a build with no report token is not started, as the job's text. `asked`
+ * is whether the fleet offered to mint one at all: a coordinator too old to
+ * (nothing to ask) and an ask that failed (the socket was going) each have a
+ * different next step, and both end the same way — no install is judged by
+ * its power state alone.
+ *
+ * @param {boolean} asked
+ */
+export function noReportToken(asked) {
+  return 'the coordinator gave this build no report token, so a finished install could not be told from a stopped VM, ' +
+    'and the install was not started. ' +
+    (asked
+      ? 'The ask did not get an answer; apply again once the machine running the setup is back in touch with the coordinator.'
+      : 'This coordinator is older than report tokens; update it, then apply again.') +
+    ' The pool keeps the machine image it had, if any, and the base disk is kept for the next build';
+}
+
+/**
  * How long before its halt a build VM last reported, for the sentence that
  * says it stopped without saying done: seconds under two minutes, minutes
  * past that, and nothing when the report carries no time, rather than a
@@ -1250,11 +1268,20 @@ export async function ensureImage({
     // the VM's first disk, and a VM made with no disk of its own has none: Xen
     // Orchestra refused it with "Can't create cloud init config drive for VM
     // without disks", which is how the first build on a real pool ended.
-    // A TOKEN FOR ITS REPORTS, when the fleet gives one (core.js,
-    // #onImageReporter). Without one the build is judged by power state
-    // alone, as it was before reports existed.
+    // A TOKEN FOR ITS REPORTS, OR NO INSTALL. The token is how the VM says
+    // `done` before it powers off (core.js, #onImageReporter), and `done` is
+    // the only thing that makes a halt mean "installed". Without one the
+    // build used to be judged by power state alone, as before reports
+    // existed — and that is the rule the wait below was rewritten to end: a
+    // maintenance reboot, a stop from Xen Orchestra or an install cut off
+    // mid-step became the template every machine was cloned from. A token
+    // the coordinator did not give (too old to mint one, or the ask failed
+    // while the socket was going) is therefore not a quieter build, it is no
+    // build: refused here, before the VM is started, with the base kept for
+    // the next try and the VM removed on the way out (the catch below).
     const token = reporter ? await reporter() : null;
-    const addresses = token ? await addressesOf(new URL(coordinatorUrl).hostname) : [];
+    if (!token) throw new Error(noReportToken(reporter !== null));
+    const addresses = await addressesOf(new URL(coordinatorUrl).hostname);
     await admin.call('vm.createCloudInitConfigDrive', { vm, sr: sr.id, config: buildCloudConfig({ coordinatorUrl, token, addresses, agent, channel }) });
     signal?.throwIfAborted();
     await admin.call('vm.start', { id: vm });
@@ -1297,10 +1324,10 @@ export async function ensureImage({
         // worked, and this used to take any halt for that: a host rebooted
         // for maintenance, a VM stopped from Xen Orchestra, or an install
         // cut off mid-step became the template every session was cloned
-        // from. A VM given a token says `done` before it powers off, and is
-        // waited on for it a little past the halt; without one (no token,
-        // as before reports existed) the power state is all there is.
-        if (!token || report?.step === 'done') break;
+        // from. The VM says `done` before it powers off, and is waited on
+        // for it a little past the halt. There is no other way out of this
+        // loop onto the template: a build with no token never gets here.
+        if (report?.step === 'done') break;
         if (haltedAt === null) haltedAt = now();
         if (now() - haltedAt < DONE_GRACE_MS) continue;
         // WHAT THE BOX KNOWS, all of it: when the VM last spoke next to when
@@ -1325,7 +1352,7 @@ export async function ensureImage({
       const elapsed = now() - started;
       const minutes = Math.max(1, Math.round(elapsed / 60_000));
       if (elapsed > VM_IMAGE.installMs) {
-        const last = report ? `; the last it said was that ${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}` : token ? ', and its VM never reported in, so it most likely has no network or its start-up script did not run' : '';
+        const last = report ? `; the last it said was that ${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}` : ', and its VM never reported in, so it most likely has no network or its start-up script did not run';
         throw new Error(`the install on the machine image did not finish within ${Math.round(VM_IMAGE.installMs / 60_000)} minutes${last}. ${await giveUp('install timed out')}`);
       }
       // HONEST ABOUT SILENCE: what it last said and how long ago, once that
@@ -1335,7 +1362,7 @@ export async function ensureImage({
         ? quiet > STALL_MS
           ? `its VM last said that ${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}${pulled(report)}, ${Math.max(1, Math.round(quiet / 60_000))} min ago, and nothing since. ${minutes} min so far.`
           : `${STEP_WORDS[/** @type {keyof typeof STEP_WORDS} */ (report.step)]}${pulled(report)}, ${minutes} min so far.`
-        : token && elapsed > STALL_MS
+        : elapsed > STALL_MS
           ? `${minutes} min so far, and its VM has not reported in. It may have no network, or its start-up script did not run.`
           : `${minutes} min so far, usually about ${Math.round(VM_IMAGE.installTypicalMs / 60_000)}.`;
       say(`Installing Fleetwright on the machine image: ${words}`, stage(3, installFill(elapsed, report?.step ?? null, pullPart(report), head)));

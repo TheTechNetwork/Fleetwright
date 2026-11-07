@@ -165,6 +165,18 @@ const DECIDE_HASHES_KEPT = 256;
  */
 export const MODEL_AWAITING_TEXT = 'is waiting for you; the fleet could not read what it is asking, open it to see';
 
+/**
+ * What a session says when its pane has been still for the idle window and
+ * nothing here can read it: no matcher, no hook saying it is working, and the
+ * decision model off or unsure. Fleet-authored, like MODEL_AWAITING_TEXT, and
+ * for the same reason: there is no prompt behind it. "May", because this box
+ * genuinely cannot tell a dialog it does not recognise from a wedge.
+ *
+ * @param {number} minutes
+ */
+export const stillUnreadText = (minutes) =>
+  `may need your attention: nothing on its screen has changed for ${minutes} minutes and this box cannot tell whether it is asking something or stuck. Open it to see`;
+
 export class SessionWatcher {
   /**
    * @param {{
@@ -338,6 +350,10 @@ export class SessionWatcher {
       // Whether `awaiting` came from the decision model rather than a regex or
       // a hook, which changes only what the event says (#awaiting).
       let readByModel = false;
+      // Whether `awaiting` is this watcher's own caution: a pane nothing could
+      // read, still for the idle window, with no hook saying the CLI is
+      // working (#stillUnread). Changes only what the event says.
+      let unread = false;
       /** @type {any} */
       let prompt = null;
       let rcUrl = session.rcUrl ?? null;
@@ -372,6 +388,21 @@ export class SessionWatcher {
           prompt = readPrompt(pane);
           if (!awaiting && prompt === null) readByModel = this.#modelSaysWaiting(name, pane, activity);
           awaiting = awaiting || readByModel;
+          // STILL, UNREAD, AND NOT SAID TO BE WORKING. A dialog the patterns
+          // miss looks exactly like a wedge from here: a pane that does not
+          // change. The last time the trust dialog's wording moved, the
+          // watcher stopped seeing it, called the session idle after an hour
+          // and restarted it onto the same question (prompt.js). So a pane
+          // this box cannot read is not called idle: once it has been still
+          // for the idle window, it is WAITING, with a sentence that says the
+          // box cannot tell what for, and #maybeRestartIdle leaves it alone.
+          // Only a hook saying `working` — the CLI's own word that it is
+          // mid-turn, with a frozen screen — is evidence of a wedge; that is
+          // the one case the restart below keeps.
+          if (!awaiting && prompt === null && !atRest && !ready && activity?.phase !== 'working' && this.#stillUnread(name)) {
+            awaiting = true;
+            unread = true;
+          }
           rcUrl = extractRcUrl(pane) ?? rcUrl;
           // Kept so health can report what a session is ASKING without a
           // second peek per session per tick. The watcher is already the one
@@ -393,7 +424,7 @@ export class SessionWatcher {
         // New to us. On a restart everything is new, which is why the first
         // pass is quiet.
         if (session.status === 'error') this.#fire(quiet, { event: 'session.error', name, text: session.detail });
-        else if (awaiting) this.#fire(quiet, this.#awaiting(name, session, prompt, readByModel));
+        else if (awaiting) this.#fire(quiet, this.#awaiting(name, session, prompt, readByModel, unread));
       } else {
         if (before.status === 'running' && !running) {
           // NOT WHEN WE STOPPED IT. A restart's own `/stop` is a status change
@@ -413,7 +444,7 @@ export class SessionWatcher {
         // The transition, not the state — a session parked at a prompt is one
         // notification, not one every twenty seconds until somebody answers.
         if (!before.awaiting && awaiting) {
-          this.#fire(quiet, this.#awaiting(name, session, prompt, readByModel));
+          this.#fire(quiet, this.#awaiting(name, session, prompt, readByModel, unread));
         }
         // BACK AT ITS PROMPT, after having been away from it. This is the
         // "done" both beta testers ranked daily: a session handed a job
@@ -448,7 +479,11 @@ export class SessionWatcher {
       // waiting, working or finished. All three exclusions are the same shape:
       // a still pane is not evidence of a problem when there is a perfectly
       // good reason for it to be still, and there usually is.
-      if (running && !awaiting && !atRest) await this.#maybeRestartIdle(name, quiet);
+      // AND ONLY ON THE CLI'S OWN WORD THAT IT IS WORKING. A still pane with
+      // no hook record, or one whose last hook said ready, is CANNOT TELL — a
+      // dialog nothing here recognises, an image older than the hooks — and
+      // cannot-tell is reported as waiting (above), never restarted onto.
+      if (running && !awaiting && !atRest && activity?.phase === 'working') await this.#maybeRestartIdle(name, quiet);
 
       // `worked` is set by any tick that finds a running session away from
       // its prompt and not waiting on a person, and cleared by the tick that
@@ -537,6 +572,21 @@ export class SessionWatcher {
       })
       .catch(() => { /* a failed ask is nothing, which is what the pane already was */ });
     return false;
+  }
+
+  /**
+   * Has this pane been still for the idle window? The same clock the restart
+   * reads, so a pane that would have been restarted is instead said to be
+   * waiting at the moment it would have been. Off when idle restart is off:
+   * an operator who turned off the fleet's judgement of stillness turned off
+   * both halves of it.
+   *
+   * @param {string} name
+   */
+  #stillUnread(name) {
+    if (!this.idleRestartMs) return false;
+    const since = this.idle.get(name)?.since;
+    return since !== undefined && Date.now() - since >= this.idleRestartMs;
   }
 
   /**
@@ -758,13 +808,17 @@ export class SessionWatcher {
    * @param {any} session
    * @param {any} prompt
    * @param {boolean} [readByModel]  the decision model said so, not a regex or a hook
+   * @param {boolean} [unread]  nothing said so; the pane has been still for the idle window and cannot be read
    */
-  #awaiting(name, session, prompt, readByModel = false) {
+  #awaiting(name, session, prompt, readByModel = false, unread = false) {
     if (!prompt) {
       // Recognised as waiting, not recognised as a question. Honest about it,
-      // and more so when it was a model that recognised it: no question, no
-      // options, nothing to answer from a phone.
-      return { event: 'session.awaiting-input', name, text: readByModel ? MODEL_AWAITING_TEXT : firstPrompt(session) };
+      // and more so when it was a model that recognised it, or nothing at
+      // all: no question, no options, nothing to answer from a phone.
+      const text = unread
+        ? stillUnreadText(Math.max(1, Math.round((Date.now() - (this.idle.get(name)?.since ?? Date.now())) / 60_000)))
+        : readByModel ? MODEL_AWAITING_TEXT : firstPrompt(session);
+      return { event: 'session.awaiting-input', name, text };
     }
     const shown = describePrompt(prompt, this.allowSessionText);
     return {

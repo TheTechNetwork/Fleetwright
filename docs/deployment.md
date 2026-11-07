@@ -353,7 +353,7 @@ order:
 | it asks | what to have ready | blank means |
 |---|---|---|
 | Coordinator URL to join | the Worker's address — not asked when you curled the coordinator's own `/install`, which carries it | set `FLEETWRIGHT_COORDINATOR_URL` in `/etc/fleetwright-sidecar.env` later |
-| Enrolment pin | six digits from the app (Fleet → Add a host) — not asked when the one line the app shows was run, which carries the pin as `FLEETWRIGHT_ENROL_PIN` | not enrolled yet; run `fleetwright-sidecar enrol <pin>` later |
+| Enrolment pin | six digits from the app (Machines › Add a machine) — not asked when the one line the app shows was run, which carries the pin as `FLEETWRIGHT_ENROL_PIN` | not enrolled yet; run `fleetwright-sidecar enrol <pin>` later |
 | Sandbox sessions? | needs podman | sessions run directly on the box |
 | Enable and start the services now? | | you start them yourself |
 
@@ -376,8 +376,8 @@ nonce on every connection. Joining is a six-digit pin, spent once.
 
 The installer holds no credential that could mint a pin — a box never runs
 the coordinator, so there is no admin token on it — and every enrolment is
-asked for. The pin comes from the coordinator: handed out by the app (Fleet →
-Add a host), or minted with the break-glass `FLEETWRIGHT_API_TOKEN` that
+asked for. The pin comes from the coordinator: handed out by the app (Machines ›
+Add a machine), or minted with the break-glass `FLEETWRIGHT_API_TOKEN` that
 [`coordinator-deploy.md`](./coordinator-deploy.md) sets on the Worker.
 
 The app does not want that token. It signs in — Sign in with Apple, or the
@@ -448,7 +448,7 @@ fleetwright-sidecar enrol 123456     # a pin from the app
 fleetwright-sidecar doctor           # says whether the coordinator accepts it
 ```
 
-The pin comes from the app — Fleet → Add a host — or from the curl above;
+The pin comes from the app — Machines › Add a machine — or from the curl above;
 the box is the only place it can be spent.
 
 **Where the coordinator runs is not a choice any more.** It is a Cloudflare

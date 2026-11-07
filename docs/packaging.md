@@ -148,6 +148,15 @@ them. Until it did, a box on the newest release could be running units from
 three releases ago, and the only cure was somebody with a shell running
 `install.sh --repair`.
 
+Whatever the helper does next is written down, not only logged. The reply
+that promised the repair has left by the time sudo runs it, so the heal
+records how it went (`src/core/update-outcome.js`): ran with `--repair`; a
+helper older than the release that exited 0 without running the installer,
+with the one command that refreshes it; or sudo refusing it, with
+`sudo /usr/local/sbin/fleetwright-migrate` as the command that finishes it by
+hand. `/updates` says it on the machine's page until an update finishes the
+step, beside the restart that happened regardless.
+
 So `/update --apply` on a packaged box ends by calling the one root grant it
 has, `fleetwright-migrate`, which on a box already on the manifest's version
 downloads that release again, checks its sha256 against the manifest, unpacks

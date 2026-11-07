@@ -201,7 +201,8 @@ npm install
 # coordinator IS the Worker, so most fleet tests load worker/src/worker.js.
 # Skipping this gets you failures that look like a broken clone.
 npm install --prefix worker
-npm test
+npm test              # the Node suite
+./scripts/verify.sh   # the rest of CI: coverage, typecheck, the Worker bundles, the contract
 npm run typecheck
 
 npm start                          # the session manager

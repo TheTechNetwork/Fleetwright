@@ -153,6 +153,11 @@ jobs:
       # commitlint.config.mjs), with no script output in the body because a
       # vendor's address is longer than a line may be. The diff is the record.
       #
+      # THE PROXMOX VE SETUP SCRIPT TOO: pin-images writes each image's row in
+      # install/fleetwright-pve-setup beside vm-image.js, and test/pve-pools
+      # holds the two equal. Adding only src left trixie 20261103's pull
+      # request red with the script still on the build before.
+      #
       # A push that is refused is a branch Renovate moved while this ran; the
       # push that moved it has already started this again on the new commit.
       - name: Commit and push what was written
@@ -167,7 +172,7 @@ jobs:
           git diff --stat
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A src apps/ios/Fleetwright/vnc.html apps/android/app/src/main/assets/vnc.html
+          git add -A src install/fleetwright-pve-setup apps/ios/Fleetwright/vnc.html apps/android/app/src/main/assets/vnc.html
           git commit -q -F - <<'MSG'
           Pin the rest of what Renovate moved
 

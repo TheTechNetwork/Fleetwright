@@ -205,6 +205,9 @@ fun describeRunning(host: Fleet.FleetHost): String {
         host.release?.available != null -> parts.add("${host.release.available} waiting")
         // A migratable checkout counts no commits and names no release version.
         host.appPending -> parts.add("update waiting")
+        // THE CODE IS CURRENT AND THE UPDATE IS NOT DONE: the host says which
+        // part did not happen, on the machine's page. Same words as iOS.
+        host.updateIncomplete != null -> parts.add("last update incomplete")
         // "UP TO DATE" IS A CLAIM. Not knowing is its own state and gets its
         // own words.
         !host.appStatusKnown -> parts.add("update status unknown")

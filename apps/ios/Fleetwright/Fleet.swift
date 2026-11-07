@@ -2407,6 +2407,13 @@ struct Fleet {
             /// NIL IS CANNOT TELL, from a host too old to say, and is not
             /// "off": the buttons stay, and the host's own refusal explains.
             let grants: Grants?
+            /// What the last update on this box did NOT finish, in the host's
+            /// own sentence (src/core/update-outcome.js): a session image it
+            /// could not pull, a root repair sudo refused. Nil is both "it
+            /// finished" and "a host too old to say", neither of which is a
+            /// fault to draw, so the row says "up to date" only when this is
+            /// nil and the page shows the sentence when it is not.
+            let incomplete: String?
 
             /// Is there anything to apply? Two separate answers, because they
             /// are two different actions on two different things.
@@ -2661,6 +2668,8 @@ struct Fleet {
             let system: System?
             /// What the box allows from the app, beside what is waiting.
             let grants: Grants?
+            /// What the last update left undone, as `Updates.incomplete`.
+            let incomplete: String?
         }
 
         /// The same health with a channel the host has just confirmed.
@@ -2692,6 +2701,9 @@ struct Fleet {
                 // Carried over when the reply does not say: an older host's
                 // check must not clear what its frame reported.
                 grants: w.grants ?? updates?.grants,
+                // A Check reads the same record the frame does, so what it
+                // says replaces what the frame said, nil included.
+                incomplete: w.incomplete,
             )
             return HostHealth(
                 account: account, credential: credential, version: version, updates: next,
@@ -3226,6 +3238,21 @@ final class Settings {
         signedInAs = ""
         admin = nil
         viewAsMember = false
+        // THE HYPERVISOR CREDENTIALS GO WITH THE SIGN-IN. They are kept by
+        // address, not by account: the pool tokens setup sealed to this
+        // phone, the admin sign-ins kept behind Face ID, the keys a running
+        // setup's token comes back to, a Proxmox node's root password while
+        // a run is followed, and the secrets this phone lets a pool's own
+        // machines in with. Signing out removed the fleet credential and
+        // left all of that, so the next person to sign in on this phone
+        // could reach every pool the last one had, phone-direct and past
+        // the coordinator (docs/manage.md). A pool kept in the fleet is
+        // still in its owner's vault; one kept only here is set up again.
+        XOSetupHandoff.forgetAll()
+        XOSaved.forgetAll()
+        ProxmoxDirectHandoff.forgetAll()
+        ProxmoxThroughHandoff.forgetAll()
+        HolderJoin.forgetAll()
     }
 
     /// Ask the fleet whether this person is an admin. A failure keeps what

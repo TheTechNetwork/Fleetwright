@@ -122,6 +122,7 @@ import { autoLabels } from '../fleet/host/auto-labels.js';
 import { manifestUrlFor } from '../core/release.js';
 import { checkRelease } from '../core/release-check.js';
 import { migrationReply, migrationState, healAfterRelease, helperState, describeHelper } from '../core/migrate.js';
+import { recordUpdateOutcome, readUpdateOutcome, describeUnfinished } from '../core/update-outcome.js';
 import { log } from '../log.js';
 import { Accounts, normaliseEmail, emailFromActor, rowForActor, HOST_ROW, operatorAccount } from '../core/accounts.js';
 import { heldFor, vaultToken, vaultBox, vaultClaudePeople } from '../core/vault-store.js';
@@ -2261,7 +2262,7 @@ export const COMMANDS = {
           return { ok: p.ok, text: `${owner}\n\n${p.text}` };
         }
         const image = flags.has('check') ? null : await refreshSandboxImageStep(ctx.cfg);
-        const imageNote = image?.text ? `\n\n${image.text}` : '';
+        const imageNote = noteImage(ctx.cfg, image);
         return {
           ok: r.ok,
           text: `${owner}\n\n${r.message}${imageNote}`,
@@ -2345,6 +2346,10 @@ export const COMMANDS = {
           // when it cannot does this process restart on its own.
           // With what the marker needs: the version that just landed, who
           // asked, and where the siblings look for it.
+          // The repair is not known until the heal has run, after this reply
+          // has left; marked undecided now so /updates does not report the
+          // verdict of the update before this one as this one's.
+          recordUpdateOutcome(ctx.cfg.stateDir, { repair: null });
           const heal = healAfterRelease({ logger: log, head: r.version ?? null, actor: ctx.actor ?? null, stateDir: ctx.cfg.stateDir ?? null });
           if (heal.scheduled) return { ok: true, text: `${r.message}${trialNote}\n\n${heal.text}` };
           const restarted = restartSelf();
@@ -2360,7 +2365,7 @@ export const COMMANDS = {
         // Not on --check: that answers "is there anything" without changing the
         // box, and a pull is a change.
         const image = flags.has('check') ? null : await refreshSandboxImageStep(ctx.cfg);
-        const imageNote = image?.text ? `\n\n${image.text}` : '';
+        const imageNote = noteImage(ctx.cfg, image);
         return {
           ok: r.ok,
           text: `${r.message}${imageNote}`,
@@ -2619,6 +2624,14 @@ export const COMMANDS = {
               : `Sessions run ${img.image}${img.digest ? ` (${img.digest})` : ''}, pinned — it changes only when you do.`,
       };
 
+      // WHAT THE LAST UPDATE LEFT UNDONE, from the record it wrote
+      // (update-outcome.js): a session image that was not refreshed, a root
+      // repair sudo refused. Each of those used to be a sentence in a reply
+      // that had already scrolled away, under a flag that said ok; this is
+      // the line that keeps saying it until an update finishes the step, and
+      // it goes first because "up to date" below it is only true of the code.
+      const incomplete = describeUnfinished(readUpdateOutcome(ctx.cfg.stateDir));
+
       return {
         ok: true,
         // EACH LINE NAMES ITS SUBJECT. The bug this verb exists for was two
@@ -2629,6 +2642,7 @@ export const COMMANDS = {
         // changelog in the middle of it would put the session image below
         // forty lines of something else.
         text:
+          (incomplete ? `${incomplete}\n\n` : '') +
           `Fleetwright: ${app.text}\nOperating system: ${system.text}\nSession image: ${sandbox.text}` +
           (packages ? `\n\nWaiting for the operating system: ${packages}` : '') +
           (notesLine ? `\n\n${notesLine}` : ''),
@@ -2641,7 +2655,11 @@ export const COMMANDS = {
         // draw Apply update, Apply system upgrade and Reboot, and a button for
         // an action the box refuses is the fault C-2 names. The sidecar
         // carries this into the health frame.
-        waiting: { app: notes === undefined ? app : { ...app, notes }, system, sandbox, grants: grantsOf(ctx.cfg) },
+        // `incomplete` is the sentence above as data — null when the last
+        // update finished what it recorded, or there is no record — so the
+        // sidecar's frame can carry it and a machine's row can stop saying
+        // "up to date" over a step that did not happen.
+        waiting: { app: notes === undefined ? app : { ...app, notes }, system, sandbox, grants: grantsOf(ctx.cfg), incomplete },
       };
     },
   },
@@ -2838,4 +2856,23 @@ export async function dispatch(ctx, line) {
     const err = /** @type {Error} */ (e);
     return { ok: false, text: `${canonical} failed: ${err.message}` };
   }
+}
+
+/**
+ * The session-image step's note for a packaged or apt box's /update reply,
+ * recorded the way runUpdate records it on a checkout: a pull that did not
+ * happen is written down (update-outcome.js) so /updates keeps saying so, and
+ * is said FIRST in the reply, ahead of a release message that reads as done.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {import('../core/update.js').StepResult|null} image
+ */
+function noteImage(cfg, image) {
+  if (!image) return '';
+  if (image.incomplete) {
+    recordUpdateOutcome(cfg.stateDir, { image: { ok: false, text: image.incomplete.text } }, { fresh: true });
+    return `\n\nNot everything finished: ${image.text}`;
+  }
+  recordUpdateOutcome(cfg.stateDir, { image: { ok: true, text: 'finished' } }, { fresh: true });
+  return image.text ? `\n\n${image.text}` : '';
 }

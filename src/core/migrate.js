@@ -21,6 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { requestRestart } from './restart-watch.js';
+import { recordUpdateOutcome } from './update-outcome.js';
 import { APT_REPAIR } from './apt-release.js';
 
 export const MIGRATE_BIN = '/usr/local/sbin/fleetwright-migrate';
@@ -326,7 +327,8 @@ export function describeHelper(state, cfg) {
  *
  * @param {{ run?: typeof spawnSync, exists?: (p: string) => boolean,
  *   after?: (fn: () => void) => void, restart?: () => void,
- *   mark?: typeof requestRestart, head?: string|null, actor?: string|null, stateDir?: string|null,
+ *   mark?: typeof requestRestart, record?: typeof recordUpdateOutcome,
+ *   head?: string|null, actor?: string|null, stateDir?: string|null,
  *   logger?: { warn: Function, info: Function }, platform?: string }} [opts]
  * @returns {{ scheduled: boolean, text: string }}
  */
@@ -336,6 +338,7 @@ export function healAfterRelease({
   after = (fn) => setTimeout(fn, 1500),
   restart = () => process.exit(0),
   mark = requestRestart,
+  record = recordUpdateOutcome,
   head = null,
   actor = null,
   stateDir = null,
@@ -375,10 +378,16 @@ export function healAfterRelease({
     const r = run('sudo', ['-n', MIGRATE_BIN], { encoding: 'utf8', timeout: 20 * 60_000 });
     const out = `${r.stdout || ''}${r.stderr || ''}`;
     const tail = out.trim().split('\n').slice(-6).join('\n');
+    // WRITTEN DOWN, NOT ONLY LOGGED. The reply that promised this repair left
+    // before it ran, so whatever happens next is news the phone has not had:
+    // update-outcome.js keeps it and /updates says it on the machine's page,
+    // beside the restart that happens regardless. Each branch names the one
+    // command that finishes what it could not.
     if (r.status === 0 && ranInstaller(out)) {
       // The installer restarted the services on its way out, this one
       // included — reaching here means it did not, so do it ourselves.
       logger.info('update: the release\u2019s installer ran with --repair; restarting to apply new code');
+      record(stateDir, { repair: { ok: true, text: 'the release\u2019s installer ran with --repair' } });
     } else if (r.status === 0) {
       // EXIT 0 IS NOT THE INSTALLER HAVING RUN, and this used to be the branch
       // above. A box's helper printed "already on the packaged layout, running
@@ -395,8 +404,20 @@ export function healAfterRelease({
           `release and never from the install dir, which this account can write: ${helperRefreshCommand()} ` +
           `\u2014 the services still restart from the marker.\n${tail}`,
       );
+      record(stateDir, {
+        repair: {
+          ok: false,
+          text: `the helper on this box is older than the release and did not run the installer, so nothing root owns was refreshed. Refresh it once: ${helperRefreshCommand()}`,
+        },
+      });
     } else {
       logger.warn(`update: could not refresh what the installer generates (sudo exited ${r.status}) — restarting anyway\n${tail}`);
+      record(stateDir, {
+        repair: {
+          ok: false,
+          text: `sudo exited ${r.status} running the helper, so the units, hook and sudoers rules were not refreshed. Finish it on the box: sudo ${MIGRATE_BIN}`,
+        },
+      });
     }
     restart();
   });

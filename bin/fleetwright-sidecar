@@ -439,6 +439,13 @@ const sidecar = new Sidecar({
         waiting.grants && typeof waiting.grants === 'object'
           ? { upgrades: Boolean(waiting.grants.upgrades), reboot: Boolean(waiting.grants.reboot) }
           : (lastUpdates?.grants ?? null),
+      // WHAT THE LAST UPDATE DID NOT FINISH, as the hub records it
+      // (src/core/update-outcome.js): the session image it could not pull,
+      // the root repair sudo refused. One sentence or null, and null is
+      // both "it finished" and "an older hub that does not say" — neither of
+      // which is a fault to draw, so the phones draw the sentence and nothing
+      // for null.
+      incomplete: typeof waiting.incomplete === 'string' && waiting.incomplete ? waiting.incomplete : null,
     };
   }
 
@@ -689,7 +696,43 @@ async function doctor() {
     try {
       const state = await hub.state();
       ok('fleetwright accepts the token', true, `${state.running}/${state.maxSessions} running on ${state.host}`);
-      ok('claude is logged in on the hub', state.auth?.loggedIn === true, state.auth?.summary || '');
+      // WHO CAN START A SESSION HERE, which is the question — and not whether
+      // the box itself is logged in, which was the line before this one.
+      //
+      // A machine has no Claude account of its own (docs/one-account-per-
+      // person.md): a session runs on the login of whoever starts it, kept in
+      // their vault and handed to the machines they approve. So `loggedIn:
+      // false` is the ordinary state of every box, and judging on it is the
+      // rule the coordinator (registry.js) and the MCP server (server.js)
+      // each retired after it degraded every host and told two beta testers
+      // the fleet was down. This command kept it: a box set up exactly the
+      // way docs/first-session.md asks — vault login, machine approved,
+      // nothing in the box's home directory — printed FAIL on the one check
+      // that page says should all read ok.
+      //
+      // `claudeAccounts` is what the hub reports to the fleet and what the
+      // fleet judges on. A runner is judged by what its sessions run on
+      // instead (runnerAuth), because nobody links a login to a GitHub job.
+      // Null is CANNOT TELL — a hub older than the field — and is said as
+      // that, never as either answer.
+      const accounts = typeof state.claudeAccounts === 'number' ? state.claudeAccounts : null;
+      const runnerAuth = ['owner', 'key', 'none'].includes(state.runnerAuth) ? state.runnerAuth : null;
+      if (accounts === null) {
+        console.log('warn  a Claude login for sessions — this fleetwright does not say how many people can start a session here (it predates the field); update it');
+      } else if (accounts > 0) {
+        ok('a Claude login for sessions', true, `${accounts} approved login${accounts === 1 ? '' : 's'} — a session runs as whoever starts it`);
+      } else if (runnerAuth === 'owner' || runnerAuth === 'key') {
+        ok('a Claude login for sessions', true, runnerAuth === 'owner' ? 'a runner: sessions run on the owner’s login' : 'a runner: sessions run on the repository’s key');
+      } else {
+        // THE REMEDY IN THE SAME LINE, and it is the vault's, not a login
+        // on this box: keep a Claude login in the app, then approve this
+        // machine from its page, which is the step docs/first-session.md
+        // says people miss.
+        ok('a Claude login for sessions', false, 'nobody’s vault gives this machine a Claude login, so the coordinator will place no session here. In the app: You › Credentials, keep your Claude login; then Machines › this machine › approve it, comparing the fingerprint with `fleetwright-sidecar identity`');
+      }
+      // The box's own login is a fact about its command line and nothing
+      // else, so it is printed and never judged.
+      console.log(`note  the box itself ${state.auth?.loggedIn === true ? `is logged in (${state.auth?.summary || 'for its own command line'}); sessions through the fleet do not use it` : 'has no Claude login of its own, which is normal'}`);
     } catch (e) {
       ok('fleetwright accepts the token', false, /** @type {Error} */ (e).message);
     }

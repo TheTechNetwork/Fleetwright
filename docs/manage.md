@@ -127,6 +127,19 @@ read for it. Never `XOSaved` or `XoSaved`, which keep the admin sign-in for
 setup when a person asks them to: no password is used or kept by any of this,
 and the source test fails a Manage file that reaches for one.
 
+**And it goes with the sign-in.** The record is kept by address, not by
+account, so signing out of the fleet used to leave it, and every other
+hypervisor credential on the phone, for whoever signed in next on the same
+device: a path past the coordinator's own checks. Sign out now forgets the
+pool records, the saved admin sign-ins, the keys a running setup's token or
+line comes back to, a Proxmox node's root password while a run is followed,
+and the secrets the phone lets a pool's own machines in with
+(`Settings.signOut` on iOS, `Settings.forgetHypervisors` on Android,
+`test/sign-out-forgets-hypervisors.test.js`). The screen says so beside the
+button. A pool kept in the fleet is still in its owner's vault and the boxes
+they approved keep making machines on it; one kept only on the phone is set
+up again.
+
 **The pin is checked in the TLS challenge, before a byte is sent.** On iOS the
 `URLSession` server-trust challenge compares the leaf certificate's SHA-256
 with the pin and cancels anything else, during the handshake and before the

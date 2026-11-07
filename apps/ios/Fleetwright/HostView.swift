@@ -177,6 +177,20 @@ struct HostView: View {
                 if mayActOnBox && health?.updates?.systemPending == true && health?.updates?.grants?.upgrades != false {
                     Button("Apply system upgrade") { run { try await fleet.upgrade(host: hostId, apply: true) } }
                 }
+                // WHAT THE LAST UPDATE DID NOT FINISH, in the host's words:
+                // the session image it could not pull, the root repair sudo
+                // refused, each with the command that finishes it. This used
+                // to be a sentence in a reply that had already scrolled away
+                // under a flag that said ok; now it stays until an update
+                // finishes the step. Attention, not error: the box works, and
+                // part of what was asked for is still waiting.
+                if let incomplete = health?.updates?.incomplete {
+                    Text(incomplete)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.attention)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
                 // Said once, at the top, so the settings further down read as
                 // answers and not as controls that went missing.
                 if !mayAdminister {

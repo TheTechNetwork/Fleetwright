@@ -212,7 +212,7 @@ half once with a six-digit pin, and signs a fresh nonce on every connection —
 see [`trust.md`](./trust.md).
 
 **Sign in on a phone first, then add machines from it.** The first person to
-sign in is the fleet's admin; Fleet → Add a host mints a pin and shows, beside
+sign in is the fleet's admin; Machines › Add a machine mints a pin and shows, beside
 it, the one line that installs a fresh box and joins it:
 
 ```sh

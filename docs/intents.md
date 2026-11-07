@@ -444,6 +444,20 @@ second — so a real fleet showed *"The box is up to date."* printed directly
 above *"running 0223f94 · 1 commit behind"*, with an Apply update button beside
 it. Both sentences were true. Neither said what it was about.
 
+**And what the last update left undone.** Each step of an update that can
+fail on its own — the session image pull, the credential tidy, the root
+repair on a packaged box — is recorded by the host as it is known
+(`src/core/update-outcome.js`, `<state dir>/last-update.json`), and `updates`
+reads it back: `waiting.incomplete` is one sentence naming what did not
+finish and why, or `null` when the last update finished what it recorded or
+there is no record. The reply's text leads with the same sentence. The
+sidecar carries it into the health frame as `updates.incomplete`, and both
+phones say *last update incomplete* on the machine's row where they would
+otherwise say *up to date*, with the sentence on its page. It stays until an
+update finishes the step: a pull that failed and said so in paragraph three
+under `ok: true` is how boxes stayed on an old image while the fleet called
+them current.
+
 Two verbs would have been two round trips and two chances to render them apart.
 One answer cannot disagree with itself, and every line in it names its subject.
 

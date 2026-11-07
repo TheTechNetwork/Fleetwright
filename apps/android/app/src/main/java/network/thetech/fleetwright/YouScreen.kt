@@ -117,6 +117,9 @@ fun YouScreen(
     fun signOut() {
         settings.credential = ""
         settings.signedInAs = ""
+        // And the hypervisor credentials kept by address, which the fleet
+        // credential's removal did not touch (Settings.forgetHypervisors).
+        settings.forgetHypervisors()
         signedIn = false
         identity = ""
         onSignedOut()
@@ -210,6 +213,10 @@ fun YouScreen(
             OpenRow("Devices") { open = "devices" }
             OpenRow("Delegations") { open = "delegations" }
             TextButton(onClick = { signOut() }) { Text("Sign out", color = Design.Palette.bad.now) }
+            // SAID BEFORE THE TAP, because it is the one thing signing out
+            // takes that the next sign-in does not give back by itself.
+            // Same words as iOS.
+            Hint("Signing out also removes the hypervisor tokens and saved sign-ins this phone holds. A pool whose token you kept in the fleet is still there; one kept only on this phone will need setting up again.")
 
             // THE OTHER ACCOUNT THIS PHONE HOLDS. It starts your temporary
             // machines and it is how your saved credentials know you. The

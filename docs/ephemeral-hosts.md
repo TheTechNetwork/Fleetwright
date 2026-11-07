@@ -91,7 +91,7 @@ only *names the owner*; it cannot admit a machine on its own.
 
 **A pin is the fallback, not the path.** The optional pin input exists for a
 coordinator with no Actions repositories configured (`FLEETWRIGHT_ACTIONS_REPOS`
-unset): mint one in the app (Fleet → Add a host, marked ephemeral) and type it
+unset): mint one in the app (Machines › Add a machine, marked ephemeral) and type it
 into the dispatch. It lasts ten minutes, is single-use, and is minted by a
 person looking at what they are doing. There is still no credential in this
 repository that can admit a machine — that property moved from "the pin is

@@ -24,6 +24,7 @@ normative.
 | Actor | Is | Trusted to | Explicitly NOT trusted to |
 |---|---|---|---|
 | **Coordinator** | Cloudflare Worker + Durable Object, internet-facing at `fleet.thetech.network` | Route intents, hold device-token hashes, host public keys, enrolment pins, the GitHub App **client secret**, and relay OAuth. Authenticate phones and hosts. | Read any session secret; hold a refresh token, a GitHub App private key, or a member's Claude credential. It is **treated as compromised** for custody decisions. |
+| **Relay** | A Worker of ours, answering coordinators that are not ours (`worker/wrangler.relay.toml`, `src/fleet/relay/relay.js`); holds our APNs key, our Firebase service account and the GitHub App **client secret** | Deliver a notification another coordinator made, exchange a GitHub code and seal the token to the key that fleet registered, count per fleet. Keep a hash per fleet and a counter per window and nothing else (`relay-terms.md`). | Read a sealed notification or token; reach any fleet, host, session or person; know which device belongs to which fleet. It **can originate** a notification to any device token it is shown, under our app's identity, and nothing on a phone yet refuses one (§4.10, §9-G15). |
 | **Host** | Debian box: fleetwright + sidecar + rootless podman | Be the sole authority on its own tmux, hold its own P-256 key, hold at rest the credentials of members who linked on it. | Speak for any host but itself (a reply is taken only for an intent sent to it); speak for, or be given the work or credentials of, a member it does not act for (`mayActFor`, `hosts.js`); hold a fleet-wide admin credential. |
 | **Session** | A Claude Code agent in a container, root inside, reading untrusted input, holding live credentials | Do the work it was asked to. Nothing else. It is the **least trusted component in the system**. | Be believed about who it is (it reports over a bind-mounted socket it cannot forge); hold anything whose leak must outlive it. |
 | **Phone app** | iOS/Android, App Store / Play, holds one per-device credential | Act as the member it was issued to, until revoked. | Contain any baked-in fleet secret (an IPA/APK is public). |
@@ -1101,6 +1102,45 @@ image is inside §4.4's bound already.
 the sandbox base image) MUST be pinned and MUST NOT float.
 *Falsify:* `renovate.json` / lockfiles; `jose` pinned per `oidc.js` comment.
 
+
+### 4.10 Compromised relay
+
+**Bound:** send, not read. The relay holds what delivers to our apps (the APNs
+key, the Firebase service account) and what exchanges a GitHub code (the
+client secret), so a party holding it can: deliver a notification of its own
+to any device token it has been shown, carrying any words and any buttons,
+under our app's identity, and the phone renders it (on iOS `push.js` sends the
+fallback alert in the clear beside the envelope; a notification with no envelope keeps its
+clear category on iOS, `PushCrypto.categoryUnopened`, and is read from its data
+on Android, `Messaging.kt`); keep a GitHub token it exchanged instead of
+sealing it, for sign-ins made through it while it is compromised; refuse or
+drop anything it is asked to deliver; and see, per request, a device token, a
+fleet id, and whatever a coordinator sent in the clear for a device with no
+key, a prompt's question and its `promptId` included. It cannot open a sealed
+envelope or a sealed token (it never holds a phone's or a fleet's public key,
+and the coordinator seals before posting); cannot speak to any coordinator,
+host or session (it is posted to and never calls back); cannot forge an
+*answer* (a press answers only a `promptId` the host issued, over the phone's
+own credential to its own coordinator); and cannot find the devices of a fleet
+it was not shown, since it keeps no token. **With what it saw in the clear** it
+can resend a keyless phone's question with the buttons' labels swapped against
+the digits, the swap the sealed category refuses and a keyless phone does not.
+Detection: nothing on a phone marks a notification as unauthenticated and the
+relay keeps no delivery history by design, so a forgery is noticed by the
+person it reaches or not at all. Revocation: rotate the APNs key, the Firebase
+service account and the client secret, which the coordinator shares with it,
+and every fleet's relay secret, which each request shows it in the clear. Raised in #350 before it
+was built; built without the sender authentication that issue asked for; G15.
+**SEC-RELAY-1** — The relay MUST be able to deny and to originate and never to
+read: nothing it holds opens a notification or a token. A phone that holds a
+key SHOULD draw no buttons for, and SHOULD say it could not read, a
+notification that arrived without an envelope that key opens. The first clause
+holds; the second is G15.
+*Falsify:* `test/relay.test.js` reads the store after a push and a sign-in and
+finds a hash and a counter; show a sealed envelope the relay opens. For the
+second clause, send a phone that registered a key a notification with no
+envelope and watch it draw the buttons — today it does.
+
 ---
 
 ## 5. Identity and authorisation — which hops verify, which carry
@@ -1897,6 +1937,40 @@ a box without podman: a member's sessions no longer go there, and an admin's
 still run as the account that holds everybody's credentials on it. G9–G14
 surfaced later; what each leaves behind is in its status row.
 
+
+**G15 — "The relay forwards bytes it cannot read" was taken as "the relay cannot
+write to a lock screen".** *Violates SEC-ACTOR-1 (the relay had no row in §1 or
+§4 for the month between being built and this entry) and the framing in
+`relay-terms.md`, which stated the confidentiality property and left
+origination unstated.* `src/fleet/push-crypto.js` is unauthenticated ECIES — an
+ephemeral sender key, no sender identity, no signature — and that is the right
+scheme for what it claims. But the relay holds our APNs key and our Firebase
+service account for `apns-topic: network.thetech.fleetwright`, and encryption
+bounds what it reads and nothing about what it originates: `push.js` sends an
+alert in the clear beside every envelope, `PushCrypto.categoryUnopened` (iOS)
+keeps a clear category when there is no envelope, and `Messaging.kt` (Android)
+reads the data in the clear when there is none, so a notification the relay
+makes up renders, buttons and all, on every phone, with no key needed. The
+product's argument (`psychology.md`) is acting from the lock screen without
+opening the app, so forgery is the higher-impact direction, and it was
+unaddressed. Two sentences stated the weaker property as the whole one —
+`ROADMAP.md`'s *"one wakes a phone, one hands over a sealed envelope"* and
+`relay-terms.md`'s *"forwards bytes it cannot read"* — and both now say the
+rest. The OAuth relay has the same shape: it performs the exchange and so picks
+the plaintext it seals; the state sealed in with the token bounds that to a
+sign-in the coordinator started, and no further. **Correct:** on a phone that
+has registered a key, a notification with no envelope, or one the key does not
+open, draws no buttons and says it could not be read rather than that
+something needs you; and the coordinator stops sending the plaintext path to a
+phone with a key. Both phones and the coordinator in one round, since a
+coordinator that stops first strands the phones that have not changed. Until
+then §4.10 is the bound and `relay-terms.md` says so in "What the relay can
+originate". The tenancy half of the same issue — the relay does not know which
+fleet a device belongs to, so one fleet can post to another's token — is
+decided and written in `relay-terms.md` ("A device token is not bound to a
+fleet") rather than tracked here: the binding belongs on the phone with the
+key, and a device table in the relay is what its own retention rules forbid.
+
 ### Status
 
 | gap | state |
@@ -1915,6 +1989,7 @@ surfaced later; what each leaves behind is in its status row.
 | **G12** | **fixed.** Protocol 14's `boxSecrets`, set by the coordinator on `start` and `resume` from whether the session's owner administers the box, decides whether the box's own named secrets may answer it; otherwise only the owner's vault does (`sessionSecret`). A member's `secret` start on a box they do not administer that speaks below 14 is refused `host_outdated`, and a member's `secrets` listing covers only boxes they administer. Fleet sessions started before the host update carry no flag, so the box's secrets stop answering them, admins' included, until resumed through a v14 coordinator; a resume on a host below 14 cannot be scoped. `test/box-secrets.test.js`, `test/box-secrets-hub.test.js`, `test/ownership.test.js`. |
 | **G13** | **fixed, except a member's own boxes.** A removal is a debt each live operator-tier enrolment owes until the box says it is paid: the coordinator-only `forgetperson`, asked at once or on the box's first answering report after it returns, retried after five minutes, with the old `stop` and `unlink` for a box too old to know it; the removals kept under Durable Object key `removals`, at most 200. The box bins the person's sessions with nothing to bring them back on boot, and deletes their Claude account, their sign-ins with the renewal material, and their vault copies, and ends a Claude sign-in in their name still waiting for its code. `unlink` now drops renewal material too. Their own boxes are not asked; a pool's sign-in held in sidecar memory goes on the next vault pass, within ten minutes. `test/config-frame.test.js`, `test/forget-person.test.js`, `test/github-renewal.test.js`, `test/login-ownership.test.js`. |
 | **G14** | **fixed, rotated on upgrade.** The edge pair's CARP password and the routers' key, kept in their `xenStoreData` where `xo.getAllObjects` shows them to every signed-in user (measured on 5.211.0), are kept in the preferences of the `fleetwright-edge-keys` user, which only an admin reads back (measured); the routers carry a hash of the password and the certificate's pin. The next policy job clears the old fields from every router and rebuilds the edge on the way out's pool with a new password and key, asked or not. The old values stay valid until that rebuild. A session machine's cloud-init drive is readable through Xen Orchestra by any box holding the fleet's token until boot destroys it (measured at Xen Orchestra's check), so it no longer carries the Claude login: the machine asks once enrolled and the box that made it hands it over sealed (`vmlogin`); its ticket lives fifteen minutes, and spent twice it is refused, recorded as `vm.ticket-reused` and the host it let in revoked. Not closed: the ticket itself stays on the drive and cannot be bound to the machine, and the machine's own disk, where the login lands, passes the same check for its life (measured at Xen Orchestra's check, the export not measured). Both reach only boxes the pool's owner approved for it; a user per box would narrow them to the box that made the machine (measured) and is not built, since a box gone would strand its machines. `test/edge-router.test.js`, `test/xo-setup.test.js`, `test/edge-credentials.test.js`, `test/xo-pools.test.js`, `test/pool-vms-coordinator.test.js`, `test/vm-claude-login.test.js`. |
+| **G15** | **open: bounded and written, the refusal on the phone not built.** §4.10 here; `relay-terms.md` "What the relay can originate" and "A device token is not bound to a fleet"; `push-encryption.md` "What it hides, and what it cannot" and its table. The other two asks in #350 were met when the relay was built: observability is off in `worker/wrangler.relay.toml` and the relay has no Sentry DSN, held by `test/relay.test.js`; and the payload `relay-terms.md` describes (`promptId`, `answers`, the category) is the one `#notify` sends. |
 
 ---
 
@@ -1934,6 +2009,8 @@ Stated plainly, because omission is where a security document lies.
 - **A malicious platform party** — Cloudflare, Apple, Google, GitHub, Anthropic.
   Their compromise or legal coercion is out of scope. The design's only hedge is
   that no single one of them is a credential *store* for the others.
+  The relay is **not** one of them: it is ours, a first party holding our push
+  credentials, and §4.10 bounds it rather than this list excusing it.
 - **Root on a live host** (§4.2). Nothing running on a box defends against root on
   that box; TPM sealing narrows the *disk/backup* case (§4.6) and is aspirational.
 - **A stolen unlocked phone**, beyond one revocation. The credential is a bearer
@@ -2044,6 +2121,7 @@ a `secret`-typed param appears in `SECRET_FROM`.
 | SEC-INJECT-4 | An operator's ask-first is a ceiling on the bypass flag for every fleet start |
 | SEC-LOG-1 | One redaction table; new secret commands added to it |
 | SEC-BUILD-1 | Security-relevant dependencies pinned |
+| SEC-RELAY-1 | The relay can deny and originate, never read; a phone with a key refuses an unsealed notification (G15, not built) |
 
 ---
 

@@ -279,6 +279,18 @@ enum XOSetupHandoff {
         }
     }
 
+    /// Every pool token and every waiting key, gone: what signing out does
+    /// (Settings.signOut). The list of pools is cleared with the records, so
+    /// nothing claims a pool the phone can no longer act on.
+    static func forgetAll() {
+        for address in UserDefaults.standard.stringArray(forKey: heldKey) ?? [] {
+            Keychain.set("", for: tokenAccount(address))
+        }
+        UserDefaults.standard.removeObject(forKey: heldKey)
+        for entry in pending() { Keychain.set("", for: replyAccount(entry.job)) }
+        UserDefaults.standard.removeObject(forKey: pendingKey)
+    }
+
     /// A pool this phone holds a record for, as Machines lists it.
     struct Held: Identifiable, Equatable {
         let address: String
