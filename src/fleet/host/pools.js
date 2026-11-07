@@ -28,7 +28,8 @@ export class Pools {
   }
 
   /**
-   * Every token held, Xen Orchestra's and Proxmox's, keyed `owner address`.
+   * Every token held, Xen Orchestra's and Proxmox's, keyed `owner address`,
+   * or `owner address box` for one box's own Xen Orchestra user.
    * @returns {Map<string, { owner: string, record: import('./xo-pools.js').PoolRecord|import('./pve-pools.js').PveRecord }>}
    */
   get held() {

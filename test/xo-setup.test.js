@@ -469,7 +469,7 @@ async function choosing(/** @type {any} */ xo, /** @type {XoSetups} */ setups, a
   const begun = await setups.begin({ address: xo.address, pin: xo.pin, trust: 'accepted', actor });
   assert.deepEqual(
     begun.xosetup.can,
-    ['policy', 'policy-signin', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
+    ['policy', 'policy-signin', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', 'box-users', ...(setups.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []), ...(setups.coordinatorUrl && setups.holderPin ? ['holder', 'holder-ask'] : [])],
     'a machine that can says so before any sign-in is sealed',
   );
   const reply = await newSealKey();
@@ -597,6 +597,108 @@ test('a policy is chosen on the phone from the pool it was shown, sealed both wa
   assert.ok(!JSON.stringify(setups.status({ job, actor })).includes(PASSWORD));
   // Its key has opened the one more thing it was for, and opens nothing now.
   assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, false);
+});
+
+test('a policy that names the live boxes gives each a user, and does not leave a gone box’s machines with nobody', { skip }, async (t) => {
+  // docs/security.md, G14. The phone names the boxes approved for the pool;
+  // the job mints `fleetwright-box-<id>` for each and seals the tokens back
+  // in a field of their own, and a box that is no longer named has its
+  // machines handed on or removed by the sweep's own rule before its user goes.
+  const now = Date.now();
+  const sec = (/** @type {number} */ ms) => Math.floor(ms / 1000);
+  const xo = await standIn(t, {
+    sets: [chosenBefore()],
+    users: [
+      { id: 'u-shared', email: 'fleetwright', permission: 'none' },
+      { id: 'u-old', email: 'fleetwright-box-oldbox', permission: 'none' },
+    ],
+    vms: {
+      late: { id: 'late', type: 'VM', power_state: 'Running', tags: ['fleetwright-session', 'fleetwright-box:oldbox', `fleetwright-until:${sec(now + 3_600_000)}`] },
+      dead: { id: 'dead', type: 'VM', power_state: 'Halted', tags: ['fleetwright-session', 'fleetwright-box:oldbox', `fleetwright-made:${sec(now - 3_600_000)}`, `fleetwright-until:${sec(now - 60_000)}`] },
+      plain: { id: 'plain', type: 'VM', power_state: 'Halted', tags: ['fleetwright-session'] },
+    },
+  });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const { begun, reply } = await choosing(xo, setups, actor);
+  const job = begun.xosetup.job;
+  const good = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab', 'net-dmz'], egress: 'net-dmz', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 }, boxes: ['gpu-1', 'deb14'] };
+  assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, good), actor })).ok, true);
+  const end = await finished(setups, job, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.match(end.text, /gpu-1 and deb14 each have a user of their own/);
+  assert.match(end.text, /handed to deb14/);
+  assert.match(end.text, /removed/);
+  assert.match(end.text, /shared user was left as it was/);
+  assert.ok(xo.users.some((u) => u.email === 'fleetwright'), 'the shared user stays');
+  assert.ok(!xo.users.some((u) => u.email === 'fleetwright-box-oldbox'), 'the gone box’s user is deleted only after its machines are handed on');
+  assert.ok(xo.users.some((u) => u.email === 'fleetwright-box-deb14'));
+  assert.ok(xo.users.some((u) => u.email === 'fleetwright-box-gpu-1'));
+  assert.equal(xo.vms.dead, undefined);
+  assert.ok(xo.vms.late);
+  assert.ok(xo.vms.plain, 'a machine with no box stays for the shared user');
+  const handed = xo.calls.find((c) => c.method === 'acl.add' && c.params.object === 'late');
+  assert.equal(handed?.params.action, 'admin');
+  assert.equal(handed?.params.subject, xo.users.find((u) => u.email === 'fleetwright-box-deb14')?.id);
+  assert.ok(!xo.calls.some((c) => c.method === 'acl.add' && c.params.object === 'plain'));
+  assert.ok(!xo.calls.some((c) => c.method === 'vm.delete' && c.params.id === 'plain'));
+  // Each new user is a subject of the fleet's set, so it sees what the set holds.
+  assert.ok(xo.sets[0].subjects.includes(xo.users.find((u) => u.email === 'fleetwright-box-deb14')?.id));
+  const [epk, iv, ct] = String(end.boxHandoff).split('.');
+  const kept = /** @type {any} */ (await open({ ...reply, aad: xosetupHandoffAad(job, xo.address), sealed: { epk, iv, ct } }));
+  assert.equal(kept.v, 1);
+  assert.equal(kept.address, xo.address);
+  assert.deepEqual(kept.boxTokens.map((/** @type {any} */ x) => x.box).sort(), ['deb14', 'gpu-1']);
+  assert.ok(kept.boxTokens.every((/** @type {any} */ x) => x.token.startsWith('tok-fleetwright-box-') && x.user === `fleetwright-box-${x.box}`));
+  assert.ok(!end.text.includes('tok-fleetwright'), 'the tokens are only in the seal');
+  assert.equal(end.handoff, undefined, 'this is not the shared token’s hand-off');
+  assert.equal(kept.retiredShared, undefined, 'naming the boxes does not withdraw the shared token');
+});
+
+test('a later choice withdraws the shared token once every box has its own, and hands over what was still on it', { skip }, async (t) => {
+  const xo = await standIn(t, {
+    sets: [chosenBefore()],
+    users: [{ id: 'u-shared', email: 'fleetwright', permission: 'none' }],
+    vms: {
+      loose: { id: 'loose', type: 'VM', power_state: 'Running', tags: ['fleetwright-session'] },
+      busy: { id: 'busy', type: 'VM', power_state: 'Running', tags: ['fleetwright-session', 'fleetwright-busy'] },
+    },
+  });
+  const { setups } = await machine();
+  const actor = 'eli@example.com';
+  const { begun, reply } = await choosing(xo, setups, actor);
+  const job = begun.xosetup.job;
+  const blocked = { v: 1, srs: ['sr1', 'sr2'], networks: ['net-lab', 'net-dmz'], egress: 'net-dmz', limits: { cpus: 8, memory: 16 * 1024 ** 3, disk: 500 * 1024 ** 3 }, boxes: ['deb14'], retireShared: true };
+  assert.equal((await setups.policy({ job, sealed: await choose(begun, xo.address, blocked), actor })).ok, true);
+  const held = await finished(setups, job, actor);
+  assert.equal(held.state, 'done', held.text);
+  assert.match(held.text, /shared user was left as it was/);
+  assert.ok(!xo.calls.some((c) => c.method === 'acl.add' && c.params.object === 'loose'), 'a resize in progress holds the withdrawal');
+  const [epk, iv, ct] = String(held.boxHandoff).split('.');
+  const opened = /** @type {any} */ (await open({ ...reply, aad: xosetupHandoffAad(job, xo.address), sealed: { epk, iv, ct } }));
+  assert.equal(opened.retiredShared, undefined);
+
+  // The busy machine is gone; the one still on the shared user can move.
+  delete xo.vms.busy;
+  xo.calls.length = 0;
+  const { begun: again, reply: reply2 } = await choosing(xo, setups, actor);
+  const job2 = again.xosetup.job;
+  assert.equal((await setups.policy({ job: job2, sealed: await choose(again, xo.address, blocked), actor })).ok, true);
+  const end = await finished(setups, job2, actor);
+  assert.equal(end.state, 'done', end.text);
+  assert.match(end.text, /still on the shared user/);
+  assert.match(end.text, /Boxes stop being given its token/);
+  assert.ok(!end.text.includes('left as it was'));
+  const moved = xo.calls.find((c) => c.method === 'acl.add' && c.params.object === 'loose');
+  assert.equal(moved?.params.subject, xo.users.find((u) => u.email === 'fleetwright-box-deb14')?.id);
+  assert.ok(xo.calls.some((c) => c.method === 'acl.remove' && c.params.object === 'loose' && c.params.subject === 'u-shared'));
+  assert.ok(xo.calls.some((c) => c.method === 'tag.add' && c.params.id === 'loose' && c.params.tag === 'fleetwright-box:deb14'));
+  assert.ok(xo.users.some((u) => u.email === 'fleetwright'), 'the phone still signs in as the shared user');
+  const parts = String(end.boxHandoff).split('.');
+  const kept = /** @type {any} */ (await open({ ...reply2, aad: xosetupHandoffAad(job2, xo.address), sealed: { epk: parts[0], iv: parts[1], ct: parts[2] } }));
+  assert.equal(kept.retiredShared, true);
+  // Minted again, the box's first token is gone from Xen Orchestra.
+  assert.deepEqual(xo.tokens.get('fleetwright-box-deb14'), [kept.boxTokens[0].token]);
 });
 
 test('the machine image is built after the policy, on the way out’s pool, behind its router, and said in the end', { skip }, async (t) => {
@@ -1028,6 +1130,17 @@ test('a choice is held to what the pool has, and the way out to a network it lis
     assert.match(/** @type {any} */ (r).text, /** @type {RegExp} */ (words));
   }
   assert.equal(checkPolicy(ok, null).ok, false, 'nothing to check it against is a refusal');
+  // THE BOXES A PHONE NAMES for a user each (xo-box-users.js): host ids this
+  // fleet can put in a user name, deduplicated; and the shared user is
+  // withdrawn only together with them.
+  assert.deepEqual(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['gpu-1', 'deb14', 'deb14'] }, choices)).policy.boxes, ['gpu-1', 'deb14']);
+  assert.equal(/** @type {any} */ (checkPolicy(ok, choices)).policy.boxes, undefined, 'a phone that names no boxes keeps the shared user');
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, boxes: [] }, choices)).text, /Name the boxes/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['not a box'] }, choices)).text, /Name the boxes/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, boxes: 'deb14' }, choices)).text, /Name the boxes/);
+  assert.match(/** @type {any} */ (checkPolicy({ ...ok, retireShared: true }, choices)).text, /withdrawn only once the boxes/);
+  assert.equal(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['deb14'], retireShared: true }, choices)).policy.retireShared, true);
+  assert.equal(/** @type {any} */ (checkPolicy({ ...ok, boxes: ['deb14'] }, choices)).policy.retireShared, undefined, 'naming the boxes does not withdraw the shared token');
 
   // THE MACHINE IMAGE is built behind the edge router, on the way out's pool:
   // with the router asked for, or where that pool already has one.

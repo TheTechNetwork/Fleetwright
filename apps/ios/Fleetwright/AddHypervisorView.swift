@@ -283,6 +283,11 @@ struct AddHypervisorView: View {
         /// from the app (`can` holds "machine-grants"); an older one leaves
         /// them the image's answers.
         var canMachineGrants = false
+        /// It gives each box approved for the pool a Xen Orchestra user of
+        /// its own when the choice names them (`can` holds "box-users"); an
+        /// older one reads the choice without them and leaves the shared
+        /// user, so they are neither promised above Apply nor sent.
+        var canBoxUsers = false
         /// It builds an image from main as well as from releases.
         var canImageChannel = false
     }
@@ -1627,6 +1632,12 @@ struct AddHypervisorView: View {
     private func applySection(_ inv: XOPolicy.Inventory, job: String) -> some View {
         let problem = choice.problem(in: inv)
         return Section {
+            // Only where the machine reads the list (C-2): said, it is done.
+            if policyJob?.canBoxUsers == true {
+                Text(XOPolicy.ownUsers)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
             Text("\(hostId) waits ten minutes for this from when it read the pool, then lets go of the sign-in without changing anything.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
@@ -2228,6 +2239,7 @@ struct AddHypervisorView: View {
                                   canLabsEach: begun.can.contains("labs-each"),
                                   canImageManage: begun.can.contains("image-manage"),
                                   canMachineGrants: begun.can.contains("machine-grants"),
+                                  canBoxUsers: begun.can.contains("box-users"),
                                   canImageChannel: begun.can.contains("image-channel"))
             hostId = begun.hostId
             progress = answer.xosetup
@@ -2380,6 +2392,13 @@ struct AddHypervisorView: View {
                 cancelRequested = true
             }
         }
+        // EACH BOX'S OWN TOKEN, filed in the fleet for that box alone, and
+        // the shared item dropped once the machine says every box has its
+        // own: read while the job's key is still held, before it goes below.
+        if state.state == "done", let sealed = state.boxHandoff, let policyJob,
+           let said = await XOSetupHandoff.keepBoxUsers(sealed, job: job, address: policyJob.address, key: policyJob.reply, settings: settings) {
+            result = said
+        }
         // THE ROUTERS' KEY, kept with the pool's token and in the fleet, so
         // the machines holding the pool read the routers from now on.
         if state.state == "done", let sealed = state.watch, let policyJob,
@@ -2414,12 +2433,18 @@ struct AddHypervisorView: View {
         // before it is sent (HolderJoin). Nil when nothing is made, or the
         // Keychain would not keep it, and then the machine joins with its pin.
         let secret = choice.makesHolder(in: inv) ? HolderJoin.newSecret(for: policyJob.address) : nil
+        // THE BOXES APPROVED FOR THIS POOL, each to be given a user of its
+        // own, and whether the shared item may now be withdrawn: read from
+        // the vault and the fleet's machines, only for a machine that reads
+        // them. Nothing read is nothing named (XOPolicy.poolPlan).
+        var plan: (boxes: [String], withdraw: Bool) = ([], false)
+        if policyJob.canBoxUsers { plan = await XOPolicy.poolPlan(settings: settings, fleet: fleet, address: policyJob.address) }
         let sealed: [String: String]
         do {
             sealed = try Seal.seal(
                 to: policyJob.key,
                 aad: Seal.xosetupPolicyAAD(job: job, address: policyJob.address),
-                payload: choice.payload(in: inv, holderSecret: secret)
+                payload: choice.payload(in: inv, holderSecret: secret, boxes: plan.boxes, retireShared: plan.withdraw)
             )
         } catch {
             refuse(error.localizedDescription)

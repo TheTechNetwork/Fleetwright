@@ -567,6 +567,71 @@ the machine made from it today runs.
 before anybody released it. Released versions is what a new image is built
 from unless somebody chooses otherwise.
 
+### A user per box
+
+> One compromised box can export another box's disk, Claude login included.
+
+**Every box approved for a pool used to sign in to Xen Orchestra as the one
+limited user setup made**, and `vm.create` gives that user `admin` on every
+machine any of them makes, so a box could reach the machines the others made
+([`security.md`](./security.md), G14; measured under "What Xen Orchestra lets
+whom do" below). Now each box gets a user of its own, from the policy screen,
+and nothing else changes for the person: Apply does it.
+
+**Apply names the boxes.** Above Apply, where the machine says `box-users` in
+`can`, both phones say so in one sentence, and on Apply the phone reads its
+vault and the fleet's machines and names each machine that is approved for
+this pool: enrolled and not revoked, a name the host can put in a user name,
+and a grant under that name covering the whole vault, the shared item or its
+own (`boxes` in the policy). The pool's own machine is one of them, since it
+is approved for the shared item under its own name. A phone that cannot read
+the vault or the host list names nobody, because cannot tell is not "no
+machines" (C-5), and the shared user is left as it is. The job then mints
+`fleetwright-box-<host id>` for each, a subject of the fleet's set with
+permission `none`, signs in as it for a token with the same life as the
+shared one, and seals the tokens back to the phone on `boxHandoff`, under the
+hand-off binding and a field of their own (`xo-box-users.js`). The phone
+files each as `hypervisor:<address>+<box>`, a copy of the pool's record with
+that box's user and token, which the vault hands to that box alone
+([`vault.md`](./vault.md)).
+
+**A box with its own token uses it.** It makes machines signed in as its own
+user, tags each `fleetwright-box:<box>`, and sweeps and works the machines
+tagged for it; the shared token sweeps and works the machines with no box,
+which are the ones it made (`operates`, `xo-pools.js`). Asked to stop or
+resize a machine another box made, a box says it is not here and the
+coordinator asks the next. The fleet's machine list is each box's view
+joined, and a box holding both tokens for a pool reports the pool once.
+
+**A box that is no longer named does not strand its machines.** Its session
+machines are handed to the first named box, or removed where the sweep would
+have removed them, by the sweep's own rule (`machine-verdict.js`: stopped past
+its end, or running well past it, is done; a machine just made, or stopped
+before its end, is not, and is handed on). The successor is given each
+machine, then the tag says so, then the gone user's access comes off, and
+only then is that user deleted. A machine in the middle of a resize keeps the
+user that has it, and the user stays until the machine is not.
+
+**The next Apply withdraws the shared user from the boxes.** Once every named
+box has its own item in the vault, which the phone can see, it sends
+`retireShared` with the list; the two go together, and the machine refuses
+one without the other. Session machines still on the shared user are handed
+to the first named box, its access taken off each, and the phone forgets
+`hypervisor:<address>` from the vault, so the next vault pass stops handing
+that token to boxes. A resize on one of those machines holds the withdrawal
+for that job; the next Apply tries again. The shared user and its tokens are
+not deleted: the phone still signs in as it to look at the pool, and that
+page then lists the machines that user can still reach
+([`manage.md`](./manage.md)).
+
+**Nothing moves at once.** A machine from before the question reads a choice
+without `boxes` and leaves the shared user; a phone from before it sends
+none and leaves `boxHandoff` where it lies. Two Applies are the cutover, and
+a machine approved between them holds the withdrawal until it has its token.
+Run here against the stand-in Xen Orchestra (`test/xo-setup.test.js`,
+`test/xo-box-users.test.js`, `test/vault.test.js`); not yet against a real
+one, and neither app on a device.
+
 ### What a machine did on the network
 
 **Its page has a section, On the network**, on both phones. It shows the last
@@ -735,10 +800,39 @@ What the code rests on, held to it:
   `vm.start` (`operate`), and `vm.set`, `tag.add` and `vm.delete`
   (`administrate`); the maker was given each. `vm.create` with `share: true`
   gives every subject the ACL, which is today's behaviour by another route.
-  Not built: a machine would answer only to the box that made it, so stopping,
-  extending, sweeping on expiry and handing over the login would all wait on
-  that one box, and each box would need a user and a token an admin job
-  minted for it (`docs/security.md`, G14).
+  **Built, from the policy screen.** A choice that names the boxes approved
+  for the pool (`boxes`; a machine says `box-users` in `can`) has the job
+  mint `fleetwright-box-<host id>` for each, a subject of the fleet's set
+  with permission `none`, and seal each box's token back on `boxHandoff`
+  (`xo-box-users.js`). The phone files each as `hypervisor:<address>+<box>`,
+  which the vault hands to that box alone (`minter/vault.js`,
+  `hypervisorItemForGrant`: a full grant gets it only under that box's label,
+  and a grant for the shared item gets its own box's too, which is how the
+  pool's own machine gets its user). A box holding its own token makes
+  machines with it, tags each `fleetwright-box:<box>`, and sweeps and works
+  the machines tagged for it; the shared token sweeps and works the ones with
+  no box, which are the ones it made (`xo-pools.js`, `operates`). Asked to
+  stop or resize a machine another box made, a box says it is not here and
+  the coordinator asks the next. A box left off the list has its session
+  machines handed to the first named box, or removed where the sweep would
+  have removed them (`machine-verdict.js`: stopped past its end, or running
+  well past it; a machine just made, or stopped before its end, is not done
+  and is handed on), and its user is deleted only after; a machine in the
+  middle of a resize keeps that user, and the user stays. The next apply,
+  once every named box has its token (the phone reads its own vault for
+  this), sends `retireShared`: session machines still on the shared user are
+  handed to the first named box, its access taken off each, and the phone
+  forgets `hypervisor:<address>` from the vault, so the next vault pass stops
+  handing that token to boxes. A resize on one of those machines holds the
+  withdrawal for that job. The shared user and its tokens are not deleted:
+  the phone still signs in as it to look at the pool, and after the
+  hand-over that page lists the machines that user can still reach, which
+  are the ones with no box tag; the others are on the fleet's own machine
+  list, reported by the box whose user sees them. A phone that cannot read
+  the vault or the host list names nobody, since cannot tell is not "no
+  machines" (C-5), and the shared user is left as it is. A machine's own
+  disk still passes Xen Orchestra's export check for the box that made it,
+  which is the box that holds its login anyway (`docs/security.md`, G14).
 
 ## What `provision` may express
 
