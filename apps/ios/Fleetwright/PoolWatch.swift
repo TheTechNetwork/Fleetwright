@@ -59,6 +59,11 @@ final class PoolWatch {
     /// The machine the page is read through, while this phone cannot reach
     /// the pool itself. Nil is read directly, over the socket.
     private(set) var via: String?
+    /// Stopped for want of access this phone can only get by setting the
+    /// pool up again: no record, one that ran out, a certificate that is not
+    /// the pinned one, or a sign-in refused. The page draws Set up again
+    /// for an admin on it (§6: the remedy as a button, not a clause).
+    private(set) var needsSetup = false
 
     /// How a page read through a machine is asked for again, and how often.
     static let throughEvery: Duration = .seconds(20)
@@ -113,8 +118,10 @@ final class PoolWatch {
     /// A second call while connecting or connected does nothing.
     func start() async {
         if phase == .connecting || phase == .relaying || phase == .live { return }
+        needsSetup = false
         guard let raw = Keychain.get(XOSetupHandoff.tokenAccount(address)), let record = Manage.record(raw, address: address) else {
             phase = .stopped(Manage.Words.noToken(address), retry: false)
+            needsSetup = true
             return
         }
         user = record.user
@@ -124,10 +131,12 @@ final class PoolWatch {
         }
         if let expires = record.expires, expires < Date() {
             phase = .stopped(Manage.Words.expired(address, on: expires.formatted(date: .long, time: .omitted)), retry: false)
+            needsSetup = true
             return
         }
         guard let link = XOLink(address: address, pin: pin) else {
             phase = .stopped(Manage.Words.noToken(address), retry: false)
+            needsSetup = true
             return
         }
         phase = .connecting
@@ -178,6 +187,7 @@ final class PoolWatch {
             generation += 1
             drop(link)
             phase = .stopped(Manage.Words.wrongCertificate(address), retry: false)
+            needsSetup = true
             return
         } catch {
             if !relayingNow { early.cancel() }
@@ -204,6 +214,7 @@ final class PoolWatch {
             // A MACHINE ALREADY SHOWING THE PAGE goes on showing it.
             if via != nil { return }
             phase = .stopped(Manage.Words.signInRefused(address, error.localizedDescription), retry: false)
+            needsSetup = true
             return
         }
         // ALL AT ONCE on the one socket, answered by id: the method list and
@@ -294,7 +305,7 @@ final class PoolWatch {
             return await runThrough(fleet, method, params, done: done)
         }
         guard let link = holder.peek(), phase == .live else {
-            return (false, Manage.Words.lost("this phone is not connected"))
+            return (false, Manage.Words.notConnected)
         }
         do {
             _ = try await link.call(method, params, timeout: 300)
@@ -407,11 +418,11 @@ final class PoolWatch {
     /// page read again so the change shows without waiting for the timer.
     private func runThrough(_ fleet: Fleet, _ method: String, _ params: [String: Any], done: String) async -> (ok: Bool, text: String) {
         guard let data = try? JSONSerialization.data(withJSONObject: params), let args = String(data: data, encoding: .utf8) else {
-            return (false, Manage.Words.refused("the action could not be written down"))
+            return (false, Manage.Words.couldNotSend)
         }
         do {
             let r = try await fleet.xoact(address, method: method, args: args)
-            if r.ok == false { return (false, r.text ?? Manage.Words.refused("the fleet refused it")) }
+            if r.ok == false { return (false, r.text ?? Manage.Words.machineRefused) }
             await readThrough(after: "")
             return (true, done)
         } catch {

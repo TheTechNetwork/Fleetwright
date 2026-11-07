@@ -92,22 +92,17 @@ internal object ProxmoxThrough {
         else -> "Setting up Proxmox VE"
     }
 
-    /** Said when this phone tried the node and could not reach it. */
-    fun unreachable(node: String): String =
-        "This phone could not reach $node, so one of your machines that can sets it up: the same steps, run on the node over SSH. " +
-            "The root password is sealed on this phone to that machine alone."
+    /** Said when this phone tried the node and could not reach it. Opened by hand there is no intro: the node field says what the screen is for. */
+    fun unreachable(node: String): String = "Couldn’t reach $node from this phone. Pick a machine to set it up."
 
-    const val INTRO =
-        "When this phone cannot reach the node, one of your machines that can does the setup for it: the same steps, run on the node " +
-            "over SSH. The root password is sealed on this phone to that machine alone."
+    /** The screen may be closed, said while it runs; how the line comes back is ProxmoxThroughHandoff's business, and docs/proxmox.md's. */
+    const val MAY_CLOSE = "Takes a few minutes. You can close this screen."
 
-    const val MAY_CLOSE =
-        "With the machine image this takes several minutes, and you need not watch: the setup goes on on the node, " +
-            "and the line comes back sealed to this phone, which keeps it in your vault when Fleetwright is next open."
-
-    fun passwordFooter(host: String): String =
-        "It signs in to the node over SSH once, and $host forgets it as soon as it has. The line comes back sealed to this phone, and " +
-            "$host keeps no copy."
+    /** The footer says the result; the custody is behind the disclosure. */
+    const val PASSWORD_FOOTER = "Used once and not stored."
+    fun custody(host: String): String =
+        "The root password signs in to the node over SSH once, and $host forgets it as soon as it has. " +
+            "It is encrypted on this phone so that only $host can read it, and the cluster’s access comes back readable by this phone alone."
 
     /** The bytes the machine signed for this job, as src/fleet/crypto.js `signingInput` writes them; every value held to its shape first. */
     fun signingInput(address: String, job: String, key: String, pin: String): ByteArray {
@@ -194,6 +189,8 @@ internal fun ProxmoxThroughSheet(
     var lineKept by remember { mutableStateOf(false) }
     var keepAgain by remember { mutableStateOf(false) }
     var keeping by remember { mutableStateOf(false) }
+    // The custody of the password, folded away until asked for.
+    var custodyOpen by remember { mutableStateOf(false) }
 
     val addressOk = XoSetup.ADDRESS_RE.matches(address.trim())
     val able = probes.orEmpty().filter { XoDeploy.canInstall(it) }
@@ -260,7 +257,7 @@ internal fun ProxmoxThroughSheet(
                 // this job's own context and over the host key compared.
                 setup.key == null || !XoSetup.verifyKeySig(setup.hostKey, setup.keySig, runCatching { ProxmoxThrough.signingInput(where, setup.job, setup.key, pin) }.getOrDefault(ByteArray(0))) -> {
                     rootPassword = ""
-                    refusal = "That key did not come from $hostId. Nothing was sent. Something between this phone and that machine is not what it says it is, so check the fleet before trying again."
+                    refusal = "That key did not come from $hostId. Nothing was sent. Something between this phone and that machine is not what it says it is, so check your machines before trying again."
                     runCatching { fleet.xosetup("cancel", job = setup.job) }
                 }
                 else -> {
@@ -277,7 +274,7 @@ internal fun ProxmoxThroughSheet(
                     when {
                         listed != null && listed != fingerprint -> {
                             rootPassword = ""
-                            refusal = "That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent."
+                            refusal = "That key did not come from $hostId: a different key is listed for it. Nothing was sent."
                             runCatching { fleet.xosetup("cancel", job = setup.job) }
                         }
                         approval == PhoneVault.Approval.ANOTHER_KEY -> {
@@ -386,7 +383,7 @@ internal fun ProxmoxThroughSheet(
                             enabled = !keeping,
                             onClick = { scope.launch { keepLine(setup.job, setup) } },
                             modifier = Modifier.heightIn(min = 48.dp),
-                        ) { Text(if (keeping) "Keeping…" else "Keep the line") }
+                        ) { Text(if (keeping) "Adding…" else "Add the cluster") }
                     setup != null && setup.state != "running" && setup.state != "waiting" ->
                         // A new begin, because the key was for the job that ended.
                         TextButton(onClick = { startAgain() }, modifier = Modifier.heightIn(min = 48.dp)) { Text("Try again") }
@@ -394,10 +391,7 @@ internal fun ProxmoxThroughSheet(
             }
             waitingOn != null -> {
                 SectionHead("Is that ${waitingOn.hostId}'s key?")
-                Hint(
-                    "This phone has not approved ${waitingOn.hostId} before. On it, fleetwright-sidecar identity prints its " +
-                        "fingerprint; send the root password only if it is this one.",
-                )
+                Hint("First time using ${waitingOn.hostId}. On it, run `fleetwright-sidecar identity` and check it shows this:")
                 SelectionContainer {
                     Text(PhoneVault.fingerprint(waitingOn.setup.hostKey!!), style = Design.Style.title, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
                 }
@@ -415,7 +409,9 @@ internal fun ProxmoxThroughSheet(
                 }
             }
             else -> {
-                Hint(if (auto) ProxmoxThrough.unreachable(address.trim()) else ProxmoxThrough.INTRO, color = Design.Palette.ink.now)
+                // ONLY WHEN THE PHONE TRIED FIRST: opened by hand, the node
+                // field and the button say what the screen is for.
+                if (auto) Hint(ProxmoxThrough.unreachable(address.trim()), color = Design.Palette.ink.now)
                 SectionHead("The node")
                 OutlinedTextField(
                     value = address,
@@ -445,7 +441,7 @@ internal fun ProxmoxThroughSheet(
                 val found = probes
                 if (found != null) {
                     SectionHead("Which machine sets it up")
-                    XoDeploy.nobody(found, address.trim(), doing = "set up Proxmox VE")?.let { Hint(it.replace("the pool master", "the node"), color = Design.Palette.attention.now) }
+                    XoDeploy.nobody(found, address.trim())?.let { Hint(it, color = Design.Palette.attention.now) }
                     found.filter { it.ssh?.reachable == true }.forEach { p ->
                         if (XoDeploy.canInstall(p)) {
                             Row(
@@ -495,7 +491,10 @@ internal fun ProxmoxThroughSheet(
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Password),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Hint(ProxmoxThrough.passwordFooter(pick.hostId))
+                    Hint(ProxmoxThrough.PASSWORD_FOOTER)
+                    // THE CUSTODY, ONCE, BEHIND A DISCLOSURE, as on an install.
+                    OpenRow(if (custodyOpen) "${XoDeploy.CUSTODY_TITLE} ▾" else XoDeploy.CUSTODY_TITLE) { custodyOpen = !custodyOpen }
+                    if (custodyOpen) Hint(ProxmoxThrough.custody(pick.hostId))
                     OutlinedButton(
                         enabled = !beginning && matched && rootPassword.isNotEmpty(),
                         onClick = { begin() },
