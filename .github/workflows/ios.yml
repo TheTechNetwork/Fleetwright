@@ -941,8 +941,8 @@ jobs:
       - name: Fetch hinge
         env:
           # renovate: datasource=github-tags depName=artemnovichkov/hinge
-          HINGE_VERSION: v0.3.0
-          HINGE_COMMIT: afb8f0bd277cb12187f0844a79542cbac35e7385
+          HINGE_VERSION: v0.3.1
+          HINGE_COMMIT: 06cb720276281da7f1aadd3874acb0d0ae5eb2b5
         run: |
           set -euo pipefail
           dir="$RUNNER_TEMP/hinge"
