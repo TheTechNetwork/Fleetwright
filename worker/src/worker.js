@@ -987,6 +987,25 @@ const OPENAPI = JSON.stringify({
             ],
             "description": "Why it is not healthy, as a sentence. The registry works hard to make \"we don't know\" unrepresentable."
           },
+          "reasonCode": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "no_login",
+              "runner_no_login",
+              "pool_no_login",
+              "login_expired",
+              "hub_unreachable",
+              "protocol_behind",
+              "protocol_ahead",
+              "fetching_login",
+              "never_reported",
+              "silent",
+              "dropped",
+              "connecting"
+            ],
+            "description": "The same reason as one word, set beside every `reason`, for a row with room for one to three words; the sentence is for the page and the terminal. Additive: a coordinator from before it leaves it out, and a client sent a word it does not know shows the sentence."
+          },
           "health": {
             "type": [
               "object",
