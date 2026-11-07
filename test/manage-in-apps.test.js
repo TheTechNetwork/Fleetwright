@@ -165,7 +165,7 @@ test('iOS: the page is under Machines, on the row that names the pool, and says 
   assert.match(IOS_HYPERVISORS, /if row\.onPhone, let pool = held\.first\(where: \{ \$0\.address == row\.address \}\) \{\s*PoolManageView\(settings: settings, pool: pool\)/);
   assert.match(IOS_SCREEN, /if settings\.showsAdmin \{\s*NavigationLink \{\s*AddHypervisorView\(settings: settings, policyFor: pool\.address\)/);
   // The row says how current the page will be: when, or never.
-  assert.match(IOS_HYPERVISORS, /Manage\.lastLooked\(row\.address\)\.map \{ Manage\.Words\.rowLooked\([^\n]*\n\s*\?\? Manage\.Words\.never\)/);
+  assert.match(IOS_HYPERVISORS, /Manage\.lastLooked\(row\.address\)\.map \{ HypervisorWords\.updated\([^\n]*\n\s*\?\? HypervisorWords\.neverOpened\)/);
   // And the page: watching (or read through a machine, at a time), or the
   // last time, and that nothing watches while closed.
   assert.match(bare(IOS_SCREEN), /case \.live: return watch\.currentLine/);
@@ -277,7 +277,7 @@ test('Android: the page is under Machines, on the row that names the pool, and s
   assert.match(KT_MACHINES, /PoolPage\(settings, pool, admin, onChangePolicy = \{ policyFor = address \}, onDismiss = \{ managing = null \}, onReconnect = \{ reconnectVia = null; reconnectFor = address \}, onAddWatchdog = \{ watchdogFor = address \}\)/);
   // Machines → Hypervisors → the pool: the list closes and the page opens.
   assert.match(KT_MACHINES, /onOpenPool = \{ listingHypervisors = false; managing = it \}/);
-  assert.match(KT_HYPERVISORS, /Manage\.lastLooked\(settings, row\.address\)\?\.let \{ Manage\.Words\.rowLooked\(relative\(it\)\.toString\(\)\) \} \?: Manage\.Words\.never/);
+  assert.match(KT_HYPERVISORS, /Manage\.lastLooked\(settings, row\.address\)\?\.let \{ HypervisorWords\.updated\(relative\(it\)\.toString\(\)\) \} \?: HypervisorWords\.NEVER_OPENED/);
   assert.match(bare(KT_SCREEN), /PoolWatch\.Phase\.Live -> watch\.currentLine/);
   assert.match(KT_MODEL, /fun lookedAt\(time: String\) = "Last looked at \$time\. \$closed"/);
   // The socket closes when the app stops, said as such.
