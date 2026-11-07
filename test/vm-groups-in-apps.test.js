@@ -30,7 +30,7 @@ const SHARED = [
   'None, so every machine is on its own',
   ' made when you apply',
   ' there now, ',
-  'Group networks are made in the way out’s pool: choose the way out. Nothing was changed.',
+  'Group networks are made in the uplink’s pool: choose the uplink. Nothing was changed.',
   'Work with others on',
   'No group',
   'address unknown',

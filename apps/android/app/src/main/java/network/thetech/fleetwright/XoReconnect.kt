@@ -204,7 +204,7 @@ internal object XoReconnect {
 
     /** The line over the pools the admin sign-in sees at the end, or the sentence that says it sees none. */
     fun poolsLine(r: Result): String = when {
-        r.pools == null -> "Cannot tell which pools Xen Orchestra shows now: the machine did not say."
+        r.pools == null -> "The machine did not say which pools Xen Orchestra shows now."
         r.pools.isEmpty() -> "Xen Orchestra still shows no pools, even to the admin sign-in."
         else -> "Xen Orchestra shows ${if (r.pools.size == 1) "this pool" else "these pools"} now:"
     }

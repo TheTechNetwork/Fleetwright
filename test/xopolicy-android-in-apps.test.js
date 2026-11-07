@@ -191,7 +191,7 @@ test('Android: the words are the machine’s and iOS’s', () => {
   // Internet access says what it is in one sentence; the router is offered
   // by a machine that can build it, with a network for it, and its spec on
   // the row: iOS's words.
-  assert.ok(form.includes('"The network VMs reach the internet through. Pick one the VMs are not on themselves."'));
+  assert.ok(form.includes('"The uplink: the network VMs reach the internet through. Pick one the VMs are not on themselves."'));
   assert.ok(form.includes('needs an update to build the router.'));
   assert.match(form, /if \(canEdge && choice\.egress != null\) \{/);
   assert.ok(form.includes('title = if (there == null) "Build the edge router on it" else "Keep the edge router on it"'));
@@ -199,7 +199,7 @@ test('Android: the words are the machine’s and iOS’s', () => {
   assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), groups = 0, holder = false, holderAgain = false)) }'));
   assert.match(sheet, /canEdge = "edge" in p\.setup\.can/);
   assert.match(policy, /\.put\("edge", c\.edge\)/);
-  assert.ok(policy.includes('The edge router needs a way out: choose the network its WAN goes on.'));
+  assert.ok(policy.includes('The edge router needs an uplink: choose the network its WAN goes on.'));
   assert.ok(sheet.includes('Hint("Apply within ten minutes, or nothing changes.")'));
   assert.ok(sheet.includes('else "Used once by ${pick.hostId} and not kept."'));
   // Every step the protocol has, in its order, said as the machine says it.
@@ -212,7 +212,7 @@ test('Android: the words are the machine’s and iOS’s', () => {
   // The rules Apply waits on, in checkPolicy's words.
   for (const line of [
     'Choose at least one storage repository: a VM needs somewhere for its disk.',
-    'The way out has to be one of the networks the fleet may use.',
+    'The uplink has to be one of the networks the fleet may use.',
     'vCPUs are between 1 and $maxCpus, what the pool has.',
     'Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.',
     'Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.',

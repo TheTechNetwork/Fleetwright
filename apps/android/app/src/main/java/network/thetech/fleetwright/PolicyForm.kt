@@ -92,9 +92,9 @@ internal fun PolicyForm(
     // fleet's networks, and the WAN usually belongs on one that is not.
     val anyWayOut = choice.anyWayOut
     val wayOut = if (anyWayOut) {
-        "The network VMs reach the internet through. Pick one the VMs are not on themselves."
+        "The uplink: the network VMs reach the internet through. Pick one the VMs are not on themselves."
     } else {
-        "The network VMs reach the internet through, from those chosen above."
+        "The uplink: the network VMs reach the internet through, from those chosen above."
     }
     Hint(if (canEdge) wayOut else "$wayOut $machine needs an update to build the router.")
     choosable.filter { anyWayOut || it.id in choice.networks }.forEach { n ->
@@ -299,7 +299,7 @@ internal fun PolicyForm(
         }
     }
     // WHERE THE DISKS GO, asked before anything is built and said while it is:
-    // any storage in the way out's pool with room, the fleet's own first.
+    // any storage in the uplink's pool with room, the fleet's own first.
     // Asked for: "which disk did it put it on?"
     val (buildEdge, buildImage) = XoPolicy.building(inv, choice)
     if (choice.edgeDiskChoice && (buildEdge || buildImage)) {
@@ -325,7 +325,7 @@ internal fun PolicyForm(
         }
     }
 
-    // GROUP NETWORKS, in the way out's pool: how many to have, from the ones
+    // GROUP NETWORKS, in the uplink's pool: how many to have, from the ones
     // there (never fewer) to four. Asked for: "the 3 VMs need to reach each
     // other". What a machine is fenced from by default is said here, because
     // this is the one place it can be let through. iOS's words.

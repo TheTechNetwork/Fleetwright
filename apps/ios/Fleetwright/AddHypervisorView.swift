@@ -1276,7 +1276,7 @@ struct AddHypervisorView: View {
                 }
             }
             // WHERE THE DISKS GO, asked before anything is built and said
-            // while it is: any storage in the way out's pool with room, the
+            // while it is: any storage in the uplink's pool with room, the
             // fleet's own first. Asked for: "which disk did it put it on?"
             if choice.edgeDiskChoice, choice.building(in: inv).edge || choice.building(in: inv).image {
                 edgeDiskRow(inv)
@@ -1460,12 +1460,12 @@ struct AddHypervisorView: View {
 
     private func wayOutFooter(canEdge: Bool, anyWayOut: Bool) -> String {
         let what = anyWayOut
-            ? "The network VMs reach the internet through. Pick one the VMs are not on themselves."
-            : "The network VMs reach the internet through, from those chosen above."
+            ? "The uplink: the network VMs reach the internet through. Pick one the VMs are not on themselves."
+            : "The uplink: the network VMs reach the internet through, from those chosen above."
         return canEdge ? what : what + " \(hostId) needs an update to build the router."
     }
 
-    /// GROUP NETWORKS, in the way out's pool: how many to have, from the
+    /// GROUP NETWORKS, in the uplink's pool: how many to have, from the
     /// ones there (never fewer) to four. Asked for: "the 3 VMs need to reach
     /// each other". What a machine is fenced from by default is said here,
     /// because this is the one place it can be let through.
@@ -1670,7 +1670,7 @@ struct AddHypervisorView: View {
         do {
             let reply = try await fleet.xoprobe(address: trimmedAddress)
             guard reply.ok != false else {
-                probeText = reply.text ?? "The fleet did not try that address."
+                probeText = reply.text ?? "No machine tried that address."
                 return
             }
             guard let found = reply.probes else {
@@ -2438,7 +2438,7 @@ struct AddHypervisorView: View {
             } else if reply.ok == false {
                 // The coordinator no longer knows the job: it restarted, or a
                 // day passed. Said as what it is, and the asking stops.
-                let text = reply.text ?? "The fleet no longer knows this job."
+                let text = reply.text ?? "This job is no longer listed."
                 await apply(Fleet.SetupState(job: job, state: "failed", text: text))
             }
         }

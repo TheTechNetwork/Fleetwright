@@ -107,7 +107,7 @@ internal object ProxmoxSsh {
         "fence" -> "The firewall group"
         "networks" -> "Lab and group networks"
         "image" -> "The machine image, which takes a few minutes"
-        "line" -> "The line for this phone"
+        "line" -> "Saving the token"
         "done" -> "Done"
         else -> step
     }

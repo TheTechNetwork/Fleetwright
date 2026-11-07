@@ -255,7 +255,7 @@ test('Android: a poll that is refused stops, says so, and paints no state the fl
   // The poll ends on the fleet's word that it has no such job, or after five
   // unanswered asks, and the screen says which.
   assert.match(sheet, /if \(r\.code == "unknown_job" \|\| unanswered >= 5\) \{/);
-  assert.ok(sheet.includes('"The fleet has no setup with this id for you, so there is nothing more to ask it."'));
+  assert.ok(sheet.includes('"No setup with this id is listed for you, so there is nothing more to ask."'));
   assert.ok(sheet.includes('"Asked five times with no answer, so this has stopped asking."'));
   // Both offer a way on: Ask again (when asking could help) and Start again.
   assert.match(sheet, /if \(!pollGone\) \{\s*OutlinedButton\(onClick = \{ asks\+\+ \}[\s\S]*?Text\("Ask again"\)/);

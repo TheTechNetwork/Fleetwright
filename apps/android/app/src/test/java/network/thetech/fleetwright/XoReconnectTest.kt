@@ -148,7 +148,7 @@ class XoReconnectTest {
         // No pools said at all is cannot tell, never none, and nothing is called missing.
         val unsaid = XoReconnect.parse(JSONObject().put("v", 1).put("servers", JSONArray().put(server("a", "enabled"))))!!
         assertNull(unsaid.pools)
-        assertEquals("Cannot tell which pools Xen Orchestra shows now: the machine did not say.", XoReconnect.poolsLine(unsaid))
+        assertEquals("The machine did not say which pools Xen Orchestra shows now.", XoReconnect.poolsLine(unsaid))
         assertNull(XoReconnect.stillMissing(listOf("Lab"), unsaid))
     }
 

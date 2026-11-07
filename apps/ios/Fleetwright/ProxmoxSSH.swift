@@ -97,7 +97,7 @@ enum ProxmoxSSH {
         case "fence": return "The firewall group"
         case "networks": return "Lab and group networks"
         case "image": return "The machine image, which takes a few minutes"
-        case "line": return "The line for this phone"
+        case "line": return "Saving the token"
         case "done": return "Done"
         default: return step
         }

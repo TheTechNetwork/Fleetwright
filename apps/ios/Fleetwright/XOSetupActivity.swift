@@ -307,7 +307,7 @@ enum XOSetupWords {
         case "fence": return "Making the firewall group"
         case "networks": return "Making lab and group networks"
         case "image": return "Building the machine image"
-        case "line": return "Handing over the line"
+        case "line": return "Sending the token to this phone"
         default: return "Step \(min(step + 1, max(of, 1))) of \(max(of, 1))"
         }
     }

@@ -254,7 +254,7 @@ enum XOPolicy {
             return edges?.first { $0.pool == pool }
         }
 
-        /// Storage the router's disk can go on: in the way out's pool, with
+        /// Storage the router's disk can go on: in the uplink's pool, with
         /// room for its 3 GiB raw disk. Any the pool listed, not only the
         /// fleet's, because the router is not one of the fleet's VMs.
         func edgeDisks(for network: String?, need: Int64 = XOPolicy.edgeDiskBytes) -> [Storage] {
@@ -368,7 +368,7 @@ enum XOPolicy {
         /// The machine takes `images`. An older one is sent `image` alone,
         /// and offered Debian alone.
         var imagesChoice = false
-        /// What Apply does to each image the way out's pool has, by key; one
+        /// What Apply does to each image the uplink's pool has, by key; one
         /// not named is kept.
         var imageActions: [String: ImageAction] = [:]
         /// The machine rebuilds and removes images (`image-manage` in begin's
@@ -377,7 +377,7 @@ enum XOPolicy {
         /// The images marked to rebuild BECAUSE the channel changed, not by
         /// hand, so changing it back unmarks them and leaves a hand's alone.
         var rebuiltForChannel: Set<String> = []
-        /// How many group networks the way out's pool is to have. Asked for:
+        /// How many group networks the uplink's pool is to have. Asked for:
         /// "the 3 VMs need to reach each other".
         var groups = 0
         /// The machine makes them (`groups` in begin's `can`). An older one
@@ -454,13 +454,13 @@ enum XOPolicy {
         /// An image is asked for, in whichever form this machine reads.
         var wantsImage: Bool { imagesChoice ? !images.isEmpty : image }
 
-        /// The images asked for that the way out's pool does not have yet.
+        /// The images asked for that the uplink's pool does not have yet.
         func imagesToBuild(in inv: Inventory) -> Set<String> {
             guard imageChoice, wantsImage else { return [] }
             return (imagesChoice ? images : [XOPolicy.debianKey]).subtracting(inv.imageKeys(on: egress))
         }
 
-        /// The images the way out's pool has that Apply is to rebuild, or to
+        /// The images the uplink's pool has that Apply is to rebuild, or to
         /// remove, in the catalogue's order.
         func imageKeys(_ action: ImageAction, in inv: Inventory) -> [String] {
             guard imageManageChoice else { return [] }
@@ -504,7 +504,7 @@ enum XOPolicy {
         }
 
         /// The storage the disks being built will go on: the person's pick
-        /// while it is still one that fits on the way out's pool, otherwise
+        /// while it is still one that fits on the uplink's pool, otherwise
         /// the fleet's chosen storage there with the most room, otherwise the
         /// pool's. Nil when nothing in that pool has room.
         func edgeDisk(in inv: Inventory) -> String? {
@@ -589,18 +589,18 @@ enum XOPolicy {
                 return "That names storage or a network this pool did not list."
             }
             if let egress, !inv.networks.contains(where: { $0.id == egress }) {
-                return "The way out has to be a network this pool listed."
+                return "The uplink has to be a network this pool listed."
             }
-            if !anyWayOut, let egress, !networks.contains(egress) { return "The way out has to be one of the networks the fleet may use." }
-            if edge, egress == nil { return "The edge router needs a way out: choose the network its WAN goes on." }
+            if !anyWayOut, let egress, !networks.contains(egress) { return "The uplink has to be one of the networks the fleet may use." }
+            if edge, egress == nil { return "The edge router needs an uplink: choose the network its WAN goes on." }
             if groupsChoice, groups > 0, egress == nil {
-                return "Group networks are made in the way out’s pool: choose the way out. Nothing was changed."
+                return "Group networks are made in the uplink’s pool: choose the uplink. Nothing was changed."
             }
             if labsChoice, labsOpen + labsClosed > XOPolicy.maxLabs {
                 return "Between 0 and \(XOPolicy.maxLabs) labs in all. Nothing was changed."
             }
             if labsChoice, labsOpen + labsClosed > 0, egress == nil {
-                return "Labs are on the edge router: choose the way out it is on. Nothing was changed."
+                return "Labs are on the edge router: choose the uplink it is on. Nothing was changed."
             }
             if labsChoice, labsOpen + labsClosed > 0, !edge, inv.edge(on: egress) == nil {
                 return "Labs are on the edge router, and that pool has none yet. Build the router with them. Nothing was changed."
@@ -611,7 +611,7 @@ enum XOPolicy {
                     : "Labs per person is no limit, or 1 to \(labsOpen + labsClosed), the labs there are. Nothing was changed."
             }
             if imageChoice, wantsImage, egress == nil {
-                return "The machine image is built behind the edge router: choose the way out it leaves through."
+                return "The machine image is built behind the edge router: choose the uplink it leaves through."
             }
             if imageChoice, wantsImage, !edge, inv.edge(on: egress) == nil {
                 return "The machine image is built behind the edge router, and that pool has none yet. Build the router with it."
@@ -622,15 +622,15 @@ enum XOPolicy {
             if holderChoice, holder, imageKeys(.remove, in: inv).contains(XOPolicy.debianKey) {
                 return "The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for."
             }
-            if holderChoice, holder, egress == nil { return "The pool’s own machine goes on the way out: choose the network it is on." }
+            if holderChoice, holder, egress == nil { return "The pool’s own machine goes on the uplink: choose the network it is on." }
             if holderChoice, holder, inv.image(on: egress) == nil, !(imageChoice && wantsImage) {
                 return "The pool’s own machine is made from its machine image, and that pool has none yet. Build one with it."
             }
             let build = building(in: inv)
             if edgeDiskChoice, build.image || build.edge, edgeDisk(in: inv) == nil {
                 return build.image
-                    ? "Nothing in the way out’s pool has 20 GiB free for the machine image’s disk."
-                    : "Nothing in the way out’s pool has 3 GiB free for the edge router’s disk."
+                    ? "Nothing in the uplink’s pool has 20 GiB free for the machine image’s disk."
+                    : "Nothing in the uplink’s pool has 3 GiB free for the edge router’s disk."
             }
             if !inv.cpuRange.contains(cpus) { return "vCPUs are between 1 and \(inv.cpuRange.upperBound), what the pool has." }
             if !inv.memoryRange.contains(memoryGiB) {

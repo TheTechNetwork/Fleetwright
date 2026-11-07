@@ -25,7 +25,7 @@ const HOST_SAYS = read('src/fleet/host/xo-holder.js');
 
 /** The machine's refusals, which each phone says before Apply rather than after. */
 const RULES = [
-  'The pool’s own machine goes on the way out: choose the network it is on.',
+  'The pool’s own machine goes on the uplink: choose the network it is on.',
   'The pool’s own machine is made from its machine image, and that pool has none yet. Build one with it.',
 ];
 
