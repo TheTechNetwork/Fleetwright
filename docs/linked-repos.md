@@ -192,6 +192,37 @@ Reading it needs nothing new: on a permanent box a session's git already asks
 the credential broker, which answers with the person's own token; on a runner,
 the broker mints a one-repository token for it.
 
+### The starter
+
+[`Fleetwright-Templates`](https://github.com/TheTechNetwork/Fleetwright-Templates)
+is a templates repository to start from, the way
+[`Fleetwright-Runners-Template`](https://github.com/TheTechNetwork/Fleetwright-Runners-Template)
+is a runner one. It carries the three shapes above, each as one real example
+rather than a placeholder: a Renovate `default.json` with the policy from this
+repository's own `renovate.json` and none of its project-specific facts; a
+`.claude` with a skill, an agent, a command and a settings file; a `.github`
+with issue forms, a pull request template and a check that runs only there.
+The check on a link names which of the three it found; the phones' linking
+screen and the check's own sentence point at the starter when a repository
+carries none of them.
+
+**One repository, where runners have two.** `Fleetwright-Runners` beside
+`Fleetwright-Runners-Template` is the fleet's own runner repository, the one a
+dispatch goes to for anybody who has not set their own; it is not a second
+starter. A templates repository is read by the person's own sessions and
+nothing fleet-wide reads one, so there is no fleet instance to keep, and the
+starter is the only one.
+
+**A GitHub template, not a repository to fork, on purpose.** A fork of a
+public repository stays public and stays tied to its upstream; a repository
+made with **Use this template** is the person's outright, with its own
+history, and may be private from its first commit. Skills that name internal
+systems are exactly what a templates repository ends up holding, so that
+choice has to be open, and a README that said "fork this" would close it. The
+same reasoning made the runner starter a template, even though a runner
+repository has to be public: a fork's jobs carry the fork's `repository`
+claim, which is not what a person links, and a template copy's carry its own.
+
 ## Runners, from the same list
 
 Unchanged, and described in [runner-central.md](./runner-central.md). Its line

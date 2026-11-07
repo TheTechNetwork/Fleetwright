@@ -194,12 +194,16 @@ func linkedRoleField(_ role: String) -> String {
 
 /// What is linked for a role now, in one sentence. For runners, the fleet's
 /// repository is what applies with none of your own, as Temporary machines says.
+/// For templates with nothing linked, where to start one: the starter is the
+/// one repository for that role (docs/linked-repos.md, "The starter").
 func describeLinkedRole(_ role: String, linked: String?, fleetRunners: String?) -> String {
     if role == "runners" { return describeRunnerRepoSetting(saved: linked, fleet: fleetRunners) }
     if let linked { return "Linked: \(linked)." }
-    return role == "archive"
-        ? "Nothing linked. Session work is not saved."
-        : "Nothing linked."
+    switch role {
+    case "archive": return "Nothing linked. Session work is not saved."
+    case "templates": return "Nothing linked. Start one from github.com/TheTechNetwork/Fleetwright-Templates."
+    default: return "Nothing linked."
+    }
 }
 
 /// What a check found, one answer per fact, "can't tell" kept apart from "no".

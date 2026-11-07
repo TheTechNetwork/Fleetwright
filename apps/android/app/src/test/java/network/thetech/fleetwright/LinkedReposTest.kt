@@ -50,6 +50,7 @@ class LinkedReposTest {
     fun nothingLinkedIsSaidPerRole() {
         assertEquals("Nothing linked. Session work is not saved.", describeLinkedRole("archive", null, null))
         assertEquals("Linked: eli/presets.", describeLinkedRole("templates", "eli/presets", null))
+        assertEquals("Nothing linked. Start one from github.com/TheTechNetwork/Fleetwright-Templates.", describeLinkedRole("templates", null, null))
         assertEquals(
             "Using the fleet's: fleet/runners",
             describeLinkedRole("runners", null, "fleet/runners"),

@@ -35,6 +35,7 @@ test('the words about each role, and about a session’s archive, are the same o
     'Try again',
     // What is linked, and what a check found.
     'Nothing linked. Session work is not saved.',
+    'Nothing linked. Start one from github.com/TheTechNetwork/Fleetwright-Templates.',
     'Linked: ',
     'Private: ',
     'You can push: ',
