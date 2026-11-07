@@ -200,6 +200,15 @@ linking: **it is world-readable, Actions logs included**, so it is a launcher
 and nothing else, and nothing a session makes belongs in it. That is what the
 archive is for.
 
-**macOS billing is still unchecked.** The issue asks for somebody to read the
-current billing page and put a date on it; nobody has, and nothing here
-promises unlimited macOS.
+**macOS billing, read on 6 November 2026.** The issue asked for somebody to
+read the current billing page and put a date on it. GitHub's runner reference
+says use of the standard GitHub-hosted runners is "free and unlimited on public
+repositories", and its public-repository table lists the macOS images this
+product dispatches (`macos-26`, `xcode-27` and `macos-15`, arm64, 3 cores; the
+Intel labels, 4 cores) beside Linux and Windows; its billing page says the
+same of standard runners and that larger runners "are billed for public
+repositories". So on a public runner repository a standard macOS runner costs
+nothing and an `-xlarge` one is metered, which is the line
+[runner-central.md](./runner-central.md) already draws. GitHub has changed this
+before, so the date is part of the claim: read the pages again before
+repeating it, and nothing in the apps promises unlimited macOS.
