@@ -33,29 +33,29 @@ const PHONES = { iOS: iosSources(), Android: androidSources() };
 const joined = (src) => src.replace(/\\\n\s*/g, '').replace(/"\s*\+\s*"/g, '');
 
 const WORDS = [
-  'Box default',
-  'Box default — asks before each tool',
-  'Box default — permissions bypassed',
+  "Machine's setting",
+  "Machine's setting (asks first)",
+  "Machine's setting (no prompts)",
   'Permission prompts on',
   'Permissions bypassed',
-  'It stops and asks before each tool, whatever its machine is set to.',
-  'It runs each tool without asking first.',
-  'It asks before each tool, because that is how its machine is set.',
-  'It runs each tool without asking, because that is how its machine is set.',
-  'It runs the way its machine is set.',
-  'Permissions bypassed is not offered while the fleet picks the machine: one of them is set to ask before each tool.',
-  'Permissions bypassed is not offered here: this machine is set to ask before each tool.',
-  'Permissions bypassed is not offered while the fleet picks the machine: one of them has not said what it allows.',
-  'Permissions bypassed is not offered here: this machine has not said what it allows.',
-  'Permissions bypassed is not offered: no machine this could start on has said what it allows.',
-  'Box default leaves permissions to the machine. Permission prompts on asks before each tool wherever it starts. ' +
-    "Bypassing them is chosen on New session, where each machine's setting is shown.",
+  'Asks before each tool, on any machine.',
+  'Runs each tool without asking.',
+  'Asks before each tool.',
+  'Runs the way the machine is set.',
+  // Why bypassing is missing, said only to somebody who reached for it
+  // (docs/reviews/copy-2026-11-06.md, 37).
+  'To skip permission prompts, pick a machine that allows it.',
+  "Machine's setting leaves it to the machine. Permission prompts on asks before each tool.",
 ];
 
 test('both phones say the permission mode in the same words', () => {
   for (const [phone, src] of Object.entries(PHONES)) {
     for (const words of WORDS) assert.ok(joined(src).includes(words), `${phone} does not say: ${words}`);
   }
+  // The hint is for somebody who asked, not everybody: the footer carries
+  // it only once askedBypass is set and the choice is still missing.
+  assert.match(PHONES.iOS, /askedBypass && !bypassAllowed \? line \+ " " \+ Self\.bypassAsk : line/);
+  assert.match(PHONES.Android, /permissionLine\(permission, boxPermissions, askedBypass && !bypassAllowed\)/);
 });
 
 /**
@@ -81,8 +81,8 @@ test('both phones draw bypassing only when every machine a start could land on s
   const SEND = { iOS: (/** @type {string} */ g) => `"dangerous" && ${g}) ? permission`, Android: (/** @type {string} */ g) => `it == "dangerous" && ${g})` };
   for (const [name, src] of Object.entries(PHONES)) {
     const phone = /** @type {'iOS'|'Android'} */ (name);
-    // The health field, and the word that takes the choice away.
-    assert.match(src, /permissions == "asks"/, phone);
+    // The health field, read for the one word that allows the choice.
+    assert.match(src, /permissions == "bypassed"/, phone);
     for (const m of src.matchAll(ANY[phone])) {
       const before = src.slice(Math.max(0, /** @type {number} */ (m.index) - 120), m.index);
       assert.match(before, /\bif [^\n{]+\{\s*$/, `${phone} draws a Permissions bypassed choice unconditionally`);

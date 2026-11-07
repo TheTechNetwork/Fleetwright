@@ -72,6 +72,7 @@ test('Android: a refused start is not announced as a ready session', () => {
 });
 
 test('the runner warning in New session is one sentence on both phones', () => {
-  const warning = 'No Claude login is kept for your runners, so this one runs on the runner repository';
+  // "May not": a runner can fall back on the runner repository's API key, which Set up Claude explains.
+  const warning = 'Set up Claude first, or this session may not start.';
   assert.ok(IOS.includes(warning) && ANDROID.includes(warning));
 });

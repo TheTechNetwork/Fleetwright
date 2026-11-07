@@ -254,7 +254,8 @@ test('a host reports how many people can start a session on it', () => {
     ['Android', androidSources()],
   ]) {
     assert.match(src, /claudeAccounts/, `${name} does not read the count`);
-    assert.match(src, /Nobody has connected a Claude account here/, `${name} does not name the real fault`);
+    // The row's verdict (docs/reviews/copy-2026-11-06.md, 9); what it means is the machine page's sentence.
+    assert.match(src, /"No Claude account"/, `${name} does not name the real fault`);
   }
 });
 

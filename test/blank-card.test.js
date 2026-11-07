@@ -54,11 +54,12 @@ test('the verb whose job is to bring text back says something when there is none
   // return text, so it is the one that needs a sentence for the empty case.
   const swift = iosSources();
   assert.match(swift, /nothingSaid/, 'iOS has nowhere to put the sentence');
-  assert.match(swift, /has printed nothing that this machine could read/);
+  // The verdict, not which machine failed to read it (docs/reviews/copy-2026-11-06.md, 34).
+  assert.match(swift, /nothingSaid: "No output yet\."/);
 
   const kotlin = androidSources();
   assert.match(kotlin, /fun String\.said\(nothing: String = ""\)/, 'Android has nowhere to put the sentence');
-  assert.match(kotlin, /has printed nothing that this machine could read/,
+  assert.match(kotlin, /nothingSaid = "No output yet\."/,
     'the two phones say the same thing here, or one of them is wrong');
 });
 

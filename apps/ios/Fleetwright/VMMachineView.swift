@@ -58,11 +58,14 @@ struct VMMachineView: View {
                 reach(machine)
                 work(machine)
             } else if !loaded {
-                Text("Asking the fleet…")
+                Text("Loading…")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             } else {
-                Text("The fleet has no report of this machine. The box holding your pool may not have looked yet, or it has been removed.")
+                // NO REPORT IS NOT "REMOVED" (C-5): the machine holding the
+                // pool may not have looked yet, and this page cannot tell
+                // that from a machine that is gone, so it says neither.
+                Text("No report of this machine yet.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
@@ -104,14 +107,14 @@ struct VMMachineView: View {
             fact("On", m.address)
             fact("Network", m.network ?? "Not reported")
             // IN A GROUP: where the others reach it, by address and by name.
+            // An address the pool has not reported is unknown, not blank (C-5).
             if let group = m.group {
-                fact("Group", "\(group), at \(m.groupIp ?? "an address not reported") or \(m.name).local")
+                fact("Group", "\(group) · \(m.groupIp ?? "address unknown") · \(m.name).local")
             }
-            // IN A LAB: which, and what its rules let it reach.
+            // IN A LAB: which, and its kind. What each kind reaches is New
+            // session's sentence, where the choice is made.
             if let lab = m.lab {
-                fact("Lab", "\(lab.name), " + (lab.open
-                    ? "open: it reaches the internet and nothing private"
-                    : "closed: it reaches the fleet and Claude and nothing else"))
+                fact("Lab", "\(lab.name) · " + (lab.open ? "open" : "closed"))
             }
             fact("Size", sizeWords(m))
             fact("Ends", endWords(m))
@@ -142,8 +145,10 @@ struct VMMachineView: View {
         } header: {
             sectionHead("On the network")
         } footer: {
-            Text("As the hypervisor counted it at this machine’s network interfaces, which nothing running on the machine can change. "
-                 + "It is how much went in and out, not where it went.")
+            // Who counted is the one fact that makes the figure trustworthy:
+            // nothing on the machine can change the hypervisor's count. That
+            // it is how much and not where to, the chart's two lines say.
+            Text("Measured by the hypervisor.")
         }
     }
 
@@ -160,11 +165,12 @@ struct VMMachineView: View {
     }
 
     /// Nothing reported is said for what it is: a stopped machine sends
-    /// nothing, a running one the pool did not answer for is cannot tell.
+    /// nothing, a running one the pool did not answer for has no data yet,
+    /// and one whose state is unknown is unknown here too (C-5).
     private func noTrafficWords(_ m: Fleet.VMMachine) -> String {
         switch m.state {
-        case "Running"?: return "The pool has not said what it sent and received. The box holding it asks each time it looks."
-        case nil: return "Cannot tell."
+        case "Running"?: return "No traffic data yet."
+        case nil: return "Unknown."
         default: return "It is not running, so there is nothing to count."
         }
     }
@@ -186,7 +192,9 @@ struct VMMachineView: View {
                         .accessibilityLabel("Copy the SSH command")
                 }
             } else {
-                Text("No address reported yet. Its guest agent says it once it has booted.")
+                // Its guest agent reports the address once it is up; the
+                // agent is mechanism, the boot is the news.
+                Text("No address yet. It appears once the machine boots.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
@@ -209,16 +217,17 @@ struct VMMachineView: View {
         } header: {
             sectionHead("Reach it")
         } footer: {
-            Text("SSH takes the public keys you keep under You › SSH keys, on machines made after you add them. " + consoleFooter)
+            Text("SSH uses the keys under You › SSH keys, on machines made after you add them." + consoleFooter)
         }
     }
 
-    /// Where the console comes from, as it stands for this phone. The same
-    /// words as Android (VmMachinePage).
+    /// Where the console goes, as it stands for this phone: nothing to add
+    /// when it opens in the app, and that it is Xen Orchestra's own page,
+    /// with its own sign-in, when it does not. How the one in the app holds
+    /// the token and the certificate is this file's header, not the footer.
+    /// The same words as Android (VmMachinePage).
     private var consoleFooter: String {
-        holdsHere
-            ? "The console opens in the app with the pool’s token this phone holds, on the pool’s own network or through one of your machines from away; the page that draws it never sees the token."
-            : "The console is Xen Orchestra’s own page, which asks you to sign in there: this phone does not hold the pool’s token."
+        holdsHere ? "" : " The console opens Xen Orchestra, where you sign in."
     }
 
     // MARK: What you can do
@@ -259,8 +268,9 @@ struct VMMachineView: View {
         } header: {
             sectionHead("Work it")
         } footer: {
-            Text("A machine lives at most \(Fleet.VMMachine.maxMinutes) minutes from when it was made. A new size is "
-                 + "held to your pool’s limits, and the machine restarts at its old size if the pool refuses.")
+            // The one limit every button here runs into. A size the pool
+            // refuses is said in the reply when it happens, not in advance.
+            Text("Machines last up to \(Fleet.VMMachine.maxMinutes) minutes.")
         }
     }
 
@@ -282,7 +292,7 @@ struct VMMachineView: View {
     }
 
     private func endWords(_ m: Fleet.VMMachine) -> String {
-        guard let until = m.until else { return "Cannot tell" }
+        guard let until = m.until else { return "Unknown" }
         let at = Date(timeIntervalSince1970: until / 1000).formatted(date: .omitted, time: .shortened)
         return "\(at), \(relativeTime(until))"
     }
@@ -325,7 +335,9 @@ struct VMMachineView: View {
                                           cpus: action == "resize" ? cpus : nil,
                                           memoryGiB: action == "resize" ? memoryGiB : nil)
             failed = r.ok == false
-            message = r.text ?? (failed ? "The fleet refused that." : "Done.")
+            // The reason is the reply's own text where there is one; this is
+            // the verdict for a refusal that gave none.
+            message = r.text ?? (failed ? "Didn't work." : "Done.")
         } catch {
             failed = true
             message = error.localizedDescription
@@ -385,7 +397,8 @@ struct TrafficChart: View {
     }
 }
 
-/// Xen Orchestra's power state in this app's words; nil is cannot tell.
+/// Xen Orchestra's power state in this app's words; nil is unknown, said as
+/// that and never as stopped (C-5).
 func vmStateWords(_ state: String?) -> String {
     switch state {
     case "Running"?: return "running"
@@ -393,6 +406,6 @@ func vmStateWords(_ state: String?) -> String {
     case "Suspended"?: return "suspended"
     case "Paused"?: return "paused"
     case let other?: return other.lowercased()
-    case nil: return "cannot tell"
+    case nil: return "unknown"
     }
 }

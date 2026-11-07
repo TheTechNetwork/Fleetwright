@@ -31,7 +31,9 @@ test('iOS: New session asks what it should do, and sends the words', () => {
 test('iOS: the sheet says what happens, and promises no link a runner cannot have', () => {
   assert.ok(IOS.includes('It starts with these words and gets to work.'));
   assert.ok(IOS.includes('Leave it empty and it starts idle, waiting for you.'));
-  assert.ok(IOS.includes(' and works on your task. You get a notification when it is back at its prompt.'));
+  // The Where footer says how long and what happens at the end, and no
+  // more (docs/reviews/copy-2026-11-06.md, 39).
+  assert.ok(IOS.includes('Ready in a few minutes. Deleted with its files when time runs out.'));
   assert.doesNotMatch(IOS, /notification with its link/);
   // "Started" said as idle only when it has neither.
   assert.match(IOS, /status = request\.profile == nil && request\.task == nil\s*\? "Starting a session\. It will come up idle/);
@@ -48,7 +50,7 @@ test('Android: the sheet says the same as iOS, and promises no link a runner can
   for (const words of [
     'It starts with these words and gets to work.',
     'Leave it empty and it starts idle, waiting for you.',
-    ' and works on your task. You get a notification when it is back at its prompt.',
+    'Ready in a few minutes. Deleted with its files when time runs out.',
   ]) {
     assert.ok(ANDROID.includes(words), `Android does not say: ${words}`);
     assert.ok(IOS.includes(words), `iOS does not say: ${words}`);

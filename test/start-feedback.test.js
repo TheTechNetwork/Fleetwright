@@ -76,7 +76,7 @@ test('a timeout is still not reported as a failure', () => {
     ['Android', 'apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt'],
   ]) {
     const src = read(path);
-    assert.match(src, /Still starting, or started/, `${name} calls a timeout a failure`);
+    assert.match(src, /Not sure it started\. Pull to refresh\./, `${name} calls a timeout a failure`);
   }
 });
 
