@@ -78,19 +78,19 @@
   "components": [
     { "id": "pool-1", "kind": "pool", "name": "Home", "state": null, "what": "Pool of 3 hosts", "numbers": "2 of 6 VMs running" },
     { "id": "host-1", "kind": "host", "name": "xcp1", "state": "running", "what": "Host in pool Home · XCP-ng 8.3.0", "numbers": "16 cores · 22 GiB of 64 GiB in use · 2 VMs running" },
-    { "id": "host-2", "kind": "host", "name": "xcp2", "state": "in maintenance mode", "what": "Host in pool Home", "numbers": "8 cores · 32 GiB, use cannot tell · no VMs running" },
-    { "id": "0f1e2d3c4b5a", "kind": "host", "name": "Unnamed host 0f1e2d3c", "state": "cannot tell", "what": "Host in pool Home", "numbers": "cores: cannot tell · memory: cannot tell · no VMs running" },
+    { "id": "host-2", "kind": "host", "name": "xcp2", "state": "in maintenance mode", "what": "Host in pool Home", "numbers": "8 cores · 32 GiB, in use: Unknown · no VMs running" },
+    { "id": "0f1e2d3c4b5a", "kind": "host", "name": "Unnamed host 0f1e2d3c", "state": "Unknown", "what": "Host in pool Home", "numbers": "cores: Unknown · memory: Unknown · no VMs running" },
     { "id": "vm-1", "kind": "vm", "name": "build-01", "state": "running", "what": "VM on xcp1 in pool Home", "numbers": "2 vCPUs · 4 GiB · 10.0.0.5" },
     { "id": "vm-2", "kind": "vm", "name": "web", "state": "stopped", "what": "VM in pool Home, not on a host", "numbers": "1 vCPU · 2 GiB" },
     { "id": "vm-3", "kind": "vm", "name": "legacy", "state": "running", "what": "VM on xcp1 in pool Home", "numbers": "4 vCPUs · 8 GiB" },
     { "id": "vm-4", "kind": "vm", "name": "frozen", "state": "paused", "what": "VM on xcp1 in pool Home", "numbers": "2 vCPUs · 4.5 GiB" },
     { "id": "vm-5", "kind": "vm", "name": "asleep", "state": "suspended", "what": "VM in pool Home, not on a host", "numbers": "1 vCPU · 1 GiB" },
-    { "id": "vm-6", "kind": "vm", "name": "elsewhere", "state": "running", "what": "VM on a host this token cannot see", "numbers": "vCPUs: cannot tell · memory: cannot tell" },
-    { "id": "vm-7", "kind": "vm", "name": "Unnamed VM vm-7", "state": "cannot tell", "what": "VM in pool Home, not on a host", "numbers": "vCPUs: cannot tell · memory: cannot tell" },
-    { "id": "vm-8", "kind": "vm", "name": "holder-c09fcd", "state": "running", "what": "VM on a host this token cannot see", "numbers": "2 vCPUs · 2 GiB · 10.10.10.230" },
+    { "id": "vm-6", "kind": "vm", "name": "elsewhere", "state": "running", "what": "VM on an unknown host", "numbers": "vCPUs: Unknown · memory: Unknown" },
+    { "id": "vm-7", "kind": "vm", "name": "Unnamed VM vm-7", "state": "Unknown", "what": "VM in pool Home, not on a host", "numbers": "vCPUs: Unknown · memory: Unknown" },
+    { "id": "vm-8", "kind": "vm", "name": "holder-c09fcd", "state": "running", "what": "VM on an unknown host", "numbers": "2 vCPUs · 2 GiB · 10.10.10.230" },
     { "id": "sr-1", "kind": "sr", "name": "Local storage", "state": null, "what": "Storage, lvm, on xcp1", "numbers": "300 GiB free of 500 GiB" },
     { "id": "sr-2", "kind": "sr", "name": "NAS", "state": null, "what": "Storage, nfs, shared by pool Home", "numbers": "1 TiB free of 2 TiB" },
-    { "id": "sr-3", "kind": "sr", "name": "Unnamed storage sr-3", "state": null, "what": "Storage, shared by pool Home", "numbers": "space: cannot tell" }
+    { "id": "sr-3", "kind": "sr", "name": "Unnamed storage sr-3", "state": null, "what": "Storage, shared by pool Home", "numbers": "space: Unknown" }
   ],
   "lists": {
     "pool": ["pool-1"],

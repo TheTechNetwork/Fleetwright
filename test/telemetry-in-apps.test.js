@@ -50,7 +50,7 @@ test('the unit tests on both phones pin the same sentences', () => {
     '"12m"',
     'Worked 42m · waited on you 3m · at its prompt 1h 10m',
     'Worked under 1m',
-    'Worked 2h · counted for the last 2h',
+    'Worked 2h · since 2h ago',
     '$12.40 at API prices · 48k tokens out',
     'at least $0.47 at API prices · 84 tokens out',
     '$835.96 at API prices · 4.6M tokens out · as of 12m ago',

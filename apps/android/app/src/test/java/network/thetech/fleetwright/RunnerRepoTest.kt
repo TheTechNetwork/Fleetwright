@@ -45,11 +45,12 @@ class RunnerRepoTest {
 
     @Test
     fun theSentenceSaysWhichRepositoryIsInEffect() {
-        assertEquals("Your machines come from Eli/Runners.", describeRunnerRepoSetting("Eli/Runners", "fleet/runners"))
+        assertEquals("Using Eli/Runners", describeRunnerRepoSetting("Eli/Runners", "fleet/runners"))
         assertEquals(
-            "Your machines come from the fleet's repository, fleet/runners. Set your own to use your free Actions minutes.",
+            "Using the fleet's: fleet/runners",
             describeRunnerRepoSetting(null, "fleet/runners"),
         )
-        assertTrue(describeRunnerRepoSetting(null, null).startsWith("Make a public repository from github.com/TheTechNetwork/Fleetwright-Runners-Template"))
+        // How to link one is the screen's footer, said once; the row only says that none is.
+        assertEquals("Nothing linked", describeRunnerRepoSetting(null, null))
     }
 }
