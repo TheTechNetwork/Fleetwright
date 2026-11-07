@@ -65,6 +65,7 @@ function hostEntry(hostId) {
     hostId,
     state: 'healthy',
     reason: 'reporting normally',
+    reasonCode: 'ok',
     connected: true,
     connectedAt: NOW - 6 * 3600_000,
     healthAt: NOW - 4_000,

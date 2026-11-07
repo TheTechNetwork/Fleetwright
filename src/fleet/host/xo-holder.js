@@ -204,7 +204,10 @@ export async function ensureHolder({ admin, pool, egress, address, coordinatorUr
   // Said, because the image it came from may be weeks old and the person
   // chose what it is built from expecting the newest of that (C-5).
   const fresh = firstBootRuncmd(machineGrantsOf(grants)).length ? ' Before it joins it takes the newest build of its suite, if it can reach one.' : '';
+  // The result, and what the person does next, in their nouns: a machine
+  // joins and is approved, and manages the pool (docs/design-system.md,
+  // "Words"); "asks to join" and "lets it in" are this file's narration.
   return secret
-    ? `${given.hostId} is starting on ${egress.name}.${fresh} Once it is up it asks to join, and your phone asks you to let it in and hold this pool.`
-    : `${given.hostId} is starting on ${egress.name}.${fresh} Approve it under Machines once it joins, and it holds this pool from then on.`;
+    ? `${given.hostId} is starting on ${egress.name}.${fresh} Once it is up it joins, and your phone asks you to approve it to manage this pool.`
+    : `${given.hostId} is starting on ${egress.name}.${fresh} Approve it under Machines once it joins, and it manages this pool from then on.`;
 }

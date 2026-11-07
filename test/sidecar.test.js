@@ -1098,7 +1098,7 @@ test('working a machine on a hypervisor is this process’s too, for the person 
     report: () => [],
     control: async (/** @type {any} */ ask) => {
       asked.push(ask);
-      return { ok: false, notHere: true, text: 'vm-111111111111 is not on any of your pools this box holds.' };
+      return { ok: false, notHere: true, text: 'vm-111111111111 is not on any of your pools this machine manages.' };
     },
     refresh: async () => {},
   });

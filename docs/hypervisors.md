@@ -391,8 +391,8 @@ The phone seals the secret to the job with the rest of the choice
    whole SHA-256 of the key (`src/fleet/protocol/holder-join.js`). It asks
    again every ten minutes while the name is held, checks every minute whether
    it is in, and wipes the secret once it is. The coordinator keeps at most
-   three requests a name, pushes `<name> asks to join` to its owner, and never
-   sees the secret.
+   three requests a name, pushes `<name> is ready to join` to its owner, and
+   never sees the secret.
 3. **The phone checks it, not the coordinator, and the phone that made it
    lets it in by itself.** The secrets this phone made for that address are
    its own to read (kept as the fleet credential is: after the first unlock,

@@ -94,6 +94,28 @@ An `id` you supply is honoured as an idempotency key, so a phone that retries a
 coordinator mints is unique per call, which is right for a first attempt and
 useless for a retry — that is the caller's to own.
 
+### A word beside every sentence
+
+The coordinator's sentences are written for a terminal and for a machine's
+page. A row on a phone has room for one to three words, so beside each
+sentence it sends one word, and the phones draw the row from the word and
+keep the sentence under a disclosure (`docs/design-system.md`, "Words").
+The words are fixed lists in the code, and the phones' tables are held to
+them by `test/reasons-in-apps.test.js`:
+
+| Beside | Field | Values | Where |
+|---|---|---|---|
+| a host's `reason` (`GET /api/hosts`, the snapshot's `hosts[]`, the `host.degraded` push's `data`) | `reasonCode` | `ok` `no_login` `runner_no_login` `pool_no_login` `login_expired` `hub_unreachable` `protocol_behind` `protocol_ahead` `fetching_login` `never_reported` `silent` `dropped` `connecting` | `REASON_CODES`, `registry.js` |
+| a refusal with `error.code: host_unavailable` | `error.why` | `offline` `not_yours` `enrolled_by_other` `pools_own` `temporary_other` `no_credentials` | `UNAVAILABLE_WHY`, `scheduler.js` |
+| the ready machine that did not come (`vmStandby.failed.text`) | `vmStandby.failed.code` | `not_joined` `refused` `unreachable` | `FAILURE_CODES`, `vm-standby.js` |
+
+Every one is additive: an old phone ignores it, an old coordinator leaves it
+out and the phone shows the sentence, and a phone sent a word it does not
+know shows the sentence too. `why` is left out when nothing on the list is
+true — a named host that is degraded rather than offline, or a name this
+fleet does not know — because a title that said "offline" of a machine that
+is reporting would be a claim without an answer behind it.
+
 ## What it cannot do
 
 It sends intents, never commands, and it cannot express a shell string even to

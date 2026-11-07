@@ -25,6 +25,36 @@ import { believedCreator } from './hosts.js';
 import { LABEL_RE, oneLine } from '../../core/text.js';
 
 /**
+ * THE ONE WORD BESIDE EACH REASON. A host's `reason` is a sentence, written
+ * for a terminal and for the machine's page; a row on a phone has room for
+ * one to three words, and for a while both phones drew the sentence into the
+ * row (docs/reviews/copy-2026-11-06.md, finding 162). So every branch that
+ * sets `reason` sets one of these beside it, and the phones map the code to
+ * the row's word and keep the sentence under a disclosure. The list is
+ * fixed here and the phones' tables are held to it
+ * (test/reasons-in-apps.test.js); a code added here needs a word there.
+ *
+ *   ok               reporting normally
+ *   no_login         nobody's vault gives this host a Claude login
+ *   runner_no_login  a runner with neither its owner's login nor an API key
+ *   pool_no_login    a machine from a pool that was handed no login
+ *   login_expired    the credential a session would get has expired
+ *   hub_unreachable  the box's session manager is not answering
+ *   protocol_behind  speaks a protocol below the fleet floor
+ *   protocol_ahead   speaks a protocol above the fleet's newest
+ *   fetching_login   a new runner, not told yet what it runs on
+ *   never_reported   connected and never sent health
+ *   silent           its last health report is stale
+ *   dropped          its connection closed and it has not dialled back
+ *   connecting       connected, no health report yet
+ */
+export const REASON_CODES = /** @type {const} */ ([
+  'ok', 'no_login', 'runner_no_login', 'pool_no_login', 'login_expired', 'hub_unreachable',
+  'protocol_behind', 'protocol_ahead', 'fetching_login', 'never_reported', 'silent', 'dropped', 'connecting',
+]);
+/** @typedef {typeof REASON_CODES[number]} ReasonCode */
+
+/**
  * A POOL'S OWN MACHINE RUNS NO SESSIONS. It is made to stay up and hold the
  * pool's token for the fleet (docs/hypervisors.md, "A machine of its own"),
  * on 2 vCPUs and 4 GiB, and nobody links a Claude account to it. It is never
@@ -49,15 +79,20 @@ export function runsNoSessions(hostId) {
  * a new machine asks again. The runner's sentence named a repository and
  * Actions secrets this machine does not have.
  *
+ * THE RESULT, THEN THE ONE ACTION, in the person's nouns (docs/design-system.md,
+ * "Words"): a machine manages a pool, it does not hold it, and the sentence
+ * says what is so and what to do, not that it asks once, which is the
+ * mechanism and belongs in the comment above.
+ *
  * @param {HostEntry} host
  */
 export function poolMachineReason(host) {
   const why = host.vmLogin?.why ? oneLine(host.vmLogin.why, 240) : '';
   return (
     (why
-      ? `this machine asked for its owner’s Claude login when it joined and was handed none: ${why}. `
-      : 'this machine was handed no Claude login of its owner’s when it joined, so no session started here can do anything. ') +
-    'It asks once. Keep your Claude login under You › Credentials in the app, with a machine of yours that holds this pool approved for it, and start a new machine'
+      ? `this machine was handed no Claude login when it joined: ${why}. `
+      : 'this machine was handed no Claude login when it joined, so no session started here can do anything. ') +
+    'Keep your Claude login under You › Credentials, approve a machine of yours that manages this pool for it, and start a new machine.'
   );
 }
 
@@ -122,6 +157,11 @@ export function poolMachineReason(host) {
  * @property {string} hostId
  * @property {'healthy'|'degraded'|'unknown'|'offline'} state
  * @property {string} reason            why it is in that state, always populated
+ * @property {ReasonCode} reasonCode    the same, as one word from REASON_CODES,
+ *   set beside `reason` in every branch that sets it. The phones draw a row's
+ *   word from it and keep the sentence for the page (docs/design-system.md,
+ *   "Words"); a terminal prints the sentence. Additive: an old phone ignores
+ *   it, and a phone sent a code it does not know shows the sentence.
  * @property {HostHealth|null} health   last report, or null if we never got one
  * @property {number|null} healthAt     when that report arrived
  * @property {{ sessions: any[], at: number|null }|null} [lastSessions]  the sessions the last report
@@ -267,6 +307,7 @@ export class HostRegistry {
       hostId,
       state: 'unknown',
       reason: existing ? 'reconnected, no health report yet' : 'connected, no health report yet',
+      reasonCode: 'connecting',
       // The last report is kept until the next one, ATTRIBUTED AGAIN under who
       // this connection may act for: a name re-keyed by a member with a pin
       // bound to it comes back acting for that member, and until its first
@@ -366,6 +407,7 @@ export class HostRegistry {
     host.connected = false;
     host.state = 'offline';
     host.reason = reason;
+    host.reasonCode = 'dropped';
 
     // AN EPHEMERAL HOST THAT DROPS LEAVES THE LIST, and keeps its key.
     //
@@ -398,7 +440,7 @@ export class HostRegistry {
 
   /**
    * @param {string} hostId @param {HostHealth} health
-   * @returns {{ from: string, to: string, reason: string, fault: string }|null} the state
+   * @returns {{ from: string, to: string, reason: string, reasonCode: ReasonCode, fault: string }|null} the state
    *   TRANSITION, when there was one. Returned rather than logged because the
    *   transition is the notifiable thing and only the caller can notify — and
    *   because a state, reported every fifteen seconds, is not an event.
@@ -510,8 +552,10 @@ export class HostRegistry {
       // fault that is not the reason's own opening would be re-announced by
       // every deploy.
       fault = hostMax < PROTOCOL_MIN ? 'speaks protocol up to' : 'speaks protocol from';
+      host.reasonCode = hostMax < PROTOCOL_MIN ? 'protocol_behind' : 'protocol_ahead';
     } else if (health.hub && health.hub.reachable === false) {
       host.state = 'degraded';
+      host.reasonCode = 'hub_unreachable';
       // The one reason in this file the box writes itself, so it is cut to a
       // line here: it is shown on every phone and was taken whole, any length
       // and any characters, into the record #onHostState writes (third
@@ -537,6 +581,7 @@ export class HostRegistry {
       // degraded with the runner's own remedy.
       host.state = 'unknown';
       host.reason = 'a new runner, still fetching the Claude login its sessions will run on';
+      host.reasonCode = 'fetching_login';
     } else if (health.claudeAccounts === 0 && health.runnerAuth !== 'owner' && health.runnerAuth !== 'key' && !runsNoSessions(hostId)) {
       // NOBODY CAN START A SESSION HERE, which is a different question from the
       // one this used to ask. It read `loggedIn === false` — the box's own
@@ -571,6 +616,7 @@ export class HostRegistry {
       // "keep your Claude login" to a person whose vault held one. Its login
       // comes from a box of its owner's once it joins (core.js #vmClaude),
       // and what those boxes answered is what is wrong with it.
+      host.reasonCode = health.runnerAuth === 'none' ? (host.madeOnPool ? 'pool_no_login' : 'runner_no_login') : 'no_login';
       host.reason = health.runnerAuth === 'none'
         ? host.madeOnPool
           ? poolMachineReason(host)
@@ -601,9 +647,11 @@ export class HostRegistry {
       // case is a warning people learn to ignore.
       host.state = 'degraded';
       host.reason = 'the credential a session would be given has expired on this host';
+      host.reasonCode = 'login_expired';
     } else {
       host.state = 'healthy';
       host.reason = 'reporting normally';
+      host.reasonCode = 'ok';
     }
     // THE TRANSITION, NOT THE STATE. A host reports health every fifteen
     // seconds; a box that has been degraded since yesterday must produce one
@@ -618,7 +666,7 @@ export class HostRegistry {
     // `fault` is the same without the box's own words, which is what
     // #onHostState keys its quiet hour on (core.js).
     if (host.state === before && host.reason === beforeReason) return null;
-    return { from: before, to: host.state, reason: host.reason, fault: fault ?? host.reason };
+    return { from: before, to: host.state, reason: host.reason, reasonCode: host.reasonCode, fault: fault ?? host.reason };
   }
 
   /**
@@ -634,6 +682,7 @@ export class HostRegistry {
         if (now - host.connectedAt > HEALTH_STALE_MS) {
           host.state = 'unknown';
           host.reason = `connected ${Math.round((now - host.connectedAt) / 1000)}s ago and has never reported health`;
+          host.reasonCode = 'never_reported';
         }
         continue;
       }
@@ -641,6 +690,7 @@ export class HostRegistry {
       if (age > HEALTH_STALE_MS) {
         host.state = 'unknown';
         host.reason = `last health report was ${Math.round(age / 1000)}s ago`;
+        host.reasonCode = 'silent';
       }
     }
   }
@@ -756,7 +806,7 @@ export class HostRegistry {
     // A dropped temporary host still holds its claims, as an offline box with
     // a reason that says it dropped and may return — so a stop or an await on
     // its session is told that, and not that no host reports the session.
-    const dropped = [...this.dropped.values()].map((d) => ({ ...d.host, connected: false, state: /** @type {const} */ ('offline'), reason: this.#droppedReason(d) }));
+    const dropped = [...this.dropped.values()].map((d) => ({ ...d.host, connected: false, state: /** @type {const} */ ('offline'), reason: this.#droppedReason(d), reasonCode: /** @type {const} */ ('dropped') }));
     for (const host of [...this.hosts.values(), ...dropped]) {
       // The live list, or — while the box's session manager is not answering
       // — the last one it gave, aged from when it gave it (recordHealth).

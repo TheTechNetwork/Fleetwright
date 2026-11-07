@@ -814,7 +814,7 @@ test('a pool’s own machine that made a machine holds no login to hand it and s
   const said = await maker.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
   assert.equal(said.ok, false);
   assert.equal(said.notHere, true, 'the coordinator is sent to the next box');
-  assert.match(said.text, /made vm-111111111111 but holds no Claude login/);
+  assert.match(said.text, /made vm-111111111111 but has no Claude login/);
   assert.match(said.text, /pool’s own machine/);
   assert.ok(maker.pools.made.has('vm-111111111111'), 'and remembers it still');
   // The same words at make, for the person reading the reply.
@@ -834,7 +834,7 @@ test('a pool’s own machine that made a machine holds no login to hand it and s
   const again = await other.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
   assert.equal(again.ok, false);
   assert.equal(again.notHere, undefined, 'handed already is an answer, not a pass to the next box');
-  assert.match(again.text, /handed its login by this box already/);
+  assert.match(again.text, /handed its login by this machine already/);
 });
 
 test('a box vouching from the pool hands nothing to a machine made for somebody else, not in the fleet’s set, or not there', async () => {
@@ -858,7 +858,7 @@ test('a box vouching from the pool hands nothing to a machine made for somebody 
   const r3 = await gone.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });
   assert.equal(r3.ok, false);
   assert.equal(r3.notHere, true, r3.text);
-  assert.match(r3.text, /not on any of eli@example.com’s pools this box holds/);
+  assert.match(r3.text, /not on any of eli@example.com’s pools this machine manages/);
   // Nothing of the maker's path leaks: a box without the login says notHere too.
   const empty = withMachine();
   const r4 = await empty.pools.handLogin({ owner: ELI, name: 'vm-111111111111', key: key.publicKey });

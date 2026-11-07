@@ -1400,7 +1400,7 @@ export class CoordinatorCore {
    * A host changed state. Say so, once, in words about what it means.
    *
    * @param {string} hostId
-   * @param {{ from: string, to: string, reason: string, fault?: string }} moved
+   * @param {{ from: string, to: string, reason: string, reasonCode?: string, fault?: string }} moved
    */
   async #onHostState(hostId, moved) {
     // NOT AGAIN, FOR THE SAME REASON, WITHIN THE HOUR.
@@ -1490,7 +1490,15 @@ export class CoordinatorCore {
     // like any session event, and a fault added later that lets the box's
     // words in is bounded by that rather than by nothing. Keyed by what was
     // said, so a different fault inside HOST_PUSH_QUIET_MS is still news.
-    if (this.push && NOTIFIABLE.has(event.event) && this.#mayPush(hostId, { event: kind, name: said })) await this.#notify(event);
+    //
+    // WITH THE REGISTRY'S ONE WORD FOR THE FAULT (reasonCode), beside the
+    // sentence in the body, so a phone can title the notification from it
+    // and keep the sentence for the details (docs/design-system.md, "Words").
+    // Not on the ring entry: record() keeps a fixed shape, and the word is
+    // read from the host's row there.
+    if (this.push && NOTIFIABLE.has(event.event) && this.#mayPush(hostId, { event: kind, name: said })) {
+      await this.#notify(event, null, moved.reasonCode ? { reasonCode: moved.reasonCode } : {});
+    }
   }
 
   /** When each host's last announcement of each fault was made (#onHostState). */
@@ -1844,7 +1852,7 @@ export class CoordinatorCore {
    * @param {{ id: string, kind: string, answers: string, category: string }|null} [prompt]
    *   what the session is asking, when it is asking something answerable
    */
-  async #notify(event, prompt = null) {
+  async #notify(event, prompt = null, extra = {}) {
     // WHOSE SESSION THIS IS, resolved from the registry rather than carried on
     // the event, because the host does not send it. A session the fleet has not
     // heard of yet, or one nobody is recorded as having started, is
@@ -1920,6 +1928,9 @@ export class CoordinatorCore {
           // that is present and empty reads as "answerable, badly" rather than
           // "not that kind of notification".
           ...(prompt ? { promptId: prompt.id, promptKind: prompt.kind, answers: prompt.answers } : {}),
+          // What the caller knows and the event does not carry: a host's
+          // reasonCode on host.degraded (#onHostState). Nothing, for the rest.
+          ...extra,
         },
       });
     } catch (e) {
@@ -1976,7 +1987,7 @@ export class CoordinatorCore {
       const placement = place(this.registry, { ...spec, preferHost: prefer }, { preferHost: prefer, requester: spec.requester ?? null });
       if (placement.kind !== 'host' || !placement.host) {
         if (relay) this.relays.close(relay.id, 'The machine this relay was for is not connected now, so setup did not begin.');
-        return { ok: false, error: { code: placement.code || 'no_hosts' }, text: placement.reason || 'No machine can run the setup.' };
+        return { ok: false, error: { code: placement.code || 'no_hosts', ...(placement.why ? { why: placement.why } : {}) }, text: placement.reason || 'No machine can run the setup.' };
       }
       const hostId = placement.host.hostId;
       /** @type {any} */
@@ -2215,7 +2226,7 @@ export class CoordinatorCore {
     if (!host?.connected) {
       const text = `${relay.hostId} is not connected now, so nothing can reach the address through this phone.`;
       this.relays.close(relay.id, text);
-      return { ok: false, error: { code: 'host_unavailable' }, text };
+      return { ok: false, error: { code: 'host_unavailable', why: 'offline' }, text };
     }
     const outdated = this.#cannotCarry(host, spec);
     if (outdated) {
@@ -4096,7 +4107,9 @@ export class CoordinatorCore {
       if ((spec.verb === 'provision' || spec.verb === 'runnerrepo' || spec.verb === 'linkrepo') && placement.code === 'ambiguous_host') {
         return this.#askEachBox(spec);
       }
-      return { ok: false, error: { code: placement.code }, text: placement.reason };
+      // `why` rides beside a host_unavailable code (scheduler.js
+      // UNAVAILABLE_WHY), for the phones to title the refusal from.
+      return { ok: false, error: { code: placement.code, ...(placement.why ? { why: placement.why } : {}) }, text: placement.reason };
     }
 
 
@@ -6203,7 +6216,7 @@ export class CoordinatorCore {
     answer(
       reply?.ok
         ? { ok: true, sealed: reply.sealed, repo: reply.repo, expiresAt: reply.expiresAt, permissions: reply.permissions, text: reply.text }
-        : { ok: false, error: reply?.error || { code: 'refused' }, text: reply?.text || 'No box would mint that token.' },
+        : { ok: false, error: reply?.error || { code: 'refused' }, text: reply?.text || 'No machine would make that token.' },
     );
   }
 
@@ -6365,7 +6378,7 @@ export class CoordinatorCore {
       }
       this.vmLoginsGiven.add(hostId);
     }
-    const why = reply ? String(reply.text || 'no reason given') : holders.length ? `no box holding the pool handed it one: ${skipped.join(', ')}` : 'no connected box holds a pool of theirs';
+    const why = reply ? String(reply.text || 'no reason given') : holders.length ? `no machine managing the pool handed it one: ${skipped.join(', ')}` : 'no connected machine manages a pool of theirs';
     // KEPT ON THE MACHINE'S ENTRY, because it asks once: its degraded line is
     // read long after, and said "keep your Claude login" to a person whose
     // vault held one when the fault was in which box was asked (registry.js,
@@ -6727,11 +6740,11 @@ export class CoordinatorCore {
       if (now - (this.#holderAskedAt.get(rec.hostId) ?? -Infinity) >= REFUSAL_EVERY_MS) {
         for (const [other, at] of this.#holderAskedAt) if (now - at >= REFUSAL_EVERY_MS) this.#holderAskedAt.delete(other);
         this.#holderAskedAt.set(rec.hostId, now);
-        this.record({ event: 'holder.asked', actor: rec.owner, hostId: rec.hostId, text: `${rec.hostId} asked to join, to hold ${rec.address}` });
+        this.record({ event: 'holder.asked', actor: rec.owner, hostId: rec.hostId, text: `${rec.hostId} is waiting to join, to manage ${rec.address}` });
         await this.#pushHolderAsk(rec);
       }
     }
-    return { status: 202, body: { ok: true, text: `Asked. ${rec.hostId} joins once whoever made it lets it in from their phone.`, until: rec.until } };
+    return { status: 202, body: { ok: true, text: `${rec.hostId} joins once whoever made it approves it from their phone.`, until: rec.until } };
   }
 
   /** When each reserved name's last request was announced (holderJoin). */
@@ -6813,6 +6826,12 @@ export class CoordinatorCore {
    * phone that could not settle it by itself. Asked for: "If I authorize the
    * creation of a holder why do I need to let it in?"
    *
+   * SAID AS THE PHONES SAY IT (docs/design-system.md, "Words"): the result
+   * in the title, one action in the body. "Asks to join" and "lets it in"
+   * are this file's narration and retired from anything a person reads
+   * (test/design-words.test.js); the button is still Let it in, because that
+   * names the one action.
+   *
    * @param {import('./holder-joins.js').Reservation} rec
    */
   async #pushHolderAsk(rec) {
@@ -6821,8 +6840,8 @@ export class CoordinatorCore {
     if (!devices.length) return;
     try {
       await this.push.send(devices, {
-        title: `${rec.hostId} asks to join`,
-        body: `The pool\u2019s own machine for ${rec.address}. The phone that made it lets it in by itself; if this is not that phone, or it has not, open Fleetwright.`,
+        title: `${rec.hostId} is ready to join`,
+        body: `The pool\u2019s own machine for ${rec.address}. The phone that made it approves it by itself; from any other phone, open Fleetwright to approve it.`,
         data: { kind: 'holder-join', name: `holder-join-${rec.hostId}`, hostId: rec.hostId, address: rec.address },
         category: HOLDER_JOIN_CATEGORY,
         drawnByApp: true,
@@ -7202,7 +7221,7 @@ export class CoordinatorCore {
     }
     holders.sort((a, b) => Number(b.seen) - Number(a.seen) || Number(holds(b.host, owner)) - Number(holds(a.host, owner)) || a.host.hostId.localeCompare(b.host.hostId));
     if (!holders.length) {
-      return { ok: false, error: { code: 'no_hosts' }, text: 'No connected box holds one of your pools, so nothing can reach that machine.' };
+      return { ok: false, error: { code: 'no_hosts' }, text: 'No connected machine manages one of your pools, so nothing can reach that machine.' };
     }
     this.record({ event: 'vm.control', actor: spec.actor ?? null, text: `${owner} asked to ${params.action} ${name}` });
     /** @type {string[]} */
@@ -7236,10 +7255,10 @@ export class CoordinatorCore {
       return {
         ok: false,
         error: { code: 'host_outdated' },
-        text: `None of the boxes holding your pools is new enough to work ${name}, so none was asked: ${skipped.join(', ')}. Update one and ask again.`,
+        text: `None of the machines managing your pools is new enough to work ${name}: ${skipped.join(', ')}. Update one and ask again.`,
       };
     }
-    return { ok: false, error: { code: 'not_found' }, text: `No box holding your pools could find ${name}: ${skipped.join(', ')}.` };
+    return { ok: false, error: { code: 'not_found' }, text: `No machine managing your pools could find ${name}: ${skipped.join(', ')}.` };
   }
 
   /**
@@ -7765,8 +7784,8 @@ export class CoordinatorCore {
         ok: false,
         error: { code: 'no_hosts' },
         text:
-          'No connected box holds a token for a pool with that machine image. Keep the pool in your vault from the ' +
-          'app (Machines › the hypervisor › Keep in the fleet) and approve a box that can reach it.',
+          'No connected machine manages a pool with that machine image. Keep the pool in your vault from the ' +
+          'app (Machines › the hypervisor › Keep in the fleet) and approve a machine that can reach it.',
       };
     }
     /** @type {Record<string, any>|null} */
@@ -7855,7 +7874,7 @@ export class CoordinatorCore {
     return {
       ok: false,
       error: { code: 'unreachable' },
-      text: `None of the boxes holding that pool could make the machine: ${skipped.join(', ')}.`,
+      text: `None of the machines managing that pool could make it: ${skipped.join(', ')}.`,
     };
   }
 
@@ -8038,7 +8057,7 @@ export class CoordinatorCore {
     if (network !== null && !XO_UUID_RE.test(network)) return { ok: false, error: { code: 'bad_params' }, text: 'That is not a network id.' };
     if (count > 0) {
       const offered = this.vmImagesFor(requester).find((i) => i.template === template);
-      if (!offered) return { ok: false, error: { code: 'no_hosts' }, text: 'No connected box holding your pools offers that machine image now.' };
+      if (!offered) return { ok: false, error: { code: 'no_hosts' }, text: 'No connected machine managing your pools offers that machine image now.' };
       if (network !== null && !offered.networks.some((n) => n.id === network)) {
         return { ok: false, error: { code: 'bad_params' }, text: 'That network is not one your pool offers for that image.' };
       }
@@ -8105,7 +8124,13 @@ export class CoordinatorCore {
     if (r?.ok === false) {
       this.log.warn(`coordinator: could not make a machine to keep ready for ${owner}: ${r.text}`);
       // SAID WHERE THE PERSON LOOKS, not only in this log.
-      this.vmStandby.noteFailed(owner, String(r.text || 'The box holding the pool would not make the machine.'));
+      // WITH THE ONE WORD the phones say it by (vm-standby.js FAILURE_CODES):
+      // a machine the pool could not be reached to make, or one it refused.
+      this.vmStandby.noteFailed(
+        owner,
+        String(r.text || 'The machine managing the pool would not make it.'),
+        r.error?.code === 'unreachable' ? 'unreachable' : 'refused',
+      );
       this.onStateChanged?.();
     }
   }
@@ -9326,9 +9351,12 @@ function signatureRequired(hostId, wasSigned, intent, fromApp = false) {
   return {
     ok: false,
     error: { code: 'signature_required' },
+    // THE RESULT, AND WHAT TO DO (docs/design-system.md, "Words"). The first
+    // has no action a person can take, so it names none: its mechanism (a
+    // value tidied on the way, or a setting this machine is too old for left
+    // out) is this comment's, not the sentence's.
     text: wasSigned
-      ? `${hostId} takes only requests a person signed, and this one was changed on its way through the fleet ` +
-        '(a value was tidied, or a setting this box is too old for was left out), so your signature no longer holds. Nothing was sent.'
+      ? `${hostId} takes only requests a person signed, and this one was changed on its way there, so your signature no longer holds and nothing was sent.`
       : `${hostId} takes only requests a person signed, and nothing ${intent?.actor || 'anybody'} signed covers this ${intent?.verb ?? 'request'}. ` +
         `${remedyFor(intent?.verb ?? '', fromApp)} Nothing was sent.`,
   };
@@ -9350,8 +9378,7 @@ const DELEGATION_REMEDY =
  * DeviceSigning). The fact in the phone's own words for it, so the two agree.
  */
 const APP_REMEDY =
-  'Your phone signs what it sends once its key is listed with the minter, which happens after you sign in to GitHub under Runners. ' +
-  'Sign in there if you have not, then ask again.';
+  'Your phone signs what it sends once you have signed in to GitHub under Runners. Sign in there if you have not, then ask again.';
 
 /**
  * What to do about a refusal, by where the request came from and what it

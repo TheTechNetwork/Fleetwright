@@ -14,6 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { CoordinatorCore, MAX_NET_POINTS } from '../src/fleet/coordinator/core.js';
+import { FAILURE_CODES } from '../src/fleet/coordinator/vm-standby.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
 import { generateKeyPair, sign } from '../src/fleet/crypto.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
@@ -170,7 +171,7 @@ test('what the boxes answer a machine’s login ask is kept on it, and is its de
   const { newSealKey } = await import('../src/fleet/seal.js');
   const { core, asked } = fleet({ deb14: { xo: holding(ELI) } }, (hostId, spec) =>
     spec.verb === 'vmlogin'
-      ? { ok: false, notHere: true, text: `This box made ${spec.params.name} but holds no Claude login of ${ELI}’s to hand it, being the pool’s own machine, which holds the pool and nothing else of theirs; another of their machines may.` }
+      ? { ok: false, notHere: true, text: `This machine made ${spec.params.name} but has no Claude login of ${ELI}’s to hand it, being the pool’s own machine, which manages the pool and nothing else of theirs; another of their machines may.` }
       : { ok: true, text: 'Cloning Debian 13 on rack.' });
   const r = await core.dispatch(ask(eli));
   const key = await generateKeyPair();
@@ -184,12 +185,13 @@ test('what the boxes answer a machine’s login ask is kept on it, and is its de
   await core.onHostMessage(r.vm, { kind: 'claude-login', id: 'login-000001', key: seal.publicKey });
   const minted = answered.find((f) => f.kind === 'minted');
   assert.equal(minted?.ok, false, JSON.stringify(minted));
-  assert.match(minted.text, /^no box holding the pool handed it one: deb14 \(This box made vm-/);
-  assert.match(core.registry.get(r.vm)?.vmLogin?.why || '', /^no box holding the pool handed it one/);
+  assert.match(minted.text, /^no machine managing the pool handed it one: deb14 \(This machine made vm-/);
+  assert.match(core.registry.get(r.vm)?.vmLogin?.why || '', /^no machine managing the pool handed it one/);
   await core.onHostMessage(r.vm, { kind: 'health', health: { hub: { reachable: true }, protocol: 8, maxSessions: 1, running: 0, free: 1, claudeAccounts: 0, runnerAuth: 'none', labels: [] } });
   const entry = core.registry.get(r.vm);
   assert.equal(entry?.state, 'degraded');
-  assert.match(entry?.reason || '', /^this machine asked for its owner’s Claude login when it joined and was handed none: no box holding the pool handed it one: deb14/);
+  assert.equal(entry?.reasonCode, 'pool_no_login');
+  assert.match(entry?.reason || '', /^this machine was handed no Claude login when it joined: no machine managing the pool handed it one: deb14/);
   assert.ok(!/ANTHROPIC_API_KEY/.test(entry?.reason || ''), entry?.reason);
 });
 
@@ -500,7 +502,7 @@ test('a machine whose boxes are all too old to work it is told that, not that no
   const { core, asked } = fleet({ old: { xo: withMachine(ELI), protocol: 8 } });
   const r = await core.dispatch({ verb: 'vmctl', params: { name: 'vm-aaaaaaaaaaaa', action: 'stop' }, requester: eli });
   assert.equal(r.error.code, 'host_outdated');
-  assert.equal(r.text, 'None of the boxes holding your pools is new enough to work vm-aaaaaaaaaaaa, so none was asked: old (needs updating). Update one and ask again.');
+  assert.equal(r.text, 'None of the machines managing your pools is new enough to work vm-aaaaaaaaaaaa: old (needs updating). Update one and ask again.');
   assert.equal(asked.length, 0);
 });
 
@@ -737,6 +739,9 @@ test('what is kept ready survives a restart, and a machine that never joined is 
   const shown = again.vmStandbyFor(eli);
   assert.equal(shown.since, undefined, 'none is being made now');
   assert.match(shown.failed.text, /^vm-[0-9a-f]+ did not join the fleet within 15 minutes of being asked for/);
+  // AND THE ONE WORD BESIDE IT, which the phones put on the row (vm-standby.js
+  // FAILURE_CODES); the sentence goes under the details.
+  assert.equal(shown.failed.code, 'not_joined');
   // Which a machine that does join answers.
   const later = JSON.parse(JSON.stringify(again.serialiseStandby()));
   const third = new CoordinatorCore({ now: () => Date.now() + 16 * 60_000 });
@@ -845,6 +850,24 @@ test('a kept machine is forgotten only once it is gone: past its end by the pool
   assert.deepEqual(counts(core), { ready: 0, starting: 0 });
   assert.equal(core.vmStandby.isKept(second), false);
   assert.equal(core.snapshot(eli).vmStandby.failed, undefined);
+});
+
+test('a ready machine the pool would not make, or could not be reached to make, says which in one word', async () => {
+  // THE ROW'S WORD beside the sentence (vm-standby.js FAILURE_CODES): the
+  // phones put the word on the row and the sentence under the details. The
+  // third word, not_joined, is the machine that never enrolled, above.
+  for (const [code, reply] of /** @type {Array<[string, any]>} */ ([
+    ['unreachable', { ok: false, unreachable: true, text: 'xo.lan did not answer' }],
+    ['refused', { ok: false, text: 'The pool has no room for another machine.' }],
+  ])) {
+    const { core } = fleet({ deb14: { xo: holding(ELI), protocol: 9 } }, () => reply);
+    await core.setVmStandby(eli, { template: DEBIAN, count: 1 });
+    await until(() => core.vmStandby.failureFor(ELI), `the ${code} failure to be noted`);
+    const shown = core.snapshot(eli).vmStandby;
+    assert.equal(shown.failed.code, code, shown.failed.text);
+    assert.ok(FAILURE_CODES.includes(shown.failed.code));
+    assert.ok(shown.failed.text.length > 0, 'the sentence stays, for a terminal and an older phone');
+  }
 });
 
 // --- machines that work together (protocol 10) --------------------------------

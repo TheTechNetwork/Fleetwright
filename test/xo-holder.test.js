@@ -276,7 +276,9 @@ test('made again, the one there goes first, disk and all, and the new one boots 
   assert.equal(asked.count, 1);
   const [, made] = /** @type {[string, any]} */ (xo.calls.find(([m]) => m === 'vm.create'));
   assert.ok(made.cloudConfig.includes(`"secret":"${SECRET}"`));
-  assert.match(said, /asks to join, and your phone asks you to let it in/);
+  // In the person's words, not this file's: it joins and is approved, never
+  // "asks to join" and "let it in" (docs/design-system.md, "Words").
+  assert.match(said, /Once it is up it joins, and your phone asks you to approve it to manage this pool\./);
 });
 
 test('with the phone’s secret it asks to join under its name and keeps its pin unspent, proving the key it made', async (t) => {
