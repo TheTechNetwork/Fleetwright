@@ -52,8 +52,10 @@ test('iOS: the count moves while it is open, says when the one being made was as
   // A person looked an hour later and was told "0 being made" and nothing
   // else: two machines had failed to join and were forgotten in silence.
   assert.match(I_FLEET, /var since: Double\? = nil/);
-  assert.match(I_FLEET, /var failed: Failure\? = nil\s*struct Failure: Codable, Hashable \{\s*let at: Double\s*let text: String\s*\}/);
-  assert.match(I_VIEW, /if let failed = kept\?\.failed \{\s*Text\("\\\(Self\.clock\(failed\.at\)\): \\\(failed\.text\)"\)[\s\S]{0,120}?Design\.Palette\.bad/);
+  // With a code beside the text since round 8: the line says the code's
+  // word and the sentence waits under Details (test/reasons-in-apps.test.js).
+  assert.match(I_FLEET, /var failed: Failure\? = nil\s*struct Failure: Codable, Hashable \{\s*let at: Double\s*let text: String\s*(?:\/\/\/[^\n]*\n\s*)*var code: String\? = nil/);
+  assert.match(I_VIEW, /if let failed = kept\?\.failed \{\s*Text\("\\\(Self\.clock\(failed\.at\)\): \\\(failed\.word\)"\)[\s\S]{0,120}?Design\.Palette\.bad/);
   assert.match(I_VIEW, /while !Task\.isCancelled \{\s*try\? await Task\.sleep\(for: \.seconds\(15\)\)\s*await refresh\(\)/);
   // The reply to the tap goes once the count has moved on; a refusal stays.
   assert.match(I_VIEW, /if got != kept, !failed \{ message = "" \}/);
@@ -92,7 +94,9 @@ test('Android: the setting is offered only where an image is, and the image with
 test('Android: the count moves while it is open, says when the one being made was asked for, and why the last did not come', () => {
   assert.match(A_FLEET, /since = o\.optLong\("since", 0L\)\.takeIf \{ it > 0 \}/);
   assert.match(A_FLEET, /failed = o\.optJSONObject\("failed"\)/);
-  assert.match(A_VIEW, /kept\?\.failed\?\.let \{ Hint\("\$\{clock\(it\.at\)\}: \$\{it\.text\}", Design\.Palette\.bad\.now\) \}/);
+  // The code's word on the line, the sentence under Details since round 8
+  // (test/reasons-in-apps.test.js).
+  assert.match(A_VIEW, /kept\?\.failed\?\.let \{\s*Hint\("\$\{clock\(it\.at\)\}: \$\{it\.word\}", Design\.Palette\.bad\.now\)/);
   assert.match(A_VIEW, /while \(true\) \{\s*delay\(15_000\)\s*Fleet\(settings\)\.vmStandby\(\)/);
   assert.match(A_VIEW, /if \(got != kept && !failed\) message = ""/);
 });

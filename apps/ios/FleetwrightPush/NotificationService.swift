@@ -32,6 +32,22 @@ final class NotificationService: UNNotificationServiceExtension {
             content.title = opened.title
             content.body = opened.body
             content.userInfo = PushCrypto.merged(userInfo: request.content.userInfo, opened: opened)
+            // A HYPERVISOR SETUP'S END IS WORDED HERE, from the job's state,
+            // phase and purpose, as Android words its own (XoSetupNotice.kt).
+            // The coordinator's body is the machine's last sentence, which is
+            // the setup page's to show: it rides along as `text`, and a tap
+            // opens the page with it (FleetwrightApp, SetupResultView).
+            if opened.data["kind"] == "xosetup" {
+                let state = opened.data["state"] ?? ""
+                content.title = SetupNoticeWords.title(purpose: opened.data["purpose"], state: state)
+                content.body = SetupNoticeWords.body(
+                    purpose: opened.data["purpose"], state: state,
+                    hostId: opened.data["hostId"] ?? "",
+                    step: Int(opened.data["step"] ?? "") ?? 0,
+                    of: Int(opened.data["of"] ?? "") ?? 0
+                )
+                content.userInfo["text"] = opened.body
+            }
             content.categoryIdentifier = PushCrypto.category(
                 sealed: opened.data["category"],
                 clear: request.content.categoryIdentifier

@@ -371,6 +371,11 @@ fun FleetScreen(
     // The kind a launcher shortcut asked for, consumed once.
     var pendingKindId by rememberSaveable { mutableStateOf<String?>(null) }
     var status by rememberSaveable { mutableStateOf("") }
+    // THE TITLE OVER A REFUSAL (Fleet.Reply.title), when the status is one:
+    // the card then leads with the word and keeps the coordinator's sentence
+    // under Details, collapsed. Null for anything else the card quotes, which
+    // is drawn as it always was. Set beside every `status` a refusal can set.
+    var statusTitle by rememberSaveable { mutableStateOf<String?>(null) }
     // The session list is deliberately NOT saved: it is a cache of what the
     // coordinator said, and a stale list restored across a rotation would show
     // sessions that may since have stopped.
@@ -414,6 +419,7 @@ fun FleetScreen(
         // A failure is shown, never swallowed: "nothing here" and "I could
         // not reach the coordinator" look identical otherwise.
         status = if (!reply.ok) reply.text.said() else if (keepStatus) status else ""
+        statusTitle = if (!reply.ok) reply.title else if (keepStatus) statusTitle else null
         // THE BIN'S CONTENTS, which `list` does not carry. Falls back to what
         // we already had: a fleet call that fails must not blank the list.
         // HEARD is what the reassurance line reads: a failed ask with nothing
@@ -444,6 +450,7 @@ fun FleetScreen(
             busy = true
             val reply = work()
             status = reply.text.said()
+            statusTitle = if (reply.ok) null else reply.title
             haptic.performHapticFeedback(if (reply.ok) HapticFeedbackType.Confirm else HapticFeedbackType.Reject)
             busy = false
             reload(keepStatus = true)
@@ -477,8 +484,13 @@ fun FleetScreen(
             scope.launch {
                 val reply = fleet.provision(platform, minutes = request.minutes, start = start, template = request.template, network = request.network, group = request.group, image = request.runnerImage)
                 val text = reply.text.ifBlank { "Asked for it." }
-                LocalNotice.post(context, if (reply.ok) "Machine on its way" else "Could not ask for a machine", text)
+                // TITLED BY WHICH REFUSAL (Fleet.Reply.title), with the
+                // coordinator's sentence as the body: "No machine available"
+                // and "Not your machine" are different news, and one title
+                // for every refusal made them the same. Same as iOS.
+                LocalNotice.post(context, if (reply.ok) "Machine on its way" else reply.title, text)
                 status = text
+                statusTitle = if (reply.ok) null else reply.title
                 reload(keepStatus = true)
             }
             return
@@ -508,8 +520,10 @@ fun FleetScreen(
                 // And by WHICH refusal: one that is a setting on the machine
                 // is titled as that, not as a failure to try again.
                 LocalNotice.post(context, if (reply.ok) "Session ready" else reply.refusedStartTitle, reply.text.ifBlank { "Started." })
+                statusTitle = if (reply.ok) null else reply.refusedStartTitle
                 reply.text.ifBlank { "Started." }
             } catch (e: Exception) {
+                statusTitle = null
                 // A TIMEOUT IS NOT A FAILURE: `start` carries an idempotency
                 // key, so the session may well exist.
                 val message = e.message.orEmpty()
@@ -605,7 +619,7 @@ fun FleetScreen(
                 runCatching {
                     val reply = fleet.resend(entry)
                     // A REFUSAL COUNTS AS DELIVERED: the fleet answered.
-                    if (!reply.ok) status = reply.text.said()
+                    if (!reply.ok) { status = reply.text.said(); statusTitle = reply.title }
                 }
             }
             pending = outbox.waiting.size
@@ -859,16 +873,35 @@ fun FleetScreen(
                             if (status.isNotBlank()) {
                                 // Evidence quoted from somewhere else, on an
                                 // inner surface rather than a card of its own.
-                                Text(
-                                    status,
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
-                                        .padding(Design.Space.inside),
-                                    fontFamily = FontFamily.Monospace,
-                                    style = Design.Style.label,
-                                    color = Design.Palette.ink.now,
-                                )
+                                // A REFUSAL LEADS WITH ITS TITLE (statusTitle),
+                                // the one to three words for its code, and
+                                // keeps the coordinator's sentence under
+                                // Details, collapsed: the row says the verdict,
+                                // the mechanism waits to be asked for
+                                // (docs/design-system.md, Words). Same as iOS.
+                                val title = statusTitle
+                                if (title != null) {
+                                    Column(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
+                                            .padding(Design.Space.inside),
+                                    ) {
+                                        Text(title, style = Design.Style.body, color = Design.Palette.ink.now)
+                                        Details(status)
+                                    }
+                                } else {
+                                    Text(
+                                        status,
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .fleetCard(radius = Design.Radius.row, fill = Design.Palette.inner.now)
+                                            .padding(Design.Space.inside),
+                                        fontFamily = FontFamily.Monospace,
+                                        style = Design.Style.label,
+                                        color = Design.Palette.ink.now,
+                                    )
+                                }
                             }
                             // WHAT IS WAITING, because a queue nobody can see is
                             // a surprise arriving later. Where it waits and what

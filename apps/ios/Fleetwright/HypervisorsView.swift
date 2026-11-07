@@ -189,14 +189,20 @@ struct HypervisorPageView: View {
                                 .fleetType(.label)
                                 .foregroundStyle(box.reachable == true ? Design.Palette.ok : box.reachable == false ? Design.Palette.attention : Design.Palette.inkDim)
                         }
-                        // THE MACHINE'S OWN WORDS on why, selectable: they name
-                        // a path and a status, which is what gets searched for.
+                        // THE MACHINE'S OWN WORDS on why, under Details: the
+                        // row's verdict is the word beside the name, and the
+                        // sentence is the mechanism (docs/design-system.md,
+                        // Words), selectable because it names a path and a
+                        // status, which is what gets searched for.
                         if let why = box.problem, !why.isEmpty {
-                            Text(why).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
+                            DisclosureGroup("Details") {
+                                Text(why).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
+                            }
+                            .fleetType(.label)
+                            .frame(minHeight: 44)
                         }
                     }
                     .frame(minHeight: 44, alignment: .leading)
-                    .accessibilityElement(children: .combine)
                 }
                 if (row.fleet?.boxes ?? []).isEmpty {
                     Text(HypervisorWords.noBox).fleetType(.label).foregroundStyle(Design.Palette.inkDim)

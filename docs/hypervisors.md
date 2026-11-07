@@ -1205,7 +1205,11 @@ page, which has the rest, for each router in this order:
 - its leases, none out said as "No leases" and a count not read as "Leases:
   Unknown";
 - its last log line, or "No log lines received", which is all the machine
-  reading it knows; or why it could not be reached;
+  reading it knows; or, for one it could not reach, "Unreachable" (and
+  "Unknown" for one nothing has asked yet) with the machine's words on why
+  under a Details disclosure, the way every sentence the fleet sends sits
+  behind the row's word on both phones (`docs/design-system.md`, "Words";
+  `test/reasons-in-apps.test.js`);
 - that the machine reading them cannot listen for their log lines, when
   another program has the port ("Router logs not received: another program
   has the port.");

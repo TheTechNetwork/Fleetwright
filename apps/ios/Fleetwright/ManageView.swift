@@ -761,14 +761,29 @@ struct EdgeRoutersView: View {
             Text(r.name)
                 .fleetType(.bodyStrong)
                 .foregroundStyle(Design.Palette.ink)
+            // THE VERDICT ON THE ROW, THE SENTENCE UNDER DETAILS. Not
+            // reached is the word in the attention tone; not asked is
+            // Unknown, never a sentence naming what did not answer
+            // (docs/design-system.md, Words, §7). The machine's own words
+            // on why open beneath, for whoever is troubleshooting.
             if r.reached == false, let problem = r.problem {
-                Text(Manage.Words.edgeUnreached(problem))
+                Text(Manage.Words.edgeUnreached)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.attention)
+                DisclosureGroup(Manage.Words.details) {
+                    Text(problem).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
+                }
+                .fleetType(.label)
+                .frame(minHeight: 44)
             } else if r.reached == nil, let problem = r.problem {
-                Text(problem)
+                Text(Manage.Words.edgeUnknown)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
+                DisclosureGroup(Manage.Words.details) {
+                    Text(problem).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
+                }
+                .fleetType(.label)
+                .frame(minHeight: 44)
             } else {
                 if let role = Manage.Words.edgeRole(r.role) {
                     Text(role).fleetType(.label).foregroundStyle(Design.Palette.ink)
