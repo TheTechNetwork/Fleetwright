@@ -367,7 +367,7 @@ struct ProxmoxThroughMachineView: View {
         do {
             let reply = try await fleet.xoprobe(address: trimmedAddress)
             guard reply.ok != false else {
-                probeText = reply.text ?? "The fleet did not try that address."
+                probeText = reply.text ?? "No machine tried that address."
                 return
             }
             guard let found = reply.probes else {
@@ -525,7 +525,7 @@ struct ProxmoxThroughMachineView: View {
             if let state = answer.xosetup {
                 await apply(state)
             } else if answer.ok == false {
-                await apply(Fleet.SetupState(job: job, state: "failed", text: answer.text ?? "The fleet no longer knows this job."))
+                await apply(Fleet.SetupState(job: job, state: "failed", text: answer.text ?? "This job is no longer listed."))
             }
         }
     }

@@ -115,7 +115,7 @@ enum Seal {
         case notAKey, notSealed
         var errorDescription: String? {
             switch self {
-            case .notAKey: return "That is not a minter key. It is 87 letters, digits, - and _."
+            case .notAKey: return "That is not a key. It is 87 letters, digits, - and _."
             case .notSealed: return "The answer did not open with this phone's key, so it was not used."
             }
         }
