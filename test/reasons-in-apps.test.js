@@ -125,7 +125,13 @@ test('every reasonCode a machine can carry has a word, and ok has none', () => {
   // THE COORDINATOR'S OWN LIST, once it sends one: every `reasonCode: '…'`
   // in the registry has a word here, or a sentence lands on a row.
   const registry = read(`${SRC}registry.js`);
-  const sent = [...registry.matchAll(/reasonCode:\s*'([a-z_]+)'/g)].map((m) => m[1]);
+  // Three shapes: the exported list, an object literal, and an assignment.
+  const listed = /export const REASON_CODES[^[]*\[([^\]]*)\]/.exec(registry)?.[1] ?? '';
+  const sent = [
+    ...[...listed.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]),
+    ...[...registry.matchAll(/reasonCode(?::|\s*=)\s*(?:\/\*\* @type \{const\} \*\/\s*\()?'([a-z_]+)'/g)].map((m) => m[1]),
+  ];
+  assert.ok(sent.length >= 10, `registry.js sends ${sent.length} reason codes; the list is not being read`);
   for (const code of sent) {
     if (code === 'ok') continue;
     assert.ok(host[code], `registry.js sends reasonCode '${code}' and neither phone has a word for it`);

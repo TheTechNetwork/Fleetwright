@@ -31,6 +31,8 @@ object ReasonWords {
         "hub_unreachable" to "Not answering",
         "fetching_login" to "Getting login…",
         "never_reported" to "No report yet",
+        "protocol_behind" to "Needs an update",
+        "protocol_ahead" to "Newer than your fleet",
         "silent" to "Not reporting",
         "dropped" to "Dropped",
         "connecting" to "Connecting…",

@@ -27,6 +27,8 @@ enum ReasonWords {
         "hub_unreachable": "Not answering",
         "fetching_login": "Getting login…",
         "never_reported": "No report yet",
+        "protocol_behind": "Needs an update",
+        "protocol_ahead": "Newer than your fleet",
         "silent": "Not reporting",
         "dropped": "Dropped",
         "connecting": "Connecting…",

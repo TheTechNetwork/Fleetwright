@@ -67,7 +67,7 @@ test('asking for one where the pool has no image asks for Debian’s, and the ro
   assert.match(I_FORM, /if choice\.imagesChoice \{ choice\.images\.insert\(XOPolicy\.debianKey\) \} else \{ choice\.image = true \}/);
   assert.match(A_FORM, /images = if \(needsImage && choice\.imagesChoice\) choice\.images \+ XoPolicy\.DEBIAN_KEY else choice\.images/);
   // And the machine tells the person what is left, which is theirs to do.
-  assert.ok(HOST_SAYS.includes('Approve it under Machines once it joins, and it holds this pool from then on.'));
+  assert.ok(HOST_SAYS.includes('Approve it under Machines once it joins, and it manages this pool from then on.'));
 });
 
 test('both phones say it in the shared words', () => {

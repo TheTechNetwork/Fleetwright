@@ -253,6 +253,14 @@ one, the way `design-tokens.test.js` fails a stray colour. `token` and
 *Your vault* is a screen's name. They are still kept out of sentences by
 hand, and under a disclosure where the mechanism has to be said.
 
+**The fleet's own sentences follow the same split.** A refusal, a machine's
+`reason`, a ready machine's failure arrive as a sentence, because a terminal
+prints them and an older phone shows them; beside each the coordinator sends
+a word (`error.code` and `why`, `reasonCode`, `failed.code`;
+`docs/coordinator.md`). The phones put the word in the row and the sentence
+under Details, and `test/reasons-in-apps.test.js` holds both phones to one
+word for every code the coordinator can send.
+
 ## 3. How it is kept honest
 
 Four checks, each answering something the others cannot:
