@@ -201,7 +201,7 @@ struct VMMachineView: View {
             // IN THE APP where this phone holds the pool's token, for a machine
             // that is running (a stopped one has no screen); Xen Orchestra's
             // own page otherwise, where you sign in.
-            if holdsHere, m.state == "Running", let vm = m.vm {
+            if holdsHere, !m.onProxmox, m.state == "Running", let vm = m.vm {
                 NavigationLink {
                     VMConsoleView(address: m.address, vm: vm, name: m.name, settings: settings)
                 } label: {
@@ -210,14 +210,14 @@ struct VMMachineView: View {
                 }
             } else if let console = m.consoleURL {
                 Link(destination: console) {
-                    Label("Open its console in Xen Orchestra", systemImage: "rectangle.on.rectangle")
+                    Label("Open its console in \(m.hypervisorName)", systemImage: "rectangle.on.rectangle")
                         .frame(minHeight: 44)
                 }
             }
         } header: {
             sectionHead("Reach it")
         } footer: {
-            Text("SSH uses the keys under You › SSH keys, on machines made after you add them." + consoleFooter)
+            Text("SSH uses the keys under You › SSH keys, on machines made after you add them." + consoleFooter(m))
         }
     }
 
@@ -226,8 +226,8 @@ struct VMMachineView: View {
     /// with its own sign-in, when it does not. How the one in the app holds
     /// the token and the certificate is this file's header, not the footer.
     /// The same words as Android (VmMachinePage).
-    private var consoleFooter: String {
-        holdsHere ? "" : " The console opens Xen Orchestra, where you sign in."
+    private func consoleFooter(_ m: Fleet.VMMachine) -> String {
+        holdsHere && !m.onProxmox ? "" : " The console opens \(m.hypervisorName), where you sign in."
     }
 
     // MARK: What you can do

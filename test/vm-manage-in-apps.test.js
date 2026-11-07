@@ -41,9 +41,12 @@ const SHARED = [
   // The machine's page, in one sentence each (docs/reviews/copy-2026-11-06.md, 43 to 48).
   'No report of this machine yet.',
   'No address yet. It appears once the machine boots.',
-  'Open its console in Xen Orchestra',
+  'Open its console in ',
   'SSH uses the keys under You › SSH keys, on machines made after you add them.',
-  ' The console opens Xen Orchestra, where you sign in.',
+  ' The console opens ',
+  ', where you sign in.',
+  '"Proxmox VE"',
+  '"Xen Orchestra"',
   'Give it longer',
   'Restart with this size',
   'End it now',
@@ -77,7 +80,7 @@ test('iOS: a machine’s page opens the console in the app where this phone hold
   // the machine, and for a machine that is running (C-2). Asked for: "Why not
   // open in web view". Otherwise Xen Orchestra's own page, as before.
   assert.match(I_PAGE, /holdsHere = found\.map \{ XOSetupHandoff\.held\(\)\.contains\(\$0\.address\) \} \?\? false/);
-  assert.match(I_PAGE, /if holdsHere, m\.state == "Running", let vm = m\.vm \{\s*NavigationLink \{\s*VMConsoleView\(address: m\.address, vm: vm, name: m\.name, settings: settings\)[\s\S]{0,200}\} else if let console = m\.consoleURL \{/);
+  assert.match(I_PAGE, /if holdsHere, !m\.onProxmox, m\.state == "Running", let vm = m\.vm \{\s*NavigationLink \{\s*VMConsoleView\(address: m\.address, vm: vm, name: m\.name, settings: settings\)[\s\S]{0,200}\} else if let console = m\.consoleURL \{/);
   assert.match(I_PAGE, /Label\(Manage\.Words\.console, systemImage: "rectangle\.on\.rectangle"\)/);
   assert.match(I_FLEET, /return URL\(string: "https:\/\/\\\(address\)\/#\/vms\/\\\(vm\)\/console"\)/);
   assert.match(I_FLEET, /var sshCommand: String\? \{ ip\.map \{ "ssh fleetwright@\\\(\$0\)" \} \}/);
@@ -150,7 +153,7 @@ test('Android: the machines on your pools are read from the snapshot, and worked
 
 test('Android: a machine’s page opens the console in the app where this phone holds the pool’s token, Xen Orchestra’s own page otherwise, and offers only what can be done', () => {
   assert.match(A_PAGE, /val holdsHere = remember\(machine\?\.address\) \{ machine\?\.address\?\.let \{ a -> XoHandoff\.held\(settings\)\.any \{ it\.address == a \} \} \?: false \}/);
-  assert.match(A_PAGE, /if \(holdsHere && m\.state == "Running" && m\.vm != null\) \{\s*OpenRow\(Manage\.Words\.console\) \{ console = true \}\s*\} else \{\s*m\.consoleUrl\?\.let/);
+  assert.match(A_PAGE, /if \(holdsHere && !m\.onProxmox && m\.state == "Running" && m\.vm != null\) \{\s*OpenRow\(Manage\.Words\.console\) \{ console = true \}\s*\} else \{\s*m\.consoleUrl\?\.let/);
   assert.match(A_PAGE, /if \(console && onScreen\?\.vm != null\) \{\s*ConsolePage\(settings, onScreen\.address, onScreen\.vm, onScreen\.name\) \{ console = false \}/);
   assert.match(A_FLEET, /"https:\/\/\$address\/#\/vms\/\$vm\/console"/);
   assert.match(A_FLEET, /val sshCommand: String\? get\(\) = ip\?\.let \{ "ssh fleetwright@\$it" \}/);
@@ -193,4 +196,18 @@ test('Android: a new machine goes behind the edge router unless a network of the
 test('both phones say it in the same words', () => {
   const android = [A_FLEET, A_PAGE, A_LIST, A_SHEET, A_MAIN, A_SSH, A_YOU, A_HYPER, A_FORM, A_POLICY].join('\n');
   for (const words of SHARED) assert.ok(android.includes(words), `Android: ${words}`);
+});
+
+// A PROXMOX VE MACHINE'S CONSOLE is that one's own noVNC page, by node and
+// number: both phones opened Xen Orchestra's path on the Proxmox VE address,
+// which reached its web interface at no machine, and said Xen Orchestra.
+test('both phones open a Proxmox VE machine’s own console, name Proxmox VE, and never the Xen Orchestra console in the app', () => {
+  for (const q of ['name: "console", value: "kvm"', 'name: "novnc", value: "1"', 'name: "vmid", value: String(vmid)', 'name: "node", value: node']) {
+    assert.ok(I_FLEET.includes(q), `iOS: ${q}`);
+  }
+  assert.match(A_FLEET, /"https:\/\/\$address\/\?console=kvm&novnc=1&vmid=\$vmid&node=\$\{java\.net\.URLEncoder\.encode\(node, "UTF-8"\)\}"/);
+  assert.match(I_FLEET, /var hypervisorName: String \{ onProxmox \? "Proxmox VE" : "Xen Orchestra" \}/);
+  assert.match(A_FLEET, /val hypervisorName: String get\(\) = if \(onProxmox\) "Proxmox VE" else "Xen Orchestra"/);
+  assert.ok(I_PAGE.includes('Label("Open its console in \\(m.hypervisorName)"'));
+  assert.ok(A_PAGE.includes('OpenRow("Open its console in ${m.hypervisorName}")'));
 });

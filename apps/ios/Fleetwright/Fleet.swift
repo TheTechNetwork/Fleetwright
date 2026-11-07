@@ -1991,7 +1991,19 @@ struct Fleet {
         let address: String
         /// Kept ready, and not yet taken by a session; nil from an older coordinator.
         var standby: Bool? = nil
+        /// `proxmox`, or `xo` for Xen Orchestra; nil from a coordinator older
+        /// than Proxmox VE, which is Xen Orchestra. On Proxmox VE, the node
+        /// and number its own console is opened by.
+        var kind: String? = nil
+        var node: String? = nil
+        var vmid: Int? = nil
         var id: String { name }
+
+        var onProxmox: Bool { kind == "proxmox" }
+
+        /// The hypervisor's own name for itself, which is where its console
+        /// opens and where you sign in.
+        var hypervisorName: String { onProxmox ? "Proxmox VE" : "Xen Orchestra" }
 
         struct InLab: Codable, Hashable {
             let name: String
@@ -2022,8 +2034,22 @@ struct Fleet {
         /// there, so it needs no token on this phone: what the machine's
         /// page offers where this phone does not hold the pool's token. Where
         /// it does, the page opens the console in the app (VMConsoleView).
+        ///
+        /// ON PROXMOX VE it is that one's own noVNC console, by node and
+        /// number (`?console=kvm&novnc=1`): Xen Orchestra's path on a Proxmox
+        /// VE address opened its web interface at no machine at all.
         var consoleURL: URL? {
-            guard let vm, !address.isEmpty else { return nil }
+            guard !address.isEmpty else { return nil }
+            if onProxmox {
+                guard let node, let vmid else { return nil }
+                var parts = URLComponents(string: "https://\(address)/")
+                parts?.queryItems = [
+                    URLQueryItem(name: "console", value: "kvm"), URLQueryItem(name: "novnc", value: "1"),
+                    URLQueryItem(name: "vmid", value: String(vmid)), URLQueryItem(name: "node", value: node),
+                ]
+                return parts?.url
+            }
+            guard let vm else { return nil }
             return URL(string: "https://\(address)/#/vms/\(vm)/console")
         }
 
