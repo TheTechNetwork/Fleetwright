@@ -264,6 +264,11 @@ internal fun HypervisorSheet(
     var canImageManage by remember { mutableStateOf(false) }
     // The machines it makes are born allowed what the person chose (`can` holds "machine-grants"); an older one leaves them the image's answers.
     var canMachineGrants by remember { mutableStateOf(false) }
+    // It gives each box approved for the pool a Xen Orchestra user of its own
+    // when the choice names them (`can` holds "box-users"); an older one reads
+    // the choice without them and leaves the shared user, so they are neither
+    // promised above Apply nor sent.
+    var canBoxUsers by remember { mutableStateOf(false) }
     // It builds an image from main as well as from releases (`can` holds "image-channel"); an older one builds from releases.
     var canImageChannel by remember { mutableStateOf(false) }
     // What the machines may do, as Apply sent it, kept with the pool once the job is done.
@@ -664,6 +669,7 @@ internal fun HypervisorSheet(
         canLabsEach = "labs-each" in p.setup.can
         canImageManage = "image-manage" in p.setup.can
         canMachineGrants = "machine-grants" in p.setup.can
+        canBoxUsers = "box-users" in p.setup.can
         canImageChannel = "image-channel" in p.setup.can
         policyKey = reply
         job = p.setup.job
@@ -929,7 +935,12 @@ internal fun HypervisorSheet(
             // before it is sent (HolderJoin). Null when nothing is made, or the
             // Keystore would not keep it, and then the machine joins with its pin.
             val secret = if (XoPolicy.makesHolder(inv, c)) withContext(Dispatchers.IO) { HolderJoin.newSecret(settings, address.trim()) } else null
-            val sealed = XoPolicy.sealChoice(key, setup.job, address.trim(), inv, c, secret)
+            // THE BOXES APPROVED FOR THIS POOL, each to be given a user of its
+            // own, and whether the shared item may now be withdrawn: read from
+            // the vault and the fleet's machines, only for a machine that
+            // reads them. Nothing read is nothing named (poolPlan).
+            val (boxes, withdraw) = if (canBoxUsers) poolPlan(settings, fleet, address.trim()) else emptyList<String>() to false
+            val sealed = XoPolicy.sealChoice(key, setup.job, address.trim(), inv, c, secret, boxes, withdraw)
             val r = fleet.xosetup("policy", job = setup.job, sealed = sealed)
             if (r.ok) {
                 sentGrants = if (c.grantsChoice) c.machineUpdates to c.machineReboot else null
@@ -998,6 +1009,15 @@ internal fun HypervisorSheet(
                 val (outcome, inFleet) = XoHandoff.collectAndKeep(settings, fleet, id, r.xosetup)
                 outcome?.let { handedBack = it }
                 inFleet?.let { fleetNote = it }
+                // EACH BOX'S OWN TOKEN, filed in the fleet for that box alone,
+                // and the shared item dropped once the machine says every box
+                // has its own: in the pass that first sees done, while the
+                // job's key is still held.
+                val boxes = r.xosetup.boxHandoff
+                val boxKey = watchKey
+                if (policy && r.xosetup.state == "done" && boxes != null && boxKey != null) {
+                    XoHandoff.keepBoxUsers(settings, fleet, boxes, id, address.trim(), boxKey)?.let { fleetNote = it }
+                }
                 // THE ROUTERS' KEY, kept with the pool's token and in the
                 // fleet, so the machines holding the pool read the routers.
                 val watch = r.xosetup.watch
@@ -1179,6 +1199,8 @@ internal fun HypervisorSheet(
                                 if (straightNote.isNotBlank()) Hint(straightNote, color = Design.Palette.ink.now)
                                 PolicyForm(inv, c, enabled = !applying && !cancelling, canEdge = canEdge, machine = machine, onChange = { choice = it }, canImage = canImage)
                                 val problem = XoPolicy.problem(inv, c)
+                                // Only where the machine reads the list (C-2): said, it is done.
+                                if (canBoxUsers) Hint(XoPolicy.OWN_USERS)
                                 Hint("$machine waits ten minutes for your choice, then lets go without changing anything.")
                                 // WHY APPLY IS OFF, in the machine's words, so
                                 // a switched-off button is never a mystery.
@@ -1926,3 +1948,16 @@ private fun SetupProgress(setup: Fleet.Setup, policy: Boolean = false, reconnect
         if (setup.state != "choosing") setup.text?.let { Quoted(it) }
     }
 }
+
+/**
+ * Which boxes this apply names, and whether it withdraws the shared item
+ * (XoPolicy.boxes, XoPolicy.withdrawShared). A vault or a host list that
+ * cannot be read names nobody: cannot tell is not "no machines" (C-5), and
+ * naming nobody leaves the shared user.
+ */
+private suspend fun poolPlan(settings: Settings, fleet: Fleet, address: String): Pair<List<String>, Boolean> = runCatching {
+    val contents = PhoneVault(settings).list(fleet)
+    val hosts = fleet.enrolledHosts().map { XoPolicy.ApprovedBox(it.hostId, it.revoked) }
+    val boxes = XoPolicy.boxes(address, hosts, contents.grants.map { XoPolicy.PoolGrant(it.label, it.only) })
+    boxes to XoPolicy.withdrawShared(address, boxes, contents.items.map { it.name })
+}.getOrDefault(emptyList<String>() to false)

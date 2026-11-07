@@ -101,7 +101,7 @@ test('Android: New session offers a machine from each of your images, drawn from
 });
 
 test('Android: the pool’s token is kept in the fleet under its address, after setup and on asking', () => {
-  assert.match(A_VAULT, /JSONObject\(\)\.put\("name", "hypervisor:\$address"\)\.put\("value", record\)/);
+  assert.match(A_VAULT, /val name = if \(box == null\) "hypervisor:\$address" else "hypervisor:\$address\+\$box"\s*ask\(fleet, "put", JSONObject\(\)\.put\("name", name\)\.put\("value", record\)\)/);
   assert.match(A_HANDOFF, /if \(outcome != Outcome\.Kept \|\| address == null\) return outcome to null/);
   assert.match(A_HANDOFF, /setup\.state == "done" -> collectAndKeep\(settings, fleet, entry\.job, setup\)/);
   assert.match(A_HYPER, /fleetNote = XoHandoff\.keepInFleet\(settings, fleet, address\.trim\(\)\)/);
