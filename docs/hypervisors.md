@@ -1785,18 +1785,25 @@ cluster was invisible for hours that way, while no box could use its line.
 Now Machines has one row, **Hypervisors**, for a known admin. It opens a page
 that lists every hypervisor of yours, of either kind:
 
-- **Each row** gives the address, the kind, and what the machines holding it
-  saw. That is "Reached from rpi-7550 · 1 image · 0 machines" when one could
-  reach it, "No machine reached it" and that machine's own words when none
-  could, and "Not looked at yet" when the boxes have not looked.
-- **A pool held on this phone** also says when this phone last looked at it,
-  and opens its own page (`manage.md`), read phone-direct with the token kept
-  here.
-- **Anything else** opens what each machine saw, and the hypervisor's facts:
-  version, whether Proxmox VE is new enough, the fence, the pool, images and
-  machines. A Proxmox VE cluster offers **Set it up again**.
+- **Each row** gives the address, the kind, and one status from a fixed set:
+  *Ready*, *Can't reach*, *Waiting for a machine*, *Needs Proxmox VE 9*,
+  *Checking*, and *Unknown* for a pool on this phone when the fleet did not
+  answer. Counts, machine names and error text are on its page, not in the
+  row (the copy review of 2026-11-06, finding 59).
+- **A pool held on this phone** also says when this phone last read it
+  (*Updated 2 hours ago*, or *Never opened*), and opens its own page
+  (`manage.md`), read phone-direct with the token kept here.
+- **Anything else** opens a page that leads with one sentence, the answer:
+  *Ready. rpi-7550 makes machines on it.*, *Can't reach it. No machine got
+  through.*, *Waiting for a machine to pick it up.* Under it, **Machines**:
+  each machine with *Reached*, *Can't reach* or *Not checked*, and its own
+  error text, selectable. Then **Details**: version, pool, the datacenter
+  firewall, images and machines, each a short line. A Proxmox VE cluster
+  offers **Set it up again**, and **Turn on the datacenter firewall** where
+  it is off. No footer explains the mechanism; this page is the one place
+  that does.
 - **The attention ring** marks a row no machine can use, or a cluster older
-  than Proxmox VE 9. A row not looked at yet is not trouble.
+  than Proxmox VE 9. *Checking* is not trouble.
 - **One Add a hypervisor** at the foot takes the address and finds the kind,
   and does not ask. Asked for: *"Instead of ask which kind detect don't ask
   question you can find the answer to"*. The fleet's machines look (`xoprobe`
@@ -1804,19 +1811,26 @@ that lists every hypervisor of yours, of either kind:
   null when nothing answered). This phone looks the same way, because a node
   is often on a network only the phone reaches. Both looks are a TCP
   connection that sends nothing and is closed as soon as it opens, so no
-  certificate check is skipped to find out. The
-  setup for what was found opens with the address filled in. Only when
-  nothing answers as either is the person asked which it is.
+  certificate check is skipped to find out. Both kinds are rows under the
+  field the whole time, each with one line on what it is. The kind that
+  answered is marked *Found at this address* and its setup opens with the
+  address filled in. When nothing answers as either, the line above the rows
+  says *Couldn't tell what's at 10.69.10.10. Pick one.*, and, when a machine
+  was too old to check for Proxmox VE, one quiet note under it: *rpi-7550
+  needs an update to check for Proxmox VE.*
 
 The list is the coordinator's `hypervisors` field of `/api/hosts`. It has one
 row per address and kind, each listing every box holding it with `reachable`,
-which is true, false, or null for "has not looked yet". A Proxmox VE row also
+which is true, false, or null for "not checked". A Proxmox VE row also
 carries the box's `problem` when it could not reach the cluster. Proxmox API
 errors name a path and a status, never the token. Xen Orchestra's problem
 stays on the box, as before, because its page asks the pool itself. Only the
 person's own hypervisors are listed, as placement believes it (`xoFor`). An
 older coordinator omits the field, and a failed ask is said as the fleet not
-answering, never as "none". `test/hypervisors-in-apps.test.js` holds the two
+answering, never as "none": an empty page is titled *Couldn't load
+hypervisors* rather than *No hypervisors yet*, and a list that still has this
+phone's pools says *Your fleet didn't answer. Only pools on this phone are
+shown.* `test/hypervisors-in-apps.test.js` holds the two
 phones' words equal.
 
 ### What ships first
