@@ -107,7 +107,7 @@ internal class ConsoleTunnel(private val address: String) {
         if (why == null) runCatching { send(JSONObject().put("op", "end")) }
         runCatching { near?.close() }
         runCatching { ws?.close(1000, null) }
-        val text = why ?: "The console from away closed."
+        val text = why ?: CLOSED
         ready.completeExceptionally(IllegalStateException(text))
         opened.completeExceptionally(IllegalStateException(text))
         if (why != null) onEnd?.invoke(text)
@@ -123,20 +123,30 @@ internal class ConsoleTunnel(private val address: String) {
                     val bytes = runCatching { Base64.getDecoder().decode(frame.optString("data")) }.getOrNull() ?: return
                     runCatching { out?.write(bytes); out?.flush() }
                 }
-                "closed" -> finish(frame.optString("text").ifBlank { "The fleet closed the console from away." })
+                "closed" -> finish(frame.optString("text").ifBlank { CLOSED })
             }
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            finish("The connection to the fleet ended, so the console from away closed.")
+            finish(LOST)
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            finish("The fleet closed the console from away.")
+            finish(CLOSED)
         }
     }
 
     private companion object {
         val CLIENT: OkHttpClient by lazy { OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).build() }
+
+        /**
+         * WHAT THE BANNER SAYS when it ends, in two verdicts: the connection
+         * was lost, or the console closed. Which socket, which machine and
+         * which side ended it is this file's business, not the person's; the
+         * Open again button under the banner is the action. The same words as
+         * iOS (ConsoleTunnel.swift) and as Manage.Words.consoleEnded.
+         */
+        const val LOST = "Lost the connection."
+        const val CLOSED = "The console closed."
     }
 }

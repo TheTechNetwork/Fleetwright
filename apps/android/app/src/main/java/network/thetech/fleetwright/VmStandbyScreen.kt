@@ -94,9 +94,10 @@ fun VmStandbyScreen(settings: Settings, images: List<Fleet.VmImage>, onDismiss: 
         val networks = chosen?.networks
         if (!networks.isNullOrEmpty()) {
             Text("Network", style = Design.Style.label, color = Design.Palette.inkDim.now)
+            // Named by what it gives the machine, as on New session.
             AssistChip(
                 onClick = { network = "" },
-                label = { Text(if (network.isEmpty()) "Behind the edge router ✓" else "Behind the edge router") },
+                label = { Text(if (network.isEmpty()) "Default (internet only) ✓" else "Default (internet only)") },
             )
             networks.forEach { n ->
                 AssistChip(onClick = { network = n.id }, label = { Text(if (network == n.id) "${n.name} ✓" else n.name) })

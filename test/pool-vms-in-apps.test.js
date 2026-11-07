@@ -31,10 +31,11 @@ const SHARED = [
   'about 220 MB, and installs Fleetwright on it, which takes about ten minutes. Sessions can then start on a new ',
   'Nothing in the way out’s pool has 20 GiB free for the machine image’s disk.',
   'The machine image is built behind the edge router, and that pool has none yet. Build the router with it.',
-  'It is cloned from your machine image and joins in a minute or two. The session starts on it then',
-  ' It powers off when the time runs out and is removed, with everything on it.',
-  'No Claude login is kept in your vault, so a machine from your hypervisor has nothing to run ',
-  'Asking your hypervisor for a ',
+  // New session's footer and the start's status, in one sentence each
+  // (docs/reviews/copy-2026-11-06.md, 6, 39, 40).
+  'Ready in about 2 minutes. Deleted with its files when time runs out.',
+  "Set up Claude first, or this session can't start.",
+  "Your session starts when it's ready.",
 ];
 
 test('iOS: a machine from your hypervisor is asked of the fleet, never of GitHub, with the image it is cloned from', () => {

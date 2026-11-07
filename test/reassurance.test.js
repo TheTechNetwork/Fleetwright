@@ -168,7 +168,7 @@ test('a person with nowhere to run anything sees a setup step, not an empty list
   const src = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
 
   assert.match(src, /needsSetup/, 'the two empty states are still one');
-  assert.match(src, /Nothing set up yet/);
+  assert.match(src, /Set up Claude to start sessions/);
   assert.match(src, /NavigationLink\("Set up Claude"\) \{\s*ClaudeSetupView\(settings: settings\)/, 'and it does not offer the thing that fixes it');
 
   // ASKED AS THE PERSON. The count a host reports is fleet-wide — how many

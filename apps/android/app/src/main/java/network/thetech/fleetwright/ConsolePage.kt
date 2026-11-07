@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
@@ -101,13 +102,21 @@ internal fun ConsolePage(settings: Settings, address: String, vm: String, name: 
                         }
                     }
                 } ?: console.via?.let { via ->
-                    // FROM AWAY, said once and quietly: how the screen got here.
-                    Text(
-                        Manage.Words.consoleAwayVia(via),
-                        style = Design.Style.label,
-                        color = Design.Palette.inkDim.now,
-                        modifier = Modifier.fillMaxWidth().background(Design.Palette.card.now).padding(Design.Space.inside),
-                    )
+                    // FROM AWAY, said once and quietly, AS A CHIP: which machine
+                    // carries the screen, in the small type on its own small
+                    // surface, not a bar across the top of a console somebody
+                    // is working in. The words are Manage.Words', the pool
+                    // page's.
+                    Row(Modifier.fillMaxWidth().padding(horizontal = Design.Space.inside, vertical = Design.Space.insideTight)) {
+                        Text(
+                            Manage.Words.consoleAwayVia(via),
+                            style = Design.Style.micro,
+                            color = Design.Palette.inkDim.now,
+                            modifier = Modifier
+                                .background(Design.Palette.card.now, RoundedCornerShape(Design.Radius.chip))
+                                .padding(horizontal = Design.Space.insideTight, vertical = Design.Space.hair),
+                        )
+                    }
                 }
                 AndroidView(
                     factory = { context -> console.makeWeb(context) },

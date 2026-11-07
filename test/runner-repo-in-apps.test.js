@@ -26,9 +26,10 @@ test('the words about a runner repository are the same on both phones', () => {
     'Check and save',
     'Use the fleet\'s repository instead',
     'Remove your runner repository',
-    'Your machines come from the fleet\'s repository, ',
-    'Set your own to use your free Actions minutes.',
-    'Make a public repository from github.com/TheTechNetwork/Fleetwright-Runners-Template, install the Fleetwright GitHub App on it, and your machines come from there.',
+    // The row's status (docs/reviews/copy-2026-11-06.md, 153); how to link
+    // one is the screen's footer.
+    'Using the fleet\'s: ',
+    'Nothing linked',
     'Public: ',
     ' · GitHub app: ',
     'Actions write: ',
@@ -48,8 +49,8 @@ test('the same four new machines, in the same order, on both phones', () => {
   assert.deepEqual(order(read('apps/android/app/src/main/java/network/thetech/fleetwright/StartSheet.kt')), expected);
   // And the promise that comes with choosing one.
   for (const src of [IOS, ANDROID]) {
-    assert.match(src, /The session starts on it when it joins/);
-    assert.match(src, /Everything on it is (?:"\s*\+\s*")?gone when the time runs out\./);
+    assert.match(src, /Your session starts when it's ready\./);
+    assert.match(src, /Deleted with its files when time runs out\./);
   }
 });
 

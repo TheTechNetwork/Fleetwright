@@ -44,8 +44,9 @@ struct VMStandbyView: View {
                 }
                 .onChange(of: template) { _, _ in network = "" }
                 if let networks = chosen?.networks, !networks.isEmpty {
+                    // Named by what it gives the machine, as on New session.
                     Picker("Network", selection: $network) {
-                        Text("Behind the edge router").tag("")
+                        Text("Default (internet only)").tag("")
                         ForEach(networks) { n in Text(n.name).tag(n.id) }
                     }
                 }
