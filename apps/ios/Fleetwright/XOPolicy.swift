@@ -49,8 +49,7 @@ enum XOPolicy {
     static let maxGroups = 4
     /// Under Machines made here: who it reaches, and the one line that
     /// changes a machine already running, which nothing from here can.
-    static let machineGrantsFooter = "Each machine made on this pool from now on starts with these answers, the pool’s own machine included. "
-        + "One already running keeps what it has. To change it, run sudo fleetwright grant upgrades on, or reboot on, on that machine."
+    static let machineGrantsFooter = "Applies to new VMs. Existing ones keep their setting."
     /// What a machine image is built from: the apt suite it installs
     /// Fleetwright from, which every machine made from it then updates along
     /// (IMAGE_CHANNELS in vm-image.js). Asked for: "Or should we build a path
@@ -405,6 +404,14 @@ enum XOPolicy {
             return (there.labs?.open ?? 0) != labsOpen || (there.labs?.closed ?? 0) != labsClosed
         }
 
+        /// Whether Apply rebuilds a router that is there: blocking, the pair
+        /// or the labs changed on it. The screen says so once, beside Apply.
+        /// The same rule as Android (XoPolicy.rebuildsRouter).
+        func rebuildsRouter(in inv: Inventory) -> Bool {
+            guard edge, let there = inv.edge(on: egress) else { return false }
+            return (there.blocks ?? false) != edgeBlock || (there.ha ?? false) != edgeHa || labsChanged(in: inv)
+        }
+
         /// The fewest group networks there can be: the ones there now, which
         /// are never removed, because a machine may be on one.
         func groupRange(in inv: Inventory) -> ClosedRange<Int> {
@@ -706,10 +713,10 @@ enum XOPolicy {
     /// a seal it cannot open.
     static func refusal(can: [String], machine: String) -> String? {
         if !can.contains("policy") {
-            return "\(machine) is older than changing what the fleet may use, so the sign-in was not sent."
+            return "\(machine) needs an update to change this. Nothing was sent."
         }
         if !can.contains("policy-signin") {
-            return "\(machine) is too old to open the sign-in this app seals for a policy change, so the sign-in was not sent."
+            return "\(machine) needs an update to take the sign-in. Nothing was sent."
         }
         return nil
     }

@@ -32,12 +32,10 @@ const RULES = [
 /** What both phones say, word for word. */
 const SHARED = [
   'Make the pool a machine of its own',
-  'A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the ',
-  'fleet may use, so the pool does not need ',
-  ' to be awake. Once it joins, approve it under Machines and it ',
-  'holds the pool.',
-  ' is there and running. It holds the pool once you have approved it under Machines.',
-  ' is there and stopped. Apply starts it.',
+  'An always-on VM that manages this pool, so ',
+  ' need not stay awake.',
+  'Running. Approve it under Machines if you have not yet.',
+  'Stopped · Apply starts it',
 ];
 
 test('offered only by a machine whose `can` says so, and only where the inventory says whether there is one', () => {

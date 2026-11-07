@@ -161,6 +161,17 @@ internal object XoPolicy {
         return (there.labs?.open ?: 0) != c.labsOpen || (there.labs?.closed ?: 0) != c.labsClosed
     }
 
+    /**
+     * Whether Apply rebuilds a router that is there: blocking, the pair or
+     * the labs changed on it. The sheet says so once, beside Apply. The same
+     * rule as iOS (XOPolicy.Choice.rebuildsRouter).
+     */
+    fun rebuildsRouter(inv: Inventory, c: Choice): Boolean {
+        if (!c.edge) return false
+        val there = edgeOn(inv, c.egress) ?: return false
+        return (there.blocks ?: false) != c.edgeBlock || (there.ha ?: false) != c.edgeHa || labsChanged(inv, c)
+    }
+
     /** A network for machines that work together: no way off the pool. */
     data class GroupNetwork(val id: String, val name: String, val pool: String?)
 
@@ -168,8 +179,7 @@ internal object XoPolicy {
     const val GROUP_PREFIX = "fleetwright-group-"
     const val MAX_GROUPS = 4
     /** Under Machines made here: who it reaches, and the one line that changes a machine already running, which nothing from here can. */
-    const val MACHINE_GRANTS_FOOTER = "Each machine made on this pool from now on starts with these answers, the pool’s own machine included. " +
-        "One already running keeps what it has. To change it, run sudo fleetwright grant upgrades on, or reboot on, on that machine."
+    const val MACHINE_GRANTS_FOOTER = "Applies to new VMs. Existing ones keep their setting."
 
     /**
      * What a machine image is built from: the apt suite it installs

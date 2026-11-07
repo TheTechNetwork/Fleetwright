@@ -22,18 +22,17 @@ const A_SHEET = A('HypervisorSheet.kt');
 const A_FORM = A('PolicyForm.kt');
 const HOST = read('src/fleet/host/xo-setup.js');
 
-/** What both phones say, word for word. */
+/** What both phones say, word for word: the row's verdict as the switch stands. */
 const SHARED = [
   'Two edge routers',
-  'On: they share the way out, so one carries the machines while the other restarts for an update.',
-  'Off: one router, and when it restarts for an update, machines behind it have no way out for those minutes.',
-  ' Apply makes the second and hands over to it: machines behind it have no way out while it starts.',
-  // Going back to one, as the box says it: the first is rebuilt beside the
-  // second while the second still carries the machines (ONE_BOOT in
-  // src/fleet/host/edge-router.js), so the way out is gone for one boot and
-  // not for the whole build.
-  ' Apply removes the second and rebuilds the first: machines behind it keep their way out while the new one is built, and have none while it starts.',
+  'No downtime during updates',
+  'Brief outage during updates',
 ];
+// Going back to one, or to two, rebuilds the router that is there: the first
+// is rebuilt beside the second while the second still carries the machines
+// (ONE_BOOT in src/fleet/host/edge-router.js). Said once, beside Apply, in
+// the sentence edge-block-in-apps.test.js pins, and not on the row.
+const REBUILD = 'Applying rebuilds the router. VMs behind it lose internet while the new one starts.';
 
 test('offered only by a machine whose `can` says so, and only with the router asked for', () => {
   assert.ok(HOST.includes("'edge-ha'"), 'the machine does not say it can');
@@ -63,5 +62,10 @@ test('both phones say it in the same words', () => {
   }
   for (const [name, form] of [['iOS', I_FORM], ['Android', A_FORM]]) {
     assert.ok(!form.includes('no way out until it is up'), `${name}: going back to one still says the way out is gone for the whole build`);
+    assert.ok(!form.includes('Apply removes the second and rebuilds the first'), `${name}: the rebuild is still said on the row`);
   }
+  assert.ok(I_FORM.includes(REBUILD) && A_SHEET.includes(REBUILD));
+  // And the rule that shows it counts the pair.
+  assert.match(I_POLICY, /func rebuildsRouter\(in inv: Inventory\) -> Bool \{[\s\S]{0,200}?\(there\.ha \?\? false\) != edgeHa/);
+  assert.match(A_POLICY, /fun rebuildsRouter\(inv: Inventory, c: Choice\): Boolean \{[\s\S]{0,200}?\(there\.ha \?: false\) != c\.edgeHa/);
 });
