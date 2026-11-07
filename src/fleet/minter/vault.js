@@ -77,6 +77,7 @@ import { DEPOSIT_MAX_AGE_MS, checkBeforeKeeping } from './claude.js';
 import { probeClaude } from '../../core/claude-token-probe.js';
 import { claudeSignIn, claudeRenewals, describeRenewals, freshClaude, checkClaude } from './claude-login.js';
 import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
+import { HYPERVISOR_PREFIX, HYPERVISOR_ADDRESS_RE, splitHypervisorItem } from '../protocol/hypervisor-name.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
 export const OAUTH_PROVIDERS = Object.freeze({
@@ -116,16 +117,16 @@ export const SECRET_PREFIX = 'secret:';
 /**
  * The prefix a hypervisor's item carries: `hypervisor:<address>`, the limited
  * Xen Orchestra token onboarding made for that address, as the record the
- * phone was handed (src/fleet/host/xo-setup.js, hand-off). Its own kind and
- * not a named secret, because a named secret is handed to SESSIONS by name
- * (`fleet-secret`), and a pool's token is for the box that makes machines on
- * it and nothing it runs. A box keeps it in memory only
- * (src/fleet/host/xo-pools.js).
+ * phone was handed (src/fleet/host/xo-setup.js, hand-off), and
+ * `hypervisor:<address>+<box>` for one box's own user on that Xen Orchestra
+ * (src/fleet/host/xo-box-users.js), which the vault hands to that box alone.
+ * Its own kind and not a named secret, because a named secret is handed to
+ * SESSIONS by name (`fleet-secret`), and a pool's token is for the box that
+ * makes machines on it and nothing it runs. A box keeps it in memory only
+ * (src/fleet/host/xo-pools.js). The grammar is protocol/hypervisor-name.js's,
+ * which the box reads with too.
  */
-export const HYPERVISOR_PREFIX = 'hypervisor:';
-
-/** A Xen Orchestra address as onboarding takes one: a host name or address, and a port. */
-export const HYPERVISOR_ADDRESS_RE = /^(?:\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9][A-Za-z0-9.-]{0,252})(?::\d{1,5})?$/;
+export { HYPERVISOR_PREFIX, HYPERVISOR_ADDRESS_RE, splitHypervisorItem };
 
 /** How large a named secret may be. A key file, not a database. */
 const MAX_SECRET = 8192;
@@ -191,7 +192,7 @@ export function itemKind(name) {
   if (name === 'claude') return 'claude';
   if (Object.hasOwn(OAUTH_PROVIDERS, name)) return 'oauth';
   if (name.startsWith(SECRET_PREFIX) && SECRET_NAME_RE.test(name.slice(SECRET_PREFIX.length))) return 'secret';
-  if (name.startsWith(HYPERVISOR_PREFIX) && HYPERVISOR_ADDRESS_RE.test(name.slice(HYPERVISOR_PREFIX.length))) return 'hypervisor';
+  if (splitHypervisorItem(name)) return 'hypervisor';
   return null;
 }
 
@@ -210,8 +211,16 @@ function isHypervisorRecord(name, value) {
   } catch {
     return false;
   }
-  return Boolean(record) && typeof record === 'object' && typeof record.token === 'string' && record.token.length > 0 &&
-    record.address === name.slice(HYPERVISOR_PREFIX.length);
+  const split = splitHypervisorItem(name);
+  if (!split || !record || typeof record !== 'object' || typeof record.token !== 'string' || !record.token) return false;
+  if (record.address !== split.address) return false;
+  // A PER-BOX TOKEN FILED UNDER THE SHARED NAME would be handed to every
+  // approved box, and a shared token filed under a box's name would be that
+  // box's alone while saying it is the user the name says. Neither files.
+  // A Proxmox cluster's record (`kind`, pve-pools.js) has no users of its
+  // own to be filed per box.
+  if (split.box === null) return record.box === undefined || record.box === null;
+  return record.box === split.box && record.kind === undefined;
 }
 
 /**
@@ -775,7 +784,8 @@ async function testItem(name, row, config, key, who, save) {
 function label(name) {
   if (name === 'claude') return 'your Claude login';
   if (Object.hasOwn(OAUTH_PROVIDERS, name)) return OAUTH_PROVIDERS[/** @type {keyof typeof OAUTH_PROVIDERS} */ (name)].label;
-  if (name.startsWith(HYPERVISOR_PREFIX)) return `the hypervisor at ${name.slice(HYPERVISOR_PREFIX.length)}`;
+  const hypervisor = splitHypervisorItem(name);
+  if (hypervisor) return hypervisor.box ? `the hypervisor at ${hypervisor.address}, as ${hypervisor.box}` : `the hypervisor at ${hypervisor.address}`;
   return name.startsWith(SECRET_PREFIX) ? `the secret ${name.slice(SECRET_PREFIX.length)}` : name;
 }
 
@@ -908,6 +918,30 @@ export async function answerVaultBox(ask, config) {
 }
 
 /**
+ * Whether this grant may be handed this item.
+ *
+ * A per-box hypervisor token (`hypervisor:<address>+<box>`) is that box's
+ * alone: a full grant gets it only when the grant's label is that box, and
+ * an `only` grant naming the shared item gets that same box's own token too,
+ * because the shared name is the approval for the pool, and a pool's own
+ * machine is approved that way (docs/vault.md). Another box's token is not
+ * handed over either way. A full grant used to mean every item, and that is
+ * how one box would have been given the user that can export the others'
+ * disks (docs/security.md, G14).
+ *
+ * @param {string} name
+ * @param {{ label?: string }} grant
+ * @param {Set<string>|null} only
+ */
+function hypervisorItemForGrant(name, grant, only) {
+  const split = splitHypervisorItem(name);
+  if (!split?.box) return !only || only.has(name);
+  if (split.box !== String(grant.label || '')) return false;
+  if (!only) return true;
+  return only.has(name) || only.has(`${HYPERVISOR_PREFIX}${split.address}`);
+}
+
+/**
  * One person's items for one box, renewing what is close to running out. Null
  * when their approval of this box is gone or is for a different key, or when
  * the fleet account that made it is no longer in the fleet.
@@ -935,7 +969,7 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
   const only = Array.isArray(grant.only) ? new Set(grant.only.map(String)) : null;
   for (const [name, item] of Object.entries(row.items)) {
     if (!item?.sealed || item.forgotten) continue;
-    if (only && !only.has(name)) continue;
+    if (!hypervisorItemForGrant(name, grant, only)) continue;
     const kind = itemKind(name);
     /** @type {any} */
     let inside;

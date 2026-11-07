@@ -127,6 +127,8 @@ import { HOLDER_SECRET_RE } from '../protocol/holder-join.js';
 import { clearExposed, exposedOn, keptFor, newWatch, watchOf } from './edge-credentials.js';
 import { DEFAULT_ADMIN, INSTALLER, MIN_ADMIN_PASSWORD, STAGES, jobDir, openPool, prepareInstaller, readPool, runInstaller, sshProbe } from './xo-deploy.js';
 import { addToDisk, findXoVm, startXoVm, stopXoVm, waitForXo } from './xo-watchdog.js';
+import { settleBoxUsers } from './xo-box-users.js';
+import { HYPERVISOR_BOX_RE } from '../protocol/hypervisor-name.js';
 import { pveSteps, stopOnNode, VMIDS_RE, pveOptionsOf } from './pve-setup.js';
 
 /** The user onboarding makes, by the name Xen Orchestra keys users on. */
@@ -464,6 +466,11 @@ async function getRoot({ host, port, secure, timeoutMs, through = null }) {
  *   Fleetwright's reconnect watchdog on this Xen Orchestra, once it has
  *   (watchdogSaid), with the address it is about
  * @property {string} [address]
+ * @property {string} [boxHandoff]  once a policy job that named the boxes is
+ *   done: each box's own token (xo-box-users.js), sealed to the same key as
+ *   `handoff` and under its binding, as `{ v: 1, address, boxTokens,
+ *   retiredShared? }`. Not the shared hand-off, so a phone from before it
+ *   does not keep a box's token as the pool's
  * @property {string} [handoff]  once done: the limited user's token record,
  *   sealed to the key the phone sent inside the sign-in, as epk.iv.ct
  * @property {string} [watch]  once a policy job is done: the key the fleet reads
@@ -671,8 +678,14 @@ export class XoSetups {
         // (xosetupPolicySigninAad), which under the setup's name a machine
         // from before policy changes ran as a whole setup, resetting the
         // pool's resource set (seventh audit).
+        // `box-users`: a policy choice may name the boxes approved for the
+        // pool (`boxes`, `retireShared`) and this machine gives each its own
+        // Xen Orchestra user (xo-box-users.js). A phone sends them, and says
+        // it will, only where this is said: an older machine would read the
+        // choice without them and leave the shared user, and the phone would
+        // have promised otherwise above Apply.
         can: [
-          'policy', 'policy-signin', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups',
+          'policy', 'policy-signin', 'reconnect', 'reconnect-signin', 'edge', 'egress-any', 'edge-disk', 'edge-block', 'edge-ha', 'groups', 'box-users',
           ...(this.coordinatorUrl ? ['image', 'images', 'labs', 'labs-each', 'image-manage', 'machine-grants', 'image-channel'] : []),
           ...(this.coordinatorUrl && this.holderPin ? ['holder', 'holder-ask'] : []),
         ],
@@ -1540,6 +1553,44 @@ export class XoSetups {
   }
 
   /**
+   * One user per named box, when the choice asked (xo-box-users.js). Absent
+   * is the shared user, as every pool ran before, and this does nothing. The
+   * sentence comes back for the job's summary; the tokens are sealed onto
+   * the job for the phone, under the hand-off binding and a field of their
+   * own, so a phone from before them leaves it.
+   *
+   * @param {any} ctx @param {any} p
+   * @returns {Promise<string>}
+   */
+  async #boxUsers(ctx, p) {
+    if (!p.boxes?.length || !ctx.rec.reply) return '';
+    const settled = await settleBoxUsers({
+      admin: ctx.admin,
+      methods: ctx.methods,
+      setId: ctx.setId,
+      boxes: p.boxes,
+      retireShared: p.retireShared === true,
+      now: this.now(),
+      tokenLifetimeMs: TOKEN_LIFETIME_MS,
+      signInAs: async (email, password) => {
+        const rpc = await this.#open(ctx.rec);
+        try {
+          await rpc.call('session.signIn', { email, password });
+        } catch (e) {
+          rpc.close();
+          throw e;
+        }
+        return rpc;
+      },
+    });
+    if (settled.handoff) {
+      const sealed = await seal({ to: ctx.rec.reply, aad: xosetupHandoffAad(ctx.rec.job, ctx.rec.address), payload: { ...settled.handoff, address: ctx.rec.address } });
+      ctx.rec.boxHandoff = `${sealed.epk}.${sealed.iv}.${sealed.ct}`;
+    }
+    return settled.text;
+  }
+
+  /**
    * A policy job's steps, in XOPOLICY_STEPS order: onboarding's first three,
    * then the person's choice and applying it.
    */
@@ -1652,7 +1703,12 @@ export class XoSetups {
         // own, so a phone that predates it still reads the progress as the
         // step it knows, with the machine's sentence under it saying where the
         // download and the disk have got to.
-        if (!p.edge && !rotate && !p.image && !p.groups && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) return;
+        if (!p.edge && !rotate && !p.image && !p.groups && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) {
+          // THE BOXES' OWN USERS, asked for or not, before each early return
+          // and at the end: the one thing a choice that builds nothing can
+          // still change (xo-box-users.js).
+          return (await this.#boxUsers(ctx, p)) || undefined;
+        }
         const rec = ctx.rec;
         // The words every time, for the screen that asks; an event only when
         // the stage changes or the bar has moved a twentieth, so a Lock
@@ -1703,7 +1759,10 @@ export class XoSetups {
         if (p.groups) {
           const made = await ensureGroups({ admin: ctx.admin, pool: way.$pool, networks: ctx.networks || [], setId: ctx.setId, inSet: p.networks, count: p.groups });
           if (made.length) built.push(`Made ${made.length === 1 ? 'a group network' : `${made.length} group networks`} for machines that work together.`);
-          if (!p.edge && !rotate && !p.image && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) return built.join(' ') || undefined;
+          if (!p.edge && !rotate && !p.image && !p.holder && p.labs === null && !p.rebuild.length && !p.remove.length) {
+            const users = await this.#boxUsers(ctx, p);
+            return [built.join(' '), users].filter(Boolean).join(' ') || undefined;
+          }
         }
         // BETWEEN EACH THING IT WAS ASKED FOR, the cancel is looked for: the
         // networks take no signal and are quick, and a cancel during one
@@ -1805,6 +1864,8 @@ export class XoSetups {
             removed: (hostId) => this.emit({ event: 'xosetup.holder-removed', job: rec.job, hostId }),
           }));
         }
+        const users = await this.#boxUsers(ctx, p);
+        if (users) built.push(users);
         return built.join(' ');
       },
     ];
@@ -3176,6 +3237,25 @@ export function checkPolicy(p, choices) {
   // versions or the newest build of main. Absent, from a phone that predates
   // it, a rebuild keeps what the image was built from and a new one is built
   // from released versions (vm-image.js, ensureImage).
+  // THE BOXES THAT MAY USE THIS POOL, each to be given a user of its own
+  // (xo-box-users.js). Absent, from a phone that does not know which
+  // machines were approved, or from one older than the question, and the
+  // shared user is what runs. Named, each is a host id this fleet can put in
+  // a user name, or the whole choice is refused: a user half-named is a
+  // machine nobody can reach.
+  /** @type {string[]|null} */
+  let boxes = null;
+  if (p.boxes !== undefined && p.boxes !== null) {
+    const named = Array.isArray(p.boxes) ? [...new Set(p.boxes)] : null;
+    if (!named || named.length < 1 || named.length > 32 || named.some((id) => typeof id !== 'string' || !HYPERVISOR_BOX_RE.test(id))) {
+      return { ok: false, text: 'Name the boxes that may use this pool, as this fleet names them. Nothing was changed.' };
+    }
+    boxes = named;
+  }
+  // WITHDRAW THE SHARED TOKEN from the boxes, only once those boxes are
+  // named. The phone says this when each of them already holds its own item.
+  const retireShared = p.retireShared === true;
+  if (retireShared && !boxes) return { ok: false, text: 'The shared user is withdrawn only once the boxes that replace it are named. Nothing was changed.' };
   const imageChannel = p.imageChannel === undefined || p.imageChannel === null ? null : String(p.imageChannel);
   if (imageChannel !== null && !IMAGE_CHANNELS.includes(imageChannel)) return { ok: false, text: 'A machine image is built from released versions or from the newest build of main. Nothing was changed.' };
   if (holder && remove.includes('debian-13')) return { ok: false, text: 'The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for. Nothing was changed.' };
@@ -3193,7 +3273,7 @@ export function checkPolicy(p, choices) {
   if (!Number.isInteger(cpus) || cpus < 1 || cpus > maxCpus) return { ok: false, text: `vCPUs are between 1 and ${maxCpus}, what the pool has.` };
   if (!Number.isInteger(memory) || memory < MIN_MEMORY || memory > maxMemory) return { ok: false, text: `Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.` };
   if (!Number.isInteger(disk) || disk < MIN_DISK || disk > maxDisk) return { ok: false, text: `Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.` };
-  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs || rebuild.length ? edgeSr : null, edgeBlock, edgeHa, image, images: asked, rebuild, remove, groups, holder, holderSecret, holderAgain, grants, imageChannel, labs, ...(labsEach !== undefined ? { labsEach } : {}), limits: { cpus, memory, disk } } };
+  return { ok: true, policy: { srs, networks, egress, edge, edgeSr: edge || image || labs || rebuild.length ? edgeSr : null, edgeBlock, edgeHa, image, images: asked, rebuild, remove, groups, holder, holderSecret, holderAgain, grants, imageChannel, labs, ...(labsEach !== undefined ? { labsEach } : {}), ...(boxes ? { boxes } : {}), ...(retireShared ? { retireShared: true } : {}), limits: { cpus, memory, disk } } };
 }
 
 /**
@@ -3451,6 +3531,10 @@ function status(rec) {
   // until the job is forgotten, because a phone that was closed at the end
   // collects it whenever it next looks.
   if (rec.state === 'done' && rec.handoff) return { ...s, handoff: rec.handoff };
+  // EACH BOX'S OWN TOKEN, sealed the same way, once a policy job was asked
+  // for them. A phone that does not know the field leaves it, and the shared
+  // token is still what its boxes hold.
+  if (rec.state === 'done' && rec.boxHandoff) return { ...s, boxHandoff: rec.boxHandoff };
   // THE ROUTERS' KEY, SEALED the same way, once a policy job is over: done,
   // or cancelled after it built a router with that key.
   if ((rec.state === 'done' || rec.state === 'cancelled') && rec.watch) return { ...s, watch: rec.watch };
