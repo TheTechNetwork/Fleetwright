@@ -14,6 +14,17 @@ import { SessionWatcher } from '../src/fleet/host/watcher.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { startStubHub, sessionRecord } from './helpers/stub-hub.js';
 
+/**
+ * The CLI's own word that it is mid-turn (src/core/activity.js). A restart is
+ * only ever for a session that SAYS it is working while its screen is frozen;
+ * a still pane with no such word is cannot-tell, and is reported as waiting
+ * rather than restarted onto.
+ */
+const WORKING = 'Reading files…\n  esc to interrupt';
+
+/** The CLI's own hook record saying the same (src/core/activity.js), which is what the restart gate reads. */
+const HOOK_WORKING = { phase: 'working', event: 'PreToolUse', at: Date.now() };
+
 const RESUME_DIALOG = [
   'This session is 6d 12h old and 347.8k tokens.',
   '  > 1. Resume from summary (recommended)',
@@ -206,7 +217,7 @@ function frozenFor(w, name, ms) {
 test('a session frozen past the threshold is stopped and resumed', async (t) => {
   const { stub, watcher, events } = await restartingWatcherFor(
     t,
-    { sessions: [sessionRecord('wedged', { status: 'running' })], panes: { wedged: 'nothing has happened for hours' } },
+    { sessions: [sessionRecord('wedged', { status: 'running', activity: HOOK_WORKING })], panes: { wedged: 'nothing has happened for hours' } },
     60 * 60_000,
   );
   await watcher.tick({ quiet: true });
@@ -241,7 +252,7 @@ test('a tick landing mid-restart does not start a second one', { timeout: 15_000
   const { stub, watcher, events } = await restartingWatcherFor(
     t,
     {
-      sessions: [sessionRecord('wedged', { status: 'running' })],
+      sessions: [sessionRecord('wedged', { status: 'running', activity: HOOK_WORKING })],
       panes: { wedged: 'nothing has happened for hours' },
       // ONLY THE FIRST STOP IS HELD, deliberately. Holding every one would
       // deadlock a regression instead of failing it — the second tick would
@@ -326,7 +337,7 @@ test('a session that is still moving is left alone', async (t) => {
 test('zero minutes means off, which is a supported answer', async (t) => {
   const { stub, watcher } = await restartingWatcherFor(
     t,
-    { sessions: [sessionRecord('wedged', { status: 'running' })], panes: { wedged: 'frozen' } },
+    { sessions: [sessionRecord('wedged', { status: 'running', activity: HOOK_WORKING })], panes: { wedged: 'frozen' } },
     0,
   );
   await watcher.tick({ quiet: true });
@@ -337,13 +348,71 @@ test('zero minutes means off, which is a supported answer', async (t) => {
   assert.deepEqual(stub.commands, []);
 });
 
+test('a still pane nothing can read is reported as waiting, never restarted onto', async (t) => {
+  // THE DIALOG THE PATTERNS MISS. The last time the trust dialog's wording
+  // moved, the watcher stopped seeing it, called the session idle after an
+  // hour and restarted it onto the same question (prompt.js). With the
+  // decision model off there is nothing else to read a pane with, so a pane
+  // this box cannot read, still for the idle window and not said to be
+  // working by any hook, is cannot-tell: said as waiting, with a sentence
+  // that says the box cannot tell what for, and left alone.
+  const { stub, watcher, events } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('unread', { status: 'running' })], panes: { unread: 'a dialog drawn in words none of the matchers know' } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'unread', 90 * 60_000);
+
+  await watcher.tick();
+  await watcher.tick();
+
+  assert.deepEqual(stub.commands, [], 'a question nobody could read was not thrown away');
+  const said = events.filter((e) => e.event === 'session.awaiting-input');
+  assert.equal(said.length, 1, 'the transition, once; not every tick until somebody opens it');
+  assert.match(said[0].text, /^may need your attention: nothing on its screen has changed for 90 minutes and this box cannot tell whether it is asking something or stuck\. Open it to see$/);
+  assert.equal(said[0].prompt, undefined, 'no question, no options: nothing to answer from a phone');
+  // And health reports it as waiting from then on, which is what the phone's
+  // "needs you" state reads.
+  assert.equal(watcher.seen.get('unread')?.awaiting, true);
+  assert.ok(watcher.awaitingSince('unread'), 'since when, for the row');
+});
+
+test('a hook that says ready is a finished session, not an unread one', async (t) => {
+  // The pane need not match the prompt regex for a session at its prompt to be
+  // at rest: the CLI said so. Neither restarted nor reported.
+  const { stub, watcher, events } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('rested', { status: 'running', activity: { phase: 'ready', event: 'Stop', at: Date.now() } })], panes: { rested: 'some output, no prompt chrome' } },
+    60 * 60_000,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'rested', 24 * 60 * 60_000);
+  await watcher.tick();
+  assert.deepEqual(stub.commands, []);
+  assert.deepEqual(events.filter((e) => e.event === 'session.awaiting-input'), []);
+});
+
+test('with idle restart off, stillness is not judged either way', async (t) => {
+  const { stub, watcher, events } = await restartingWatcherFor(
+    t,
+    { sessions: [sessionRecord('quiet', { status: 'running' })], panes: { quiet: 'frozen' } },
+    0,
+  );
+  await watcher.tick({ quiet: true });
+  frozenFor(watcher, 'quiet', 999 * 60_000);
+  await watcher.tick();
+  assert.deepEqual(stub.commands, []);
+  assert.deepEqual(events.filter((e) => e.event === 'session.awaiting-input'), []);
+});
+
 test('a session that goes straight back to idle is given up on, out loud', async (t) => {
   // A session idle because it is BROKEN comes back broken. A restarter with no
   // memory sits in that loop indefinitely — burning a slot, and doing it
   // silently, which is worse.
   const { stub, watcher, events } = await restartingWatcherFor(
     t,
-    { sessions: [sessionRecord('broken', { status: 'running' })], panes: { broken: 'same as it ever was' } },
+    { sessions: [sessionRecord('broken', { status: 'running', activity: HOOK_WORKING })], panes: { broken: 'same as it ever was' } },
     60 * 60_000,
   );
   await watcher.tick({ quiet: true });
@@ -369,7 +438,7 @@ test('a restart that works resets the budget, so next week it may restart again'
   // wedges every time it comes up.
   const { stub, watcher } = await restartingWatcherFor(
     t,
-    { sessions: [sessionRecord('flaky', { status: 'running' })], panes: { flaky: 'frozen' } },
+    { sessions: [sessionRecord('flaky', { status: 'running', activity: HOOK_WORKING })], panes: { flaky: 'frozen' } },
     60 * 60_000,
   );
   await watcher.tick({ quiet: true });
@@ -439,7 +508,7 @@ test('a pane frozen mid-work, with no prompt on it, still restarts', async (t) =
   // middle of something, which is the case worth acting on.
   const { stub, watcher } = await restartingWatcherFor(
     t,
-    { sessions: [sessionRecord('wedged', { status: 'running' })], panes: { wedged: 'Running tests…' } },
+    { sessions: [sessionRecord('wedged', { status: 'running', activity: HOOK_WORKING })], panes: { wedged: 'Running tests…' } },
     60 * 60_000,
   );
   await watcher.tick({ quiet: true });
@@ -457,7 +526,7 @@ test('our own stop is not announced as the session finishing', async (t) => {
   // surface its credibility.
   const { stub, watcher, events } = await restartingWatcherFor(
     t,
-    { sessions: [sessionRecord('wedged', { status: 'running' })], panes: { wedged: 'Running tests…' } },
+    { sessions: [sessionRecord('wedged', { status: 'running', activity: HOOK_WORKING })], panes: { wedged: 'Running tests…' } },
     60 * 60_000,
   );
   await watcher.tick({ quiet: true });
@@ -477,7 +546,7 @@ test('an error still gets through, because that is not our doing', async (t) => 
   // errored while we were restarting it is a fact about the session.
   const { stub, watcher, events } = await restartingWatcherFor(
     t,
-    { sessions: [sessionRecord('wedged', { status: 'running' })], panes: { wedged: 'Running tests…' } },
+    { sessions: [sessionRecord('wedged', { status: 'running', activity: HOOK_WORKING })], panes: { wedged: 'Running tests…' } },
     60 * 60_000,
   );
   await watcher.tick({ quiet: true });
@@ -498,7 +567,7 @@ test('hitting the cap is one notification, not two', async (t) => {
   // it takes to read; spending two on one event spends one against the person.
   const { watcher, events } = await restartingWatcherFor(
     t,
-    { sessions: [sessionRecord('broken', { status: 'running' })], panes: { broken: 'Running tests…' } },
+    { sessions: [sessionRecord('broken', { status: 'running', activity: HOOK_WORKING })], panes: { broken: 'Running tests…' } },
     60 * 60_000,
   );
   await watcher.tick({ quiet: true });
@@ -524,7 +593,6 @@ test('hitting the cap is one notification, not two', async (t) => {
 // once per return, and never on the first pass.
 
 const AT_PROMPT = '> \n  ? for shortcuts · shift+tab to cycle modes';
-const WORKING = 'Reading files…\n  esc to interrupt';
 
 test('a session that comes back to its prompt after working is announced once', async (t) => {
   const { stub, watcher, events } = await watcherFor(t, {

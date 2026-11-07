@@ -307,6 +307,15 @@ struct SessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await reload() }
         .task(id: watchGeneration) { await watch() }
+        // BACK IN FRONT: the picture on this page is from before the pocket.
+        // One fresh look and the short watch again, as if the page had just
+        // been opened; a page left open all afternoon still stops. The
+        // session's own sentence is reloaded too, so a Stop or an answer from
+        // the other phone moves the title.
+        .onReceive(NotificationCenter.default.publisher(for: .becameActive)) { _ in
+            Task { await reload() }
+            watchGeneration += 1
+        }
     }
 
     private func sectionHead(_ text: String) -> some View {

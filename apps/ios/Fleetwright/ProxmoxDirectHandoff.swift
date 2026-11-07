@@ -61,6 +61,13 @@ enum ProxmoxDirectHandoff {
 
     static func isPending(_ address: String) -> Bool { pending().contains { $0.address == address } }
 
+    /// Every run this phone followed, with the node password each held:
+    /// what signing out does (Settings.signOut).
+    static func forgetAll() {
+        for entry in pending() { forget(address: entry.address) }
+        UserDefaults.standard.removeObject(forKey: pendingKey)
+    }
+
     /// One look at the run: how far it has got, and, once it has ended, what
     /// came of it. Nil when this phone follows no run at that address, or
     /// another look is taking its line this moment. Throws when the node did

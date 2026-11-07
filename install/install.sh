@@ -1958,8 +1958,8 @@ if [ -n "$NODE_BIN" ]; then
 
        The prerequisite step installs it into your user's home with nvm, and is
        separate because changing how this machine gets software is not a thing
-       an installer does on your behalf:
-           curl -fsSL ${FLEETWRIGHT_COORDINATOR_URL:-https://fleet.thetech.network}/prereq | sudo sh
+       an installer does on your behalf. Your coordinator serves it:
+           curl -fsSL ${FLEETWRIGHT_COORDINATOR_URL:-https://<your-coordinator>}/prereq | sudo sh
 
        Or install node any other way — nvm, fnm, a backport — and re-run. If
        you already have one that sudo cannot see:
@@ -4005,6 +4005,15 @@ enrol_host() {
   if sidecar_cli enrol "$pin" 2>&1 | sed 's/^/  /'; then
     ok "enrolled at $ENROL_URL"
     ENROLLED=1
+    # JOINED IS NOT READY, and this used to be where the installer stopped
+    # talking. The coordinator knows the machine now and will still place no
+    # work on it: a machine has no Claude account of its own, so until
+    # somebody's vault approves it (docs/first-session.md) every session
+    # placed here is refused. Said now, in the app's own words, because a
+    # beta tester's first run ended at exactly this silence.
+    printf '  Joined, not ready for sessions yet: in the app keep your Claude login under\n'
+    printf '  You > Credentials, then approve this machine from its page under Machines.\n'
+    printf '  `fleetwright-sidecar doctor` says when a session can start here.\n'
   else
     warn "enrolment failed — run: sudo -u $SIDECAR_USER $(sidecar_tree)/bin/fleetwright-sidecar enrol <pin>"
   fi

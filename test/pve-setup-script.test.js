@@ -240,3 +240,66 @@ test('the script names the host a public certificate is checked as, from the cer
   assert.equal(pick('DNS:pve01.example.test', 'pve01.example.test:8006'), 'NAME=', 'an address that is a name is what the certificate is held to');
   assert.equal(pick('DNS:pve01.example.test', '[fd00::10]:8006'), 'NAME=pve01.example.test');
 });
+
+// STOPPED IS NOT DONE, on Proxmox as on Xen Orchestra. The build's
+// cloud-config says `fleetwright-build: off` on the console before it powers
+// off, and the script used to take any stopped VM for an installed one: a VM
+// stopped from the web interface, a node rebooted for maintenance, an install
+// cut off mid-step, each ran `qm template` and became the image every later
+// machine was cloned from. Reproduced by a review that ran this function
+// against a stand-in qm with no marker on the console. The image step's
+// functions, run as the script runs them, against stand-ins that keep what
+// they are told and a perl that plays the console's reader.
+test('the image build becomes a template only once its console said off; a halt without the word keeps the VM and the old image', { skip }, () => {
+  const text = readFileSync(SCRIPT, 'utf8');
+  const names = ['say', 'step', 'die', 'part', 'json', 'pinned', 'free_vmid', 'tagged', 'templates_of', 'build_image', 'console_said', 'build_failed', 'build_unfinished'];
+  // A one-line function first (`say() { ...; }`), then a block to its own
+  // closing brace; the other way round, the lazy block swallowed the script
+  // after a one-liner.
+  const fns = names.map((n) => new RegExp(`^${n}\\(\\) \\{[^\\n]*\\}\\n|^${n}\\(\\) \\{\\n[\\s\\S]*?^\\}\\n`, 'm').exec(text)?.[0]);
+  assert.ok(fns.every(Boolean), `the script is missing one of ${names.join(', ')}`);
+  for (const marker of [true, false]) {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-pve-image-'));
+    const bin = path.join(dir, 'bin');
+    spawnSync('mkdir', ['-p', bin]);
+    const log = path.join(dir, 'qm.log');
+    const tools = {
+      qm: `echo "$*" >> '${log}'\ncase "$1" in status) echo "status stopped" ;; esac\nexit 0`,
+      pvesh: `case "$1 $2" in "get /cluster/nextid") echo 9100 ;; "get /cluster/resources") echo '[]' ;; *) echo "no pvesh $*" >&2; exit 255 ;; esac`,
+      // The image is "already downloaded and checked": the sum stand-in agrees with any file.
+      sha512sum: 'exit 0',
+      sha256sum: 'exit 0',
+      // THE CONSOLE'S READER is perl on a socket; everything else the script
+      // asks perl (JSON::PP) is the real one. The stand-in writes what the
+      // build VM would have said, or nothing.
+      perl: `case "$1" in -MIO::Socket::UNIX) ${marker ? `printf 'fleetwright-build: up\\nfleetwright-build: fleetwright\\nfleetwright-build: off\\n' >> "\${@: -1}"` : ':'}; exit 0 ;; *) exec /usr/bin/perl "$@" ;; esac`,
+      sleep: 'exit 0',
+    };
+    for (const [name, body] of Object.entries(tools)) {
+      writeFileSync(path.join(bin, name), `#!/bin/bash\n${body}\n`);
+      chmodSync(path.join(bin, name), 0o755);
+    }
+    const harness = [
+      'set -Eeuo pipefail',
+      'POOL=fleetwright STORAGE=local-lvm BRIDGE=vmbr0 SNIPPETS=local CHANNEL=stable REBUILD=0 VMIDS="" SAID="" BUILDING=""',
+      `LAST_ERR=${path.join(dir, 'last-err')}`,
+      ...fns,
+      'build_image debian-13 1 1',
+    ].join('\n');
+    const r = spawnSync('bash', ['-c', harness], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, timeout: 60_000 });
+    const out = `${r.stdout}${r.stderr}`;
+    assert.ok(existsSync(log), `qm was never asked anything:\n${out}`);
+    const qm = readFileSync(log, 'utf8');
+    if (marker) {
+      assert.equal(r.status, 0, out);
+      assert.match(out, /^fleetwright: image: template 9100, fleetwright-debian-13$/m);
+      assert.match(qm, /^template 9100$/m, 'the build that said off is the template');
+    } else {
+      assert.equal(r.status, 1, out);
+      assert.match(out, /^fleetwright-error: VM 9100 powered off before it said the install was done\. It was not made the template; the pool keeps the image it had\. VM 9100 is kept, stopped, as fleetwright-debian-13-build-stopped-before-done; running this again removes it and builds afresh\.$/m);
+      assert.doesNotMatch(qm, /^template /m, 'a halt without the word became the template');
+      assert.doesNotMatch(qm, /^destroy 9100/m, 'the VM is kept for looking at, not removed');
+      assert.match(qm, /^set 9100 --name fleetwright-debian-13-build-stopped-before-done$/m);
+    }
+  }
+});

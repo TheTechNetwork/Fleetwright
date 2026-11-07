@@ -689,6 +689,15 @@ class Fleet(
          */
         val appPendingReported: Boolean? = null,
         /**
+         * What the last update on this box did NOT finish, in the host's own
+         * sentence (src/core/update-outcome.js): a session image it could not
+         * pull, a root repair sudo refused. Null is both "it finished" and "a
+         * host too old to say", neither a fault to draw, so the row says
+         * "up to date" only when this is null and the page shows the sentence
+         * when it is not.
+         */
+        val updateIncomplete: String? = null,
+        /**
          * Whether a new session from this person would reach it now, by the
          * rule placement uses (core.js, takesSessions). Null from a coordinator
          * too old to say, and then a healthy machine is offered as before.
@@ -885,6 +894,8 @@ class Fleet(
         /** What the box allows from the app, beside what is waiting; null when the host did not say. */
         val grantUpgrades: Boolean? = null,
         val grantReboot: Boolean? = null,
+        /** What the last update left undone, as the frame's `updates.incomplete`. */
+        val incomplete: String? = null,
     )
 
     data class Reply(
@@ -3093,6 +3104,7 @@ class Fleet(
                             // missing grant is a host that did not say, not off.
                             grantUpgrades = w.optJSONObject("grants")?.takeIf { it.has("upgrades") && !it.isNull("upgrades") }?.optBoolean("upgrades"),
                             grantReboot = w.optJSONObject("grants")?.takeIf { it.has("reboot") && !it.isNull("reboot") }?.optBoolean("reboot"),
+                            incomplete = w.optString("incomplete")?.takeIf { it.isNotBlank() && it != "null" },
                         )
                     },
                     profiles = json.optJSONArray("profiles")?.let { a ->
@@ -3284,6 +3296,7 @@ class Fleet(
                     // and "nobody could find out" — the whole point of the field.
                     appPendingReported =
                         updates?.takeIf { it.has("appPending") && !it.isNull("appPending") }?.optBoolean("appPending"),
+                    updateIncomplete = updates?.optString("incomplete")?.takeIf { it.isNotBlank() && it != "null" },
                     systemUpdates = updates?.optString("system")?.takeIf { it.isNotBlank() && it != "null" },
                     rebootRequired = updates?.optBoolean("rebootRequired") == true,
                     release = updates?.optJSONObject("release")?.let { r ->
@@ -3785,6 +3798,30 @@ class Settings(context: Context) {
     }
 
     fun secret(name: String): String? = prefs.getString("secret.$name.enc", null)?.let { decrypt(it) }
+
+    /**
+     * EVERY HYPERVISOR CREDENTIAL THIS PHONE HOLDS, GONE: what signing out
+     * does (YouScreen). They are kept by address, not by account: the pool
+     * tokens setup sealed to this phone (`secret.hypervisor.*`), the admin
+     * sign-ins kept behind the fingerprint (`xoSaved.*`), the keys a running
+     * setup's token or line comes back to, a Proxmox node's root password
+     * while a run is followed, the secrets this phone lets a pool's own
+     * machines in with (`holderSecrets.*`), and the lists that name them.
+     * Signing out removed the fleet credential and left all of that, so the
+     * next person to sign in on this phone could reach every pool the last
+     * one had, phone-direct and past the coordinator (docs/manage.md). A
+     * pool kept in the fleet is still in its owner's vault; one kept only
+     * here is set up again.
+     */
+    fun forgetHypervisors() {
+        val prefixes = listOf(
+            "secret.hypervisor.", "secret.xosetup-reply.", "secret.pvesetup-reply.",
+            "secret.pvedirect-password.", "secret.pvedirect-line.", "xoSaved.", "holderSecrets.",
+        )
+        val whole = setOf("xoHeld", "xoPending", "pveDirectPending", "pvePending", "xoVia", "xoLooked")
+        val gone = prefs.all.keys.filter { k -> k in whole || prefixes.any { k.startsWith(it) } }
+        prefs.edit().apply { gone.forEach { remove(it) } }.apply()
+    }
 
     /**
      * The Xen Orchestra addresses this phone keeps a token for, as XoHandoff

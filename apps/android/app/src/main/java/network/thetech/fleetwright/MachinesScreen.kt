@@ -720,6 +720,12 @@ private fun MachinePage(
                     OutlinedButton(enabled = !busy, onClick = { run { it.update(hostId, restart = true) } }) { Text("Apply update") }
                 }
             }
+            // WHAT THE LAST UPDATE DID NOT FINISH, in the host's words: the
+            // session image it could not pull, the root repair sudo refused,
+            // each with the command that finishes it. It stays until an update
+            // finishes the step. Attention, not error: the box works, and part
+            // of what was asked for is still waiting. Same rule as iOS.
+            h.updateIncomplete?.let { Hint(it, color = Design.Palette.attention.now) }
             if (administers) {
                 // ONLY WHERE IT WOULD WORK. Null is cannot tell (an older host) and
                 // keeps the button; the box's own refusal explains.
@@ -1082,6 +1088,9 @@ private fun withWaiting(host: Fleet.FleetHost, w: Fleet.Waiting): Fleet.FleetHos
         null
     },
     appPendingReported = w.appPending,
+    // A Check reads the same record the frame does, so what it says replaces
+    // what the frame said, null included.
+    updateIncomplete = w.incomplete,
     // Carried over when the reply does not say: an older host's check must not
     // clear what its frame reported.
     grantUpgrades = w.grantUpgrades ?: host.grantUpgrades,
