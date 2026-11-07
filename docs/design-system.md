@@ -217,9 +217,45 @@ the web drops every `box-shadow`, and a borderless card there is three panes of
 text running together. `@media (forced-colors: active)` puts a border back, and
 only there.
 
+### Words — the answer, then the reason, then the mechanism
+
+A review in November 2026 (`docs/reviews/copy-2026-11-06.md`) found both apps
+showing their working: a row said what was checked, from where, what each part
+answered and why that was not enough, in place of what was true. It had grown
+out of three good rules in `psychology.md` — the banner's *"and why it is
+confident"*, §6 *say what to do about it*, §7 *never pass "cannot tell" off as
+"none"* — applied at every level instead of the one line they were argued for.
+
+The rules stand. What is fixed is **where each kind of sentence goes**:
+
+| Level | Says | Length | Example |
+|---|---|---|---|
+| **Row** | the verdict | 1 to 3 words, plus a count or a time | `healthy` · `Waiting for you · 12m` · `2 of 3 linked` · `Can't reach` |
+| **Page** | the result, and at most one action, as a control | one sentence | `Not started: the machine needs an update` · `1 session is running on deb132. It will not survive.` |
+| **Why** | the mechanism: what was checked and from where, custody, polling | as long as it needs, **once per screen**, behind a disclosure or a tap | the scope list behind `works · @octocat · 6 scopes` |
+
+Three things survive from the doctrine, in a new shape:
+
+- **§7 survives as a word.** *Cannot tell* is still never shown as *none*. It
+  is `Unknown` or `Not checked`, never a sentence naming the component that
+  did not answer.
+- **§6 survives as a button.** The remedy is still offered. It is a control
+  beside the result, not a clause inside the status.
+- **The banner keeps its basis.** `Reassurance.basis` is the one line the
+  second sentence was argued for.
+
+And the codebase's nouns stay in the codebase. A person reading the phone has
+a machine, not a box; something saved, not sealed to a minter; access, not a
+line handed over; internet access, not a way out. The list is in
+`test/design-words.test.js`, which fails a sentence on either phone that uses
+one, the way `design-tokens.test.js` fails a stray colour. `token` and
+`vault` are not on that list: a GitHub token is what GitHub calls it, and
+*Your vault* is a screen's name. They are still kept out of sentences by
+hand, and under a disclosure where the mechanism has to be said.
+
 ## 3. How it is kept honest
 
-Three checks, each answering something the others cannot:
+Four checks, each answering something the others cannot:
 
 - **`test/design-parity.test.js`** reads the stylesheet, the Swift and the
   Kotlin and asserts every token in the shared table is declared with the same
@@ -230,6 +266,10 @@ Three checks, each answering something the others cannot:
   written outside the palette, an off-scale px value, heading tracking applied
   to body text, a card that draws a border, and the two light palettes drifting
   apart — which is silent until somebody flips the theme switch.
+- **`test/design-words.test.js`** reads every Swift and Kotlin source and
+  fails a sentence (a string literal with a space in it, comments skipped)
+  that uses a word from the retired list above. It cannot judge whether a
+  row says too much; it can see a `box` where a machine belongs.
 - **The app builds.** A token renamed in `Design.swift` and not at its call
   sites is an unresolved symbol; CI compiles both apps on every pull request
   that touches them.
