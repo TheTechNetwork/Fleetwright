@@ -16,7 +16,7 @@ import path from 'node:path';
 
 import { PveApi, connectTrusted } from '../src/fleet/host/pve-api.js';
 import {
-  PvePools, parseConnection, connectionOf, pveProblem, certsOf, pveRecord, markOf, markText, wideOf, pveIdOf, pveVendorConfig, pveBuildConfig, vmidsOf,
+  PvePools, parseConnection, connectionOf, pveProblem, certsOf, pveRecord, markOf, markText, wideOf, agentAddress, pveIdOf, pveVendorConfig, pveBuildConfig, vmidsOf,
   CONNECTION_PREFIX, PVE_FENCE_GROUP, PVE_GROUP_ZONE, PVE_LAB_ZONE, PVE_ALLOW_SET, PVE_ROLE_PRIVS, PVE_STORAGE_PRIVS, PVE_NET_PRIVS, PVE_ROOT_PRIVS,
 } from '../src/fleet/host/pve-pools.js';
 import { poolRecord } from '../src/fleet/host/xo-pools.js';
@@ -728,4 +728,20 @@ test('both phones start, follow and take the setup on the node with the same com
     assert.match(script, new RegExp(`^step ${step}$`, 'm'), `the script has no step ${step}`);
     assert.ok(ios.includes(`case "${step}":`) && android.includes(`"${step}" ->`), `a phone has no words for ${step}`);
   }
+});
+
+// THE ADDRESS ITS GUEST AGENT REPORTS, on the interface the fleet gave it.
+// "No address yet" stayed for good on every Proxmox VE machine: the box never
+// asked. A second interface on a group network is not the machine's own, and
+// loopback and link-local are never an address to reach.
+test('a machine’s address is its guest agent’s IPv4 on net0, and nothing else is', () => {
+  const net0 = 'virtio=BC:24:11:00:00:07,bridge=vmbr0,firewall=1';
+  const nic = (/** @type {string} */ mac, /** @type {string[]} */ ips) => ({ name: 'x', 'hardware-address': mac, 'ip-addresses': ips.map((ip) => ({ 'ip-address-type': ip.includes(':') ? 'ipv6' : 'ipv4', 'ip-address': ip, prefix: 24 })) });
+  const answer = { result: [nic('00:00:00:00:00:00', ['127.0.0.1']), nic('bc:24:11:00:00:09', ['10.200.0.5']), nic('bc:24:11:00:00:07', ['fe80::1', '169.254.3.3', '10.69.10.57'])] };
+  assert.equal(agentAddress(answer, net0), '10.69.10.57');
+  // C-5: no agent, no such interface, or no address yet is cannot tell.
+  assert.equal(agentAddress(null, net0), null);
+  assert.equal(agentAddress({ result: [nic('bc:24:11:00:00:09', ['10.200.0.5'])] }, net0), null);
+  assert.equal(agentAddress({ result: [nic('bc:24:11:00:00:07', ['fe80::1'])] }, net0), null);
+  assert.equal(agentAddress(answer, 'bridge=vmbr0'), null);
 });

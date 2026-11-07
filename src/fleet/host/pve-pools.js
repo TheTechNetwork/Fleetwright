@@ -113,6 +113,10 @@ export const PVE_ROLE_PRIVS = Object.freeze([
   'VM.Allocate', 'VM.Clone', 'VM.Audit', 'VM.PowerMgmt',
   'VM.Config.CPU', 'VM.Config.Memory', 'VM.Config.Network', 'VM.Config.Options', 'VM.Config.HWType', 'VM.Config.Cloudinit',
   'Pool.Audit',
+  // THE ADDRESS ITS GUEST AGENT REPORTS, for "No address yet" to end and
+  // SSH to be offered: `agent/network-get-interfaces`, which Proxmox VE 9
+  // allows with this and nothing wider (it replaced VM.Monitor). Read only.
+  'VM.GuestAgent.Audit',
 ]);
 export const PVE_STORAGE_PRIVS = Object.freeze(['Datastore.AllocateSpace', 'Datastore.Audit']);
 export const PVE_NET_PRIVS = Object.freeze(['SDN.Use', 'SDN.Audit']);
@@ -661,7 +665,10 @@ export class PvePools {
         name: String(v.name),
         vm: pveIdOf(record.address, 'vm', `${v.vmid}:${mark.made}`),
         state: stopped ? 'Halted' : v.status === 'running' ? 'Running' : String(v.status || '') || null,
-        ip: null,
+        // ITS ADDRESS, as its guest agent says, on the interface the fleet
+        // gave it: null while it boots, where the agent does not answer, or
+        // where the token predates the privilege (the setup run again adds it).
+        ip: stopped ? null : agentAddress(await api.get(`${base}/agent/network-get-interfaces`).catch(() => null), cfg.net0),
         until: mark.until * 1000,
         madeAt: mark.made * 1000,
         cpus: Number.isInteger(Number(cfg.cores)) ? Number(cfg.cores) * (Number(cfg.sockets) || 1) : null,
@@ -1089,6 +1096,34 @@ export class PvePools {
       return { ok: false, text: `${record.address} would not do that: ${/** @type {Error} */ (e).message}` };
     }
   }
+}
+
+/**
+ * A MACHINE'S ADDRESS from its guest agent's answer to
+ * `agent/network-get-interfaces`: the IPv4 address on the interface whose
+ * hardware address is net0's, the one the fleet put it on, so a second
+ * interface on a group network is never offered for SSH as if it were the
+ * machine's own. Loopback and link-local are never an address to reach. Null
+ * is cannot tell (C-5): no answer, no such interface, or no address on it.
+ *
+ * ONE CALL PER RUNNING MACHINE A LOOK, which the look already makes for its
+ * config: the budget is MAX_MACHINES of each, every refresh.
+ *
+ * @param {any} answer @param {unknown} net0 @returns {string|null}
+ */
+export function agentAddress(answer, net0) {
+  const list = Array.isArray(answer?.result) ? answer.result : Array.isArray(answer) ? answer : null;
+  if (!list) return null;
+  const mac = /(?:^|,)[a-z0-9]+=([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})/.exec(String(net0 || ''))?.[1]?.toLowerCase();
+  if (!mac) return null;
+  const nic = list.find((/** @type {any} */ i) => String(i?.['hardware-address'] || '').toLowerCase() === mac);
+  for (const a of Array.isArray(nic?.['ip-addresses']) ? nic['ip-addresses'] : []) {
+    const ip = String(a?.['ip-address'] || '');
+    if (a?.['ip-address-type'] !== 'ipv4' || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) continue;
+    if (ip.startsWith('127.') || ip.startsWith('169.254.')) continue;
+    return ip;
+  }
+  return null;
 }
 
 /**
