@@ -56,13 +56,12 @@ struct ClaudeSetup: View {
 
     var body: some View {
         if !phone.signedIn {
-            Text("Your Claude login is kept under your GitHub account, so sign in to GitHub on this phone first.")
+            Text("Sign in to GitHub first.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
             PhoneGitHubSignIn(settings: settings)
         } else {
-            Text("Sessions run on your own Claude subscription. Keep your login once, and every runner you start, "
-                 + "and every box you approve, uses it.")
+            Text("Sessions run on your Claude subscription. Add it once.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
                 .task { await loadMachines() }
@@ -78,7 +77,7 @@ struct ClaudeSetup: View {
                 SecureField("Code from the sign-in page", text: $code)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Button(busy ? "Keeping…" : "3. Keep my Claude login") { Task { await keepFromMachine() } }
+                Button(busy ? "Saving…" : "3. Save my Claude login") { Task { await keepFromMachine() } }
                     .disabled(busy || code.isBlank)
                 Button("Cancel", role: .cancel) {
                     self.page = nil
@@ -97,20 +96,23 @@ struct ClaudeSetup: View {
                     }
                     Button(busy ? "Starting…" : "Make it on \(machine)") { Task { await startOnMachine() } }
                         .disabled(busy || machine.isEmpty)
-                    Text("\(machine) signs you in to Claude, the kind of login Remote Control needs. It comes back "
-                         + "sealed to this phone, and the machine keeps no copy.")
+                    Text("Works with Remote Control. \(machine) keeps no copy.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
+                // THE LIMIT IS SAID ONCE. With a machine offered, the line
+                // above says which kind works with Remote Control, so this one
+                // does not say it again; with none, this is the only path and
+                // the only place to say it.
                 Text(machines.isEmpty
-                     ? "On a computer, run claude setup-token, sign in, and paste the line it prints here. It runs sessions but cannot open Remote Control."
-                     : "Or, on a computer, run claude setup-token, sign in, and paste the line it prints here. It runs sessions but cannot open Remote Control.")
+                     ? "Paste a token from claude setup-token. It cannot open Remote Control."
+                     : "Or paste a token from claude setup-token.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
                 SecureField("Token from claude setup-token", text: $draft)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Button(busy ? "Keeping…" : "Keep my Claude login") {
+                Button(busy ? "Saving…" : "Save my Claude login") {
                     Task {
                         busy = true
                         defer { busy = false }
@@ -220,8 +222,7 @@ struct ClaudeSetupCard: View {
             Text("Finish setting up")
                 .fleetType(.bodyStrong)
                 .foregroundStyle(Design.Palette.ink)
-            Text("Sessions run on your own Claude account. Keep your Claude login once, and every runner "
-                 + "you start can use it.")
+            Text("Add your Claude account so sessions can start.")
                 .fleetType(.bodySmall)
                 .foregroundStyle(Design.Palette.inkDim)
             HStack(spacing: Design.Space.groupTight) {

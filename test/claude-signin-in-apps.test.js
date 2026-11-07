@@ -24,13 +24,16 @@ const ANDROID = androidSources();
 const HOST_VIEW = readFileSync(new URL('../apps/ios/Fleetwright/HostView.swift', import.meta.url), 'utf8');
 
 // The sentences a person reads, the same on both phones.
+// The Remote Control limit is said once per screen: as the saved Claude
+// row's status word, and on the paste line only when no machine is offered
+// (docs/reviews/copy-2026-11-06.md, 134, 135, 142).
 const SAID = [
-  'signs you in to Claude, the kind of login Remote Control needs. It comes back ',
-  'It runs sessions but cannot open Remote Control.',
-  'Your Claude login is a setup-token: it runs sessions but cannot open Remote Control. ',
-  'Make it on a machine below to have Remote Control.',
-  'is older and made a setup-token, which runs sessions but cannot open Remote Control.',
-  'do not use these any more; forget them to take them off the box.',
+  'Works with Remote Control. ',
+  ' keeps no copy.',
+  'Paste a token from claude setup-token. It cannot open Remote Control.',
+  'No Remote Control',
+  'is out of date, so this login cannot open Remote Control. Update it and sign in again.',
+  'Older links. Sessions you start no longer use them.',
 ];
 
 test('iOS: a machine’s page signs nobody in to Claude', () => {
@@ -43,8 +46,9 @@ test('iOS: the words about a sign-in and a setup-token', () => {
   for (const words of SAID) {
     assert.ok(IOS.includes(words), `iOS does not say: ${words}`);
   }
-  // Said only when the minter said which kind it keeps (C-5).
-  assert.match(IOS, /if kept\.items\.first\(where: \{ \$0\.name == "claude" \}\)\?\.kind == "token" \{/);
+  // Said only when the minter said which kind it keeps (C-5): the row's
+  // status word, and "Saved" for a kind it did not say.
+  assert.match(IOS, /item\.name == "claude" && item\.kind == "token" \? "No Remote Control" : "Saved"/);
 });
 
 test('Android: no machine’s page signs anybody in, with the same words about a sign-in and a setup-token', () => {
@@ -52,7 +56,7 @@ test('Android: no machine’s page signs anybody in, with the same words about a
   assert.doesNotMatch(ANDROID, /onlyClaude = true\)/);
   assert.doesNotMatch(ANDROID, /Connect Claude on \$host/);
   for (const words of SAID) assert.ok(ANDROID.includes(words), `Android does not say: ${words}`);
-  assert.match(ANDROID, /if \(kept\.items\.firstOrNull \{ it\.name == "claude" \}\?\.kind == "token"\) \{/);
+  assert.match(ANDROID, /if \(item\.name == "claude" && item\.kind == "token"\) "No Remote Control" else "Saved"/);
   // The empty list asks the vault, as iOS does.
   assert.match(ANDROID, /needsSetup = binHosts\.isNotEmpty\(\) && \(claude == ClaudeKept\.Missing \|\| claude == ClaudeKept\.NeedsGitHub\)/);
   assert.match(ANDROID, /OutlinedButton\(onClick = onSetUp\) \{ Text\("Set up Claude"\) \}/);

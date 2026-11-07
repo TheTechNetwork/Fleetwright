@@ -379,7 +379,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             await MainActor.run {
                 LocalNotice.post(
                     title: name,
-                    body: "That question is more than an hour old, so it was not answered from here. Open the session to see what it is asking now."
+                    body: "Not answered: the question is over an hour old. Tap to see it now."
                 )
                 open(name)
             }
@@ -458,7 +458,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         } catch {
             LocalNotice.post(
                 title: name,
-                body: "The fleet could not be reached, so that answer was not sent. Open the session to try again."
+                body: "Answer not sent. Could not reach your fleet."
             )
             open(name)
         }

@@ -52,15 +52,17 @@ const PHONES = [
  * literal on both.
  */
 const SAID = [
-  ['{hostId} asks to join'],
-  ['To hold {address}. This phone checks it is the machine you made before it lets it in.'],
-  ['{hostId} has not asked to join yet. If it never does, make it again from the pool’s policy.'],
-  ['Let {hostId} join and hold {address}'],
-  ['None of the requests under {hostId} was made by the machine this phone made, so nothing was let in. ', 'Decline it, and make the pool’s own machine again if it never asks.'],
-  ['This phone did not make {hostId}, so it cannot check it. Let it in from the phone that applied the policy, or make it again from this one.'],
-  ['{hostId} has joined and holds {address}.'],
-  ['{hostId} has joined, and could not be approved to hold its pool: {why} Approve it under its page.'],
-  ['This phone made {hostId}, so it lets it in by itself once it asks. Nothing to tap.'],
+  ['{hostId} wants to join'],
+  ['Pool machine for {address}.'],
+  ['Waiting for {hostId}…'],
+  ['Approve {hostId} for {address}'],
+  ['{hostId} could not be verified. Decline it.'],
+  ['Approve {hostId} from the phone that created it.'],
+  ['{hostId} joined and manages {address}.'],
+  // One short sentence: the vault's reason stays off the card, which says
+  // the result and the one action (docs/reviews/copy-2026-11-06.md, 158).
+  ['{hostId} joined but still needs approval. Open its page.'],
+  ['{hostId} will join by itself.'],
   ['{hostId} joined'],
 ];
 
@@ -153,8 +155,8 @@ test('Let it in and Decline are offered only for a name something has asked unde
 
 test('both phones say it in the same words', () => {
   const names = {
-    iOS: { hostId: 'hostId', address: 'address', why: 'why' },
-    Android: { hostId: 'hostId', address: 'address', why: 'why' },
+    iOS: { hostId: 'hostId', address: 'address' },
+    Android: { hostId: 'hostId', address: 'address' },
   };
   for (const p of PHONES) {
     for (const pieces of SAID) {
@@ -169,8 +171,8 @@ test('both phones say it in the same words', () => {
 test('the policy form offers to make it again, and says what the new one does, in the same words', () => {
   const lines = [
     ['Make it again'],
-    ['Removes {name}, disk and all, and makes a new one that asks to join. For one that never joined the fleet.'],
-    ['to be awake. Once it is up it asks to join, and this phone ', 'lets it in to hold the pool by itself, as the phone that made it.'],
+    ['Removes {name} and makes a new one. For one that never joined.'],
+    ['An always-on VM that manages this pool, so ', ' need not stay awake.'],
   ];
   for (const p of PHONES) {
     for (const pieces of lines) {

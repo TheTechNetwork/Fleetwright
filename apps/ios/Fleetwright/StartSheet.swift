@@ -188,30 +188,18 @@ struct StartSheet: View {
         return host.hasPrefix(newMachineTag) ? String(host.dropFirst(newMachineTag.count)) : nil
     }
 
-    /// The machine image chosen, when it is one from your hypervisor.
-    /// What a lab is, in the words of the hypervisor it is on: a network on
-    /// Xen Orchestra's edge router, or one the setup made on a Proxmox VE
-    /// cluster and its firewall holds (docs/proxmox.md, "Labs and groups").
-    /// A function of its own, so the type checker sees strings and not one
-    /// long expression.
-    static func labFooter(proxmox: Bool, open: Bool) -> String {
-        let what = proxmox
-            ? "A lab is a network of its own on your cluster, and this machine is alone on it. "
-            : "A lab is a network of its own on your edge router, and this machine is alone on it. "
-        let reach: String
-        if !open {
-            reach = "It reaches the fleet and Claude and nothing else, so the session still runs, and everything else it tries is blocked."
-        } else if proxmox {
-            reach = "It reaches the internet and nothing private: not your network, not the cluster's other machines, not another lab."
-        } else {
-            reach = "It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab."
-        }
-        let cost = proxmox
-            ? " It costs no extra machine: the lab is a network the setup made on the cluster, and the cluster's firewall holds it there."
-            : " It costs no extra machine: the lab is an interface on the router you already have."
-        return what + reach + cost + " When its time runs out, or you end it on its page, the machine is removed and the lab is free for the next one."
+    /// What a lab gives the machine, in two sentences: alone, and what it
+    /// reaches. Where the lab lives (an interface on Xen Orchestra's edge
+    /// router, or a network a Proxmox VE cluster's firewall holds:
+    /// docs/proxmox.md, "Labs and groups") is the same answer for the person
+    /// starting a session, so it is not said here. The same words as Android.
+    static func labFooter(open: Bool) -> String {
+        open
+            ? "Alone on its own network. Reaches the internet only."
+            : "Alone on its own network. Reaches only Fleetwright and Claude."
     }
 
+    /// The machine image chosen, when it is one from your hypervisor.
     private var chosenImage: Fleet.VMImage? {
         guard host.hasPrefix(vmImageTag) else { return nil }
         let id = String(host.dropFirst(vmImageTag.count))
@@ -248,49 +236,43 @@ struct StartSheet: View {
         !reachableHosts.isEmpty && reachableHosts.allSatisfy { $0.health?.permissions == "bypassed" }
     }
 
-    /// Why "Permissions bypassed" is missing, said as what the machines told
-    /// us: one set to ask, or one that has not said. Empty when it is offered.
-    private var bypassMissingLine: String {
-        if bypassAllowed { return "" }
-        if reachableHosts.isEmpty {
-            return " Permissions bypassed is not offered: no machine this could start on has said what it allows."
-        }
-        let asks = reachableHosts.contains { $0.health?.permissions == "asks" }
-        if host.isEmpty {
-            return asks
-                ? " Permissions bypassed is not offered while the fleet picks the machine: one of them is set to ask before each tool."
-                : " Permissions bypassed is not offered while the fleet picks the machine: one of them has not said what it allows."
-        }
-        return asks
-            ? " Permissions bypassed is not offered here: this machine is set to ask before each tool."
-            : " Permissions bypassed is not offered here: this machine has not said what it allows."
-    }
+    /// Somebody reached for "Permissions bypassed" and it was not there: a kind
+    /// saved with it on a machine that does not allow it, or the choice taken
+    /// away under them when the machine changed. Only then does the footer
+    /// say how to get it; a person who never asked is not told why a choice
+    /// they did not want is missing.
+    @State private var askedBypass = false
+
+    /// What to do about it, said once and only to somebody who asked. Which
+    /// machine refused, or has not said, is the machine's page's business.
+    static let bypassAsk = "To skip permission prompts, pick a machine that allows it."
 
     private var boxDefaultLabel: String {
         switch boxPermissions ?? "" {
-        case "asks": return "Box default — asks before each tool"
-        case "bypassed": return "Box default — permissions bypassed"
-        default: return "Box default"
+        case "asks": return "Machine's setting (asks first)"
+        case "bypassed": return "Machine's setting (no prompts)"
+        default: return "Machine's setting"
         }
     }
 
     /// The sentence under the choice. The selected one still has to say what
-    /// it does, and the box default says it only when the box has said.
+    /// it does, and the machine's setting says it only when the machine has
+    /// said (C-5).
     private var permissionLine: String {
         let line: String
         switch permission {
         case "safe":
-            line = "It stops and asks before each tool, whatever its machine is set to."
+            line = "Asks before each tool, on any machine."
         case "dangerous":
-            line = "It runs each tool without asking first."
+            line = "Runs each tool without asking."
         default:
             switch boxPermissions ?? "" {
-            case "asks": line = "It asks before each tool, because that is how its machine is set."
-            case "bypassed": line = "It runs each tool without asking, because that is how its machine is set."
-            default: line = "It runs the way its machine is set."
+            case "asks": line = "Asks before each tool."
+            case "bypassed": line = "Runs each tool without asking."
+            default: line = "Runs the way the machine is set."
             }
         }
-        return line + bypassMissingLine
+        return askedBypass && !bypassAllowed ? line + " " + Self.bypassAsk : line
     }
 
     private var taskIsEmpty: Bool { task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -365,7 +347,7 @@ struct StartSheet: View {
                             scheduleSuggestion()
                         }
                     if profilesAnswered, !profiles.isEmpty, chosenPlatform == nil, taskIsEmpty {
-                        Picker("Or one written on a host", selection: $profile) {
+                        Picker("Or a saved task", selection: $profile) {
                             Text("None").tag("")
                             ForEach(profiles) { p in
                                 // The summary, not the name, because the name is
@@ -391,7 +373,7 @@ struct StartSheet: View {
                          ? "It starts with these words and gets to work. Say what to do, where, and what to report back: nothing can be added once it is going."
                          : profile.isEmpty
                             ? "Leave it empty and it starts idle, waiting for you."
-                            : "It starts with this as its first message. The words are kept on the host.")
+                            : "It starts with this as its first message.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
@@ -419,9 +401,11 @@ struct StartSheet: View {
                     } header: {
                         Text("Secret").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                     } footer: {
+                        // Where the value lives (on the machine, never here) is
+                        // the comment above this section's, not the footer's.
                         Text(secret.isEmpty
-                             ? "Optional. Grant a named secret and the session can fetch its value at runtime."
-                             : "It may fetch this secret's value while it runs. The value stays on the host — this app never sees it.")
+                             ? "Optional. The session can use this secret."
+                             : "The session can use this secret.")
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.inkDim)
                     }
@@ -440,9 +424,14 @@ struct StartSheet: View {
                             if let kindHost = now?.host, !kindHost.isEmpty { host = kindHost }
                             // A kind that saved a mode fills that too. One that
                             // saved none leaves the choice where it is, which
-                            // is the box default unless somebody moved it.
+                            // is the machine's setting unless somebody moved
+                            // it. One that saved a bypass no machine here
+                            // allows is the asking that earns the footer's
+                            // hint.
                             if let kindMode = now?.mode, kindMode == "safe" || (kindMode == "dangerous" && bypassAllowed) {
                                 permission = kindMode
+                            } else if now?.mode == "dangerous" {
+                                askedBypass = true
                             }
                             // And a kind that names a task fills that too, on
                             // the same terms — but only if the fleet still has
@@ -507,9 +496,12 @@ struct StartSheet: View {
                         // pool has a network besides the uplink. Behind the
                         // edge router is the default and the safe one: a
                         // network of yours puts the machine beside your own.
+                        // The default is named by what it gives the machine,
+                        // not by the router or firewall that gives it: that is
+                        // the pool page's word.
                         if vmLab.isEmpty, let networks = chosenImage?.networks, !networks.isEmpty {
                             Picker("Network", selection: $vmNetwork) {
-                                Text(chosenImage?.onProxmox == true ? "Behind the cluster’s firewall" : "Behind the edge router").tag("")
+                                Text("Default (internet only)").tag("")
                                 ForEach(networks) { network in Text(network.name).tag(network.id) }
                             }
                         }
@@ -533,7 +525,7 @@ struct StartSheet: View {
                                 Picker("In a lab", selection: $vmLab) {
                                     Text("No lab").tag("")
                                     if open { Text("Open: reaches the internet").tag("open") }
-                                    if closed { Text("Closed: only the fleet and Claude").tag("closed") }
+                                    if closed { Text("Closed: only Fleetwright and Claude").tag("closed") }
                                 }
                                 .onChange(of: vmLab) { _, now in
                                     if !now.isEmpty { vmNetwork = ""; vmGroup = "" }
@@ -553,34 +545,28 @@ struct StartSheet: View {
                     } header: {
                         Text("Where").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                     } footer: {
+                        // HOW LONG, AND WHAT HAPPENS AT THE END: the two facts
+                        // somebody choosing a new machine needs. Whether the
+                        // session starts idle is the Task footer's sentence,
+                        // and no link is promised: a runner's credential cannot
+                        // open Remote Control.
                         if chosenPlatform == "lab" {
-                            Text(Self.labFooter(proxmox: chosenImage?.onProxmox == true, open: vmLab == "open"))
+                            Text(Self.labFooter(open: vmLab == "open"))
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
                         } else if chosenPlatform == "vm" {
-                            Text("It is cloned from your machine image and joins in a minute or two. The session starts on it then"
-                                 + (taskIsEmpty
-                                    ? ", idle, with nothing to do. Give it a task above to put it to work."
-                                    : " and works on your task. You get a notification when it is back at its prompt.")
-                                 + " It powers off when the time runs out and is removed, with everything on it.")
+                            Text("Ready in about 2 minutes. Deleted with its files when time runs out.")
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
                         } else if chosenPlatform != nil {
-                            // NO LINK PROMISED. A runner's credential cannot open
-                            // Remote Control, so the notification that matters is
-                            // the one when its task is done.
-                            Text("It takes a few minutes to boot. The session starts on it when it joins"
-                                 + (taskIsEmpty
-                                    ? ", idle, with nothing to do. Give it a task above to put it to work."
-                                    : " and works on your task. You get a notification when it is back at its prompt.")
-                                 + " Everything on it is gone when the time runs out.")
+                            Text("Ready in a few minutes. Deleted with its files when time runs out.")
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
                             // SAID OUT LOUD, as docs/runner-central.md says it:
                             // the Windows runner is written and not yet proven,
                             // and offering it without that is a claim.
                             if chosenPlatform == "windows" {
-                                Text("Windows runners are written and not yet proven.")
+                                Text("Windows machines are new and may not work yet.")
                                     .fleetType(.label)
                                     .foregroundStyle(Design.Palette.attention)
                             }
@@ -589,13 +575,14 @@ struct StartSheet: View {
                 }
 
                 // HOW IT RUNS, after Where because the answer depends on it.
-                // The box's own default comes first and is selected: it sends
-                // no mode, so the operator's setting decides, and it is named
-                // from what the machine reported, or not at all when it has
-                // not (C-5). Bypassing is offered only where every machine
-                // this could land on has said it bypasses, because a box set
-                // to ask refuses it (C-2) and one that has not said may be set
-                // to ask (C-5), and the sentence below says why it is missing.
+                // The machine's own setting comes first and is selected: it
+                // sends no mode, so the operator's setting decides, and it is
+                // named from what the machine reported, or not at all when it
+                // has not (C-5). Bypassing is offered only where every machine
+                // this could land on has said it bypasses, because a machine
+                // set to ask refuses it (C-2) and one that has not said may be
+                // set to ask (C-5). Why it is missing is said only to somebody
+                // who reached for it (askedBypass).
                 Section {
                     Picker("Permissions", selection: $permission) {
                         Text(boxDefaultLabel).tag("")
@@ -604,9 +591,13 @@ struct StartSheet: View {
                             Text("Permissions bypassed").tag("dangerous")
                         }
                     }
-                    // A choice that vanished cannot stay chosen.
+                    // A choice that vanished cannot stay chosen, and losing it
+                    // is the asking that earns the footer's hint.
                     .onChange(of: bypassAllowed) { _, allowed in
-                        if !allowed, permission == "dangerous" { permission = "" }
+                        if !allowed, permission == "dangerous" {
+                            permission = ""
+                            askedBypass = true
+                        }
                     }
                 } header: {
                     Text("Permissions").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
@@ -622,11 +613,13 @@ struct StartSheet: View {
                 // session. Nothing said so until after the machine had booted.
                 if chosenPlatform != nil, claude == .missing || claude == .needsGitHub {
                     Section {
+                        // "May not" for a runner, which can fall back on the
+                        // runner repository's API key; "can't" for a machine
+                        // from your hypervisor, which has nothing to fall back
+                        // on. The fallback itself is Set up Claude's to explain.
                         Text(chosenImage != nil
-                             ? "No Claude login is kept in your vault, so a machine from your hypervisor has nothing to run "
-                               + "its session on. Keep one here first."
-                             : "No Claude login is kept for your runners, so this one runs on the runner repository's "
-                               + "API key if it has one, and cannot start the session if it does not.")
+                             ? "Set up Claude first, or this session can't start."
+                             : "Set up Claude first, or this session may not start.")
                             .fleetType(.bodySmall)
                             .foregroundStyle(Design.Palette.attention)
                         ClaudeSetup(settings: settings) { claude = .kept }

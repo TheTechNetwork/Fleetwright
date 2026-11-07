@@ -161,6 +161,17 @@ internal object XoPolicy {
         return (there.labs?.open ?: 0) != c.labsOpen || (there.labs?.closed ?: 0) != c.labsClosed
     }
 
+    /**
+     * Whether Apply rebuilds a router that is there: blocking, the pair or
+     * the labs changed on it. The sheet says so once, beside Apply. The same
+     * rule as iOS (XOPolicy.Choice.rebuildsRouter).
+     */
+    fun rebuildsRouter(inv: Inventory, c: Choice): Boolean {
+        if (!c.edge) return false
+        val there = edgeOn(inv, c.egress) ?: return false
+        return (there.blocks ?: false) != c.edgeBlock || (there.ha ?: false) != c.edgeHa || labsChanged(inv, c)
+    }
+
     /** A network for machines that work together: no way off the pool. */
     data class GroupNetwork(val id: String, val name: String, val pool: String?)
 
@@ -168,8 +179,7 @@ internal object XoPolicy {
     const val GROUP_PREFIX = "fleetwright-group-"
     const val MAX_GROUPS = 4
     /** Under Machines made here: who it reaches, and the one line that changes a machine already running, which nothing from here can. */
-    const val MACHINE_GRANTS_FOOTER = "Each machine made on this pool from now on starts with these answers, the pool’s own machine included. " +
-        "One already running keeps what it has. To change it, run sudo fleetwright grant upgrades on, or reboot on, on that machine."
+    const val MACHINE_GRANTS_FOOTER = "Applies to new VMs. Existing ones keep their setting."
 
     /**
      * What a machine image is built from: the apt suite it installs
@@ -248,7 +258,7 @@ internal object XoPolicy {
         return (inv.images ?: emptyList()).filter { it.pool == pool }.map { it.key ?: DEBIAN_KEY }.toSet()
     }
 
-    /** The images asked for that the way out's pool does not have yet. */
+    /** The images asked for that the uplink's pool does not have yet. */
     fun imagesToBuild(inv: Inventory, c: Choice): Set<String> {
         if (!c.imageChoice || !c.wantsImage) return emptySet()
         return (if (c.imagesChoice) c.images else setOf(DEBIAN_KEY)) - imageKeysOn(inv, c.egress)
@@ -273,7 +283,7 @@ internal object XoPolicy {
     const val REBUILD = "rebuild"
     const val REMOVE = "remove"
 
-    /** The images the way out's pool has that Apply is to [REBUILD], or to [REMOVE], in the catalogue's order. */
+    /** The images the uplink's pool has that Apply is to [REBUILD], or to [REMOVE], in the catalogue's order. */
     fun imageKeys(inv: Inventory, c: Choice, action: String): List<String> {
         if (!c.imageManageChoice) return emptyList()
         val present = imageKeysOn(inv, c.egress)
@@ -336,7 +346,7 @@ internal object XoPolicy {
     const val EDGE_DISK = 3L * 1024 * 1024 * 1024
 
     /**
-     * Storage the router's disk can go on: in the way out's pool, with room
+     * Storage the router's disk can go on: in the uplink's pool, with room
      * for its 3 GiB raw disk. Any the pool listed, not only the fleet's,
      * because the router is not one of the fleet's VMs.
      */
@@ -347,7 +357,7 @@ internal object XoPolicy {
 
     /**
      * The storage the router's disk will go on: the person's pick while it
-     * still fits on the way out's pool, otherwise the fleet's chosen storage
+     * still fits on the uplink's pool, otherwise the fleet's chosen storage
      * there with the most room, otherwise the pool's. Null when nothing in
      * that pool has room. Asked for: "which disk did it put it on?"
      */
@@ -413,7 +423,7 @@ internal object XoPolicy {
         /** The machine takes [images]. An older one is sent `image` alone, and offered Debian alone. */
         val imagesChoice: Boolean = false,
         /**
-         * What Apply does to each image the way out's pool has, by key: [REBUILD] or [REMOVE]; one not named
+         * What Apply does to each image the uplink's pool has, by key: [REBUILD] or [REMOVE]; one not named
          * is kept. Asked for: "There is no rebuild button or delete button".
          */
         val imageActions: Map<String, String> = emptyMap(),
@@ -421,7 +431,7 @@ internal object XoPolicy {
         val imageManageChoice: Boolean = false,
         /** The images marked to rebuild BECAUSE the channel changed, not by hand, so changing it back unmarks them and leaves a hand's alone. */
         val rebuiltForChannel: Set<String> = emptySet(),
-        /** How many group networks the way out's pool is to have. Asked for: "the 3 VMs need to reach each other". */
+        /** How many group networks the uplink's pool is to have. Asked for: "the 3 VMs need to reach each other". */
         val groups: Int = 0,
         /** The machine makes them (`groups` in begin's `can`). An older one cannot, so they are neither offered nor sent. */
         val groupsChoice: Boolean = false,
@@ -691,15 +701,15 @@ internal object XoPolicy {
         if (!srIds.containsAll(c.srs) || !networkIds.containsAll(c.networks)) {
             return "That names storage or a network this pool did not list. Nothing was changed."
         }
-        if (c.egress != null && c.egress !in networkIds) return "The way out has to be a network this pool listed. Nothing was changed."
-        if (!c.anyWayOut && c.egress != null && c.egress !in c.networks) return "The way out has to be one of the networks the fleet may use."
-        if (c.edge && c.egress == null) return "The edge router needs a way out: choose the network its WAN goes on."
+        if (c.egress != null && c.egress !in networkIds) return "The uplink has to be a network this pool listed. Nothing was changed."
+        if (!c.anyWayOut && c.egress != null && c.egress !in c.networks) return "The uplink has to be one of the networks the fleet may use."
+        if (c.edge && c.egress == null) return "The edge router needs an uplink: choose the network its WAN goes on."
         if (c.groupsChoice && c.groups > 0 && c.egress == null) {
-            return "Group networks are made in the way out’s pool: choose the way out. Nothing was changed."
+            return "Group networks are made in the uplink’s pool: choose the uplink. Nothing was changed."
         }
         if (c.labsChoice && c.labsOpen + c.labsClosed > MAX_LABS) return "Between 0 and $MAX_LABS labs in all. Nothing was changed."
         if (c.labsChoice && c.labsOpen + c.labsClosed > 0 && c.egress == null) {
-            return "Labs are on the edge router: choose the way out it is on. Nothing was changed."
+            return "Labs are on the edge router: choose the uplink it is on. Nothing was changed."
         }
         if (c.labsChoice && c.labsOpen + c.labsClosed > 0 && !c.edge && edgeOn(inv, c.egress) == null) {
             return "Labs are on the edge router, and that pool has none yet. Build the router with them. Nothing was changed."
@@ -712,7 +722,7 @@ internal object XoPolicy {
             }
         }
         if (c.imageChoice && c.wantsImage && c.egress == null) {
-            return "The machine image is built behind the edge router: choose the way out it leaves through."
+            return "The machine image is built behind the edge router: choose the uplink it leaves through."
         }
         if (c.imageChoice && c.wantsImage && !c.edge && edgeOn(inv, c.egress) == null) {
             return "The machine image is built behind the edge router, and that pool has none yet. Build the router with it."
@@ -723,14 +733,14 @@ internal object XoPolicy {
         if (c.holderChoice && c.holder && DEBIAN_KEY in imageKeys(inv, c, REMOVE)) {
             return "The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for."
         }
-        if (c.holderChoice && c.holder && c.egress == null) return "The pool’s own machine goes on the way out: choose the network it is on."
+        if (c.holderChoice && c.holder && c.egress == null) return "The pool’s own machine goes on the uplink: choose the network it is on."
         if (c.holderChoice && c.holder && imageOn(inv, c.egress) == null && !(c.imageChoice && c.wantsImage)) {
             return "The pool’s own machine is made from its machine image, and that pool has none yet. Build one with it."
         }
         val (buildEdge, buildImage) = building(inv, c)
         if (c.edgeDiskChoice && (buildEdge || buildImage) && edgeDisk(inv, c) == null) {
-            return if (buildImage) "Nothing in the way out’s pool has 20 GiB free for the machine image’s disk."
-            else "Nothing in the way out’s pool has 3 GiB free for the edge router’s disk."
+            return if (buildImage) "Nothing in the uplink’s pool has 20 GiB free for the machine image’s disk."
+            else "Nothing in the uplink’s pool has 3 GiB free for the edge router’s disk."
         }
         val maxCpus = maxCpus(inv)
         if (c.cpus < 1 || c.cpus > maxCpus) return "vCPUs are between 1 and $maxCpus, what the pool has."

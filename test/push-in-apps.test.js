@@ -72,9 +72,11 @@ test('a phone that does not know it can open its notifications says why on You, 
   // an extension that ran out of time or a key since replaced, and a launch
   // does not clear it; telling the person to restart had them restart and
   // see the line stay.
-  const key =
-    'Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts.';
-  const seal = 'The last notification sealed for this phone arrived without its words. This goes once one arrives with them.';
+  // The result, and for the key the one remedy the phone knows works; the
+  // mechanism (which key, which seal) stays off the screen
+  // (docs/reviews/copy-2026-11-06.md, 118).
+  const key = 'Notifications may arrive without their text. Fleetwright tries again each time it starts.';
+  const seal = 'The last notification arrived without its text.';
   const ios = iosSources();
   const android = androidSources();
   // Each sentence on each phone, and for the same kind: one swapped would

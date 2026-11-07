@@ -38,17 +38,23 @@ struct LinkedReposView: View {
             switch load {
             case .asking:
                 Section {
-                    Text("Asking the fleet…")
+                    Text("Loading…")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
             case .failed(let why):
+                // The result, then the reason smaller under it: the reason
+                // is the transport's sentence and is there to be copied, not
+                // read as the headline.
                 Section {
-                    Text("The fleet did not say what you have linked: \(why)")
+                    Text("Could not load your repositories.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.bad)
+                    Text(why)
+                        .fleetType(.micro)
+                        .foregroundStyle(Design.Palette.inkDim)
                         .textSelection(.enabled)
-                    Button("Ask again") { Task { await reload() } }
+                    Button("Try again") { Task { await reload() } }
                 }
             case .answered:
                 ForEach(linkedRoles, id: \.self) { role in
@@ -171,9 +177,9 @@ func linkedRoleTitle(_ role: String) -> String {
 func linkedRoleSentence(_ role: String) -> String {
     switch role {
     case "archive":
-        return "Private. Each session you start is pushed here, on a branch of its own, before it stops and every ten minutes while it runs. A public repository is refused: this is your work, and possibly a client's."
+        return "Must be private. Sessions you start save their work here, each on its own branch."
     case "runners":
-        return "Public, because Actions minutes are free only there. Your temporary machines start here. Anyone can read it, logs included, so it is a launcher and nothing else: no session writes into it."
+        return "Must be public, so Actions minutes are free. Anyone can read it, logs included."
     case "templates":
         return "Public or private. Skills, presets, configs and workflows a session can read when you ask it to. Nothing in it runs by itself."
     default:
@@ -192,7 +198,7 @@ func describeLinkedRole(_ role: String, linked: String?, fleetRunners: String?) 
     if role == "runners" { return describeRunnerRepoSetting(saved: linked, fleet: fleetRunners) }
     if let linked { return "Linked: \(linked)." }
     return role == "archive"
-        ? "Nothing linked. Sessions you start are not pushed anywhere when they stop."
+        ? "Nothing linked. Session work is not saved."
         : "Nothing linked."
 }
 

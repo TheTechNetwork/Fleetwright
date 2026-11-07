@@ -35,10 +35,11 @@ class XoDeployTest {
         assertFalse(XoDeploy.canInstall(probe(good.copy(deploy = false, missing = listOf("getopt")))))
         assertFalse(XoDeploy.canInstall(probe(good.copy(keys = emptyList()))))
         assertFalse(XoDeploy.canInstall(probe(null)))
-        assertEquals("Reached its SSH server, and has no getopt to install with", XoDeploy.describe(probe(good.copy(deploy = false, missing = listOf("getopt")))))
-        // Cannot tell is said as that, and a machine that did not look as too old.
-        assertEquals("Cannot tell: it has no ssh-keyscan to look with", XoDeploy.describe(probe(good.copy(reachable = null))))
-        assertEquals("Too old to install Xen Orchestra. Update it, then ask again.", XoDeploy.describe(probe(null)))
+        assertEquals("Missing getopt", XoDeploy.describe(probe(good.copy(deploy = false, missing = listOf("getopt")))))
+        // Cannot tell is said as that and never as unreachable (C-5), and a
+        // machine that did not look as needing the update that would let it.
+        assertEquals("Can’t check", XoDeploy.describe(probe(good.copy(reachable = null))))
+        assertEquals("Needs update", XoDeploy.describe(probe(null)))
     }
 
     @Test
@@ -47,8 +48,9 @@ class XoDeployTest {
         val got = Fleet.SshProbe(true, listOf(Fleet.SshKey("ssh-ed25519", sshKey, pin)), deploy = true, missing = emptyList())
         assertNull(XoDeploy.nobody(listOf(probe(got), probe(missed)), "xcp1.lan"))
         val said = XoDeploy.nobody(listOf(probe(missed)), "xcp1.lan")!!
-        assertTrue(said.startsWith("No machine reached SSH at xcp1.lan."))
-        assertTrue(XoDeploy.nobody(listOf(probe(null)), "xcp1.lan")!!.startsWith("Too old to install Xen Orchestra"))
+        assertEquals("Couldn’t reach xcp1.lan over SSH.", said)
+        // A machine too old to look did not find it unreachable, and is not said to have.
+        assertEquals("No machine could check xcp1.lan.\ndeb14 needs an update.", XoDeploy.nobody(listOf(probe(null)), "xcp1.lan"))
     }
 
     @Test

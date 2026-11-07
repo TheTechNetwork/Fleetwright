@@ -62,16 +62,16 @@ test('both clients can bind a pin to one host, and ask for readmission', () => {
 });
 
 test('both apps offer the right verb for the state the host is in', () => {
-  // Readmit for a revoked host, Replace key for a live one. Two different
-  // refusals, two different remedies, and showing the wrong word would send
-  // somebody to a pin the coordinator declines.
+  // Let it back in for a revoked host, New pairing code for a live one. Two
+  // different refusals, two different remedies, and showing the wrong word
+  // would send somebody to a pin the coordinator declines.
   // On iOS this moved onto the machine's own page, where `enrolled` is that
   // machine's membership record — so the condition reads the same fact under a
   // different name. The property is the word shown, not the expression.
-  assert.match(IOS_VIEW, /enrolled\?\.isRevoked == true \? "Readmit" : "Replace key"/);
+  assert.match(IOS_VIEW, /enrolled\?\.isRevoked == true \? "Let it back in" : "New pairing code"/);
   // Android's is the machine's page now too, where `member` is that machine's
   // membership record.
-  assert.match(DROID_VIEW, /if \(member\.revoked\) "Readmit" else "Replace key"/);
+  assert.match(DROID_VIEW, /if \(member\.revoked\) "Let it back in" else "New pairing code"/);
   assert.match(IOS_VIEW, /mintHostPin\(hostId: hostId, readmit: enrolled\?\.isRevoked == true\)/);
   assert.match(DROID_VIEW, /hostId = hostId, readmit = member\.revoked/);
 });
@@ -83,8 +83,8 @@ test('a bound pin says which box it is for, on both phones', () => {
   // Both phones mint a bound pin on the machine's own page, so the label is
   // that page's machine and cannot name another one. (Android's panel minted
   // both kinds in one place and had to clear a label between them.)
-  assert.match(IOS_VIEW, /for \\\(hostId\) only/);
-  assert.match(DROID_VIEW, /for \$hostId only/);
+  assert.match(IOS_VIEW, /"Run on \\\(hostId\): fleetwright-sidecar enrol \\\(pin\)"/);
+  assert.match(DROID_VIEW, /"Run on \$hostId: fleetwright-sidecar enrol \$pin"/);
 });
 
 test('a failed mint does not leave the old pin wearing a new name', () => {

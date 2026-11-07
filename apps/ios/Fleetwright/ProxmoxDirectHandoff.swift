@@ -90,7 +90,7 @@ enum ProxmoxDirectHandoff {
             let (_, got) = try await ProxmoxSSH.run(address, fingerprint: entry.fingerprint, password: password, command: ProxmoxSSH.takeLine)
             guard let record = ProxmoxLine.parse(got) else {
                 forget(address: address)
-                return (progress, .failed("The setup finished, and what it left for this phone is not a line it can keep. Run it again; it finds what it made."))
+                return (progress, .failed("The setup finished, but what it left couldn’t be read. Run it again; it finds what it made."))
             }
             Keychain.set(got.trimmingCharacters(in: .whitespacesAndNewlines), for: lineAccount(address))
             return (progress, await keep(record, address: address, settings: settings))
@@ -110,7 +110,7 @@ enum ProxmoxDirectHandoff {
             forget(address: address)
             return .kept(record.address)
         } catch {
-            return .failed("The node is set up, and its line was not kept yet: \(error.localizedDescription) This phone tries again when Fleetwright is next open.")
+            return .failed("The node is set up, but its access isn’t saved yet: \(error.localizedDescription) This phone tries again when it is next open.")
         }
     }
 

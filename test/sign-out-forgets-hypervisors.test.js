@@ -79,7 +79,7 @@ test('Android: sign-out forgets every settings key that keeps a hypervisor crede
 });
 
 test('both phones say so before the tap, in the same words', () => {
-  const sentence = 'Signing out also removes the hypervisor tokens and saved sign-ins this phone holds. A pool whose token you kept in the fleet is still there; one kept only on this phone will need setting up again.';
+  const sentence = 'Signing out also removes the hypervisor tokens and saved sign-ins this phone holds. A pool whose token you saved to your fleet is still there; one kept only on this phone will need setting up again.';
   assert.ok(ios('YouView.swift').includes(sentence), 'iOS');
   assert.ok(android('YouScreen.kt').includes(sentence), 'Android');
 });

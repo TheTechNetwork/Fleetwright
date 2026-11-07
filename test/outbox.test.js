@@ -112,7 +112,7 @@ test('a held command expires rather than surprising somebody a day later, and is
   assert.match(main, /Text\("Not sent: \$\{entry\.summary\}"/);
   assert.match(main, /TextButton\(onClick = \{ outbox\.drop\(entry\.id\)/);
   // Same sentence on both phones.
-  const sentence = 'Held for more than 12 hours while the fleet could not be reached, so it was not sent. Ask again if you still want it.';
+  const sentence = 'Held for more than 12 hours with no connection, so it was not sent. Ask again if you still want it.';
   assert.ok(view.includes(sentence) && main.includes(sentence));
 });
 
@@ -133,8 +133,10 @@ test('both apps show what is being held', () => {
     new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url),
     'utf8',
   );
-  assert.match(view, /held on this phone/);
-  assert.match(main, /held on this phone/);
+  // The count and that it is waiting; where it waits is mechanism
+  // (docs/reviews/copy-2026-11-06.md, 3).
+  assert.match(view, /waiting to send\./);
+  assert.match(main, /waiting to send\./);
   // And the count is kept current on refresh, not only after a flush — a
   // command queued a moment ago has to appear without waiting for the fleet.
   // The count is of what WILL be sent; what expired is listed, not counted.

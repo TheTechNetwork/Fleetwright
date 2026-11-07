@@ -132,7 +132,7 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertNil(c.egress)
         XCTAssertFalse(c.edge, "a router with no way out was left asked for")
         c.edge = true
-        XCTAssertEqual(c.problem(in: inv), "The edge router needs a way out: choose the network its WAN goes on.")
+        XCTAssertEqual(c.problem(in: inv), "The edge router needs an uplink: choose the network its WAN goes on.")
     }
 
     // MARK: Where the screen starts
@@ -207,11 +207,11 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(c.payload(in: inv)["egress"] as? String, "net-wan")
         XCTAssertEqual(c.payload(in: inv)["networks"] as? [String], ["net-lab"])
         c.egress = "net-elsewhere"
-        XCTAssertEqual(c.problem(in: inv), "The way out has to be a network this pool listed.")
+        XCTAssertEqual(c.problem(in: inv), "The uplink has to be a network this pool listed.")
     }
 
     /// Asked for: "which disk did it put it on?" The router's disk goes on
-    /// the storage picked, any in the way out's pool with room; unpicked, the
+    /// the storage picked, any in the uplink's pool with room; unpicked, the
     /// fleet's there with the most room; and it is sent only to a machine
     /// that reads it.
     func testTheRoutersDiskGoesWhereItIsPickedAndIsSentOnlyToAMachineThatReadsIt() throws {
@@ -419,7 +419,7 @@ final class XOPolicyTests: XCTestCase {
         XCTAssertEqual(c.problem(in: inv), "Disk is between 10 GiB and 500 GiB, the size of the storage chosen.")
         c = XOPolicy.Choice.initial(for: inv)
         c.egress = "net-lab"
-        XCTAssertEqual(c.problem(in: inv), "The way out has to be one of the networks the fleet may use.")
+        XCTAssertEqual(c.problem(in: inv), "The uplink has to be one of the networks the fleet may use.")
         c = XOPolicy.Choice.initial(for: inv)
         c.networks.insert("net-elsewhere")
         XCTAssertEqual(c.problem(in: inv), "That names storage or a network this pool did not list.")
@@ -485,13 +485,13 @@ final class XOPolicyTests: XCTestCase {
     func testOnlyAMachineThatOpensThatBindingIsSentTheSignIn() {
         XCTAssertNil(XOPolicy.refusal(can: ["policy", "policy-signin", "edge"], machine: "deb132"))
         XCTAssertEqual(XOPolicy.refusal(can: ["edge"], machine: "deb132"),
-                       "deb132 is older than changing what the fleet may use, so the sign-in was not sent.")
+                       "deb132 needs an update to change this. Nothing was sent.")
         // `policy` alone is what a relay can add to a machine from before
         // policy jobs, so it is not enough.
         XCTAssertEqual(XOPolicy.refusal(can: ["policy", "edge"], machine: "deb132"),
-                       "deb132 is too old to open the sign-in this app seals for a policy change, so the sign-in was not sent.")
+                       "deb132 needs an update to take the sign-in. Nothing was sent.")
         XCTAssertEqual(XOPolicy.refusal(can: ["policy-signin"], machine: "deb132"),
-                       "deb132 is older than changing what the fleet may use, so the sign-in was not sent.")
+                       "deb132 needs an update to change this. Nothing was sent.")
     }
 
     func testTheInventoryOpensOnlyUnderItsJobItsAddressAndThisKey() throws {
@@ -557,13 +557,13 @@ final class XOPolicyTests: XCTestCase {
         building.doing = "read"
         building.done = 192
         building.total = 2238
-        XCTAssertEqual(XOSetupWords.bytes(building), "Reading the blocks the configuration goes in: 192 of 2238 MB")
+        XCTAssertEqual(XOSetupWords.bytes(building), "Configuring: 192 of 2238 MB")
         building.doing = "download"
         XCTAssertEqual(XOSetupWords.bytes(building), "Downloading OPNsense: 192 of 2238 MB")
         building.build = "image"
         XCTAssertEqual(XOSetupWords.bytes(building), "Downloading the image: 192 of 2238 MB", "the image is whichever was chosen, which is not pushed")
         building.doing = "keep"
-        XCTAssertEqual(XOSetupWords.bytes(building), "Writing the image to the pool, to keep: 192 of 2238 MB")
+        XCTAssertEqual(XOSetupWords.bytes(building), "Saving the image to the pool: 192 of 2238 MB")
         building.doing = "something-newer"
         XCTAssertEqual(XOSetupWords.bytes(building), "192 of 2238 MB", "the numbers are still known; the words are not made up")
         building.state = "done"
@@ -608,7 +608,7 @@ final class XOPolicyTests: XCTestCase {
         c.groupsChoice = true
         c.groups = 2
         c.egress = nil
-        XCTAssertEqual(c.problem(in: inv), "Group networks are made in the way out’s pool: choose the way out. Nothing was changed.")
+        XCTAssertEqual(c.problem(in: inv), "Group networks are made in the uplink’s pool: choose the uplink. Nothing was changed.")
         XCTAssertNil(c.payload(in: inv)["groups"])
     }
 }

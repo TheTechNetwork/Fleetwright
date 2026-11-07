@@ -44,7 +44,7 @@ test('both phones delegate to an MCP client exactly the verbs it offers that a b
 test('both phones name each kind of delegation in the same words', () => {
   for (const words of [
     'Finishing a sign-in', 'Ending machines kept ready', 'Making machines kept ready', 'An MCP client',
-    'A request the fleet places: ', 'Allow for a day', 'Allow for a week', 'Revoke this delegation?',
+    'Sent in your name: ', 'Allow for a day', 'Allow for a week', 'Revoke this delegation?',
     'Nothing is delegated. What the app sends now, it signs as it sends it.',
   ]) {
     assert.ok(iosSources().includes(words), `iOS does not say "${words}"`);

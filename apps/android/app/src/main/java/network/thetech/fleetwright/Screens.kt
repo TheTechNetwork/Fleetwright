@@ -126,16 +126,16 @@ fun Quoted(text: String) {
  * What a pool's own machine is, in place of who can start sessions on it.
  * The same words on both phones (test/holder-sessions-in-apps.test.js).
  */
-const val HOLDER_LINE = "This pool’s own machine. It holds the pool for the fleet and runs no sessions."
+const val HOLDER_LINE = "Manages this pool. Runs no sessions."
 
 /**
  * Make it again, offered on a pool's own machine's page: what it does, said
- * before the policy screen it opens. The same words on both phones
+ * before the policy screen it opens. The sign-in it may ask for is that
+ * screen's to say. The same words on both phones
  * (test/holder-sessions-in-apps.test.js).
  */
 const val HOLDER_AGAIN_TITLE = "Make it again"
-const val HOLDER_AGAIN_LINE = "Removes this machine, disk and all, and makes a new one from the newest build of its suite, which asks to join; this phone lets it in. " +
-    "It asks for the pool’s admin sign-in, or opens the one this phone kept, and does the rest by itself."
+const val HOLDER_AGAIN_LINE = "Replaces this machine with a fresh one. Its disk is erased."
 
 /**
  * Whether the who-can-start line adds anything. A box degraded with nobody's
@@ -165,20 +165,22 @@ fun describeWhoCanStart(accounts: Int, host: Fleet.FleetHost): String {
     // A RUNNER IS ASKED A DIFFERENT QUESTION. Nobody links an account on a
     // GitHub job; its sessions run on the login its owner keeps for runners or
     // on the runner repository's key, and the host says which. This line said
-    // "sessions will not start" on a runner whose sessions would, beside the
-    // word "healthy". The same words as iOS (FleetView.swift).
+    // a Claude account was missing on a runner whose sessions would start,
+    // beside the word "healthy". The same words as iOS (FleetView.swift).
     if (accounts == 0) {
         when (host.runnerAuth) {
-            "owner" -> return "Sessions run on the Claude login its owner keeps for runners"
-            "key" -> return "Sessions run on the runner repository's API key"
-            "none" -> return "No Claude login is kept for this runner's owner and its repository has no API key — sessions will not start"
+            "owner" -> return "Owner's Claude login"
+            "key" -> return "Repository API key"
+            "none" -> return "No Claude login or API key"
             // Cannot tell yet, which is not a fault (C-5).
-            else -> if (host.ephemeral) return "Fetching the Claude login its sessions will run on"
+            else -> if (host.ephemeral) return "Getting Claude login…"
         }
     }
-    // THE ZERO CASE KEEPS ITS WORDS. It is the only real fault here, and
-    // naming the Claude account is what makes it actionable.
-    if (accounts == 0) return "Nobody has connected a Claude account here — sessions will not start"
+    // THE ZERO CASE IS THE ONE FAULT HERE, and it is a row: the verdict, in the
+    // attention colour its callers give it (whoCanStartIsFault). What it
+    // means, that sessions cannot start until someone connects a Claude
+    // account, is the machine page's sentence, not every row's.
+    if (accounts == 0) return "No Claude account"
     val parts = mutableListOf("$accounts ${if (accounts == 1) "person" else "people"}")
     host.accountEmail?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
     host.accountPlan?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
@@ -216,7 +218,8 @@ fun describeRunning(host: Fleet.FleetHost): String {
     if (host.rootHalfBehind) parts.add("update helper out of date")
     host.channel?.takeIf { it.isNotBlank() }?.let {
         // Pinned is worth a word, because it is why the picker is missing.
-        parts.add(if (host.channelPinned) "$it, set on the box" else it)
+        // Where it was fixed is the machine page's to say.
+        parts.add(if (host.channelPinned) "$it (fixed)" else it)
     }
     return if (parts.isEmpty()) "version not reported" else parts.joinToString(" · ")
 }

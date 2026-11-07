@@ -53,7 +53,7 @@ import kotlinx.coroutines.launch
  * notification carries them when it is not (XoSetupNotice).
  *
  * WHAT IT DOES IS SAID BEFORE THE PASSWORD IS ASKED FOR (XoWatchdog.
- * WHAT_HAPPENS): Xen Orchestra goes away for a minute or two, and the person
+ * whatHappens): Xen Orchestra goes away for a minute or two, and the person
  * chooses when. Its end is the machine's own sentence, which says whether the
  * VM was started again; nothing here claims it was (C-5).
  *
@@ -87,6 +87,8 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
     var progress by remember { mutableStateOf<Fleet.Setup?>(null) }
     var cancelling by remember { mutableStateOf(false) }
     var cancelAccepted by rememberSaveable { mutableStateOf(false) }
+    // The custody of the password, folded away until asked for.
+    var custodyOpen by remember { mutableStateOf(false) }
 
     val addressOk = XoSetup.ADDRESS_RE.matches(address.trim())
     val able = probes.orEmpty().filter { XoDeploy.canInstall(it) }
@@ -105,7 +107,7 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                 // One machine that can is not a choice, so it is chosen.
                 r.probes.filter { XoDeploy.canInstall(it) }.singleOrNull()?.let { chosen = it.hostId }
             } else {
-                probeText = r.text.ifBlank { "The fleet did not try that address." }
+                probeText = r.text.ifBlank { "No machine tried that address." }
             }
             probing = false
         }
@@ -146,7 +148,7 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                 // compared.
                 setup.key == null || !XoSetup.verifyKeySig(setup.hostKey, setup.keySig, runCatching { XoWatchdog.signingInput(where, setup.job, setup.key, pin) }.getOrDefault(ByteArray(0))) -> {
                     rootPassword = ""
-                    refusal = "That key did not come from $hostId. Nothing was sent. Something between this phone and that machine is not what it says it is, so check the fleet before trying again."
+                    refusal = "That key did not come from $hostId. Nothing was sent. Something between this phone and that machine is not what it says it is, so check your machines before trying again."
                     runCatching { fleet.xosetup("cancel", job = setup.job) }
                 }
                 else -> {
@@ -167,7 +169,7 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                     when {
                         listed != null && listed != fingerprint -> {
                             rootPassword = ""
-                            refusal = "That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent."
+                            refusal = "That key did not come from $hostId: a different key is listed for it. Nothing was sent."
                             runCatching { fleet.xosetup("cancel", job = setup.job) }
                         }
                         // Approved under another key: a machine that was
@@ -227,7 +229,7 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                 continue
             }
             unanswered++
-            refusal = r.text.ifBlank { "The fleet did not answer about adding the watchdog." }
+            refusal = r.text.ifBlank { "No answer about adding the watchdog." }
             if (r.code == "unknown_job" || unanswered >= 5) break
         }
     }
@@ -258,10 +260,7 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
             }
             waitingOn != null -> {
                 SectionHead("Is that ${waitingOn.hostId}'s key?")
-                Hint(
-                    "This phone has not approved ${waitingOn.hostId} before. On it, fleetwright-sidecar identity prints its " +
-                        "fingerprint; send the root password only if it is this one.",
-                )
+                Hint("First time using ${waitingOn.hostId}. On it, run `fleetwright-sidecar identity` and check it shows this:")
                 SelectionContainer {
                     Text(PhoneVault.fingerprint(waitingOn.setup.hostKey!!), style = Design.Style.title, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
                 }
@@ -279,7 +278,7 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                 }
             }
             else -> {
-                Hint("For Xen Orchestra at $xoAddress. It reconnects a pool Xen Orchestra loses, by itself, without waiting for Reconnect its servers.")
+                Hint(XoWatchdog.INTRO, color = Design.Palette.ink.now)
                 SectionHead("The pool master")
                 OutlinedTextField(
                     value = address,
@@ -294,12 +293,7 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                         }
                     },
                     label = { Text("Address of the pool master") },
-                    supportingText = {
-                        Text(
-                            if (startPoolMaster != null) "The pool master Xen Orchestra was installed from. Change it if the pool’s master has changed since."
-                            else "The host that runs Xen Orchestra’s VM, or its pool’s master, as you would SSH to it as root.",
-                        )
-                    },
+                    supportingText = { Text(XoWatchdog.whereHint(prefilled = startPoolMaster != null)) },
                     singleLine = true,
                     enabled = !beginning,
                     isError = address.isNotBlank() && !addressOk,
@@ -314,7 +308,7 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                 val found = probes
                 if (found != null) {
                     SectionHead("Which machine does it")
-                    XoDeploy.nobody(found, address.trim(), doing = "add the watchdog")?.let { Hint(it, color = Design.Palette.attention.now) }
+                    XoDeploy.nobody(found, address.trim())?.let { Hint(it, color = Design.Palette.attention.now) }
                     found.filter { it.ssh?.reachable == true }.forEach { p ->
                         if (XoDeploy.canInstall(p)) {
                             Row(
@@ -357,7 +351,7 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                     HostKeyAsk(pick.hostId, address.trim(), key, matched, enabled = !beginning, onMatched = { matched = it })
 
                     SectionHead("What happens")
-                    Text(XoWatchdog.WHAT_HAPPENS, style = Design.Style.body, color = Design.Palette.ink.now)
+                    Text(XoWatchdog.whatHappens(xoAddress), style = Design.Style.body, color = Design.Palette.ink.now)
 
                     SectionHead("Root password")
                     OutlinedTextField(
@@ -370,7 +364,10 @@ internal fun XoWatchdogSheet(settings: Settings, xoAddress: String, startPoolMas
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Password),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Hint(XoWatchdog.passwordFooter(pick.hostId))
+                    Hint(XoWatchdog.PASSWORD_FOOTER)
+                    // THE CUSTODY, ONCE, BEHIND A DISCLOSURE, as on an install.
+                    OpenRow(if (custodyOpen) "${XoDeploy.CUSTODY_TITLE} ▾" else XoDeploy.CUSTODY_TITLE) { custodyOpen = !custodyOpen }
+                    if (custodyOpen) Hint(XoWatchdog.custody(pick.hostId))
                     OutlinedButton(
                         enabled = !beginning && matched && rootPassword.isNotEmpty(),
                         onClick = { begin() },

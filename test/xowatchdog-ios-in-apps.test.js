@@ -99,8 +99,7 @@ test('iOS: the root password and Xen Orchestra’s address are sealed under the 
 test('iOS: what will happen to Xen Orchestra is said before the button', () => {
   const section = fn(SCREEN, 'passwordSection');
   assert.ok(section.indexOf('WatchdogWords.whatHappens(xoAddress)') < section.indexOf('WatchdogWords.addFrom('));
-  assert.ok(SCREEN.includes('is shut down for a minute or two while the watchdog is put on its disk, '));
-  assert.ok(SCREEN.includes('"then started again. Xen Orchestra is unavailable meanwhile, and so is this pool’s page."'));
+  assert.ok(SCREEN.includes('"Xen Orchestra at \\(xo) goes offline for 1 to 2 minutes."'));
 });
 
 test('iOS: every step of adding the watchdog has the host’s words, and its ends are the coordinator’s titles', () => {

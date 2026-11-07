@@ -25,7 +25,7 @@ struct DelegationsView: View {
         List {
             Section {
                 if delegations.isEmpty {
-                    Text(loaded ? "Nothing is delegated. What the app sends now, it signs as it sends it." : "Asking the fleet…")
+                    Text(loaded ? "Nothing is delegated. What the app sends now, it signs as it sends it." : "Loading…")
                         .fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                 }
                 ForEach(delegations) { d in
@@ -41,7 +41,7 @@ struct DelegationsView: View {
                     Text(result).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                 }
             } footer: {
-                Text("A box that takes only what you signed takes these in your name until they run out. Swipe to revoke one.")
+                Text("A machine that takes only what you signed takes these in your name until they run out. Swipe to revoke one.")
             }
 
             Section {
@@ -52,8 +52,8 @@ struct DelegationsView: View {
             } header: {
                 Text("An MCP client")
             } footer: {
-                Text("Lets an MCP client signed in as you start, read, stop and resume sessions and make machines, on any box, until it runs out. "
-                     + "It cannot reboot or upgrade a box, or move your credentials.")
+                Text("Lets an MCP client signed in as you start, read, stop and resume sessions and make machines, on any machine, until it runs out. "
+                     + "It cannot reboot or upgrade a machine, or move your credentials.")
             }
         }
         .scrollContentBackground(.hidden)
@@ -76,7 +76,7 @@ struct DelegationsView: View {
                 Task { await revoke(d) }
             }
         } message: {
-            Text("Boxes refuse it from the next key list they take, within ten minutes. What it was for asks you to sign again.")
+            Text("Machines refuse it from the next key list they take, within ten minutes. What it was for asks you to sign again.")
         }
     }
 
@@ -86,15 +86,15 @@ struct DelegationsView: View {
         if d.verbs == ["vmctl"] { return "Ending machines kept ready" }
         if d.verbs == ["provision"] && d.expires - d.issuedAt > 24 * 3600 * 1000 { return "Making machines kept ready" }
         if d.verbs.count > 8 { return "An MCP client" }
-        return "A request the fleet places: \(d.verbs.joined(separator: ", "))"
+        return "Sent in your name: \(d.verbs.joined(separator: ", "))"
     }
 
     /// Where, and until when.
     static func scope(_ d: Fleet.Delegation) -> String {
         let until = Date(timeIntervalSince1970: d.expires / 1000)
             .formatted(date: .abbreviated, time: .shortened)
-        let boxes = d.hosts == ["*"] ? "any box" : d.hosts.joined(separator: ", ")
-        return "\(boxes) · until \(until)"
+        let machines = d.hosts == ["*"] ? "any machine" : d.hosts.joined(separator: ", ")
+        return "\(machines) · until \(until)"
     }
 
     @MainActor

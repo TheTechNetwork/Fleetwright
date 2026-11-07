@@ -32,7 +32,7 @@ What happens, from the phone to a session on a VM:
 1. **The pool's token is kept in your vault.** Setup seals the limited user's
    token to your phone (the hand-off, below). The phone now also puts that
    record in your vault as `hypervisor:<address>`, after setup and from the
-   hypervisor's page (Machines › the pool › Keep its token in the fleet) for
+   hypervisor's page (Machines › the pool › Let my machines use this pool) for
    a pool set up before. The minter checks the record names that address.
 2. **The boxes you approved hold it, in memory only.** Each sidecar pass
    (every ten minutes) hands an approved box everything you keep, and the box
@@ -108,7 +108,7 @@ setup-token cannot open Remote Control, so, as on a runner, the
 notification that matters is the one when its task is done.
 
 **The machine image** is built by the policy job, which already holds the
-admin sign-in: switch on "Make the machine image for sessions" under Way out.
+admin sign-in: switch on "Make the machine image for sessions" under Internet access.
 It is Debian 13's own cloud image, pinned by its published SHA-512, with
 Fleetwright installed from this fleet's `/install` and not enrolled, built
 behind the edge router on the storage picked, and turned into a template in
@@ -294,7 +294,7 @@ said the address. A machine on the uplink is reachable only from behind the
 edge router; for SSH from your own network, start it on one of yours.
 
 **The network.** New session › Where offers the pool's networks the fleet may
-use besides the default, *Behind the edge router*. A network of yours puts the
+use besides the default, *Default (internet only)*. A network of yours puts the
 machine beside your own machines, which is what SSH from your laptop needs and
 exactly what the uplink exists to prevent, so it is a choice and never the
 default. The box takes only a network it saw on that pool
@@ -317,7 +317,7 @@ rebuild or remove", under Templates).
 ### A machine of its own
 
 **The policy screen offers to make the pool a Fleetwright machine of its
-own**, under Way out, from a machine whose setup offers it (`holder` in
+own**, under Internet access, from a machine whose setup offers it (`holder` in
 `can`). Until then, the boxes that hold a pool's token are whichever machines
 its owner approved, and that is often the laptop that set the pool up. When
 the laptop sleeps, nothing can start a machine on the pool. The pool's own
@@ -1048,8 +1048,8 @@ for each router:
   tell, not zero).
 
 **Built measured.** The first router read by this was fine and said almost
-nothing: "cannot tell whether its way out is up", "0 DHCP leases", "no log
-lines", twenty minutes after a rebuild. Each traced to its configuration.
+nothing: "Internet: Unknown", "No leases", "No log lines received", twenty
+minutes after a rebuild. Each traced to its configuration.
 OPNsense 26.7 makes a DHCP WAN's gateway itself with monitoring off
 (`Gateways.php`: "disable monitoring by default"), so dpinger never ran and
 the way out was cannot tell for good; Unbound's statistics were off, so there
@@ -1093,25 +1093,33 @@ that saw a router, by its API or its syslog, over one that could not tell, so
 the box on the network is the one shown as soon as it has read them.
 
 **What the phone shows.** The pool's page gains an Edge routers card under its
-status, refreshed every 30 seconds while it is open:
+status, refreshed every 30 seconds while it is open. The card says which
+machine read them and when ("Via rpi-7550 · 2 minutes ago"), then one word per
+router: "Unreachable", else "Internet down", else its part in the shared
+address ("Primary", "Standby", "Starting"), else "Internet up"; a read that
+could not tell is "Unknown". Under the word, its DNS: "DNS down", "DNS: 1,204
+answered, 3 blocked" once it counts, or "DNS up" for a router that answers
+names and has counted none (a router built before it counted, or one nothing
+has asked yet, which the read cannot tell apart). The card opens the routers'
+page, which has the rest, for each router in this order:
 
-- which machine read them, and when;
-- for each router, in this order: whether it holds the gateway address or
-  stands by; whether its way out is up, with its latency and loss once it is
-  monitored, no loss said as no loss; how many names it answered and refused
-  since it started counting and the five it refused most, or that it answers
-  names and none have been counted (a router built before it counted, or one
-  nothing has asked yet, which the read cannot tell apart); its leases, none
-  out said as none and a count not read said as not read; and its last log
-  line, or that none has reached the machine reading it, which is all that
-  machine knows; or why it could not be read;
+- its part in the shared address;
+- whether it reaches the internet, with its latency and loss once it is
+  monitored, no loss said as "no loss";
+- how many names it answered and the lists blocked since it started
+  counting, and the five blocked most;
+- its leases, none out said as "No leases" and a count not read as "Leases:
+  Unknown";
+- its last log line, or "No log lines received", which is all the machine
+  reading it knows; or why it could not be reached;
 - that the machine reading them cannot listen for their log lines, when
-  another program has the port;
+  another program has the port ("Router logs not received: another program
+  has the port.");
 - the last eight lines they logged, newest first.
 
-Cannot tell is said as cannot tell, and what is wrong is the one line in the
-attention tone. A pool nothing reads says so ("No machine reads this pool's
-edge routers yet"), never as fine.
+Cannot tell is said as "Unknown", and what is wrong is the one line in the
+attention tone. A pool nothing reads says so ("No router data yet. Use Change
+what the fleet may use once to start it."), never as fine.
 
 **What it needs:** a release with this in it on the boxes holding the pool,
 then one policy apply from the phone. That apply rebuilds the routers once,
@@ -1462,8 +1470,7 @@ only "part 2 of 3". That sentence is the host's and names the release and the
 storage, so it is never pushed. Beside a part whose bytes are moving the host
 now reports a key from `XOBUILD_DOING` (`download`, `read`, `keep` or
 `write`) and the megabytes done and in all (`doing`, `done`, `total`), and
-the phones word the key themselves: "Reading the blocks the configuration
-goes in: 192 of 2238 MB". A part that moves no bytes, such as the install on
+the phones word the key themselves: "Configuring: 192 of 2238 MB". A part that moves no bytes, such as the install on
 the image, carries none, and a key a phone has never met still gets its
 megabytes said.
 
@@ -1785,18 +1792,25 @@ cluster was invisible for hours that way, while no box could use its line.
 Now Machines has one row, **Hypervisors**, for a known admin. It opens a page
 that lists every hypervisor of yours, of either kind:
 
-- **Each row** gives the address, the kind, and what the machines holding it
-  saw. That is "Reached from rpi-7550 · 1 image · 0 machines" when one could
-  reach it, "No machine reached it" and that machine's own words when none
-  could, and "Not looked at yet" when the boxes have not looked.
-- **A pool held on this phone** also says when this phone last looked at it,
-  and opens its own page (`manage.md`), read phone-direct with the token kept
-  here.
-- **Anything else** opens what each machine saw, and the hypervisor's facts:
-  version, whether Proxmox VE is new enough, the fence, the pool, images and
-  machines. A Proxmox VE cluster offers **Set it up again**.
+- **Each row** gives the address, the kind, and one status from a fixed set:
+  *Ready*, *Can't reach*, *Waiting for a machine*, *Needs Proxmox VE 9*,
+  *Checking*, and *Unknown* for a pool on this phone when the fleet did not
+  answer. Counts, machine names and error text are on its page, not in the
+  row (the copy review of 2026-11-06, finding 59).
+- **A pool held on this phone** also says when this phone last read it
+  (*Updated 2 hours ago*, or *Never opened*), and opens its own page
+  (`manage.md`), read phone-direct with the token kept here.
+- **Anything else** opens a page that leads with one sentence, the answer:
+  *Ready. rpi-7550 makes machines on it.*, *Can't reach it. No machine got
+  through.*, *Waiting for a machine to pick it up.* Under it, **Machines**:
+  each machine with *Reached*, *Can't reach* or *Not checked*, and its own
+  error text, selectable. Then **Details**: version, pool, the datacenter
+  firewall, images and machines, each a short line. A Proxmox VE cluster
+  offers **Set it up again**, and **Turn on the datacenter firewall** where
+  it is off. No footer explains the mechanism; this page is the one place
+  that does.
 - **The attention ring** marks a row no machine can use, or a cluster older
-  than Proxmox VE 9. A row not looked at yet is not trouble.
+  than Proxmox VE 9. *Checking* is not trouble.
 - **One Add a hypervisor** at the foot takes the address and finds the kind,
   and does not ask. Asked for: *"Instead of ask which kind detect don't ask
   question you can find the answer to"*. The fleet's machines look (`xoprobe`
@@ -1804,19 +1818,26 @@ that lists every hypervisor of yours, of either kind:
   null when nothing answered). This phone looks the same way, because a node
   is often on a network only the phone reaches. Both looks are a TCP
   connection that sends nothing and is closed as soon as it opens, so no
-  certificate check is skipped to find out. The
-  setup for what was found opens with the address filled in. Only when
-  nothing answers as either is the person asked which it is.
+  certificate check is skipped to find out. Both kinds are rows under the
+  field the whole time, each with one line on what it is. The kind that
+  answered is marked *Found at this address* and its setup opens with the
+  address filled in. When nothing answers as either, the line above the rows
+  says *Couldn't tell what's at 10.69.10.10. Pick one.*, and, when a machine
+  was too old to check for Proxmox VE, one quiet note under it: *rpi-7550
+  needs an update to check for Proxmox VE.*
 
 The list is the coordinator's `hypervisors` field of `/api/hosts`. It has one
 row per address and kind, each listing every box holding it with `reachable`,
-which is true, false, or null for "has not looked yet". A Proxmox VE row also
+which is true, false, or null for "not checked". A Proxmox VE row also
 carries the box's `problem` when it could not reach the cluster. Proxmox API
 errors name a path and a status, never the token. Xen Orchestra's problem
 stays on the box, as before, because its page asks the pool itself. Only the
 person's own hypervisors are listed, as placement believes it (`xoFor`). An
 older coordinator omits the field, and a failed ask is said as the fleet not
-answering, never as "none". `test/hypervisors-in-apps.test.js` holds the two
+answering, never as "none": an empty page is titled *Couldn't load
+hypervisors* rather than *No hypervisors yet*, and a list that still has this
+phone's pools says *Your fleet didn't answer. Only pools on this phone are
+shown.* `test/hypervisors-in-apps.test.js` holds the two
 phones' words equal.
 
 ### What ships first
@@ -1940,7 +1961,7 @@ Android), so the boxes you approved can make machines on the pool
 ("Machines from your pool"); a phone not signed in to GitHub is told to sign
 in first, since the vault is kept under that account, and says when the
 fleet refused. That is the default, not a choice: the switch a pool set up
-before it offers (Machines › the pool › Keep its token in the fleet) is for
+before it offers (Machines › the pool › Let my machines use this pool) is for
 catching up, and nothing on either phone keeps a token out of the vault
 except not being signed in. The record also carries the pool master's
 addresses as setup saw them (`masters`, the management one first), shown on
@@ -1957,8 +1978,8 @@ was refused, and the machine's state directory was empty afterwards.
 > Deploying Xen Orchestra with the installer's `xo-remote-deploy.sh`.
 
 **Built, and not yet run on a real pool.** When every machine that answered
-the probe found no Xen Orchestra at the address, Add a hypervisor offers *This
-pool has no Xen Orchestra yet*. A machine of the fleet then installs Xen
+the probe found no Xen Orchestra at the address, Add a hypervisor offers *Install
+Xen Orchestra*. A machine of the fleet then installs Xen
 Orchestra on the pool with XenOrchestraInstallerUpdater's own script and adds
 the pool to the fleet through it, in one job, so the phone can close at the
 first step and collects the token at the end as from any setup.
@@ -2007,8 +2028,8 @@ new password for Xen Orchestra's admin. In order:
    port 22: Connection refused”" is a master that is up and said no, where
    "nothing answered SSH at 192.168.1.128 from here: ssh-keyscan heard
    nothing in 5 seconds, twice" is one that is off or out of reach. The first
-   had been said as the second, under a sheet that still showed the probe's
-   "Reached its SSH server", and read as a contradiction. It opens one
+   had been said as the second, under a sheet whose row for the master still
+   said "Ready", and read as a contradiction. It opens one
    OpenSSH master connection as root, answering the password prompt through
    `SSH_ASKPASS` from a unix socket in the job's 0700 directory, and wipes the
    password as soon as the master is up. The password is never in an argument,

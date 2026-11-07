@@ -71,7 +71,7 @@ test('Android: a reconnect sign-in goes only to a machine that says it can, aske
   }
   // Refused, its job is let go rather than left holding a slot.
   assert.match(begin.slice(refuse), /refusal = olderThanReconnect\(hostId\)\s*runCatching \{ fleet\.xosetup\("cancel", job = setup\.job\) \}/);
-  assert.ok(sheet.includes('"$hostId is older than reconnecting servers, so nothing was sent.'));
+  assert.ok(sheet.includes('"$hostId needs an update to reconnect servers. Nothing was sent."'));
   // A machine that lists reconnect but not the binding the sign-in goes under
   // is refused the same way, with its own sentence: a coordinator can add
   // `reconnect` to an older machine's unsigned `can`, but not make it open a
@@ -82,7 +82,7 @@ test('Android: a reconnect sign-in goes only to a machine that says it can, aske
     assert.ok(begin.indexOf(later) > tooOld, `the reconnect-signin check comes before ${later}`);
   }
   assert.match(begin.slice(tooOld), /refusal = olderThanReconnectSignin\(hostId\)\s*runCatching \{ fleet\.xosetup\("cancel", job = setup\.job\) \}/);
-  assert.ok(sheet.includes('"$hostId is too old for this app to send it a reconnect safely, so nothing was sent. Update it,'));
+  assert.ok(sheet.includes('"$hostId needs an update to take the sign-in. Nothing was sent."'));
   // And both again at the last line before the seal.
   const run = fn(sheet, 'suspend fun runReconnect(');
   assert.ok(run.indexOf('XoReconnect.PURPOSE !in p.setup.can') < run.indexOf('XoReconnect.sealSignIn('));
@@ -158,8 +158,8 @@ test('Android: a reconnect for an address this phone does not know asks the flee
   assert.match(sheet, /openedOnce = true\s*(?:\/\/[^\n]*\n\s*)*if \(reconnect && !knowsAddress\) askFirst = true else openRemembered\(\)/);
   // The one way on names the address, after the same sentence iOS says.
   assert.ok(sheet.includes('askFirst -> "Ask your machines to reach $address"'));
-  assert.ok(sheet.includes('"This phone has not set up $address, kept a sign-in for it or pinned its certificate. " +'));
-  assert.ok(sheet.includes('"The address came from one of your machines, so none of them is asked to reach it until you say so."'));
+  assert.ok(sheet.includes('if (via.isNullOrBlank()) "New address from one of your machines. Connect only if you recognise it."'));
+  assert.ok(sheet.includes('else "New address, from $via. Connect only if you recognise it.",'));
   assert.match(fn(sheet, 'fun probe('), /probing = true\s*askFirst = false/);
 });
 

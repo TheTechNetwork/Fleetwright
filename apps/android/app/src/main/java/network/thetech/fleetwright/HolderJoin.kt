@@ -343,13 +343,16 @@ internal object HolderJoin {
         val (request, value) = proven(waiting, secrets.map { it.value }) ?: return Outcome.Refused(notProven(waiting.hostId))
         val fleet = Fleet(settings)
         val answer = fleet.approveHolder(waiting.hostId, request.key).getOrElse {
-            return Outcome.Refused(it.message ?: "The fleet did not let ${waiting.hostId} in.")
+            return Outcome.Refused(it.message ?: "Your fleet refused ${waiting.hostId}.")
         }
-        if (!answer.ok) return Outcome.Refused(answer.text.ifBlank { "The fleet did not let ${waiting.hostId} in." })
+        if (!answer.ok) return Outcome.Refused(answer.text.ifBlank { "Your fleet refused ${waiting.hostId}." })
         secrets.firstOrNull { it.value == value }?.let { spent(settings, waiting.address, it) }
+        // The vault's reason is not in the sentence: the card says the result
+        // and the one action, and the machine's page is where approving
+        // happens and where the reason shows.
         return PhoneVault(settings).approveHolder(fleet, waiting.hostId, request.publicJwk, waiting.address).fold(
             onSuccess = { Outcome.Joined(joined(waiting.hostId, waiting.address)) },
-            onFailure = { Outcome.JoinedNotHolding(joinedNotHolding(waiting.hostId, it.message ?: "the vault did not answer.")) },
+            onFailure = { Outcome.JoinedNotHolding(joinedNotHolding(waiting.hostId)) },
         )
     }
 
@@ -365,20 +368,20 @@ internal object HolderJoin {
 
     // What both phones say
 
-    fun asks(hostId: String) = "$hostId asks to join"
-    fun toHold(address: String) = "To hold $address. This phone checks it is the machine you made before it lets it in."
-    fun notYet(hostId: String) = "$hostId has not asked to join yet. If it never does, make it again from the pool’s policy."
-    fun reason(hostId: String, address: String) = "Let $hostId join and hold $address"
-    fun notProven(hostId: String) =
-        "None of the requests under $hostId was made by the machine this phone made, so nothing was let in. " +
-            "Decline it, and make the pool’s own machine again if it never asks."
-    fun notThisPhone(hostId: String) =
-        "This phone did not make $hostId, so it cannot check it. Let it in from the phone that applied the policy, or make it again from this one."
-    fun joined(hostId: String, address: String) = "$hostId has joined and holds $address."
-    fun joinedNotHolding(hostId: String, why: String) =
-        "$hostId has joined, and could not be approved to hold its pool: $why Approve it under its page."
+    // ONE SHORT SENTENCE EACH: the result, and the one thing to do. The
+    // custody reasoning (which phone made it, what the proof is, why nothing
+    // was let in) is this file's header, not the card's
+    // (docs/reviews/copy-2026-11-06.md, 155 to 159).
+    fun asks(hostId: String) = "$hostId wants to join"
+    fun toHold(address: String) = "Pool machine for $address."
+    fun notYet(hostId: String) = "Waiting for $hostId…"
+    fun reason(hostId: String, address: String) = "Approve $hostId for $address"
+    fun notProven(hostId: String) = "$hostId could not be verified. Decline it."
+    fun notThisPhone(hostId: String) = "Approve $hostId from the phone that created it."
+    fun joined(hostId: String, address: String) = "$hostId joined and manages $address."
+    fun joinedNotHolding(hostId: String) = "$hostId joined but still needs approval. Open its page."
     /** Under a name nothing has asked under yet, on the phone that made it. */
-    fun byItself(hostId: String) = "This phone made $hostId, so it lets it in by itself once it asks. Nothing to tap."
+    fun byItself(hostId: String) = "$hostId will join by itself."
     /** The notification, once it is in: the title, and [joined] under it. */
     fun joinedTitle(hostId: String) = "$hostId joined"
     /** The one action on the asks-to-join notification. */

@@ -75,10 +75,11 @@ test('the new sentences carry no em dash', () => {
   // The count is pinned by test/antislop.test.js; new copy may not add one.
   for (const s of [
     'Continue in Remote Control',
-    'Your shell on this session, in the browser. Anything typed there goes to the session as if you were at the box.',
-    'Not running, so there is no screen to read. Output has what it printed; Resume brings the conversation back.',
+    'Opens this session in Claude, where you can type to it.',
+    'Not running.',
     'Reading the screen…',
-    'No longer watching.',
+    'Live',
+    'Updated ',
   ]) {
     assert.ok(SCREEN.includes(s), `lost: ${s}`);
     assert.doesNotMatch(s, /—/);
@@ -137,10 +138,11 @@ test('both phones put the same things in the same order, and say the same senten
   assert.ok(sentence > 0 && sentence < asking && asking < rc && rc < pane && pane < actions, 'the sheet is out of order');
   for (const s of [
     'Continue in Remote Control',
-    'Your shell on this session, in the browser. Anything typed there goes to the session as if you were at the box.',
-    'Not running, so there is no screen to read. Output has what it printed; Resume brings the conversation back.',
+    'Opens this session in Claude, where you can type to it.',
+    'Not running.',
     'Reading the screen…',
-    'No longer watching.',
+    'Live',
+    'Updated ',
     'Look again',
     "'s screen right now.",
   ]) {

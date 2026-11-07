@@ -40,7 +40,7 @@ struct ActivityView: View {
     var body: some View {
         List {
             if events.isEmpty {
-                Text(loaded ? "Nothing recorded yet." : "Asking the fleet…")
+                Text(loaded ? "Nothing recorded yet." : "Loading…")
                     .fleetType(.label).foregroundStyle(Design.Palette.inkDim)
             }
             // NEWEST FIRST HERE, oldest-first on the wire: right for a log and

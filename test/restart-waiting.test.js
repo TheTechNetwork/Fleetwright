@@ -38,7 +38,7 @@ test('the row says restart waiting before it says anything about downloads', () 
 
 test('the host page names the release on disk and says what applies it', () => {
   const swift = iosSources();
-  assert.match(swift, /is on this box and not yet running\. A restart applies it\./);
+  assert.match(swift, /is installed and not yet running\. A restart applies it\./);
   assert.match(swift, /restartWaitingFor[\s\S]{0,600}Design\.Palette\.attention/, 'in the attention colour');
 });
 
@@ -60,7 +60,7 @@ test('both phones put restart waiting first, in the same words', () => {
   assert.match(body, /installed, restart waiting/);
 
   const swift = iosSources();
-  for (const sentence of ['installed, restart waiting', 'is on this box and not yet running. A restart applies it.']) {
+  for (const sentence of ['installed, restart waiting', 'is installed and not yet running. A restart applies it.']) {
     assert.ok(swift.includes(sentence), `iOS lost: ${sentence}`);
     assert.ok(kotlin.includes(sentence), `Android lost: ${sentence}`);
   }

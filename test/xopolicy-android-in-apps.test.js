@@ -86,7 +86,7 @@ test('Android: the key the pool comes back to lives in memory, never on disk or 
   assert.doesNotMatch(file('XoPolicy.kt'), /putSecret|Settings|SharedPreferences|Log\.[idwe]\(/);
   // A screen rebuilt while the machine waits says it cannot open the pool
   // and offers Cancel, rather than a form it cannot fill.
-  assert.ok(sheet.includes('"What the pool has did not open with this screen\'s key, so it cannot be shown. That key is kept " +'));
+  assert.ok(sheet.includes('"Could not read the pool. Cancel, and start again.",'));
 });
 
 test('Android: a policy sign-in goes only to a machine that says it can, asked before anything is sealed', () => {
@@ -103,7 +103,7 @@ test('Android: a policy sign-in goes only to a machine that says it can, asked b
   for (const later of ['XoSetup.verifyKeySig(', 'approval == PhoneVault.Approval.APPROVED -> run(pending)', 'else -> unvouched = pending']) {
     assert.ok(begin.indexOf(later) > refuse, `the can check comes before ${later}`);
   }
-  assert.ok(sheet.includes('"$hostId is older than changing a policy, so nothing was sent.'));
+  assert.ok(sheet.includes('"$hostId needs an update to change this. Nothing was sent."'));
   // A machine that lists `policy` but not the binding the sign-in goes under
   // is refused the same way, with its own sentence: a coordinator can add
   // `policy` to an older machine's unsigned `can`, but not make it open a
@@ -115,7 +115,7 @@ test('Android: a policy sign-in goes only to a machine that says it can, asked b
     assert.ok(begin.indexOf(later) > tooOld, `the policy-signin check comes before ${later}`);
   }
   assert.match(begin.slice(tooOld), /refusal = olderThanPolicySignin\(hostId\)\s*runCatching \{ fleet\.xosetup\("cancel", job = setup\.job\) \}/);
-  assert.ok(sheet.includes('"$hostId is too old for this app to send it a policy change safely, so nothing was sent. Update it,'));
+  assert.ok(sheet.includes('"$hostId needs an update to take the sign-in. Nothing was sent."'));
   // And both again at the last line before the seal.
   const runPolicy = fn(sheet, 'suspend fun runPolicy(');
   assert.ok(runPolicy.indexOf('XoPolicy.PURPOSE !in p.setup.can') < runPolicy.indexOf('XoPolicy.sealSignIn('));
@@ -183,25 +183,25 @@ test('Android: the words are the machine’s and iOS’s', () => {
   const form = file('PolicyForm.kt');
   const policy = file('XoPolicy.kt');
   assert.ok(sheet.includes('if (policy) "What the fleet may use" else "Add a hypervisor"'));
-  for (const head of ['Storage', 'Networks', 'Way out', 'Limits']) {
+  for (const head of ['Storage', 'Networks', 'Internet access', 'Limits']) {
     assert.ok(form.includes(`SectionHead("${head}")`), `the form has ${head}`);
   }
   assert.ok(form.includes('title = "None yet"'));
   assert.ok(sheet.includes('Text(if (applying) "Applying…" else "Apply")'));
-  // The way out says what it records and names the router it is for; the
-  // router is offered by a machine that can build it, with a way out, and
-  // its cost said first: iOS's words.
-  assert.ok(form.includes('"The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not " +'));
-  assert.ok(form.includes('is too old to build the router; update it to have it built from here.'));
+  // Internet access says what it is in one sentence; the router is offered
+  // by a machine that can build it, with a network for it, and its spec on
+  // the row: iOS's words.
+  assert.ok(form.includes('"The uplink: the network VMs reach the internet through. Pick one the VMs are not on themselves."'));
+  assert.ok(form.includes('needs an update to build the router.'));
   assert.match(form, /if \(canEdge && choice\.egress != null\) \{/);
   assert.ok(form.includes('title = if (there == null) "Build the edge router on it" else "Keep the edge router on it"'));
-  assert.ok(form.includes('downloads OPNsense once, about 470 MB, and builds it while you wait.'));
+  assert.ok(form.includes('2 vCPU · 2 GiB · 3 GiB disk · 470 MB download'));
   assert.ok(form.includes('onClick = { onChange(choice.copy(egress = null, edge = false, image = false, images = emptySet(), groups = 0, holder = false, holderAgain = false)) }'));
   assert.match(sheet, /canEdge = "edge" in p\.setup\.can/);
   assert.match(policy, /\.put\("edge", c\.edge\)/);
-  assert.ok(policy.includes('The edge router needs a way out: choose the network its WAN goes on.'));
-  assert.ok(sheet.includes('"$machine waits ten minutes for your choice, then lets go without changing anything."'));
-  assert.ok(sheet.includes('"Used once, on ${pick.hostId}, to read the pool and apply what you choose, and not kept. " +'));
+  assert.ok(policy.includes('The edge router needs an uplink: choose the network its WAN goes on.'));
+  assert.ok(sheet.includes('Hint("Apply within ten minutes, or nothing changes.")'));
+  assert.ok(sheet.includes('else "Used once by ${pick.hostId} and not kept."'));
   // Every step the protocol has, in its order, said as the machine says it.
   let last = -1;
   for (const key of XOPOLICY_STEPS) {
@@ -212,7 +212,7 @@ test('Android: the words are the machine’s and iOS’s', () => {
   // The rules Apply waits on, in checkPolicy's words.
   for (const line of [
     'Choose at least one storage repository: a VM needs somewhere for its disk.',
-    'The way out has to be one of the networks the fleet may use.',
+    'The uplink has to be one of the networks the fleet may use.',
     'vCPUs are between 1 and $maxCpus, what the pool has.',
     'Memory is between 1 GiB and ${gib(maxMemory)}, what the pool has.',
     'Disk is between 10 GiB and ${gib(maxDisk)}, the size of the storage chosen.',
@@ -242,7 +242,7 @@ test('Android: the form is the design’s tokens, 48dp, with nothing offered tha
   // ASKED FOR: "this needs proper progress, also which disk did it put it on?"
   assert.ok(file('HypervisorSheet.kt').includes('edgeDisk = "edge-disk" in p.setup.can'));
   assert.ok(form.includes('if (choice.edgeDiskChoice && (buildEdge || buildImage)) {'));
-  assert.ok(form.includes('there.sr?.let { " Its disk is on $it." }'));
+  assert.ok(form.includes('there.sr?.let { " · disk on $it" }'));
   assert.ok(file('HypervisorSheet.kt').includes('part != null -> part.fill / 1000f'));
   // ASKED FOR: "Why no actual updates in the live activity?", while a machine
   // image built and the screen called it the edge router. Named from the

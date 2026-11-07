@@ -9,14 +9,18 @@ import XCTest
 /// WHAT IS PINNED: the coordinator's rule (hosts.js runsSessionsFor), that a
 /// resume runs only where sessions are sandboxed or for someone who
 /// administers the machine; that a box which has not said is not taken for
-/// sandboxed and is named as not having said (C-5); that a box which says why
-/// it does not contain a session is told by that reason and its way on, or
-/// by every reason and every way on when it gives more than one, and one
-/// too old to say why reads as off; that a coordinator too old
-/// to send `administers` offers Resume as before; and that a refusal which is a
+/// sandboxed and is named as not having said (C-5); that whichever reason a
+/// box gives for not containing a session, and however many, the session's
+/// page says the same one sentence, who can resume it, because the reason
+/// and its way on are the machine page's (docs/reviews/copy-2026-11-06.md,
+/// 1); that the card says less still; that a coordinator too old to send
+/// `administers` offers Resume as before; and that a refusal which is a
 /// setting on the machine is titled as one. Where the line and the button sit
 /// is read by test/unsandboxed-resume-ios-in-apps.test.js.
 final class ResumeKeptTests: XCTestCase {
+
+    private static let without = "deb132 runs sessions without full isolation. Your admin can resume it."
+    private static let notSaid = "deb132 has not said whether it isolates sessions. Your admin can resume it."
 
     private func host(_ json: String) throws -> Fleet.FleetHost {
         try JSONDecoder().decode(Fleet.FleetHost.self, from: Data(json.utf8))
@@ -42,76 +46,37 @@ final class ResumeKeptTests: XCTestCase {
         XCTAssertNil(h.resumeKept)
     }
 
-    func testAMemberIsToldWhyOnAMachineWithoutTheSandbox() throws {
+    func testAMemberIsToldWhoCanOnAMachineWithoutTheSandbox() throws {
         let h = try host(#"{"hostId":"deb132","state":"healthy","administers":false,"health":{"sandboxed":false}}"#)
-        XCTAssertEqual(
-            h.resumeKept,
-            "deb132 runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
-        )
+        XCTAssertEqual(h.resumeKept, Self.without)
     }
 
-    func testAMachineWithItsSandboxOnIsToldForWhatItSaid() throws {
-        // Run as root, a box has its sandbox on and root in a session is root
-        // on the machine; "without the sandbox" sent its operator to a switch
-        // that was already on. Each reason with its way on, as the coordinator
-        // words the same refusal.
-        XCTAssertEqual(
-            try said("userns_root"),
-            "deb132 runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user."
-        )
-        XCTAssertEqual(
-            try said("userns_docker"),
-            "deb132 runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman."
-        )
-        XCTAssertEqual(
-            try said("userns_host"),
-            "deb132 has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap."
-        )
-        XCTAssertEqual(
-            try said("unsafe_args"),
-            "deb132 lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out."
-        )
-        XCTAssertEqual(
-            try said("off"),
-            "deb132 runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
-        )
-        XCTAssertEqual(
-            try said("a_reason_from_later"),
-            "deb132 says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
-        )
+    func testAMachineThatSaysWhyIsToldTheSameSentence() throws {
+        // Root, docker, an environment variable: each is the machine's
+        // business and its admin's, said on the machine's page. A member
+        // reading the session is told the same thing whichever it is, and
+        // nothing a later box might say changes that.
+        for why in ["userns_root", "userns_docker", "userns_host", "unsafe_args", "off", "a_reason_from_later"] {
+            XCTAssertEqual(try said(why), Self.without, why)
+        }
     }
 
-    func testAMachineWithMoreThanOneReasonIsToldEveryOne() throws {
-        // Run as root with its sandbox off, "until its sandbox is on" was
-        // half of it: with the sandbox on, root still kept the session out.
-        // Every reason the machine gives, and everything that has to change.
+    func testAMachineWithMoreThanOneReasonIsToldTheSameSentence() throws {
         let two = try host(#"{"hostId":"deb132","state":"healthy","administers":false,"health":{"sandboxed":false,"sandboxedWhy":"off","sandboxedAlso":["userns_root"]}}"#)
-        XCTAssertEqual(
-            two.resumeKept,
-            "deb132 runs sessions without the sandbox and runs fleetwright as root, so only this fleet’s admin, or the one person it works for, can resume one there until its sandbox is on and fleetwright runs as its own user."
-        )
+        XCTAssertEqual(two.resumeKept, Self.without)
         let three = try host(#"{"hostId":"deb132","state":"healthy","administers":false,"health":{"sandboxed":false,"sandboxedWhy":"unsafe_args","sandboxedAlso":["userns_host","userns_root"]}}"#)
-        XCTAssertEqual(
-            three.resumeKept,
-            "deb132 lets FLEETWRIGHT_SANDBOX_ARGS end its sandbox, has FLEETWRIGHT_SANDBOX_USERNS=host, and runs fleetwright as root, so only this fleet’s admin, or the one person it works for, can resume one there until the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox is taken out, FLEETWRIGHT_SANDBOX_USERNS is set back to nomap, and fleetwright runs as its own user."
-        )
-        // One it does not know makes the rest a partial list: no way on named.
+        XCTAssertEqual(three.resumeKept, Self.without)
         let later = try host(#"{"hostId":"deb132","state":"healthy","administers":false,"health":{"sandboxed":false,"sandboxedWhy":"userns_root","sandboxedAlso":["a_reason_from_later"]}}"#)
-        XCTAssertEqual(
-            later.resumeKept,
-            "deb132 says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
-        )
-        // An empty list is one reason, in its own sentence.
-        let one = try host(#"{"hostId":"deb132","state":"healthy","administers":false,"health":{"sandboxed":false,"sandboxedWhy":"userns_root","sandboxedAlso":[]}}"#)
-        XCTAssertEqual(one.resumeKept, try said("userns_root"))
+        XCTAssertEqual(later.resumeKept, Self.without)
     }
 
     func testAMachineThatHasNotSaidIsNotTakenForSandboxed() throws {
         let h = try host(#"{"hostId":"deb132","state":"healthy","administers":false,"health":{}}"#)
-        XCTAssertEqual(
-            h.resumeKept,
-            "deb132 has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
-        )
+        XCTAssertEqual(h.resumeKept, Self.notSaid)
+    }
+
+    func testTheCardSaysOnlyWhoCan() {
+        XCTAssertEqual(Fleet.FleetHost.resumeKeptRow, "Only an admin can resume this")
     }
 
     func testAnOlderCoordinatorOffersResumeAsBefore() throws {

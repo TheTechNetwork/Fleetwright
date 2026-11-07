@@ -158,8 +158,8 @@ internal object XoSetupNotice {
                 pve -> if (hostId.isBlank()) "The node is set up." else "$hostId set up the node."
                 watchdog -> if (hostId.isBlank()) "Open to see how Xen Orchestra was left." else "$hostId finished. Open to see how Xen Orchestra was left."
                 policy -> if (hostId.isBlank()) "Applied." else "$hostId applied it."
-                hostId.isBlank() -> "The pool is in the fleet."
-                else -> "$hostId finished. The pool is in the fleet."
+                hostId.isBlank() -> "The pool is added."
+                else -> "$hostId finished. The pool is added."
             }
             "failed" -> if (hostId.isBlank()) "Open to see what stopped it." else "Open to see what stopped it on $hostId."
             "cancelled" -> "Stopped between steps, as asked."

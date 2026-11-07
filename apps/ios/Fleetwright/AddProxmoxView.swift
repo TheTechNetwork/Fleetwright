@@ -86,7 +86,7 @@ struct AddProxmoxView: View {
                     .onChange(of: node) { _, _ in offered = nil; trusted = nil }
                 SecureField("Its root password", text: $password)
                     .disabled(since != nil || kept)
-                TextField("Machine numbers, such as 9000-9099 (optional)", text: $vmids)
+                TextField("VM IDs, such as 9000-9099 (optional)", text: $vmids)
                     .keyboardType(.numbersAndPunctuation)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -126,7 +126,7 @@ struct AddProxmoxView: View {
                     TextField("Bridge (vmbr0 when empty)", text: $options.bridge)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    Picker("The fleet's token lasts", selection: $options.expireDays) {
+                    Picker("Access expires after", selection: $options.expireDays) {
                         ForEach(ProxmoxOptions.lifetimes, id: \.self) { Text("\($0) days").tag($0) }
                     }
                     Stepper("Group networks: \(options.groups)", value: $options.groups, in: 0...4)
@@ -140,7 +140,7 @@ struct AddProxmoxView: View {
                 }
                 .disabled(since != nil || kept)
                 if !coordinatorOk {
-                    Text("This phone's fleet address is not one the setup can be told, so set it up by hand below.")
+                    Text("Can’t set this up from the phone. Use By hand below.")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.bad)
                 } else if let waiting = offered {
@@ -183,7 +183,7 @@ struct AddProxmoxView: View {
                             .contentTransition(.opacity)
                     }
                     if since != nil {
-                        Text("Running on the node, and you need not watch: it carries on if this screen closes, and this phone keeps its line in your vault when Fleetwright is next open.")
+                        Text("Running on the node. You can close this screen.")
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.inkDim)
                     }
@@ -196,7 +196,10 @@ struct AddProxmoxView: View {
             } header: {
                 sectionHead("Set it up")
             } footer: {
-                Text("Proxmox VE 9 or newer. This phone tries the node itself first, and the password goes to the node and nowhere else; it is kept on this phone only while the setup runs. When this phone cannot reach the node, one of your machines that can sets it up, with the password sealed to it alone. Machine numbers are the VM IDs the fleet's image and machines take; left empty, they take the cluster's next free ones.")
+                // THE RESULT IN ONE SENTENCE. The route (the phone first, a
+                // machine when it cannot reach the node) and the password's
+                // custody are in the header comment and docs/proxmox.md.
+                Text("Needs Proxmox VE 9 or newer. Your password goes only to the node.")
             }
 
             Section {
@@ -236,7 +239,7 @@ struct AddProxmoxView: View {
             } header: {
                 sectionHead("Or by hand, on the node")
             } footer: {
-                Text("In Proxmox's web interface: Datacenter › the node › Shell. It makes a pool, a user with no password, its token, a firewall group, the lab and group networks and the machine image, which takes a few minutes, and prints one line. The line is the cluster's token, kept in your vault and handed only to the machines you approved.")
+                Text("Run it in Datacenter › node › Shell, then paste what it prints.")
             }
 
             if !result.isBlank {
@@ -302,7 +305,7 @@ struct AddProxmoxView: View {
                 answered = try await ProxmoxSSH.hostKey(nodeKey)
             } catch {
                 guard coordinatorOk else {
-                    sshText = "This phone could not reach \(nodeKey) (\(error.localizedDescription)), and its fleet address is not one a machine can be told. Set it up by hand below."
+                    sshText = "Couldn’t reach \(nodeKey) (\(error.localizedDescription)). Set it up by hand below."
                     return
                 }
                 through = true
@@ -346,7 +349,7 @@ struct AddProxmoxView: View {
                     // Collected from the front of the app, or no longer followed.
                     if !ProxmoxDirectHandoff.isPending(nodeKey) {
                         since = nil
-                        sshText = "This phone follows no setup on \(nodeKey) now. If it finished, its line is in your vault."
+                        sshText = "No setup running on \(nodeKey)."
                         return
                     }
                     try? await Task.sleep(for: .seconds(3))
@@ -368,7 +371,7 @@ struct AddProxmoxView: View {
                     break
                 }
             } catch {
-                sshText = "Lost the node for a moment (\(error.localizedDescription)); asking again."
+                sshText = "Reconnecting…"
             }
             try? await Task.sleep(for: .seconds(3))
         }
@@ -383,9 +386,9 @@ struct AddProxmoxView: View {
             kept = true
             failed = false
             line = ""
-            // WHAT HAPPENS NEXT, AND WHEN: not "added", which would be a claim
-            // about the cluster nobody has checked yet (C-5).
-            result = "Kept in your vault. Your machines pick it up within ten minutes and check it against the cluster; it then shows under New session › Where, as Proxmox at \(record.address)."
+            // WHAT HAPPENS NEXT, AND WHEN: saved, not "added", which would be
+            // a claim about the cluster nobody has checked yet (C-5).
+            result = "Saved. Within 10 minutes it appears under New session › Where, as Proxmox at \(record.address)."
         } catch {
             failed = true
             result = error.localizedDescription
@@ -399,7 +402,7 @@ struct AddProxmoxView: View {
         kept = true
         failed = false
         line = ""
-        result = "Kept in your vault. Your machines pick it up within ten minutes and check it against the cluster; it then shows under New session › Where, as Proxmox at \(address)."
+        result = "Saved. Within 10 minutes it appears under New session › Where, as Proxmox at \(address)."
     }
 
     private func sectionHead(_ text: String) -> some View {
@@ -416,7 +419,7 @@ struct AddProxmoxView: View {
 /// The options' words, the same on Android (ProxmoxSheet.kt).
 enum ProxmoxWords {
     static let systemsHint = "Each system chosen becomes an image a session's machine can be made from. One already on the cluster is kept, and built again only when asked."
-    static let firewallHint = "Until it is on, the fleet's machines are made only on networks you choose. Proxmox VE's own rules keep the nodes' web interface, SSH and cluster traffic open to the local network; anything else coming in to the nodes themselves is dropped, so add a rule first for any other service they run."
+    static let firewallHint = "Blocks traffic into the nodes except the web interface, SSH and cluster traffic."
 }
 
 struct ProxmoxOptions: Codable, Equatable {

@@ -1173,8 +1173,8 @@ test('nothing is downloaded or made without room for the disk or a template to m
   const full = xo({ VM: [], 'VM-template': [TEMPLATE] });
   const tight = SRS.map((s) => ({ ...s, physical_usage: s.size }));
   await assert.rejects(ensureEdge(edgeArgs(full, { srs: tight }).args), /has 3 GiB free[\s\S]*Choose where its disk goes/);
-  // Storage the person chose is held to the way out's pool and to room.
-  await assert.rejects(ensureEdge(edgeArgs(full, { sr: 'sr-other-pool' }).args), /not in the way out’s pool/);
+  // Storage the person chose is held to the uplink's pool and to room.
+  await assert.rejects(ensureEdge(edgeArgs(full, { sr: 'sr-other-pool' }).args), /not in the uplink’s pool/);
   await assert.rejects(ensureEdge(edgeArgs(full, { sr: 'sr-small' }).args), /sr-small has no 3 GiB free/);
   const bare = xo({ VM: [], 'VM-template': [] });
   await assert.rejects(ensureEdge(edgeArgs(bare).args), /no built-in "Other install media" template/);
@@ -1221,7 +1221,7 @@ test('the edge router is asked for only with a way out for its WAN', () => {
   const base = { v: 1, srs: ['sr1'], networks: ['n1', 'n2'], limits: { cpus: 2, memory: 4 * GiB, disk: 20 * GiB } };
   const none = checkPolicy({ ...base, egress: null, edge: true }, choices);
   assert.equal(none.ok, false);
-  assert.match(/** @type {any} */ (none).text, /needs a way out/);
+  assert.match(/** @type {any} */ (none).text, /needs an uplink/);
   const asked = checkPolicy({ ...base, egress: 'n2', edge: true }, choices);
   assert.equal(asked.ok && asked.policy.edge, true);
   // Anything but `true` is no: an older phone sends nothing and builds nothing.

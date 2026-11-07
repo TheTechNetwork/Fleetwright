@@ -9,8 +9,10 @@ import SwiftUI
 /// could not use was invisible for hours that way.
 ///
 /// WHAT THIS PAGE IS FOR: is each hypervisor usable, and if not, why. So each
-/// row is the same shape (RHYTHM 1): its address, which kind it is, and what
-/// the machines holding it saw. A row that wears the attention ring is one no
+/// row is the same shape (RHYTHM 1): its address, which kind it is, and one
+/// short status from a fixed set (`HypervisorWords.status`). The why, the
+/// machines and the counts are on its page, not in the row (the copy review
+/// of 2026-11-06, finding 59). A row that wears the attention ring is one no
 /// machine can use, or a cluster too old for the fleet. Calm recedes, trouble
 /// comes forward.
 struct HypervisorsView: View {
@@ -47,13 +49,15 @@ struct HypervisorsView: View {
     var body: some View {
         List {
             if !loaded {
-                Text("Asking the fleet…")
+                Text("Checking…")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
                     .fleetRow()
             } else if rows.isEmpty {
                 ContentUnavailableView {
-                    Label("No hypervisors yet", systemImage: "square.stack.3d.up")
+                    // THE TITLE KEEPS §7: a fleet that did not answer is not a fleet with
+                    // no hypervisors, and the title says which.
+                    Label(failed ? "Couldn't load hypervisors" : "No hypervisors yet", systemImage: "square.stack.3d.up")
                 } description: {
                     Text(failed ? HypervisorWords.fleetSilentEmpty : HypervisorWords.none)
                 }
@@ -115,16 +119,20 @@ struct HypervisorsView: View {
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
-            Text(HypervisorWords.status(row.fleet, onPhone: row.onPhone))
+            // ONE STATUS, never colour alone: the word changes with the colour.
+            // `answered` keeps §7: a pool the fleet did not list is waiting for
+            // a machine only when the fleet actually answered, and Unknown
+            // when it did not.
+            Text(HypervisorWords.status(row.fleet, onPhone: row.onPhone, answered: fleet != nil))
                 .fleetType(.label)
                 .foregroundStyle(HypervisorWords.wantsSomething(row.fleet, onPhone: row.onPhone) ? Design.Palette.attention : Design.Palette.inkDim)
             // HOW CURRENT ITS PAGE WILL BE, for a pool this phone reads
             // itself: nothing watches a pool while the app is closed, so the
-            // row says when this phone last looked rather than letting the
+            // row says when this phone last read it rather than letting the
             // page's first frame pass for now.
             if row.onPhone {
-                Text(Manage.lastLooked(row.address).map { Manage.Words.rowLooked(relativeTime($0.timeIntervalSince1970 * 1000)) }
-                     ?? Manage.Words.never)
+                Text(Manage.lastLooked(row.address).map { HypervisorWords.updated(relativeTime($0.timeIntervalSince1970 * 1000)) }
+                     ?? HypervisorWords.neverOpened)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
@@ -156,13 +164,21 @@ struct HypervisorsView: View {
     }
 }
 
-/// What the fleet saw of one hypervisor, box by box, and what can be done.
+/// One hypervisor: the answer in a sentence, then the machines that checked
+/// it, its details, and what can be done. The sentence is the page; the rest
+/// is the evidence under it.
 struct HypervisorPageView: View {
     let settings: Settings
     let row: HypervisorsView.Row
 
     var body: some View {
         List {
+            Section {
+                Text(HypervisorWords.answer(row.fleet))
+                    .fleetType(.body)
+                    .foregroundStyle(Design.Palette.ink)
+                    .frame(minHeight: 44, alignment: .leading)
+            }
             Section {
                 ForEach(row.fleet?.boxes ?? [], id: \.hostId) { box in
                     VStack(alignment: .leading, spacing: Design.Space.hair) {
@@ -173,6 +189,8 @@ struct HypervisorPageView: View {
                                 .fleetType(.label)
                                 .foregroundStyle(box.reachable == true ? Design.Palette.ok : box.reachable == false ? Design.Palette.attention : Design.Palette.inkDim)
                         }
+                        // THE MACHINE'S OWN WORDS on why, selectable: they name
+                        // a path and a status, which is what gets searched for.
                         if let why = box.problem, !why.isEmpty {
                             Text(why).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
                         }
@@ -181,15 +199,13 @@ struct HypervisorPageView: View {
                     .accessibilityElement(children: .combine)
                 }
                 if (row.fleet?.boxes ?? []).isEmpty {
-                    Text(HypervisorWords.noBox).fleetType(.label).foregroundStyle(Design.Palette.attention)
+                    Text(HypervisorWords.noBox).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                 }
             } header: {
-                Text("What each machine saw")
-            } footer: {
-                Text(HypervisorWords.boxesFooter)
+                Text("Machines")
             }
-            if let f = row.fleet {
-                Section("The hypervisor") {
+            if let f = row.fleet, !HypervisorWords.facts(f).isEmpty {
+                Section("Details") {
                     ForEach(HypervisorWords.facts(f), id: \.self) { line in
                         Text(line).fleetType(.body).foregroundStyle(Design.Palette.ink)
                     }
@@ -198,7 +214,7 @@ struct HypervisorPageView: View {
             if row.proxmox {
                 Section {
                     // THE SAME SETUP, again: it finds what it made, keeps the
-                    // image, and hands over a new line.
+                    // image, and issues new access.
                     // THE FIREWALL, where it is off: the same setup, with the
                     // address filled in and the option already on.
                     if row.fleet?.fenced == false {
@@ -228,17 +244,23 @@ struct HypervisorPageView: View {
 /// find the answer to". The fleet's machines look (`xoprobe`, which says both
 /// whether Xen Orchestra answered and whether Proxmox VE's API did), and so
 /// does this phone, at Proxmox VE's port, because a node is often on a
-/// network only the phone reaches. The setup for what was found opens with
-/// the address filled in. Only when nothing answers as either is the person
-/// asked which it is, and then it is a fact nobody here could find.
+/// network only the phone reaches. Both kinds are rows under the field the
+/// whole time, so the page has the same shape whatever answers: the one that
+/// did is marked and its setup opens with the address filled in; when nothing
+/// answers as either, the line above the rows says so and the person picks.
 struct AddHypervisorChoiceView: View {
     let settings: Settings
 
     @State private var address = ""
     @State private var finding = false
+    /// What answered, which opens its setup.
     @State private var found: Found?
-    /// Nothing answered as either: said, and both setups offered.
+    /// What answered last, kept once the setup closes so its row still says so.
+    @State private var marked: Found?
+    /// Nothing answered as either: said above the rows.
     @State private var unknown: String?
+    /// Machines too old to check for Proxmox VE, named once, quietly.
+    @State private var note: String?
 
     enum Found: Hashable {
         case xo(String)
@@ -256,33 +278,46 @@ struct AddHypervisorChoiceView: View {
                     .keyboardType(.URL)
                     .submitLabel(.go)
                     .onSubmit { Task { await find() } }
+                    .onChange(of: address) { _, _ in
+                        unknown = nil
+                        note = nil
+                    }
                     .frame(minHeight: 44)
-                Button(finding ? "Looking…" : "Find it") { Task { await find() } }
+                Button(finding ? "Checking…" : "Find it") { Task { await find() } }
                     .disabled(trimmed.isEmpty || finding)
                     .frame(minHeight: 44)
             } footer: {
                 Text(HypervisorWords.findFooter)
             }
-            if let unknown {
-                Section {
+            Section {
+                if let unknown {
                     Text(unknown).fleetType(.label).foregroundStyle(Design.Palette.attention)
-                    NavigationLink { AddHypervisorView(settings: settings, startAt: trimmed) } label: {
-                        VStack(alignment: .leading, spacing: Design.Space.hair) {
-                            Text("Xen Orchestra").fleetType(.bodyStrong)
-                            Text(HypervisorWords.xoChoice).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
-                        }
-                        .frame(minHeight: 44, alignment: .leading)
-                    }
-                    NavigationLink { AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(trimmed)) } label: {
-                        VStack(alignment: .leading, spacing: Design.Space.hair) {
-                            Text("Proxmox VE").fleetType(.bodyStrong)
-                            Text(HypervisorWords.pveChoice).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
-                        }
-                        .frame(minHeight: 44, alignment: .leading)
-                    }
-                } header: {
-                    Text("Which hypervisor is it")
                 }
+                if let note {
+                    Text(note).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                }
+                NavigationLink { AddHypervisorView(settings: settings, startAt: trimmed) } label: {
+                    VStack(alignment: .leading, spacing: Design.Space.hair) {
+                        Text("Xen Orchestra").fleetType(.bodyStrong)
+                        Text(HypervisorWords.xoChoice).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        if marked == .xo(trimmed) {
+                            Text(HypervisorWords.foundHere).fleetType(.label).foregroundStyle(Design.Palette.ok)
+                        }
+                    }
+                    .frame(minHeight: 44, alignment: .leading)
+                }
+                NavigationLink { AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(trimmed)) } label: {
+                    VStack(alignment: .leading, spacing: Design.Space.hair) {
+                        Text("Proxmox VE").fleetType(.bodyStrong)
+                        Text(HypervisorWords.pveChoice).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        if marked == .pve(HypervisorAddress.node(trimmed)) {
+                            Text(HypervisorWords.foundHere).fleetType(.label).foregroundStyle(Design.Palette.ok)
+                        }
+                    }
+                    .frame(minHeight: 44, alignment: .leading)
+                }
+            } header: {
+                Text("Which hypervisor is it")
             }
         }
         .navigationTitle("Add a hypervisor")
@@ -301,6 +336,8 @@ struct AddHypervisorChoiceView: View {
         guard !at.isEmpty, !finding else { return }
         finding = true
         unknown = nil
+        note = nil
+        marked = nil
         defer { finding = false }
         let fleet = Fleet(settings: settings)
         async let asked = try? fleet.xoprobe(address: at)
@@ -312,11 +349,13 @@ struct AddHypervisorChoiceView: View {
         } else if probes.contains(where: { $0.pve == true }) || phoneSees {
             found = .pve(HypervisorAddress.node(at))
         } else {
-            // A MACHINE THAT NEVER LOOKED is named, and the way to make it look
-            // given, rather than counted among the ones that found nothing.
+            // A MACHINE THAT NEVER LOOKED is named, in one quiet line under the
+            // answer, rather than counted among the ones that found nothing.
             let didNotLook = probes.filter { $0.pveLooked != true && $0.through != "phone" }.map(\.hostId)
-            unknown = didNotLook.isEmpty ? HypervisorWords.notFound(at) : HypervisorWords.notLooked(at, machines: didNotLook)
+            unknown = HypervisorWords.notFound(at)
+            note = didNotLook.isEmpty ? nil : HypervisorWords.needsUpdate(didNotLook)
         }
+        marked = found
     }
 }
 
@@ -376,62 +415,86 @@ enum HypervisorAddress {
 
 /// The page's words, the same on Android (HypervisorsScreen.kt); a test
 /// holds the two equal (test/hypervisors-in-apps.test.js).
+///
+/// THREE LEVELS, from the copy review of 2026-11-06: a row says a verdict in
+/// a word or three, a page says the result in a sentence and offers at most
+/// one action, and the mechanism is not on this screen at all. §7 of
+/// docs/psychology.md survives as a word: "cannot tell" is `Unknown` or
+/// `Not checked`, never a sentence naming what did not answer, and never
+/// "none".
 enum HypervisorWords {
-    static let none = "Add one, and the machines that can reach it make machines on it for your sessions."
-    static let fleetSilent = "The fleet did not answer, so only the pools this phone holds are listed. Open this page again to ask again."
-    static let fleetSilentEmpty = "The fleet did not answer, and this phone holds no pool of its own. Open this page again to ask again."
-    static let noBox = "No machine of the fleet holds its token yet. Machines pick up a hypervisor from your vault within ten minutes of it being kept there."
-    static let boxesFooter = "Each machine you approved reads your vault and looks at the hypervisor every few minutes. One that can reach it makes machines on it."
+    static let none = "Add one. Machines that can reach it make machines on it for your sessions."
+    static let fleetSilent = "Your fleet didn't answer. Only pools on this phone are shown."
+    static let fleetSilentEmpty = "Your fleet didn't answer, and this phone has no pool of its own."
+    static let noBox = "None yet"
     static let turnOnFirewall = "Turn on the datacenter firewall"
-    static let againFooter = "Run on the node again, it finds what it made, keeps the image, and hands over a new line. The old line stops working."
-    static let xoElsewhere = "Its page opens on the phone that set it up, which holds its token."
-    static let xoChoice = "A pool of XCP-ng hosts, through the Xen Orchestra in front of it."
-    static let pveChoice = "A Proxmox VE 9 node or cluster, set up over SSH as root."
-    static let findFooter = "The fleet's machines and this phone look at what answers there, and the setup for it opens."
+    static let againFooter = "Keeps what it made; the old access stops working."
+    static let xoElsewhere = "Its page opens on the phone that set it up."
+    static let xoChoice = "A pool of XCP-ng hosts, through Xen Orchestra."
+    static let pveChoice = "A Proxmox VE 9 node or cluster, set up over SSH."
+    static let findFooter = "Fleetwright checks what answers there and opens the right setup."
+    static let foundHere = "Found at this address"
+    static let neverOpened = "Never opened"
 
-    /// Nothing answered as Xen Orchestra, and some machines never looked for
-    /// Proxmox VE: they are named, with the update that makes them look.
-    static func notLooked(_ address: String, machines: [String]) -> String {
-        let one = machines.count == 1
-        return "Nothing at \(address) answered as Xen Orchestra, and this phone could not reach its Proxmox VE port. \(machines.joined(separator: ", ")) did not look for Proxmox VE: \(one ? "its" : "their") Fleetwright is older than that look. Apply update on \(one ? "its page" : "their pages") under Machines, then Find it again, or say which it is."
-    }
+    /// THE ROW'S ONE STATUS, from a fixed set. Trouble is the three that wear
+    /// the attention colour (`wantsSomething`); the rest are calm.
+    static let ready = "Ready"
+    static let cantReach = "Can't reach"
+    static let waiting = "Waiting for a machine"
+    static let needsPve9 = "Needs Proxmox VE 9"
+    static let checking = "Checking"
+    static let unknown = "Unknown"
 
-    /// Nothing answered as either kind: the one question the page asks.
+    /// When this phone last read a pool it holds, for the row.
+    static func updated(_ when: String) -> String { "Updated \(when)" }
+
+    /// Nothing answered as either kind: the one line above the two rows.
     static func notFound(_ address: String) -> String {
-        "Nothing at \(address) answered as Xen Orchestra or as Proxmox VE, from the fleet's machines or from this phone. Which is it?"
+        "Couldn't tell what's at \(address). Pick one."
     }
 
+    /// Some machines never checked for Proxmox VE: their Fleetwright is older
+    /// than that check. Named once, quietly, under the answer.
+    static func needsUpdate(_ machines: [String]) -> String {
+        "\(machines.joined(separator: ", ")) \(machines.count == 1 ? "needs" : "need") an update to check for Proxmox VE."
+    }
+
+    /// One machine's word on the page: nil is "has not checked", never "no".
     static func reach(_ reachable: Bool?) -> String {
         switch reachable {
-        case true?: return "reached it"
-        case false?: return "could not reach it"
-        case nil: return "has not looked yet"
+        case true?: return "Reached"
+        case false?: return "Can't reach"
+        case nil: return "Not checked"
         }
     }
 
-    /// The row's one line: the machines that reached it and what is there, or
-    /// why none could.
-    static func status(_ h: Fleet.Hypervisor?, onPhone: Bool) -> String {
-        guard let h, !h.boxes.isEmpty else {
-            return onPhone ? "On this phone. No machine of the fleet holds its token yet." : "No machine of the fleet holds its token yet."
-        }
+    /// The row's status. `answered` is whether the fleet sent its list at
+    /// all: a pool of this phone's the fleet did not list is waiting for a
+    /// machine only when the fleet said so by leaving it out (§7).
+    static func status(_ h: Fleet.Hypervisor?, onPhone: Bool, answered: Bool) -> String {
+        guard let h else { return answered && onPhone ? waiting : unknown }
+        if h.boxes.isEmpty { return waiting }
+        if h.boxes.contains(where: { $0.reachable == true }) { return h.onProxmox && h.supported == false ? needsPve9 : ready }
+        if h.boxes.contains(where: { $0.reachable == false }) { return cantReach }
+        return checking
+    }
+
+    /// The page's one sentence: the same verdict as the row, and the one
+    /// fact that makes it so.
+    static func answer(_ h: Fleet.Hypervisor?) -> String {
+        guard let h else { return "Unknown. Your fleet said nothing about it." }
+        if h.boxes.isEmpty { return "Waiting for a machine to pick it up." }
         let reached = h.boxes.filter { $0.reachable == true }.map(\.hostId)
         if !reached.isEmpty {
-            var parts = ["Reached from \(reached.joined(separator: ", "))"]
-            if let n = h.images { parts.append(n == 1 ? "1 image" : "\(n) images") }
-            if let n = h.machines { parts.append(n == 1 ? "1 machine" : "\(n) machines") }
-            if h.onProxmox && h.supported == false { parts.append("older than Proxmox VE 9") }
-            return parts.joined(separator: " · ")
+            if h.onProxmox && h.supported == false { return "Needs Proxmox VE 9. No machine is made on it." }
+            return "Ready. \(reached.joined(separator: ", ")) \(reached.count == 1 ? "makes" : "make") machines on it."
         }
-        if let failed = h.boxes.first(where: { $0.reachable == false }) {
-            let why = failed.problem.map { ": \($0)" } ?? ""
-            return "No machine reached it. \(failed.hostId)\(why)"
-        }
-        return "Not looked at yet. The machines holding it look every few minutes."
+        if h.boxes.contains(where: { $0.reachable == false }) { return "Can't reach it. No machine got through." }
+        return "Checking. No machine has checked it yet."
     }
 
     /// Whether the row wears the attention ring: nothing of the fleet's can
-    /// use it, or the cluster is too old. Not looked at yet is not trouble.
+    /// use it, or the cluster is too old. Checking is not trouble.
     static func wantsSomething(_ h: Fleet.Hypervisor?, onPhone: Bool) -> Bool {
         guard let h else { return !onPhone }
         if h.boxes.isEmpty { return true }
@@ -439,21 +502,22 @@ enum HypervisorWords {
         return h.boxes.contains { $0.reachable == false }
     }
 
-    /// The facts the machines could tell, each said only when known.
+    /// The facts the machines could tell, each said only when known, each a
+    /// short line. Whether the cluster is new enough is the headline's, not
+    /// repeated here.
     static func facts(_ h: Fleet.Hypervisor) -> [String] {
         var lines: [String] = []
         if let v = h.version { lines.append(h.onProxmox ? "Proxmox VE \(v)" : "Version \(v)") }
-        if h.supported == false { lines.append("Older than Proxmox VE 9, so no machine is made on it.") }
         if let pools = h.pools, !pools.isEmpty { lines.append("\(h.onProxmox ? "Pool" : "Pools"): \(pools.joined(separator: ", "))") }
         if h.onProxmox {
             switch h.fenced {
-            case true?: lines.append("The datacenter firewall is on, and the fleet's machines are behind it.")
-            case false?: lines.append("The datacenter firewall is off: machines are made only on networks you chose until it is on.")
+            case true?: lines.append("Datacenter firewall on")
+            case false?: lines.append("Datacenter firewall off: machines only on networks you chose")
             case nil: break
             }
         }
-        if let n = h.images { lines.append(n == 1 ? "1 machine image" : "\(n) machine images") }
-        if let n = h.machines { lines.append(n == 1 ? "1 machine of the fleet's on it" : "\(n) machines of the fleet's on it") }
+        if let n = h.images { lines.append(n == 1 ? "1 image" : "\(n) images") }
+        if let n = h.machines { lines.append(n == 1 ? "1 machine made on it" : "\(n) machines made on it") }
         return lines
     }
 }

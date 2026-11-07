@@ -104,7 +104,7 @@ final class PhoneRelay: @unchecked Sendable {
     /// wait for the fleet to say it is ready or why it is not.
     func open(settings: Settings, host: String?) async throws -> Ready {
         guard var parts = URLComponents(string: settings.coordinatorURL + "/api/xosetup/relay"), let scheme = parts.scheme?.lowercased() else {
-            throw FleetError.message("That coordinator URL is not a URL")
+            throw FleetError.message("That fleet address is not a URL")
         }
         // NOT OVER CLEARTEXT, for the reason Fleet.send gives: the upgrade
         // carries this device's credential.
@@ -113,7 +113,7 @@ final class PhoneRelay: @unchecked Sendable {
         }
         parts.scheme = scheme == "https" ? "wss" : "ws"
         parts.queryItems = [URLQueryItem(name: "address", value: address)] + (host.map { [URLQueryItem(name: "host", value: $0)] } ?? [])
-        guard let url = parts.url else { throw FleetError.message("That coordinator URL is not a URL") }
+        guard let url = parts.url else { throw FleetError.message("That fleet address is not a URL") }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(settings.credential)", forHTTPHeaderField: "authorization")
         if settings.viewAsMember { request.setValue("member", forHTTPHeaderField: "x-fleetwright-view") }
@@ -148,7 +148,7 @@ final class PhoneRelay: @unchecked Sendable {
                 case .success:
                     self.receive()
                 case .failure:
-                    self.finish("The connection to the fleet ended, so this phone is no longer carrying anything to Xen Orchestra.")
+                    self.finish("Lost connection to your fleet.")
                 }
             }
         }
@@ -166,7 +166,7 @@ final class PhoneRelay: @unchecked Sendable {
             waitingForReady?.resume(returning: Ready(relay: relay, hostId: hostId))
             waitingForReady = nil
         case "closed":
-            finish(frame["text"] as? String ?? "The fleet closed the relay.")
+            finish(frame["text"] as? String ?? "Connection closed.")
         case "open":
             if let stream { connect(stream) }
         case "data":
@@ -206,7 +206,7 @@ final class PhoneRelay: @unchecked Sendable {
                 self.send(["op": "opened", "stream": stream])
                 self.pump(stream, connection)
             case .failed(let error), .waiting(let error):
-                self.drop(stream, connection, why: "this phone could not reach \(self.address): \(error.localizedDescription)")
+                self.drop(stream, connection, why: "Could not reach \(self.address): \(error.localizedDescription)")
             default:
                 break
             }
@@ -237,7 +237,7 @@ final class PhoneRelay: @unchecked Sendable {
         if reached.remove(stream) != nil {
             send(["op": "end", "stream": stream])
         } else {
-            send(["op": "refused", "stream": stream, "text": why ?? "this phone could not reach \(address)"])
+            send(["op": "refused", "stream": stream, "text": why ?? "Could not reach \(address)."])
         }
     }
 
@@ -249,7 +249,7 @@ final class PhoneRelay: @unchecked Sendable {
         reached.removeAll()
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
-        let why = text ?? "This phone stopped carrying the relay."
+        let why = text ?? "Connection closed."
         waitingForReady?.resume(throwing: FleetError.message(why))
         waitingForReady = nil
         if let text, let onClose {

@@ -79,7 +79,7 @@ struct PhoneVault {
         let pin = try await PhoneGitHub(settings: settings).minterKey(fleet)
         let email = settings.signedInAs.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !email.isEmpty else {
-            throw FleetError.message("This phone does not know which fleet account it is signed in as. Sign in to the fleet again.")
+            throw FleetError.message("Sign in to your fleet again.")
         }
         let github = try await PhoneGitHub(settings: settings).accessToken(fleet)
         let reply = Seal.newKey()
@@ -92,7 +92,7 @@ struct PhoneVault {
         payload["reply"] = reply.publicKey
         let r = try await fleet.vault(sealed: try Seal.seal(to: pin, aad: Seal.vaultRequestAAD, payload: payload))
         guard r["ok"] as? Bool == true, let box = r["sealed"] as? [String: Any] else {
-            throw FleetError.message(r["text"] as? String ?? "The vault refused that.")
+            throw FleetError.message(r["text"] as? String ?? "Your fleet refused that.")
         }
         let answer = try Seal.open(reply, aad: Seal.vaultReplyAAD, sealed: box)
         return (r["text"] as? String ?? "", answer)
@@ -149,7 +149,7 @@ struct PhoneVault {
         if provider == "github" {
             let start = try await fleet.githubDeviceStart()
             guard start.ok == true, let clientId = start.clientId, let redirectUri = start.redirectUri else {
-                throw FleetError.message(start.text ?? "The fleet cannot start that sign-in.")
+                throw FleetError.message(start.text ?? "Your fleet cannot start that sign-in.")
             }
             back = try await DeviceSignIn.run(authorize: "https://github.com/login/oauth/authorize", clientId: clientId,
                                               redirectUri: redirectUri, statePrefix: start.statePrefix ?? "d.", host: "github")
@@ -157,7 +157,7 @@ struct PhoneVault {
             let start = try await fleet.cloudflareDeviceStart()
             guard start.ok == true, let clientId = start.clientId, let redirectUri = start.redirectUri,
                   let authorize = start.authorizeUrl
-            else { throw FleetError.message(start.text ?? "The fleet cannot start that sign-in.") }
+            else { throw FleetError.message(start.text ?? "Your fleet cannot start that sign-in.") }
             back = try await DeviceSignIn.run(
                 authorize: authorize, clientId: clientId, redirectUri: redirectUri,
                 statePrefix: start.statePrefix ?? "d.", host: "cloudflare",
@@ -171,7 +171,7 @@ struct PhoneVault {
 
     func approve(_ fleet: Fleet, host: Fleet.Host) async throws -> String {
         guard let key = host.publicJwk else {
-            throw FleetError.message("The fleet did not list \(host.hostId)'s key, so it cannot be approved from here. Update the fleet.")
+            throw FleetError.message("\(host.hostId) cannot be approved yet. Update your fleet first.")
         }
         let jwk: [String: Any] = ["kty": key.kty, "crv": key.crv, "x": key.x, "y": key.y]
         return try await ask(fleet, op: "grant", extra: ["hostKey": jwk, "label": host.hostId]).text
@@ -235,12 +235,11 @@ struct PhoneVault {
     static func forgetting(_ name: String) -> String {
         switch name {
         case "claude":
-            return "Runners you start go back to the runner repository's API key, and boxes stop being given it. "
-                + "Getting it back means a new token from claude setup-token."
+            return "Your sessions stop using it. Getting it back means adding it again."
         case "github", "cloudflare":
-            return "Boxes stop being given it when they next ask. Getting it back means signing in again from this page."
+            return "Machines you approved stop being given it. Getting it back means signing in again."
         default:
-            return "Boxes stop being given it when they next ask. Getting it back means typing it in again."
+            return "Machines you approved stop being given it. Getting it back means typing it in again."
         }
     }
 

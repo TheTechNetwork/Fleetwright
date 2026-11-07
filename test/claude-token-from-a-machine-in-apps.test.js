@@ -37,7 +37,7 @@ test('iOS: the sign-in comes back sealed to a key made for that one answer, and 
   assert.match(keep, /if let signIn = inside\["signIn"\] as\? \[String: Any\] \{\s*return try await depositClaudeSignIn\(fleet, signIn: signIn\)/);
   // A machine from before protocol 15 makes a setup-token: kept, and said.
   assert.match(keep, /let kept = try await depositClaudeLogin\(fleet, claudeToken: token\)/);
-  assert.ok(keep.includes('is older and made a setup-token, which runs sessions but cannot open Remote Control.'));
+  assert.ok(keep.includes('is out of date, so this login cannot open Remote Control.'));
   // Sealed to the minter as a token is, with `signIn` where a token is `claude`.
   assert.match(IOS, /let payload: \[String: Any\] = \["v": 1, "github": github, "signIn": signIn, "at":/);
 });
@@ -63,20 +63,24 @@ test('Android: the sign-in comes back sealed to a key made for that one answer, 
   assert.match(keep, /Seal\.open\(key, Seal\.SETUP_TOKEN_AAD, sealed\)/);
   assert.match(keep, /if \(signIn != null\) return@runCatching depositClaudeSignIn\(fleet, signIn\)\.getOrThrow\(\)/);
   assert.match(keep, /val kept = depositClaudeLogin\(fleet, token\)\.getOrThrow\(\)/);
-  assert.ok(keep.includes('is older and made a setup-token, which runs sessions but cannot open Remote Control.'));
+  assert.ok(keep.includes('is out of date, so this login cannot open Remote Control.'));
   assert.match(ANDROID, /JSONObject\(\)\.put\("v", 1\)\.put\("github", github\)\.put\("signIn", signIn\)/);
   assert.match(ANDROID, /"setuptoken",[\s\S]{0,300}?idempotencyKey = "app-"/);
 });
 
 test('both phones say the same things', () => {
+  // The Remote Control limit is said once per screen: beside the machine
+  // when one is offered, and on the paste line only when none is
+  // (docs/reviews/copy-2026-11-06.md, 134, 135, 142).
   for (const words of [
-    'signs you in to Claude, the kind of login Remote Control needs. It comes back ',
-    'and the machine keeps no copy.',
+    'Works with Remote Control. ',
+    ' keeps no copy.',
     '1. Open the sign-in page',
     '2. Sign in to Claude, copy the code the page shows, and paste it here.',
     'Code from the sign-in page',
-    '3. Keep my Claude login',
-    'Or, on a computer, run claude setup-token, sign in, and paste the line it prints here.',
+    '3. Save my Claude login',
+    'Paste a token from claude setup-token. It cannot open Remote Control.',
+    'Or paste a token from claude setup-token.',
   ]) {
     assert.ok(IOS.includes(words), `iOS does not say: ${words}`);
     assert.ok(ANDROID.includes(words), `Android does not say: ${words}`);

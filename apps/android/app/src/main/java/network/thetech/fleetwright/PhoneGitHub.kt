@@ -76,13 +76,13 @@ internal class PhoneGitHub(private val settings: Settings) {
      */
     suspend fun checkPin(fleet: Fleet, pin: String): Result<String> = runCatching {
         val p = pin.trim()
-        require(Seal.KEY_RE.matches(p)) { "That is not a minter key. It is 87 letters, digits, - and _." }
+        require(Seal.KEY_RE.matches(p)) { "That is not a key. It is 87 letters, digits, - and _." }
         val said = fleet.claudeLoginKey()
         val key = said.optString("key")
-        if (said.optBoolean("ok") != true || key.isBlank()) error(said.optString("text").ifBlank { "The fleet did not say which key its minter has." })
-        if (key != p) error("The fleet's minter has a different key from the one you were given, so nothing was saved. Ask whoever runs your fleet.")
+        if (said.optBoolean("ok") != true || key.isBlank()) error(said.optString("text").ifBlank { "Your fleet did not say which key it uses." })
+        if (key != p) error("That key does not match your fleet's. Ask whoever runs your fleet for the current one.")
         settings.minterPin = p
-        "Saved. This phone seals only to that key."
+        "Key saved."
     }
 
     /**
@@ -99,13 +99,13 @@ internal class PhoneGitHub(private val settings: Settings) {
     suspend fun minterKey(fleet: Fleet): String =
         fleet.minterOwnKey()
             ?: settings.minterPin.ifBlank { null }
-            ?: error("This fleet's minter does not answer for its own key. Paste the key whoever runs your fleet gave you.")
+            ?: error("Paste the key from whoever runs your fleet.")
 
     /** Sign in to GitHub on this phone. Opens GitHub's page; returns once it comes back. */
     suspend fun signInWith(context: Context, fleet: Fleet): Result<String> = runCatching {
         val pin = minterKey(fleet)
         val start = fleet.githubDeviceStart()
-        if (start.optBoolean("ok") != true) error(start.optString("text").ifBlank { "The fleet cannot start a GitHub sign-in." })
+        if (start.optBoolean("ok") != true) error(start.optString("text").ifBlank { "Your fleet cannot start a GitHub sign-in." })
         val back = DeviceSignIn.run(
             context,
             authorize = "https://github.com/login/oauth/authorize",
@@ -171,7 +171,7 @@ internal class PhoneGitHub(private val settings: Settings) {
             // same way on every screen that needs a token; dropped, those
             // screens offer "Sign in to GitHub" instead.
             if (r.optJSONObject("error")?.optString("code") == "sign_in_again") signOut()
-            error(r.optString("text").ifBlank { "The fleet refused the GitHub sign-in." })
+            error(r.optString("text").ifBlank { "Your fleet refused the GitHub sign-in." })
         }
         val token = Seal.open(reply, Seal.GITHUB_REPLY_AAD, r.getJSONObject("sealed"))
         settings.githubSignIn = JSONObject()
@@ -191,7 +191,7 @@ internal class PhoneGitHub(private val settings: Settings) {
      */
     suspend fun startRunner(fleet: Fleet, platform: String, minutes: Int?, start: Map<String, String>?, image: String? = null): Fleet.Reply {
         val plan = fleet.prepareRunnerDispatch(platform, minutes, start, image)
-        if (plan.optBoolean("ok") != true) return Fleet.Reply(false, plan.optString("text").ifBlank { "The fleet would not start a machine." }, emptyList())
+        if (plan.optBoolean("ok") != true) return Fleet.Reply(false, plan.optString("text").ifBlank { "Your fleet would not start a machine." }, emptyList())
         val repo = plan.getString("repo")
         val workflow = plan.getString("workflow")
         val token = accessToken(fleet)
@@ -204,14 +204,14 @@ internal class PhoneGitHub(private val settings: Settings) {
             when (sent.first) {
                 204 -> Fleet.Reply(
                     true,
-                    "Asked GitHub for a $platform machine from $repo, as you. It takes a few minutes to boot and then " +
-                        "appears in the fleet as a host of yours.",
+                    "Asked GitHub for a $platform machine. It takes a few minutes to boot, then appears under Machines.",
                     emptyList(),
                 )
+                // GitHub's 422 on a dispatch is a workflow that does not take
+                // the inputs sent: the repository is behind the template.
                 422 -> Fleet.Reply(
                     false,
-                    "GitHub refused the dispatch (422). $repo has $workflow, but it does not take the inputs this fleet " +
-                        "sends. Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.",
+                    "$repo is out of date. Update it from github.com/TheTechNetwork/Fleetwright-Runners-Template.",
                     emptyList(),
                 )
                 else -> Fleet.Reply(false, refusal(sent.first, "$workflow in $repo"), emptyList())
@@ -232,7 +232,7 @@ internal class PhoneGitHub(private val settings: Settings) {
             .put("claude", claudeToken?.trim()?.ifBlank { null } ?: JSONObject.NULL)
             .put("at", System.currentTimeMillis())
         val r = fleet.depositClaudeLogin(Seal.seal(pin, Seal.DEPOSIT_AAD, payload))
-        if (r.optBoolean("ok") != true) error(r.optString("text").ifBlank { "The minter refused it." })
+        if (r.optBoolean("ok") != true) error(r.optString("text").ifBlank { "Your fleet did not save it." })
         r.optString("text")
     }
 
@@ -246,7 +246,7 @@ internal class PhoneGitHub(private val settings: Settings) {
         val github = accessToken(fleet)
         val payload = JSONObject().put("v", 1).put("github", github).put("signIn", signIn).put("at", System.currentTimeMillis())
         val r = fleet.depositClaudeLogin(Seal.seal(pin, Seal.DEPOSIT_AAD, payload))
-        if (r.optBoolean("ok") != true) error(r.optString("text").ifBlank { "The minter refused it." })
+        if (r.optBoolean("ok") != true) error(r.optString("text").ifBlank { "Your fleet did not save it." })
         r.optString("text")
     }
 
@@ -268,7 +268,7 @@ internal class PhoneGitHub(private val settings: Settings) {
         val token = inside.optString("token")
         if (token.isBlank()) error("The answer did not open with this phone's key, so it was not used.")
         val kept = depositClaudeLogin(fleet, token).getOrThrow()
-        "$kept $host is older and made a setup-token, which runs sessions but cannot open Remote Control. Update it and make your login again for Remote Control."
+        "$kept $host is out of date, so this login cannot open Remote Control. Update it and sign in again."
     }
 
     private fun github(method: String, url: String, token: String, body: JSONObject?): Pair<Int, String> {

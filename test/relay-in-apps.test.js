@@ -38,12 +38,15 @@ const plain = (/** @type {string} */ s) => s.replace(/\u2019/g, "'");
 /** The sentences both phones say, word for word. */
 const SAID = [
   'Try through this phone',
-  'can work through this phone: it opens HTTPS to Xen Orchestra ',
-  'itself, and this phone and the fleet carry only that encrypted connection. Keep this screen open while it runs.',
-  'Reached Xen Orchestra through this phone',
-  'Reached something through this phone; cannot tell whether it is Xen Orchestra',
+  'This phone may be on a network that reaches it. Keep this screen open while ',
+  ' works through it.',
+  // The row: the verdict, then the path, with cannot tell said as Unknown (C-5).
+  ' · via this phone',
+  '"Unknown"',
   'so something between them answered in Xen Orchestra’s place. Nothing was sent.',
   'Keep this screen open until it is done.',
+  // Where the sign-in crosses, under How your password is protected.
+  'opens to Xen Orchestra, which neither this phone nor anything in between can read.',
 ];
 
 test('iOS: through this phone is offered only when the fleet named a machine that can take it, and never for a policy change or a reconnect', () => {
@@ -64,7 +67,7 @@ test('iOS: the machine is offered only when it saw the certificate this phone se
   assert.ok(at('PhoneRelay.ownLook(address: target)') < at('carrier.open(settings: settings, host: via)'));
   assert.ok(at('carrier.open(settings: settings, host: via)') < at('fleet.xoprobeThrough(address: target, relay: ready.relay)'));
   // Nothing seen here is cannot tell, and it goes no further (C-5).
-  assert.match(flow, /guard let own = await PhoneRelay\.ownLook\(address: target\) else \{\s*probeText = "This phone could not reach \\\(target\) over HTTPS itself/);
+  assert.match(flow, /guard let own = await PhoneRelay\.ownLook\(address: target\) else \{\s*probeText = "This phone cannot reach \\\(target\) either/);
   // A different certificate closes the relay and offers nothing.
   assert.match(flow, /guard seen\.cert == own else \{\s*carrier\.close\(\)/);
   // The pin is the SHA-256 of the certificate's DER, in the machine's hex.
@@ -93,13 +96,15 @@ test('iOS: the job goes through the relay only for a machine that reached it tha
   assert.match(FLEET, /if let relay \{ params\["relay"\] = relay \}/);
   assert.ok(VERBS.xosetup.params.relay && VERBS.xoprobe.params.relay, 'the protocol carries it');
   // Without its relay, a through-phone machine is not begun on.
-  assert.match(SCREEN, /if probe\.throughPhone, relayId == nil \{\s*refuse\("This phone is no longer carrying the connection/);
+  assert.match(SCREEN, /if probe\.throughPhone, relayId == nil \{\s*refuse\("The connection through this phone closed\./);
   // Ended with the job, with the screen, and on Try again.
   assert.match(SCREEN, /if let now = state\.state, !XOSetupWords\.isLive\(now\) \{\s*endRelay\(\)/);
   assert.match(SCREEN, /\.onDisappear \{ endRelay\(\) \}/);
   assert.match(SCREEN, /private func reset\(\) \{\s*endRelay\(\)/);
-  // Where the sign-in crosses is said beside what it crosses as.
-  assert.ok(SCREEN.includes('It then crosses this phone inside the HTTPS connection \\(chosen.hostId) opens to Xen Orchestra, which neither this phone nor the fleet can read.'));
+  // Where the sign-in crosses is said with the rest of its custody, behind
+  // the one disclosure on the sign-in step.
+  assert.ok(SCREEN.includes('Through this phone, it travels inside the HTTPS connection \\(chosen.hostId) opens to Xen Orchestra, which neither this phone nor anything in between can read.'));
+  assert.match(SCREEN, /DisclosureGroup\(isExpanded: \$protectionOpen\) \{\s*ForEach\(protectionLines\(chosen\), id: \\\.self\)/);
 });
 
 // --- Android ---------------------------------------------------------------
@@ -123,7 +128,7 @@ test('Android: the machine is offered only when it saw the certificate this phon
   assert.ok(at('PhoneRelay.ownLook(target)') > 0);
   assert.ok(at('PhoneRelay.ownLook(target)') < at('carrier.open(settings, via)'));
   assert.ok(at('carrier.open(settings, via)') < at('fleet.xoprobeThrough(target, ready.relay)'));
-  assert.match(flow, /own == null -> probeText = "This phone could not reach \$target over HTTPS itself/);
+  assert.match(flow, /own == null -> probeText = "This phone cannot reach \$target either/);
   assert.match(flow, /\} else if \(seen\.cert != own\) \{\s*carrier\.close\(\)/);
   // The pin is the SHA-256 of the certificate's DER, in the machine's hex,
   // and the trust manager only looks: it refuses every certificate it reads.
@@ -145,10 +150,11 @@ test('Android: the phone connects only to the address the person typed, and carr
 test('Android: the job goes through the relay only for a machine that reached it that way, and the relay ends with it', () => {
   assert.match(SHEET, /relay = if \(through\) relayId else null\)/);
   assert.match(KFLEET, /if \(relay != null\) put\("relay", relay\)/);
-  assert.match(SHEET, /if \(through && relayId == null\) \{\s*refusal = "This phone is no longer carrying the connection/);
+  assert.match(SHEET, /if \(through && relayId == null\) \{\s*refusal = "The connection through this phone closed\./);
   // Ended with the job, with the screen (a rotation included), and on Start again.
   assert.match(SHEET, /if \(state == "done" \|\| state == "failed" \|\| state == "cancelled"\) \{[\s\S]{0,200}?endRelay\(\)/);
   assert.match(SHEET, /DisposableEffect\(Unit\) \{ onDispose \{ relay\?\.close\(\) \} \}/);
   assert.match(SHEET, /fun startAgain\(\) \{[\s\S]{0,400}?endRelay\(\)/);
-  assert.ok(SHEET.includes('It then crosses this phone inside the HTTPS connection $hostId opens to Xen Orchestra, which neither this phone nor the fleet can read.'));
+  assert.ok(SHEET.includes('"Through this phone, it travels inside the HTTPS connection $hostId opens to Xen Orchestra, which neither this phone nor anything in between can read."'));
+  assert.match(SHEET, /OpenRow\("How your password is protected", value = if \(protectionOpen\) "Hide" else "Show"\)/);
 });

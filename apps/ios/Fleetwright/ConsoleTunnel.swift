@@ -42,7 +42,7 @@ final class ConsoleTunnel: @unchecked Sendable {
     /// the pool. Answers the proxy's endpoint and the machine carrying it.
     func open(settings: Settings) async throws -> (NWEndpoint, String) {
         guard var parts = URLComponents(string: settings.coordinatorURL + "/api/xoconsole/tunnel"), let scheme = parts.scheme?.lowercased() else {
-            throw FleetError.message("That coordinator URL is not a URL")
+            throw FleetError.message("That fleet address is not a URL")
         }
         // NOT OVER CLEARTEXT: the upgrade carries this device's credential.
         if scheme != "https", !Fleet.isLocal(parts.host) {
@@ -50,7 +50,7 @@ final class ConsoleTunnel: @unchecked Sendable {
         }
         parts.scheme = scheme == "https" ? "wss" : "ws"
         parts.queryItems = [URLQueryItem(name: "address", value: address)]
-        guard let url = parts.url else { throw FleetError.message("That coordinator URL is not a URL") }
+        guard let url = parts.url else { throw FleetError.message("That fleet address is not a URL") }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(settings.credential)", forHTTPHeaderField: "authorization")
         if settings.viewAsMember { request.setValue("member", forHTTPHeaderField: "x-fleetwright-view") }
@@ -85,7 +85,7 @@ final class ConsoleTunnel: @unchecked Sendable {
                 case .success:
                     self.receive()
                 case .failure:
-                    self.finish("The connection to the fleet ended, so the console from away closed.")
+                    self.finish(Self.lost)
                 }
             }
         }
@@ -107,17 +107,26 @@ final class ConsoleTunnel: @unchecked Sendable {
             guard let encoded = frame["data"] as? String, let bytes = Data(base64Encoded: encoded) else { return }
             client?.send(content: bytes, completion: .contentProcessed { _ in })
         case "closed":
-            finish(frame["text"] as? String ?? "The fleet closed the console from away.")
+            finish(frame["text"] as? String ?? Self.closed)
         default:
             break
         }
     }
 
+    /// WHAT THE BANNER SAYS when it ends, in three verdicts: the connection
+    /// was lost, the console closed, or it never connected. Which socket, which
+    /// machine and which side ended it is this file's business, not the
+    /// person's; the Open again button under the banner is the action. The
+    /// same words as Android (ConsoleTunnel.kt) and as Manage.Words.consoleEnded.
+    static let lost = "Lost the connection."
+    static let closed = "The console closed."
+    static let couldNotConnect = "Couldn't connect."
+
     private func toFleet(_ frame: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: frame), let text = String(data: data, encoding: .utf8) else { return }
         task?.send(.string(text)) { [weak self] error in
             guard error != nil, let self else { return }
-            self.queue.async { self.finish("The connection to the fleet ended, so the console from away closed.") }
+            self.queue.async { self.finish(Self.lost) }
         }
     }
 
@@ -127,7 +136,7 @@ final class ConsoleTunnel: @unchecked Sendable {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         guard let listener = try? NWListener(using: parameters) else {
-            finish("This phone could not start the console from away.")
+            finish(Self.couldNotConnect)
             return
         }
         self.listener = listener
@@ -144,7 +153,7 @@ final class ConsoleTunnel: @unchecked Sendable {
                     self.waiting = nil
                     waiting.resume(returning: (.hostPort(host: "127.0.0.1", port: port), self.hostId))
                 case .failed:
-                    self.finish("This phone could not start the console from away.")
+                    self.finish(Self.couldNotConnect)
                 default:
                     break
                 }
@@ -173,7 +182,7 @@ final class ConsoleTunnel: @unchecked Sendable {
                 if let data { self.head.append(data) }
                 if let end = self.head.range(of: Data("\r\n\r\n".utf8)) {
                     guard self.head.starts(with: Data("CONNECT ".utf8)) else {
-                        self.finish("The console asked this phone's proxy for something other than a connection.")
+                        self.finish(Self.couldNotConnect)
                         return
                     }
                     let rest = self.head[end.upperBound...]
@@ -183,7 +192,7 @@ final class ConsoleTunnel: @unchecked Sendable {
                     if !rest.isEmpty { self.carry(Data(rest)) }
                     self.pump()
                 } else if done || error != nil || self.head.count > 16384 {
-                    self.finish("The console closed before it reached the pool.")
+                    self.finish(Self.closed)
                 } else {
                     self.readHead()
                 }
@@ -222,7 +231,7 @@ final class ConsoleTunnel: @unchecked Sendable {
         client?.cancel()
         listener?.cancel()
         task?.cancel(with: .goingAway, reason: nil)
-        let text = why ?? "The console from away closed."
+        let text = why ?? Self.closed
         if let waiting {
             self.waiting = nil
             waiting.resume(throwing: FleetError.message(text))

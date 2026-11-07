@@ -165,7 +165,7 @@ test('an app that has not asked yet does not claim there is nothing', () => {
   assert.match(view, /@State private var loaded = false/);
   for (const claim of ['No devices reported.', 'Nothing recorded yet.']) {
     assert.ok(
-      view.includes(`Text(loaded ? "${claim}" : "Asking the fleet…")`),
+      view.includes(`Text(loaded ? "${claim}" : "Loading…")`),
       `"${claim}" is stated before an answer has arrived`,
     );
   }

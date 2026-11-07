@@ -27,11 +27,12 @@ final class RunnerRepoTests: XCTestCase {
     }
 
     func testTheSentenceSaysWhichRepositoryIsInEffect() {
-        XCTAssertEqual(describeRunnerRepoSetting(saved: "Eli/Runners", fleet: "fleet/runners"), "Your machines come from Eli/Runners.")
+        XCTAssertEqual(describeRunnerRepoSetting(saved: "Eli/Runners", fleet: "fleet/runners"), "Using Eli/Runners")
         XCTAssertEqual(
             describeRunnerRepoSetting(saved: nil, fleet: "fleet/runners"),
-            "Your machines come from the fleet's repository, fleet/runners. Set your own to use your free Actions minutes."
+            "Using the fleet's: fleet/runners"
         )
-        XCTAssertTrue(describeRunnerRepoSetting(saved: nil, fleet: nil).hasPrefix("Make a public repository from github.com/TheTechNetwork/Fleetwright-Runners-Template"))
+        // How to link one is the screen's footer, said once; the row only says that none is.
+        XCTAssertEqual(describeRunnerRepoSetting(saved: nil, fleet: nil), "Nothing linked")
     }
 }

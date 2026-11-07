@@ -57,7 +57,7 @@ test('Android: the screen asks the address, probes, then begins, runs, polls and
   assert.ok(at[0] < at[1], 'probe before begin');
   assert.ok(at[3] > at[2] && at[4] > at[2], 'status and cancel after run');
   // The address field takes no scheme, and says so.
-  assert.ok(sheet.includes('A host name or IP address, with a port if it is not 443. No https://.'));
+  assert.ok(sheet.includes('supportingText = { Text("For example xo.lan or 10.0.0.5:8443.") },'));
   // A machine that reached it over TLS with a certificate is offered first;
   // one answered in plain HTTP after those, and only with the card that asks
   // (the plain-HTTP test below).
@@ -98,12 +98,12 @@ test('Android: the key is verified against the documented signing input before a
   assert.ok(verify > 0 && sealed > 0);
   assert.ok(sheet.includes('That key did not come from $hostId. Nothing was sent.'));
   // A key the fleet lists for that machine that differs is the same stop.
-  assert.ok(sheet.includes('That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent.'));
+  assert.ok(sheet.includes('That key is not the one listed for $hostId. Nothing was sent.'));
   // Approved in the vault and matching: proceed. Otherwise the person compares.
   assert.match(sheet, /grants\s*\?\.let \{ PhoneVault\.approval\(it, hostId, setup\.hostKey!!\) \} \?: PhoneVault\.Approval\.NONE/);
   assert.match(sheet, /approval == PhoneVault\.Approval\.APPROVED -> run\(pending\)/);
   assert.match(sheet, /else -> unvouched = pending/);
-  assert.ok(sheet.includes('Compare this with what fleetwright-sidecar identity prints on ${waitingOn.hostId}.'));
+  assert.ok(sheet.includes('Hint("First time using ${waitingOn.hostId}. On it, run fleetwright-sidecar identity and check it shows this:")'));
   assert.ok(sheet.includes('Text("They match")'));
   assert.ok(sheet.includes('If they differ, cancel: the sign-in has not left this phone, and will not.'));
 });
@@ -190,7 +190,7 @@ test('Android: the token comes back to this phone, to a key sent inside the seal
   assert.match(file('MainActivity.kt'), /XoHandoff\.collectPending\(settings, fleet\)/);
   assert.match(sheet, /val \(outcome, inFleet\) = XoHandoff\.collectAndKeep\(settings, fleet, id, r\.xosetup\)\s*outcome\?\.let \{ handedBack = it \}/);
   // Said only once this phone knows (C-5).
-  assert.match(sheet, /XoHandoff\.Outcome\.Kept -> Hint\("The token is kept on this phone now, encrypted\. No machine in the fleet keeps it on disk\."\)/);
+  assert.match(sheet, /XoHandoff\.Outcome\.Kept -> Hint\("Saved on this phone\."\)/);
   assert.doesNotMatch(handoff, /Log\.[idwe]\(|println\(/);
 });
 
@@ -229,7 +229,7 @@ test('Android: progress is polled only while the screen is open, and the words a
     'resource-set': 'Setting what it may use',
     token: 'Making its token',
     updates: 'Turning on updates',
-    'hand-off': 'Handing over',
+    'hand-off': 'Sending the token',
   };
   assert.deepEqual(Object.keys(words), [...XOSETUP_STEPS], 'the app knows every step the protocol has, in order');
   let last = -1;
@@ -255,7 +255,7 @@ test('Android: a poll that is refused stops, says so, and paints no state the fl
   // The poll ends on the fleet's word that it has no such job, or after five
   // unanswered asks, and the screen says which.
   assert.match(sheet, /if \(r\.code == "unknown_job" \|\| unanswered >= 5\) \{/);
-  assert.ok(sheet.includes('"The fleet has no setup with this id for you, so there is nothing more to ask it."'));
+  assert.ok(sheet.includes('"No setup with this id is listed for you, so there is nothing more to ask."'));
   assert.ok(sheet.includes('"Asked five times with no answer, so this has stopped asking."'));
   // Both offer a way on: Ask again (when asking could help) and Start again.
   assert.match(sheet, /if \(!pollGone\) \{\s*OutlinedButton\(onClick = \{ asks\+\+ \}[\s\S]*?Text\("Ask again"\)/);
@@ -283,7 +283,7 @@ test('Android: a certificate that does not check out is acknowledged, having bee
     assert.ok(sheet.includes(label), `the card shows ${label}`);
   }
   // A trusted certificate is one calm line and no question.
-  assert.ok(xo.includes('"Its certificate checks out: ${parts.joinToString(", ")}."'));
+  assert.ok(xo.includes('"Certificate trusted: ${parts.joinToString(", ")}."'));
   assert.match(sheet, /certificate != null && trusted && cert != null -> \{[\s\S]*?Hint\(XoSetup\.trustedLine\(certificate\)/);
   // Otherwise the card that asks: the attention ring, this screen's one
   // tone, and an explicit box at the design's 48dp, off while beginning.
@@ -314,11 +314,14 @@ test('Android: a certificate that does not check out is acknowledged, having bee
 test('Android: a Xen Orchestra answering in plain HTTP can be chosen, once the person has read what would cross the wire', () => {
   const xo = file('XoSetup.kt');
   const sheet = file('HypervisorSheet.kt');
-  // What the row says, with `xo` three-valued: the same words as iOS.
+  // What the row says, with `xo` three-valued and cannot tell said as
+  // Unknown (C-5), then the path: the same words as iOS.
   for (const line of [
-    'true -> "Reached Xen Orchestra over plain HTTP"',
-    'false -> "Reached something over plain HTTP, and it does not look like Xen Orchestra"',
-    'null -> "Reached something over plain HTTP; cannot tell whether it is Xen Orchestra"',
+    'true -> "Xen Orchestra" + (probe.version?.let { " $it" } ?: "")',
+    'false -> "Not Xen Orchestra"',
+    'null -> "Unknown"',
+    '!probe.tls -> "$what · no HTTPS"',
+    'probe.through == "phone" -> "$what · via this phone"',
   ]) {
     assert.ok(xo.includes(line), `the row says: ${line}`);
   }
@@ -329,11 +332,11 @@ test('Android: a Xen Orchestra answering in plain HTTP can be chosen, once the p
   // says what it does.
   const card = sheet.slice(sheet.indexOf('private fun PlainAsk('), sheet.indexOf('private fun Detail('));
   assert.ok(card.includes('.fleetCard(radius = Design.Radius.cardSmall, ring = Design.Palette.attention.now)'));
-  assert.ok(card.includes('Text("This Xen Orchestra answers without HTTPS", style = Design.Style.bodyStrong, color = Design.Palette.attention.now)'));
-  assert.ok(card.includes('"The admin password you type, and the token the fleet keeps afterwards, would cross the network between " +'));
-  assert.ok(card.includes('"${probe.hostId} and $address unencrypted. Anything on that network could read them."'));
-  assert.ok(card.includes('"To give it HTTPS instead: in the installer\'s xo-install.cfg, set PORT=\\"443\\", PATH_TO_HTTPS_CERT, " +'));
-  assert.ok(card.includes('"PATH_TO_HTTPS_KEY and AUTOCERT=\\"true\\", then run it again."'));
+  assert.ok(card.includes('Text("No HTTPS", style = Design.Style.bodyStrong, color = Design.Palette.attention.now)'));
+  assert.ok(card.includes('"Your password would cross the network between ${probe.hostId} and $address unencrypted.",'));
+  // The fix, behind one row, in the installer's own variable names.
+  assert.ok(card.includes('OpenRow("How to turn on HTTPS", value = if (howOpen) "Hide" else "Show") { howOpen = !howOpen }'));
+  assert.ok(card.includes('"In the installer\'s xo-install.cfg, set PORT=\\"443\\", PATH_TO_HTTPS_CERT, PATH_TO_HTTPS_KEY and AUTOCERT=\\"true\\", then run it again.",'));
   assert.match(card, /\.heightIn\(min = 48\.dp\)\s*\.toggleable\(value = accepted, enabled = enabled, role = Role\.Checkbox/);
   assert.ok(card.includes('Checkbox(checked = accepted, onCheckedChange = null, enabled = enabled)'));
   assert.ok(card.includes('Text("Send it without HTTPS anyway"'));
@@ -437,7 +440,7 @@ test('Android: kind=xosetup becomes one ongoing notification per job, then one t
   assert.ok(!notice.includes('data["text"]'), 'the machine’s sentence reached the notification');
   const xosetup = file('XoSetup.kt');
   const ios = readFileSync(new URL('../apps/ios/Fleetwright/XOSetupActivity.swift', import.meta.url), 'utf8');
-  for (const words of ['Reading the blocks the configuration goes in', 'Downloading OPNsense', 'Downloading the image', 'Writing OPNsense to the pool, to keep', 'Writing the image to the pool, to keep', 'Writing the edge router’s disk', 'Writing the disk']) {
+  for (const words of ['Configuring', 'Downloading OPNsense', 'Downloading the image', 'Saving OPNsense to the pool', 'Saving the image to the pool', 'Writing the edge router’s disk', 'Writing the disk']) {
     assert.ok(xosetup.includes(`"${words}"`), `Android has no words: ${words}`);
     assert.ok(ios.includes(`"${words}"`), `iOS has no words: ${words}`);
   }
@@ -457,6 +460,6 @@ test('Android: a setup goes only to a machine new enough to hand the token back,
   assert.ok(guard < sheet.indexOf('XoSetup.verifyKeySig('), 'checked after the key, so after the comparison could begin');
   const block = sheet.slice(guard, sheet.indexOf('}', guard));
   assert.match(block, /password = ""/);
-  assert.match(block, /keeps the pool's token itself instead of handing it to this phone\. Nothing was sent\./);
+  assert.match(block, /refusal = "\$hostId needs an update\. Nothing was sent\."/);
   assert.match(sheet.slice(guard, guard + 900), /fleet\.xosetup\("cancel", job = setup\.job\)/);
 });

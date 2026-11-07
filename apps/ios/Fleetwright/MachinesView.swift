@@ -54,19 +54,20 @@ struct MachinesView: View {
                 ContentUnavailableView {
                     Label("Not signed in", systemImage: "server.rack")
                 } description: {
-                    Text("Sign in to a fleet under You, and its machines are listed here.")
+                    Text("Sign in under You to see your machines.")
                 }
                 .fleetRow()
             } else if !loaded {
-                Text("Asking the fleet…")
+                Text("Loading…")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
                     .fleetRow()
             } else if fleetHosts.isEmpty && hosts.isEmpty {
+                // THE TITLE ALONE. The Add a machine row is right below it,
+                // and a body saying how a machine joins was that row's job
+                // said twice.
                 ContentUnavailableView {
                     Label("No machines yet", systemImage: "server.rack")
-                } description: {
-                    Text("A machine joins with a pin from Add a machine and one line typed on it.")
                 }
                 .fleetRow()
             }
@@ -249,16 +250,19 @@ struct MachinesView: View {
         let reporting = fleetHosts.first { $0.hostId == id }
         let member = hosts.first { $0.hostId == id }
         // Nil health for a silent machine, not a guess: the page shows what a
-        // box reports, and this one reports nothing. Its membership record is
-        // what there is, and it is what Replace key and Revoke act on.
+        // machine reports, and this one reports nothing. Its membership record
+        // is what there is, and it is what New pairing code, Let it back in
+        // and Remove this machine act on. The reason names the one remedy for
+        // a reinstall; a revoked machine's remedy is the button, and the
+        // state word above already says revoked.
         HostView(
             settings: settings,
             hostId: id,
             initialHealth: reporting?.health,
             initialState: reporting?.state ?? (member?.isRevoked == true ? "revoked" : "not reporting"),
             initialReason: reporting?.reason ?? (member?.isRevoked == true
-                ? "Its key was revoked. Readmit mints the pin that brings it back."
-                : "Not connected to the fleet. Reinstalled? Replace key mints the pin its new key needs."),
+                ? "Not connected since it was revoked."
+                : "Not connected. If you reinstalled it, use New pairing code."),
             enrolled: member,
             initialHolder: reporting?.holder == true,
             initialHolds: reporting?.holds,

@@ -53,7 +53,7 @@ import kotlinx.coroutines.launch
 internal fun LinkedReposSheet(settings: Settings, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     // Three states, each said: asking (neither set), answered, and failed with
-    // the reason. `asked` is bumped by Ask again, which runs the load again.
+    // the reason. `asked` is bumped by Try again, which runs the load again.
     var failed by remember { mutableStateOf<String?>(null) }
     var answered by remember { mutableStateOf(false) }
     var asked by remember { mutableIntStateOf(0) }
@@ -81,10 +81,14 @@ internal fun LinkedReposSheet(settings: Settings, onDismiss: () -> Unit) {
         val why = failed
         when {
             why != null -> {
-                Hint("The fleet did not say what you have linked: $why", color = Design.Palette.bad.now)
-                OutlinedButton(onClick = { asked++ }) { Text("Ask again") }
+                // The result, then the reason smaller under it: the reason is
+                // the transport's sentence and is there to be copied, not read
+                // as the headline. The same words as iOS.
+                Hint("Could not load your repositories.", color = Design.Palette.bad.now)
+                Hint(why)
+                OutlinedButton(onClick = { asked++ }) { Text("Try again") }
             }
-            !answered -> Hint("Asking the fleet…")
+            !answered -> Hint("Loading…")
             else -> linkedRoles.forEach { role ->
                 SectionHead(linkedRoleTitle(role))
                 Hint(linkedRoleSentence(role))
@@ -175,8 +179,8 @@ fun linkedRoleTitle(role: String): String = when (role) {
 
 /** What a role is for, and what linking it means, said before the button. */
 fun linkedRoleSentence(role: String): String = when (role) {
-    "archive" -> "Private. Each session you start is pushed here, on a branch of its own, before it stops and every ten minutes while it runs. A public repository is refused: this is your work, and possibly a client's."
-    "runners" -> "Public, because Actions minutes are free only there. Your temporary machines start here. Anyone can read it, logs included, so it is a launcher and nothing else: no session writes into it."
+    "archive" -> "Must be private. Sessions you start save their work here, each on its own branch."
+    "runners" -> "Must be public, so Actions minutes are free. Anyone can read it, logs included."
     "templates" -> "Public or private. Skills, presets, configs and workflows a session can read when you ask it to. Nothing in it runs by itself."
     else -> ""
 }
@@ -190,7 +194,7 @@ fun linkedRoleField(role: String): String =
 fun describeLinkedRole(role: String, linked: String?, fleetRunners: String?): String = when {
     role == "runners" -> describeRunnerRepoSetting(linked, fleetRunners)
     linked != null -> "Linked: $linked."
-    role == "archive" -> "Nothing linked. Sessions you start are not pushed anywhere when they stop."
+    role == "archive" -> "Nothing linked. Session work is not saved."
     else -> "Nothing linked."
 }
 
