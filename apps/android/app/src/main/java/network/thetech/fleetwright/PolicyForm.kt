@@ -57,7 +57,7 @@ internal fun PolicyForm(
 
     SectionHead("Storage")
     if (inv.srs.isEmpty()) {
-        Hint("The pool listed no storage a VM's disk can go on, so there is nothing to choose here. Add some in Xen Orchestra first.")
+        Hint("This pool lists no storage for VM disks. Add some in Xen Orchestra first.")
     }
     inv.srs.forEach { s ->
         CheckRow(
@@ -78,27 +78,25 @@ internal fun PolicyForm(
             checked = n.id in choice.networks,
             enabled = enabled,
             title = n.name.ifBlank { n.id },
-            line = XoPolicy.networkLine(n) + (if (n.egress) " · the way out now" else "") + inPool(n.pool),
+            line = XoPolicy.networkLine(n) + (if (n.egress) " · internet access now" else "") + inPool(n.pool),
             onChange = { on -> onChange(XoPolicy.withNetwork(choice, n.id, on)) },
         )
     }
 
-    SectionHead("Way out")
-    // WHAT CHOOSING IT DOES, in iOS's words: the network is recorded, and
-    // the router is built on it only when the switch below asks for it.
+    SectionHead("Internet access")
+    // WHAT IT IS, in iOS's words, in one sentence; the router is built on it
+    // only when the switch below asks for it.
     // ANY OF THE POOL'S NETWORKS, on a machine that takes that (`egress-any`),
     // and only the ones chosen above on one that does not, which is all it
     // takes (checkPolicy). Asked for: the first version offered only the
     // fleet's networks, and the WAN usually belongs on one that is not.
     val anyWayOut = choice.anyWayOut
-    val wayOut = "The network the edge router, an OPNsense VM, will put its WAN on, so labs reach the internet through it and not " +
-        "your LAN. It is recorded in Xen Orchestra as the fleetwright-egress tag on that network. " +
-        if (anyWayOut) {
-            "Any of the pool’s networks can be it. One the fleet’s VMs may not use is the better, so no lab can skip the router."
-        } else {
-            "Only a network chosen above can be the way out."
-        }
-    Hint(if (canEdge) wayOut else "$wayOut $machine is too old to build the router; update it to have it built from here.")
+    val wayOut = if (anyWayOut) {
+        "The network VMs reach the internet through. Pick one the VMs are not on themselves."
+    } else {
+        "The network VMs reach the internet through, from those chosen above."
+    }
+    Hint(if (canEdge) wayOut else "$wayOut $machine needs an update to build the router.")
     choosable.filter { anyWayOut || it.id in choice.networks }.forEach { n ->
         RadioRow(
             selected = choice.egress == n.id,
@@ -130,11 +128,9 @@ internal fun PolicyForm(
             enabled = enabled,
             title = if (there == null) "Build the edge router on it" else "Keep the edge router on it",
             line = when {
-                there == null ->
-                    "An OPNsense VM with 2 vCPUs, 2 GiB of memory and a 3 GiB disk on the storage chosen. " +
-                        "$machine downloads OPNsense once, about 470 MB, and builds it while you wait."
-                there.running -> "It is there and running. Apply keeps its WAN on this network." + (there.sr?.let { " Its disk is on $it." } ?: "")
-                else -> "It is there and stopped. Apply keeps its WAN on this network and starts it." + (there.sr?.let { " Its disk is on $it." } ?: "")
+                there == null -> "2 vCPU · 2 GiB · 3 GiB disk · 470 MB download"
+                there.running -> "Running" + (there.sr?.let { " · disk on $it" } ?: "")
+                else -> "Stopped · Apply starts it" + (there.sr?.let { " · disk on $it" } ?: "")
             },
             // The image is built behind the router: no router, no image.
             onChange = { on ->
@@ -146,45 +142,27 @@ internal fun PolicyForm(
     // WHAT THE ROUTER DOES WITH WHAT ITS THREAT RULES MATCH, offered only by
     // a machine that builds either kind, and only with the router asked for.
     // Asked for: blocking mode for the edge's intrusion detection, which only
-    // ever logged. The same words as iOS.
+    // ever logged. What changing it costs on a router that is there is said
+    // once, beside Apply (HypervisorSheet), not here. The same words as iOS.
     if (canEdge && choice.edgeBlockChoice && choice.edge && choice.egress != null) {
-        val there = XoPolicy.edgeOn(inv, choice.egress)
-        val what = if (choice.edgeBlock) {
-            "On: Suricata drops it, and while it cannot inspect, nothing leaves."
-        } else {
-            "Off: Suricata logs it by machine and lets it through."
-        }
         CheckRow(
             checked = choice.edgeBlock,
             enabled = enabled,
             title = "Drop what the threat rules match",
-            line = if (there != null && (there.blocks ?: false) != choice.edgeBlock) {
-                "$what Apply rebuilds the edge router to change this: machines behind it keep their way out while the new one is built, and have none while it starts."
-            } else {
-                what
-            },
+            line = if (choice.edgeBlock) "Blocks matched traffic" else "Logs only",
             onChange = { on -> onChange(choice.copy(edgeBlock = on)) },
         )
     }
     // TWO ROUTERS OR ONE, offered only by a machine that builds a pair, and
     // only with the router asked for. Asked for: "do ha will allow
-    // maintenance". The same words as iOS.
+    // maintenance". The cost of changing it is beside Apply. The same words
+    // as iOS.
     if (canEdge && choice.edgeHaChoice && choice.edge && choice.egress != null) {
-        val there = XoPolicy.edgeOn(inv, choice.egress)
-        val what = if (choice.edgeHa) {
-            "On: they share the way out, so one carries the machines while the other restarts for an update."
-        } else {
-            "Off: one router, and when it restarts for an update, machines behind it have no way out for those minutes."
-        }
         CheckRow(
             checked = choice.edgeHa,
             enabled = enabled,
             title = "Two edge routers",
-            line = when {
-                there == null || (there.ha ?: false) == choice.edgeHa -> what
-                choice.edgeHa -> "$what Apply makes the second and hands over to it: machines behind it have no way out while it starts."
-                else -> "$what Apply removes the second and rebuilds the first: machines behind it keep their way out while the new one is built, and have none while it starts."
-            },
+            line = if (choice.edgeHa) "No downtime during updates" else "Brief outage during updates",
             onChange = { on -> onChange(choice.copy(edgeHa = on)) },
         )
     }
@@ -227,7 +205,7 @@ internal fun PolicyForm(
                     checked = kind.key in choice.images,
                     enabled = enabled,
                     title = "Make the ${kind.os} machine image",
-                    line = imageLine(kind, machine),
+                    line = imageLine(kind),
                     // Built behind the router, so asking for it asks for that too.
                     onChange = { on ->
                         onChange(choice.copy(
@@ -263,15 +241,13 @@ internal fun PolicyForm(
         val there = XoPolicy.edgeOn(inv, choice.egress)
         val image = XoPolicy.imageOn(inv, choice.egress)
         if (image != null) {
-            Hint("Machine image: ${image.name} is there. New session › Where offers machines from it.")
+            Hint("Machine image: ${image.name} · Ready")
         } else {
             CheckRow(
                 checked = choice.image,
                 enabled = enabled,
                 title = "Make the machine image for sessions",
-                line = "Debian 13 with Fleetwright installed, on a 20 GiB disk on the storage chosen. $machine downloads Debian once, " +
-                    "about 220 MB, and installs Fleetwright on it, which takes about ten minutes. Sessions can then start on a new " +
-                    "machine from it.",
+                line = "Debian 13 · 20 GiB disk · 220 MB download · about 10 min",
                 // Built behind the router, so asking for it asks for that too.
                 onChange = { on -> onChange(choice.copy(image = on, edge = choice.edge || (on && there == null))) },
             )
@@ -284,10 +260,10 @@ internal fun PolicyForm(
         val mine = XoPolicy.holderOn(inv, choice.egress)
         if (mine != null) {
             Hint(
-                "The pool’s own machine: " + if (mine.running) {
-                    "${mine.name} is there and running. It holds the pool once you have approved it under Machines."
+                "The pool’s own machine: ${mine.name} · " + if (mine.running) {
+                    "Running. Approve it under Machines if you have not yet."
                 } else {
-                    "${mine.name} is there and stopped. Apply starts it."
+                    "Stopped · Apply starts it"
                 },
             )
             // MAKE IT AGAIN, for one that never joined: offered only by a
@@ -297,7 +273,7 @@ internal fun PolicyForm(
                     checked = choice.holderAgain,
                     enabled = enabled,
                     title = "Make it again",
-                    line = "Removes ${mine.name}, disk and all, and makes a new one that asks to join. For one that never joined the fleet.",
+                    line = "Removes ${mine.name} and makes a new one. For one that never joined.",
                     onChange = { on -> onChange(choice.copy(holderAgain = on)) },
                 )
             }
@@ -307,15 +283,7 @@ internal fun PolicyForm(
                 checked = choice.holder,
                 enabled = enabled,
                 title = "Make the pool a machine of its own",
-                line = if (choice.holderAskChoice) {
-                    "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the " +
-                        "fleet may use, so the pool does not need $machine to be awake. Once it is up it asks to join, and this phone " +
-                        "lets it in to hold the pool by itself, as the phone that made it."
-                } else {
-                    "A Fleetwright machine that stays up on this network, made from the pool’s machine image and kept outside what the " +
-                        "fleet may use, so the pool does not need $machine to be awake. Once it joins, approve it under Machines and it " +
-                        "holds the pool."
-                },
+                line = "An always-on VM that manages this pool, so $machine need not stay awake.",
                 // Made from the image: asking for it asks for Debian's, and the
                 // router that is built behind, when the pool has neither.
                 onChange = { on ->
@@ -340,8 +308,8 @@ internal fun PolicyForm(
             val fits = XoPolicy.edgeDisks(inv, choice.egress, XoPolicy.diskNeed(inv, choice))
             if (fits.isEmpty()) {
                 Hint(
-                    if (buildImage) "Nothing in the way out’s pool has 20 GiB free for the machine image’s disk."
-                    else "Nothing in the way out’s pool has 3 GiB free for its disk.",
+                    if (buildImage) "Nothing in that network’s pool has 20 GiB free for the image’s disk."
+                    else "Nothing in that network’s pool has 3 GiB free for its disk.",
                 )
             }
             val picked = XoPolicy.edgeDisk(inv, choice)
@@ -363,12 +331,7 @@ internal fun PolicyForm(
     // this is the one place it can be let through. iOS's words.
     if (choice.groupsChoice && choice.egress != null) {
         SectionHead("Machines that work together")
-        Hint(
-            "Every machine the fleet starts here reaches the internet and nothing else: not your network, and not the other machines. " +
-                "A group is for machines that need to talk to each other, like the nodes of a cluster you are testing. " +
-                "Machines in the same group share a private network and keep their way to the internet. " +
-                "You choose the group when you start a session, under Where. A group stays once it is made, because a machine may be on it.",
-        )
+        Hint("VMs in the same group can reach each other. Pick a group when you start a session.")
         val there = XoPolicy.groupCount(inv, choice.egress)
         val range = XoPolicy.groupRange(inv, choice)
         Stepper(
@@ -387,21 +350,17 @@ internal fun PolicyForm(
 
     // LABS, on the edge router: how many of each kind, four in all at most.
     // Each is a network of its own with one machine at a time, and costs no
-    // machine of its own, which is the first thing said. Changing them
-    // rebuilds the router, said before Apply as blocking mode says it. iOS's words.
+    // machine of its own. Changing them rebuilds the router, which is said
+    // once, beside Apply (HypervisorSheet). iOS's words.
     if (choice.labsChoice && choice.egress != null && (choice.edge || XoPolicy.edgeOn(inv, choice.egress) != null)) {
         SectionHead("Labs")
-        Hint(
-            "A lab is a network of its own on the edge router, for one machine at a time: New session › Where puts a machine in one. " +
-                "It costs no extra machine, only an interface on the router. Up to four in all." +
-                if (choice.labsEachChoice) " Labs per person is how many one person may hold at once. With no limit, one person may take every lab that is free." else "",
-        )
+        Hint("One VM per lab. Up to four labs." + if (choice.labsEachChoice) " Labs per person caps how many one person holds at once." else "")
         Stepper(
             label = "Open labs",
             value = choice.labsOpen.toLong(),
             min = 0,
             max = (XoPolicy.MAX_LABS - choice.labsClosed).toLong(),
-            shown = "${choice.labsOpen}: each reaches the internet and nothing private",
+            shown = "${choice.labsOpen} · internet only",
             bound = "0 to ${XoPolicy.MAX_LABS - choice.labsClosed}",
             less = "Fewer open labs",
             more = "More open labs",
@@ -414,7 +373,7 @@ internal fun PolicyForm(
             value = choice.labsClosed.toLong(),
             min = 0,
             max = (XoPolicy.MAX_LABS - choice.labsOpen).toLong(),
-            shown = "${choice.labsClosed}: each reaches the fleet and Claude and nothing else",
+            shown = "${choice.labsClosed} · Claude and Fleetwright only",
             bound = "0 to ${XoPolicy.MAX_LABS - choice.labsOpen}",
             less = "Fewer closed labs",
             more = "More closed labs",
@@ -436,13 +395,6 @@ internal fun PolicyForm(
                 more = "More labs per person",
                 enabled = enabled,
                 onValue = { onChange(choice.copy(labsEach = it.toInt())) },
-            )
-        }
-        if (XoPolicy.labsChanged(inv, choice)) {
-            Text(
-                "Apply rebuilds the edge router to change the labs: machines behind it keep their way out while the new one is built, and have none while it starts.",
-                style = Design.Style.bodySmall,
-                color = Design.Palette.attention.now,
             )
         }
     }
@@ -600,21 +552,12 @@ private fun Stepper(
 
 /** What Apply does to an image that is there: kept (null), rebuilt or removed. The same words as iOS (AddHypervisorView.swift). */
 private fun imageThereLine(action: String?): String = when (action) {
-    XoPolicy.REBUILD -> "Apply builds a new one beside it from the newest image, then removes this one. " +
-        "If a machine was made from this one, it is kept until that machine is gone."
-    XoPolicy.REMOVE -> "Apply removes it, and New session stops offering it. " +
-        "If a machine was made from it, it is kept until that machine is gone."
-    else -> "It is there. New session › Where offers machines from it."
+    XoPolicy.REBUILD -> "Rebuilt on Apply from the newest image"
+    XoPolicy.REMOVE -> "Removed on Apply"
+    else -> "Ready"
 }
 
-/** What making one of the images costs. The same words as iOS (AddHypervisorView.swift). */
-private fun imageLine(kind: XoPolicy.ImageKind, machine: String): String =
-    if (kind.key == XoPolicy.DEBIAN_KEY) {
-        "Debian 13 with Fleetwright installed, on a 20 GiB disk on the storage chosen. $machine downloads Debian once, " +
-            "about 220 MB, and installs Fleetwright on it, which takes about ten minutes. Sessions can then start on a new " +
-            "machine from it."
-    } else {
-        "${kind.os} with Fleetwright installed, on a 20 GiB disk on the storage chosen. $machine downloads its cloud " +
-            "image once, converts it to a disk, and installs Fleetwright on it, which takes about ten minutes. Sessions can " +
-            "then start on a new machine from it."
-    }
+/** What making one of the images costs, as a row's line. The same words as iOS (AddHypervisorView.swift). */
+private fun imageLine(kind: XoPolicy.ImageKind): String =
+    if (kind.key == XoPolicy.DEBIAN_KEY) "Debian 13 · 20 GiB disk · 220 MB download · about 10 min"
+    else "${kind.os} · 20 GiB disk · about 10 min"

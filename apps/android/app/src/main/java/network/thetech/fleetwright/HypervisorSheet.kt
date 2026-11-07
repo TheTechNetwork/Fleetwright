@@ -204,6 +204,8 @@ internal fun HypervisorSheet(
     var password by remember { mutableStateOf("") }
     var beginning by remember { mutableStateOf(false) }
     var refusal by remember { mutableStateOf("") }
+    /** "How your password is protected", open or shut: the one place on the sign-in step the mechanism is. */
+    var protectionOpen by rememberSaveable { mutableStateOf(false) }
 
     // A `begin` answer this phone could not vouch for by itself, waiting on
     // the person's comparison, with the inputs as they were when `begin` was
@@ -440,8 +442,7 @@ internal fun HypervisorSheet(
             val own = if (carrier == null) null else PhoneRelay.ownLook(target)
             when {
                 carrier == null -> probeText = "$target is not an address this phone can connect to."
-                own == null -> probeText = "This phone could not reach $target over HTTPS itself, so nothing can reach it through this phone either. " +
-                    "Check that this phone is on the pool's network."
+                own == null -> probeText = "This phone cannot reach $target either. Join the pool’s network and try again."
                 else -> {
                     carrier.onClose = { text ->
                         scope.launch {
@@ -453,7 +454,7 @@ internal fun HypervisorSheet(
                     val opened = runCatching { carrier.open(settings, via) }
                     val ready = opened.getOrNull()
                     if (ready == null) {
-                        probeText = opened.exceptionOrNull()?.message ?: "The fleet did not open the relay."
+                        probeText = opened.exceptionOrNull()?.message ?: "Could not connect through this phone."
                     } else {
                         val r = fleet.xoprobeThrough(target, ready.relay)
                         val seen = r.probes?.firstOrNull()
@@ -559,7 +560,7 @@ internal fun HypervisorSheet(
         if (s.state != "failed") return
         pendingSave = null
         if (phase == "connect" && viaMemory) {
-            keepNote = "$runningOn got through last time and did not this time. Start again asks all your machines and shows the certificate in full."
+            keepNote = "$runningOn got through last time and did not this time. Start again asks every machine."
         } else if (phase == "sign-in" && keepLoaded) {
             XoSaved.forget(settings, where)
             remembered = null
@@ -570,16 +571,16 @@ internal fun HypervisorSheet(
     }
 
     fun olderThanPolicy(hostId: String) =
-        "$hostId is older than changing a policy, so nothing was sent. Update it, or choose another machine that reaches $address."
+        "$hostId needs an update to change this. Nothing was sent."
 
     fun olderThanPolicySignin(hostId: String) =
-        "$hostId is too old for this app to send it a policy change safely, so nothing was sent. Update it, or choose another machine that reaches $address."
+        "$hostId needs an update to take the sign-in. Nothing was sent."
 
     fun olderThanReconnect(hostId: String) =
-        "$hostId is older than reconnecting servers, so nothing was sent. Update it, or choose another machine that reaches $address."
+        "$hostId needs an update to reconnect servers. Nothing was sent."
 
     fun olderThanReconnectSignin(hostId: String) =
-        "$hostId is too old for this app to send it a reconnect safely, so nothing was sent. Update it, or choose another machine that reaches $address."
+        "$hostId needs an update to take the sign-in. Nothing was sent."
 
     /**
      * `run` for a reconnect: the policy sign-in's seal under a binding of
@@ -726,7 +727,7 @@ internal fun HypervisorSheet(
         // phone still carries the relay it reached it through.
         val through = p.through == "phone"
         if (through && relayId == null) {
-            refusal = "This phone is no longer carrying the connection ${p.hostId} reached Xen Orchestra through. Try through this phone again."
+            refusal = "The connection through this phone closed. Try through this phone again."
             return
         }
         scope.launch {
@@ -789,7 +790,7 @@ internal fun HypervisorSheet(
                 // release after the hand-off, so an empty one is older than both.
                 !policy && setup.can.isEmpty() -> {
                     password = ""
-                    refusal = "$hostId is running a Fleetwright older than this app, and an older machine keeps the pool's token itself instead of handing it to this phone. Nothing was sent. Update that machine (Update, then Restart to apply), then try again."
+                    refusal = "$hostId needs an update. Nothing was sent."
                     runCatching { fleet.xosetup("cancel", job = setup.job) }
                 }
                 // The machine signed over an empty pin for a plain setup, and
@@ -798,7 +799,7 @@ internal fun HypervisorSheet(
                     // A HARD STOP. The key was not signed by the key offered as
                     // the machine's, so it is nobody's key worth sealing to.
                     password = ""
-                    refusal = "That key did not come from $hostId. Nothing was sent. Something between this phone and that machine is not what it says it is, so check the fleet before trying again."
+                    refusal = "That key did not come from $hostId. Nothing was sent."
                 }
                 else -> {
                     val fingerprint = PhoneVault.fingerprint(setup.hostKey!!)
@@ -823,14 +824,14 @@ internal fun HypervisorSheet(
                     when {
                         listed != null && listed != fingerprint -> {
                             password = ""
-                            refusal = "That key did not come from $hostId: the fleet lists a different key for it. Nothing was sent."
+                            refusal = "That key is not the one listed for $hostId. Nothing was sent."
                         }
                         // Approved under another key: a machine that was
                         // re-keyed would have been re-approved. Hard stop, in
                         // iOS's words, and the job is dropped on the machine.
                         approval == PhoneVault.Approval.ANOTHER_KEY -> {
                             password = ""
-                            refusal = "The key $hostId answered with did not come from that machine: it is not the key this phone approved for it. The sign-in was not sent."
+                            refusal = "$hostId’s key is not the one this phone approved. The sign-in was not sent."
                             runCatching { fleet.xosetup("cancel", job = setup.job) }
                         }
                         approval == PhoneVault.Approval.APPROVED -> run(pending)
@@ -1074,7 +1075,7 @@ internal fun HypervisorSheet(
                             val mine = XoPolicy.holderOn(opened, c.egress)
                             if (c.holderAgain && mine != null && XoPolicy.problem(opened, c) == null) {
                                 straightName = mine.name
-                                straightWayOut = opened.networks.firstOrNull { it.id == c.egress }?.name ?: "the way out"
+                                straightWayOut = opened.networks.firstOrNull { it.id == c.egress }?.name ?: "its network"
                                 straight = true
                                 applyChoice(r.xosetup)
                             } else {
@@ -1119,8 +1120,7 @@ internal fun HypervisorSheet(
         val setup = progress
         val waitingOn = unvouched
         if (!policy && !reconnect && job == null) {
-            OpenRow("It is Proxmox VE") { proxmox = true }
-            Hint("This screen is for Xen Orchestra. A Proxmox VE cluster is added with one command on the node and the line it prints.")
+            OpenRow("Proxmox VE? Set it up here") { proxmox = true }
         }
         when {
             job != null -> {
@@ -1138,7 +1138,7 @@ internal fun HypervisorSheet(
                     if (straight && live && gone != null) Hint(straightLine(gone, straightWayOut), color = Design.Palette.ink.now)
                 }
                 when (val outcome = handedBack) {
-                    XoHandoff.Outcome.Kept -> Hint("The token is kept on this phone now, encrypted. No machine in the fleet keeps it on disk.")
+                    XoHandoff.Outcome.Kept -> Hint("Saved on this phone.")
                     is XoHandoff.Outcome.Failed -> Hint(outcome.why, color = Design.Palette.bad.now)
                     null -> {}
                 }
@@ -1146,7 +1146,7 @@ internal fun HypervisorSheet(
                 // THROUGH THIS PHONE: what it is doing while the job runs,
                 // and why it stopped if it stopped first.
                 if (relay != null && setup != null && (setup.state == "running" || setup.state == "waiting")) {
-                    Hint("This phone is carrying $runningOn's connection to Xen Orchestra. Keep this screen open until it is done.", color = Design.Palette.ink.now)
+                    Hint("Keep this screen open until it is done.", color = Design.Palette.ink.now)
                 }
                 if (relayNote.isNotBlank()) Hint(relayNote, color = Design.Palette.attention.now)
                 if (fleetNote.isNotBlank()) Hint(fleetNote)
@@ -1179,7 +1179,12 @@ internal fun HypervisorSheet(
                                 if (straightNote.isNotBlank()) Hint(straightNote, color = Design.Palette.ink.now)
                                 PolicyForm(inv, c, enabled = !applying && !cancelling, canEdge = canEdge, machine = machine, onChange = { choice = it }, canImage = canImage)
                                 val problem = XoPolicy.problem(inv, c)
-                                Hint("$machine waits ten minutes for your choice, then lets go without changing anything.")
+                                Hint("Apply within ten minutes, or nothing changes.")
+                                // THE ROUTER'S REBUILD, said once, here, beside the
+                                // button that causes it, and nowhere in the form.
+                                if (XoPolicy.rebuildsRouter(inv, c)) {
+                                    Hint("Applying rebuilds the router. VMs behind it lose internet while the new one starts.", color = Design.Palette.attention.now)
+                                }
                                 // WHY APPLY IS OFF, in the machine's words, so
                                 // a switched-off button is never a mystery.
                                 if (problem != null) Hint(problem, color = Design.Palette.ink.now)
@@ -1199,9 +1204,7 @@ internal fun HypervisorSheet(
                             }
                             unopened -> {
                                 Hint(
-                                    "What the pool has did not open with this screen's key, so it cannot be shown. That key is kept " +
-                                        "in memory only, and goes when the screen does: if the phone turned or the app was closed " +
-                                        "since, that is why. Cancel, and start again.",
+                                    "Could not read the pool. Cancel, and start again.",
                                     color = Design.Palette.attention.now,
                                 )
                                 TextButton(
@@ -1243,8 +1246,7 @@ internal fun HypervisorSheet(
                         when (val r = reconnected) {
                             null -> if (outcomeUnopened) {
                                 Hint(
-                                    "What each server came to did not open with this screen's key, so only the machine's count above " +
-                                        "can be shown. That key is kept in memory only, and goes when the screen does.",
+                                    "Could not read the results. The pool’s page shows what Xen Orchestra lists now.",
                                 )
                             }
                             else -> ReconnectOutcome(r, XoHandoff.held(settings).firstOrNull { it.address == address.trim() }?.pools)
@@ -1262,10 +1264,7 @@ internal fun HypervisorSheet(
             }
             waitingOn != null -> {
                 SectionHead("Is that ${waitingOn.hostId}'s key?")
-                Hint(
-                    "${waitingOn.hostId} signed the key your sign-in will be sealed to, and this phone has not approved " +
-                        "that machine before. Compare this with what fleetwright-sidecar identity prints on ${waitingOn.hostId}.",
-                )
+                Hint("First time using ${waitingOn.hostId}. On it, run fleetwright-sidecar identity and check it shows this:")
                 SelectionContainer {
                     Text(
                         PhoneVault.fingerprint(waitingOn.setup.hostKey!!),
@@ -1309,22 +1308,18 @@ internal fun HypervisorSheet(
                             }
                         },
                         modifier = Modifier.heightIn(min = 48.dp),
-                    ) { Text(if (keepingInFleet) "Keeping…" else "Keep its token in the fleet") }
+                    ) { Text(if (keepingInFleet) "Keeping…" else "Let my machines use this pool") }
                     if (fleetNote.isNotBlank()) Hint(fleetNote, color = Design.Palette.ink.now)
-                    Hint(
-                        "The boxes you approved can then make machines on it for your sessions. They hold its token in memory only, " +
-                            "and stop being given it when you remove them from your vault.",
-                    )
+                    Hint("Your approved machines can then create VMs here.")
                 }
                 SectionHead("Where Xen Orchestra answers")
                 if (policy || reconnect) {
                     // FIXED: the pool this phone keeps a token for, as the
                     // setup that made the token was begun.
                     Text(address, style = Design.Style.body, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
-                    Hint(
-                        if (reconnect) "Reconnecting its servers starts the way adding the pool did: a machine that reaches it, and an admin sign-in."
-                        else "Changing what the fleet may use starts the way adding the pool did: a machine that reaches it, and an admin sign-in.",
-                    )
+                    // A policy's address needs no sentence under it; a reconnect
+                    // says what it does in one.
+                    if (reconnect) Hint("Reconnects disconnected servers. Nothing else changes.")
                 } else OutlinedTextField(
                     value = address,
                     onValueChange = { typed ->
@@ -1344,7 +1339,7 @@ internal fun HypervisorSheet(
                         }
                     },
                     label = { Text("Address") },
-                    supportingText = { Text("A host name or IP address, with a port if it is not 443. No https://.") },
+                    supportingText = { Text("For example xo.lan or 10.0.0.5:8443.") },
                     singleLine = true,
                     enabled = !beginning,
                     isError = address.isNotBlank() && !addressOk,
@@ -1357,8 +1352,8 @@ internal fun HypervisorSheet(
                 )
                 if (askFirst) {
                     Hint(
-                        "This phone has not set up $address, kept a sign-in for it or pinned its certificate. " +
-                            "The address came from one of your machines, so none of them is asked to reach it until you say so.",
+                        if (via.isNullOrBlank()) "New address from one of your machines. Connect only if you recognise it."
+                        else "New address, from $via. Connect only if you recognise it.",
                         color = Design.Palette.ink.now,
                     )
                 }
@@ -1387,13 +1382,9 @@ internal fun HypervisorSheet(
                         },
                     )
                     when {
-                        found.isEmpty() -> Hint("This fleet has no permanent machine to ask. Add a machine first; a temporary one cannot hold the pool's token.")
+                        found.isEmpty() -> Hint("No machines online. Add or start one first.")
                         reachable.isEmpty() -> {
-                            Hint(
-                                "No machine reached $address. Check the address and the port, that Xen Orchestra is " +
-                                    "running, and that one of these machines is on a network that can see it.",
-                                color = Design.Palette.attention.now,
-                            )
+                            Hint("Could not reach $address.", color = Design.Palette.attention.now)
                             found.forEach { p -> ProbeLine(p) }
                             // THE WAY ROUND IT, offered only when the fleet named
                             // a machine that can take it (C-2).
@@ -1407,14 +1398,6 @@ internal fun HypervisorSheet(
                             }
                         }
                         else -> {
-                            Hint(
-                                when {
-                                    policy -> "Only a machine that reaches it can. It signs in, reads the pool, applies what you choose, and keeps nothing afterwards."
-                                    reconnect -> "Only a machine that reaches it can. It signs in, reconnects the servers that are not connected, leaves any " +
-                                        "turned off in Xen Orchestra off, and keeps nothing afterwards."
-                                    else -> "Only a machine that reaches it can. The machine keeps the pool's token afterwards, so pick one that stays."
-                                },
-                            )
                             reachable.forEach { p ->
                                 Row(
                                     Modifier
@@ -1448,8 +1431,8 @@ internal fun HypervisorSheet(
                                             when {
                                                 // The push's machine, which is not the one remembered.
                                                 viaMemory && p.hostId == chosen && reconnect && p.hostId == via && via != XoSaved.machine(settings, address.trim()) ->
-                                                    "Saw the pools go, so it is tried first"
-                                                viaMemory && p.hostId == chosen -> "Got through last time, so it is tried first"
+                                                    "Saw the pool go"
+                                                viaMemory && p.hostId == chosen -> "Worked last time"
                                                 else -> XoSetup.describe(p)
                                             },
                                             style = Design.Style.label,
@@ -1470,12 +1453,9 @@ internal fun HypervisorSheet(
                     // through a relay.
                     if (!policy && !reconnect && found.isNotEmpty() && found.none { it.through == "phone" } && found.all { !it.reachable || it.xo == false }) {
                         OutlinedButton(enabled = !beginning, onClick = { password = ""; deploying = true }, modifier = Modifier.heightIn(min = 48.dp)) {
-                            Text("This pool has no Xen Orchestra yet")
+                            Text("Install Xen Orchestra")
                         }
-                        Hint(
-                            "None of your machines found Xen Orchestra at $address. One of them can install it on the pool, from the pool " +
-                                "master’s root password, and then add it.",
-                        )
+                        Hint("Needs the pool master’s root password.")
                     }
                 }
 
@@ -1490,21 +1470,21 @@ internal fun HypervisorSheet(
                         viaMemory && trusted && cert != null -> {
                             // FROM MEMORY, said as when it was checked: nothing
                             // was asked this time, and the machine checks again.
-                            Hint("Its certificate checked out when this pool was set up, and ${pick.hostId} checks it again before signing in.", color = Design.Palette.ink.now)
-                            PinLines(cert, pick.hostId, address, fromMemory = true)
+                            Hint("Certificate trusted at setup. ${pick.hostId} checks it again before signing in.", color = Design.Palette.ink.now)
+                            PinLines(cert)
                         }
                         certificate != null && trusted && cert != null -> {
                             // CALM. It checks out, so nothing is asked; the pin
                             // still shows, because it is what the machine holds
                             // the sign-in to.
                             Hint(XoSetup.trustedLine(certificate), color = Design.Palette.ink.now)
-                            PinLines(cert, pick.hostId, address, throughPhone = pick.through == "phone")
+                            PinLines(cert)
                         }
                         // A path from memory has no details to show, and is
                         // taken only for a certificate the person accepted.
                         viaMemory && kept && cert != null && certificate == null -> {
-                            PinLines(cert, pick.hostId, address, fromMemory = true)
-                            Hint("You accepted this certificate before, and this phone kept that behind your fingerprint or face.")
+                            PinLines(cert)
+                            Hint("Trusted before.")
                         }
                         else -> CertificateAsk(pick, address, acknowledged, enabled = !beginning, onAcknowledged = { acknowledged = it }, kept = kept)
                     }
@@ -1570,36 +1550,17 @@ internal fun HypervisorSheet(
                             Text("Keep on this phone, behind your fingerprint or face", style = Design.Style.body, color = Design.Palette.ink.now)
                         }
                     }
-                    // WHO KEEPS IT, for the box as it stands. The fleet never does.
-                    // And through this phone, where it crosses as well as what
-                    // it crosses as.
-                    val word = if (trusted) "" else ", and your word for the certificate,"
-                    val path = if (pick.through == "phone") XoRelayWords.crosses(pick.hostId) else ""
+                    // WHO KEEPS IT, for the box as it stands, in one sentence. The
+                    // rest of the custody is behind the one row below it: the
+                    // seal, the pin, the path through this phone (iOS's words).
                     Hint(
-                        when {
-                            keep && canKeep && reconnect ->
-                                "Used on ${pick.hostId} to reconnect Xen Orchestra’s servers. It is sealed to that machine on this " +
-                                    "phone; the fleet relays it and cannot read it. This phone keeps it$word encrypted behind your " +
-                                    "fingerprint or face, once ${pick.hostId} has signed in with it; the fleet never keeps it."
-                            reconnect ->
-                                "Used once, on ${pick.hostId}, to reconnect Xen Orchestra’s servers, and not kept. " +
-                                    "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
-                            keep && canKeep && policy ->
-                                "Used on ${pick.hostId} to read the pool and apply what you choose. It is sealed to that machine on this " +
-                                    "phone; the fleet relays it and cannot read it. This phone keeps it$word encrypted behind your " +
-                                    "fingerprint or face, once ${pick.hostId} has signed in with it; the fleet never keeps it."
-                            keep && canKeep ->
-                                "Used on ${pick.hostId} to make a limited fleetwright user and its token. It is sealed to that machine on " +
-                                    "this phone; the fleet relays it and cannot read it. This phone keeps it$word encrypted behind your " +
-                                    "fingerprint or face, once ${pick.hostId} has signed in with it; the fleet never keeps it."
-                            policy ->
-                                "Used once, on ${pick.hostId}, to read the pool and apply what you choose, and not kept. " +
-                                    "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
-                            else ->
-                                "Used once, on ${pick.hostId}, to make a limited fleetwright user and its token, then dropped. " +
-                                    "It is sealed to that machine on this phone; the fleet relays it and cannot read it."
-                        } + path,
+                        if (keep && canKeep) "Kept on this phone behind your fingerprint or face once ${pick.hostId} has signed in."
+                        else "Used once by ${pick.hostId} and not kept.",
                     )
+                    OpenRow("How your password is protected", value = if (protectionOpen) "Hide" else "Show") { protectionOpen = !protectionOpen }
+                    if (protectionOpen) {
+                        XoRelayWords.protection(pick, keep = keep && canKeep, trusted = trusted).forEach { Hint(it) }
+                    }
                     // OFF UNTIL THE CERTIFICATE IS EITHER FINE OR ACKNOWLEDGED,
                     // or plain HTTP has been accepted: the host would refuse
                     // anyway, and a button that leads to a refusal is a button
@@ -1665,16 +1626,35 @@ private fun ReconnectOutcome(r: XoReconnect.Result, held: List<String>?) {
     XoReconnect.stillMissing(held, r)?.let { Hint(it, color = Design.Palette.attention.now) }
 }
 
-/** The words for working through this phone, which are iOS's (AddHypervisorView). */
+/** The words for working through this phone, and for the sign-in's custody, which are iOS's (AddHypervisorView). */
 internal object XoRelayWords {
-    /** What it is, before it is asked for. */
+    /** What it is, before it is asked for. What is encrypted, and by whom, is under [protection] once a machine is chosen. */
     fun throughLine(via: String) =
-        "This phone may be on a network that reaches it. $via can work through this phone: it opens HTTPS to Xen Orchestra " +
-            "itself, and this phone and the fleet carry only that encrypted connection. Keep this screen open while it runs."
+        "This phone may be on a network that reaches it. Keep this screen open while $via works through it."
 
-    /** Where the sign-in crosses, said after who keeps it. */
+    /** Where the sign-in crosses, under [protection]. */
     fun crosses(hostId: String) =
-        " It then crosses this phone inside the HTTPS connection $hostId opens to Xen Orchestra, which neither this phone nor the fleet can read."
+        "Through this phone, it travels inside the HTTPS connection $hostId opens to Xen Orchestra, which neither this phone nor anything in between can read."
+
+    /**
+     * The custody chain, in full, behind the one disclosure on the sign-in
+     * step: the seal, the pin, the path through this phone, and who keeps
+     * it. Nothing in the fleet can read or keep it on any path. iOS's
+     * protectionLines.
+     */
+    fun protection(pick: Fleet.Probe, keep: Boolean, trusted: Boolean): List<String> {
+        val host = pick.hostId
+        val lines = mutableListOf("It is encrypted on this phone to a key only $host holds, so nothing between them can read it.")
+        if (pick.cert != null) lines += "$host sends it only to a server that answers with the certificate above."
+        if (pick.through == "phone") lines += crosses(host)
+        lines += if (keep) {
+            val word = if (trusted) "" else ", and your answer above,"
+            "This phone keeps it$word encrypted behind your fingerprint or face, once $host has signed in with it. Nothing else keeps it."
+        } else {
+            "Once $host has used it, nothing keeps it."
+        }
+        return lines
+    }
 }
 
 /** A `begin` answer with the inputs it was sent for, which `run` seals under and not the fields' current text. */
@@ -1689,10 +1669,11 @@ private fun ProbeLine(p: Fleet.Probe) {
 /**
  * THE PIN. The machine sends the sign-in only to an address that answers
  * with this certificate, so this is the thing to compare with the padlock in
- * a browser before going on.
+ * a browser before going on. That it is the pin is said once, under "How
+ * your password is protected", not here.
  */
 @Composable
-private fun PinLines(cert: String, hostId: String, address: String, fromMemory: Boolean = false, throughPhone: Boolean = false) {
+private fun PinLines(cert: String) {
     Text("Certificate SHA-256", style = Design.Style.label, color = Design.Palette.inkDim.now)
     SelectionContainer {
         Text(
@@ -1702,13 +1683,6 @@ private fun PinLines(cert: String, hostId: String, address: String, fromMemory: 
             color = Design.Palette.ink.now,
         )
     }
-    Hint(
-        when {
-            fromMemory -> "The certificate at $address as it was last time. The machine refuses to send the sign-in to any other."
-            throughPhone -> "The certificate $hostId saw at $address through this phone, and this phone sees it itself. The machine refuses to send the sign-in to any other."
-            else -> "The certificate $hostId saw at $address. Compare it with the one your browser shows for Xen Orchestra; the machine refuses to send the sign-in to any other."
-        },
-    )
 }
 
 /**
@@ -1744,12 +1718,12 @@ private fun CertificateAsk(probe: Fleet.Probe, address: String, acknowledged: Bo
             Detail("Valid until", c.notAfter?.let { XoSetup.mediumDate(it) })
             Detail("Names", c.names.takeIf { it.isNotEmpty() }?.joinToString(", "))
         }
-        probe.cert?.let { PinLines(it, probe.hostId, address, throughPhone = probe.through == "phone") }
+        probe.cert?.let { PinLines(it) }
         // THE PERSON'S EARLIER WORD for this same fingerprint, said in place
         // of the box it answers. A different certificate gets the box.
         if (kept) {
             Text(
-                "You accepted this certificate before, and this phone kept that behind your fingerprint or face.",
+                "Trusted before.",
                 style = Design.Style.bodySmall,
                 color = Design.Palette.inkDim.now,
             )
@@ -1773,15 +1747,17 @@ private fun CertificateAsk(probe: Fleet.Probe, address: String, acknowledged: Bo
  * The other card that asks: a Xen Orchestra answering in plain HTTP. The same
  * ring and the same shape as CertificateAsk, because it is the same kind of
  * question, with different stakes: not "is this the right server" but "the
- * password and the token would be readable on the wire between these two".
- * It names both ends, because "the network" is nobody's network; it says how
- * to give the server HTTPS instead, in the installer's own variable names,
- * because the fix is on the far side and the person may well go and do it;
- * and the box says what ticking it does. The heading carries the word, so the
- * card reads the same with the colour gone.
+ * password would be readable on the wire between these two". One headline
+ * and one sentence that names both ends, because "the network" is nobody's
+ * network; how to give the server HTTPS instead, in the installer's own
+ * variable names, is behind one row, because the fix is on the far side and
+ * the person may well go and do it; and the box says what ticking it does.
+ * The heading carries the word, so the card reads the same with the colour
+ * gone.
  */
 @Composable
 private fun PlainAsk(probe: Fleet.Probe, address: String, accepted: Boolean, enabled: Boolean, onAccepted: (Boolean) -> Unit, kept: Boolean = false) {
+    var howOpen by rememberSaveable { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -1789,22 +1765,23 @@ private fun PlainAsk(probe: Fleet.Probe, address: String, accepted: Boolean, ena
             .padding(Design.Space.groupTight),
         verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
     ) {
-        Text("This Xen Orchestra answers without HTTPS", style = Design.Style.bodyStrong, color = Design.Palette.attention.now)
+        Text("No HTTPS", style = Design.Style.bodyStrong, color = Design.Palette.attention.now)
         Text(
-            "The admin password you type, and the token the fleet keeps afterwards, would cross the network between " +
-                "${probe.hostId} and $address unencrypted. Anything on that network could read them.",
+            "Your password would cross the network between ${probe.hostId} and $address unencrypted.",
             style = Design.Style.bodySmall,
             color = Design.Palette.ink.now,
         )
-        Text(
-            "To give it HTTPS instead: in the installer's xo-install.cfg, set PORT=\"443\", PATH_TO_HTTPS_CERT, " +
-                "PATH_TO_HTTPS_KEY and AUTOCERT=\"true\", then run it again.",
-            style = Design.Style.bodySmall,
-            color = Design.Palette.ink.now,
-        )
+        OpenRow("How to turn on HTTPS", value = if (howOpen) "Hide" else "Show") { howOpen = !howOpen }
+        if (howOpen) {
+            Text(
+                "In the installer's xo-install.cfg, set PORT=\"443\", PATH_TO_HTTPS_CERT, PATH_TO_HTTPS_KEY and AUTOCERT=\"true\", then run it again.",
+                style = Design.Style.bodySmall,
+                color = Design.Palette.ink.now,
+            )
+        }
         if (kept) {
             Text(
-                "You chose to send it without HTTPS before, and this phone kept that behind your fingerprint or face.",
+                "You chose no HTTPS before.",
                 style = Design.Style.bodySmall,
                 color = Design.Palette.inkDim.now,
             )
@@ -1844,7 +1821,7 @@ private fun Detail(label: String, value: String?) {
  * new one is made. The same words as iOS (AddHypervisorView, straightLine).
  */
 private fun straightLine(name: String, wayOut: String) =
-    "Removing $name, disk and all, and making a new one on $wayOut, which asks to join; this phone lets it in."
+    "Replacing $name with a new one on $wayOut."
 
 /**
  * Why Make it again from the machine's page did nothing by itself, and
@@ -1852,11 +1829,11 @@ private fun straightLine(name: String, wayOut: String) =
  * words as iOS (AddHypervisorView, straightRefusal).
  */
 private fun straightRefusal(inv: XoPolicy.Inventory, c: XoPolicy.Choice, machine: String, pool: String): String {
-    if (!c.holderAskChoice) return "$machine cannot make a machine that asks to join, so nothing was made again by itself. Update it, or choose below."
+    if (!c.holderAskChoice) return "$machine needs an update to do this. Choose below instead."
     if (XoPolicy.holderOn(inv, c.egress) == null) {
-        return "$pool has no machine of its own on the way out any more, so there is nothing to make again. This is what the fleet may use there, as it stands."
+        return "$pool has no managing VM to replace."
     }
-    return "Nothing was made again by itself: ${XoPolicy.problem(inv, c) ?: "the choice as it stands would be refused"}. Choose below."
+    return "Not done by itself: ${XoPolicy.problem(inv, c) ?: "the choice as it stands would be refused"}. Choose below."
 }
 
 @Composable

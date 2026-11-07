@@ -31,10 +31,8 @@ const I_POLICY = IOS('XOPolicy.swift');
 /** What both phones say, word for word. */
 /** What Apply does to an image that is there, in the words both phones use. */
 const IMAGE_ACTION_WORDS = [
-  'Apply builds a new one beside it from the newest image, then removes this one. ',
-  'Apply removes it, and New session stops offering it. ',
-  'If a machine was made from this one, it is kept until that machine is gone.',
-  'If a machine was made from it, it is kept until that machine is gone.',
+  'Rebuilt on Apply from the newest image',
+  'Removed on Apply',
   'The pool’s own machine is made from the Debian 13 image, so that one stays while it is asked for.',
   'A machine image is rebuilt behind the edge router, and that pool has none. Build the router with it.',
 ];
@@ -58,10 +56,9 @@ const SHARED = [
   'Keep in your vault',
   'Only public keys, one a line, starting ssh-ed25519, ssh-rsa or ecdsa-sha2. This line is not one: ',
   'A machine made on your hypervisor after you keep them lets you in as fleetwright, with sudo: ',
-  'It is there. New session › Where offers machines from it.',
+  '"Ready"',
   ...IMAGE_ACTION_WORDS,
-  ' with Fleetwright installed, on a 20 GiB disk on the storage chosen. ',
-  'image once, converts it to a disk, and installs Fleetwright on it, which takes about ten minutes. Sessions can ',
+  ' · 20 GiB disk · about 10 min',
 ];
 
 test('iOS: the machines on your pools are read from the snapshot, and worked through the fleet, never held for later', () => {
