@@ -365,8 +365,10 @@ A named person's request to a `signers` box is sent, because only the box knows
 whether it has seen that person's key. When the box refuses it for having
 neither a signature nor a delegation, the coordinator adds to the box's words
 what to do about it, by where the request came from and what it asked
-(`remedyFor` in core.js): a phone's request says how a phone comes to sign (its
-key listed with the minter, which happens after a GitHub sign-in under Runners);
+(`remedyFor` in core.js): a phone's request says how a phone comes to sign
+(after a GitHub sign-in under Runners, which is when its key is listed with the
+minter; the sentence says the sign-in and not the custody, by
+`docs/design-system.md`, "Words");
 an MCP client's request for `update`, which the phones leave out of the MCP
 delegation on purpose (`MCP_UNDELEGATED_VERBS`), says to apply it from the app
 or on the box; any other says, as steps, open the app, go to You → Delegations,

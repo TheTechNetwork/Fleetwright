@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { PROTOCOL_VERSION, PROTOCOL_MIN } from '../src/fleet/protocol/intents.js';
 
 import { Coordinator } from './helpers/node-coordinator.js';
-import { HostRegistry, HEALTH_STALE_MS } from '../src/fleet/coordinator/registry.js';
+import { HostRegistry, HEALTH_STALE_MS, REASON_CODES } from '../src/fleet/coordinator/registry.js';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { place } from '../src/fleet/coordinator/scheduler.js';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
@@ -111,12 +111,17 @@ test('a machine from a pool handed no Claude login says what the boxes answered,
   const vm = 'vm-0123456789ab';
   reg.connect(vm, () => {}, { ephemeral: true, owner: 'eli@example.com', madeOnPool: true });
   const entry = /** @type {any} */ (reg.hosts.get(vm));
-  entry.vmLogin = { at: 1, why: 'no box holding the pool handed it one: holder-5a5829 (This box made vm-0123456789ab but holds no Claude login of eli@example.com’s to hand it)' };
+  entry.vmLogin = { at: 1, why: 'no machine managing the pool handed it one: holder-5a5829 (This machine made vm-0123456789ab but has no Claude login of eli@example.com’s to hand it)' };
   reg.recordHealth(vm, health({ claudeAccounts: 0, runnerAuth: 'none' }));
   assert.equal(reg.get(vm)?.state, 'degraded');
+  assert.equal(reg.get(vm)?.reasonCode, 'pool_no_login');
   const said = reg.get(vm)?.reason || '';
-  assert.match(said, /^this machine asked for its owner’s Claude login when it joined and was handed none: no box holding the pool handed it one: holder-5a5829/);
-  assert.match(said, /It asks once\./);
+  assert.match(said, /^this machine was handed no Claude login when it joined: no machine managing the pool handed it one: holder-5a5829/);
+  // THE RESULT, THEN THE ONE ACTION (docs/design-system.md, "Words"): the
+  // remedy names the screen and manages, not holds, the pool; that it asks
+  // once is the mechanism and is not said.
+  assert.match(said, /\. Keep your Claude login under You › Credentials, approve a machine of yours that manages this pool for it, and start a new machine\.$/);
+  assert.doesNotMatch(said, /\bbox\b|holds? (?:the|this) pool|asks once/);
   assert.ok(!/ANTHROPIC_API_KEY|repository|runner/.test(said), said);
   // Kept across a reconnect: the line is read long after the one ask.
   reg.connect(vm, () => {}, { ephemeral: true, owner: 'eli@example.com' });
@@ -126,7 +131,7 @@ test('a machine from a pool handed no Claude login says what the boxes answered,
   const fresh = new HostRegistry();
   fresh.connect(vm, () => {}, { ephemeral: true, owner: 'eli@example.com', madeOnPool: true });
   fresh.recordHealth(vm, health({ claudeAccounts: 0, runnerAuth: 'none' }));
-  assert.match(fresh.get(vm)?.reason || '', /^this machine was handed no Claude login of its owner’s when it joined/);
+  assert.match(fresh.get(vm)?.reason || '', /^this machine was handed no Claude login when it joined, so no session started here can do anything\. Keep your Claude login/);
   // A GitHub runner keeps its own.
   fresh.connect('gha-1', () => {}, { ephemeral: true, owner: 'eli@example.com' });
   fresh.recordHealth('gha-1', health({ claudeAccounts: 0, runnerAuth: 'none' }));
@@ -260,6 +265,76 @@ test('a disconnected host is kept, marked offline, with its last known sessions'
   assert.equal(entry?.state, 'offline');
   assert.match(entry?.reason || '', /1006/);
   assert.equal(reg.findSession('bigjob')?.host.hostId, 'box');
+});
+
+test('every state the registry puts a host in carries one word beside its sentence, from the fixed list', () => {
+  // THE ROW'S WORD. A phone has room for one to three words on a host's row
+  // and was drawing the whole `reason` into it (docs/reviews/copy-2026-11-06.md,
+  // finding 162); the sentence now goes under a disclosure and the row is
+  // drawn from `reasonCode`. Both phones map every code on REASON_CODES to a
+  // word (test/reasons-in-apps.test.js), so a branch here that set a code off
+  // the list, or none, would put a row back to the sentence. This walks every
+  // branch and keeps the list and the branches equal in both directions.
+  let now = 1_000_000;
+  const reg = new HostRegistry({ now: () => now });
+  /** @type {Set<string>} */
+  const seen = new Set();
+  const expect = (/** @type {string} */ id, /** @type {string} */ want) => {
+    const h = reg.get(id);
+    assert.equal(h?.reasonCode, want, `${id}: ${h?.state} (${h?.reason})`);
+    assert.ok(REASON_CODES.includes(/** @type {any} */ (want)), `${want} is not on the list`);
+    seen.add(want);
+  };
+
+  reg.connect('box', () => {});
+  expect('box', 'connecting');
+  for (const [want, patch] of /** @type {Array<[string, Partial<any>]>} */ ([
+    ['ok', {}],
+    ['no_login', { claudeAccounts: 0 }],
+    ['login_expired', { credential: { state: 'expired', refreshable: false, expiresAt: 1, account: null, plan: null, summary: '' } }],
+    ['hub_unreachable', { hub: { reachable: false, reason: 'ECONNREFUSED' }, free: null }],
+    ['protocol_behind', { protocol: PROTOCOL_MIN - 1 }],
+    ['protocol_ahead', { protocol: PROTOCOL_VERSION + 1, protocolMin: PROTOCOL_VERSION + 1 }],
+  ])) {
+    reg.recordHealth('box', health(patch));
+    expect('box', want);
+  }
+  // And the transition a change of state reports carries the word too, which
+  // is what the host.degraded push puts in its data (core.js #onHostState).
+  reg.recordHealth('box', health());
+  const moved = reg.recordHealth('box', health({ claudeAccounts: 0 }));
+  assert.equal(moved?.to, 'degraded');
+  assert.equal(moved?.reasonCode, 'no_login');
+
+  // A runner's three: not told yet, told nothing, and a machine from a pool.
+  reg.connect('gha-1', () => {}, { ephemeral: true, owner: 'eli@example.com' });
+  reg.recordHealth('gha-1', health({ claudeAccounts: 0, runnerAuth: null }));
+  expect('gha-1', 'fetching_login');
+  reg.recordHealth('gha-1', health({ claudeAccounts: 0, runnerAuth: 'none' }));
+  expect('gha-1', 'runner_no_login');
+  reg.connect('vm-0123456789ab', () => {}, { ephemeral: true, owner: 'eli@example.com', madeOnPool: true });
+  reg.recordHealth('vm-0123456789ab', health({ claudeAccounts: 0, runnerAuth: 'none' }));
+  expect('vm-0123456789ab', 'pool_no_login');
+
+  // Silence, of a host that never reported and of one that stopped.
+  reg.connect('quiet', () => {});
+  now += HEALTH_STALE_MS + 1;
+  expect('quiet', 'never_reported');
+  expect('box', 'silent');
+
+  // Gone: a permanent host whose socket closed, and a temporary one that
+  // dropped and is found still holding a session.
+  reg.disconnect('box', 'socket closed: 1006');
+  expect('box', 'dropped');
+  reg.connect('gha-2', () => {}, { ephemeral: true, owner: 'eli@example.com' });
+  reg.recordHealth('gha-2', health({ sessions: [{ name: 'build', status: 'running' }] }));
+  reg.disconnect('gha-2', 'socket closed: 1006');
+  const found = reg.findSessions('build')[0];
+  assert.equal(found?.host.state, 'offline');
+  assert.equal(found?.host.reasonCode, 'dropped');
+  seen.add('dropped');
+
+  assert.deepEqual([...seen].sort(), [...REASON_CODES].sort(), 'every word on the list is one some branch sets, and no branch sets another');
 });
 
 // --- the scheduler ----------------------------------------------------------
@@ -544,7 +619,8 @@ test('GET /api/hosts describes the host and never the socket carrying it', async
     // `madeOnPool` and `vmLogin` describe a machine from a pool: that it is
     // one, and what the boxes answered when it asked for its login
     // (registry.js poolMachineReason), which is text they chose, not a handle.
-    ['administers', 'connected', 'connectedAt', 'ephemeral', 'health', 'healthAt', 'hostId', 'madeOnPool', 'owner', 'reason', 'state', 'takesSessions', 'vmLogin'],
+    // `reasonCode` is `reason` as one word, for a phone's row (REASON_CODES).
+    ['administers', 'connected', 'connectedAt', 'ephemeral', 'health', 'healthAt', 'hostId', 'madeOnPool', 'owner', 'reason', 'reasonCode', 'state', 'takesSessions', 'vmLogin'],
     'the entry is a description of the host, not a window onto the process serving it',
   );
 
@@ -1059,6 +1135,10 @@ test('a host whose fault CHANGES says so, even inside the quiet hour', async () 
 
   assert.equal(sent.length, 2);
   assert.match(sent[1].body, /credential/);
+  // AND EACH CARRIES THE REGISTRY'S WORD FOR ITS FAULT beside the sentence,
+  // so a phone titles the notification from it (REASON_CODES).
+  assert.equal(sent[0].data.reasonCode, 'no_login');
+  assert.equal(sent[1].data.reasonCode, 'login_expired');
 });
 
 test('a coordinator restart does not re-announce a fault it already announced', async () => {

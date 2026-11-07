@@ -1379,7 +1379,11 @@ export class XoSetups {
       rec.part = null;
       rec.text = [ctx.summary || (policy ? `${rec.address}: what the fleet may use is changed.` : `${rec.address} is in the fleet.`), ...ctx.notes].join(' ');
       if (watchdog) rec.text = ctx.summary;
-      if (pve) rec.text = `${rec.address} is set up for the fleet. Its line is sealed to your phone, which keeps it in your vault when it next asks; the fleet’s machines pick it up within ten minutes of that.`;
+      // THE RESULT AND WHAT FOLLOWS, in the person's nouns (docs/design-system.md,
+      // "Words"): the token is saved, not a line sealed, and the machines are
+      // theirs. How it travels (sealed to the phone's key, kept in the vault
+      // when the phone next asks) is edge-credentials.js's to say.
+      if (pve) rec.text = `${rec.address} is set up for your fleet. This phone saves its access to your vault, and your machines pick it up within ten minutes of that.`;
       // A CANCEL THAT LANDED DURING THE LAST THING A POLICY JOB DID, which
       // took no signal (the pool's own machine) and finished: the job was
       // cancelled and says so, with what it had done. Not for a setup or an
