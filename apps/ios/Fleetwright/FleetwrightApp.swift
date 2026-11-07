@@ -7,6 +7,11 @@ extension Notification.Name {
     /// credentials reloads; nobody trusts the payload, because a custom scheme
     /// can be claimed by anything.
     static let credentialsChanged = Notification.Name("network.thetech.fleetwright.credentialsChanged")
+    /// The app is back in front after being away. Whoever is showing the
+    /// fleet refreshes and sends what it was holding; an open session page
+    /// takes a fresh look and starts its watch again. Posted on every return
+    /// to active, so the list is never the one from the pocket.
+    static let becameActive = Notification.Name("network.thetech.fleetwright.becameActive")
     /// Somebody tapped a notification. `userInfo["name"]` is the session it
     /// was about, when the payload said; `userInfo["host"]` the machine, for a
     /// host event; `userInfo["pool"]` a PoolAsk, for a pool's news.
@@ -41,14 +46,25 @@ struct FleetwrightApp: App {
                 // appearance would leave a phone that signed in on its first
                 // launch unregistered until its second.
                 .task(id: settings.credential) { await delegate.registerForPush(settings: settings) }
-                // BACK IN FRONT: a Proxmox VE setup that ended while the app
-                // was away has its line kept now, not at the next launch.
+                // BACK IN FRONT. The list says a refresh "already happens
+                // when the app comes back to the foreground", and nothing
+                // here did it: this hook only collected a Proxmox VE line
+                // that finished while the app was away, so a phone that was
+                // in a pocket while a session changed state showed the
+                // pocket's list until somebody pulled. Now it tells the
+                // screens, and the handoff is still collected.
                 .onChange(of: scenePhase) { _, phase in
                     guard phase == .active, settings.configured else { return }
+                    NotificationCenter.default.post(name: .becameActive, object: nil)
                     Task {
-            await ProxmoxThroughHandoff.collectPending(fleet: Fleet(settings: settings))
-            await ProxmoxDirectHandoff.collectPending(settings: settings)
-        }
+                        // Every kind of setup this phone is owed a result
+                        // from, not only Proxmox: a Xen Orchestra setup that
+                        // finished while the app was away was collected only
+                        // at the next launch or on its own screen.
+                        await XOSetupHandoff.collectPending(fleet: Fleet(settings: settings))
+                        await ProxmoxThroughHandoff.collectPending(fleet: Fleet(settings: settings))
+                        await ProxmoxDirectHandoff.collectPending(settings: settings)
+                    }
                 }
                 // COMING BACK FROM A PROVIDER. The coordinator's OAuth callback
                 // redirects to fleetwright://connected when it has stored the

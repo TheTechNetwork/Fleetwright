@@ -41,6 +41,11 @@ final class NotificationService: UNNotificationServiceExtension {
                 userInfo: request.content.userInfo,
                 clear: request.content.categoryIdentifier
             )
+            // A seal that did not open loses its buttons for the same reason
+            // the timed-out case below does, and says so for the same reason.
+            if content.categoryIdentifier.isEmpty, request.content.userInfo["e"] != nil {
+                content.body = PushCrypto.openToAnswer(after: content.body)
+            }
         }
         finish(content)
     }
@@ -63,6 +68,14 @@ final class NotificationService: UNNotificationServiceExtension {
             userInfo: original.userInfo,
             clear: original.categoryIdentifier
         )
+        // SAID, NOT SILENTLY DOWNGRADED. A sealed question that lost its
+        // buttons arrived looking like any other alert, and the person
+        // learned the buttons were missing by looking for them. The body
+        // now says the question is still waiting in the app, which is the
+        // one thing a tap on this notification can still do.
+        if content.categoryIdentifier.isEmpty, original.userInfo["e"] != nil {
+            content.body = PushCrypto.openToAnswer(after: content.body)
+        }
         finish(content)
     }
 

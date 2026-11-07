@@ -233,6 +233,17 @@ Every setting is in `src/fleet/host/config.js`. Five are worth calling out:
   however long it waits — that pane is still because somebody has to answer it
   — and it gives up after two restarts that did not help rather than looping.
 
+  **A restart needs the CLI's own word that it was working.** The hooks a
+  session reports through (`src/core/activity.js`) say whether Claude is
+  mid-turn, at its prompt, or waiting on a person, and only a frozen pane
+  under a `working` hook is a wedge. A still pane with no such word — a
+  dialog the matchers in `prompt.js` do not recognise, an image older than
+  the hooks — is cannot-tell, and after the same window it is reported as
+  *may need your attention* and left alone, rather than stopped and resumed
+  onto the question it was asking. That happened once, when the trust
+  dialog's wording moved, and it is the reason the rule is written this way
+  round.
+
   **"Still" is not one fact, which is what broke this in production.** It
   shipped, and a session on a real box was stopped and resumed twice and then
   declared beyond help — because it had *finished*. A session that completed

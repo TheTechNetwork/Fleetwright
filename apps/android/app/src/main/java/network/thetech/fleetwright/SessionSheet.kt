@@ -19,6 +19,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -28,6 +29,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -116,6 +120,25 @@ fun SessionSheet(
             busy = false
             reload()
             onChanged()
+        }
+    }
+
+    // BACK IN FRONT: the picture on this sheet is from before the pocket. One
+    // fresh look and the short watch again, as if the sheet had just opened; a
+    // sheet left open all afternoon still stops. The session's own sentence is
+    // reloaded too, so a Stop or an answer from the other phone moves it. The
+    // first resume is the opening, which the effect below already covers.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var resumes by remember { mutableIntStateOf(0) }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) resumes++ }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(resumes) {
+        if (resumes > 1) {
+            reload()
+            watchGeneration += 1
         }
     }
 

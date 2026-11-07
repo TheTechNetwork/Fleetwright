@@ -1237,6 +1237,12 @@ const buildArgs = (p) => ({
   coordinatorUrl: 'https://fleet.test',
   addressesOf: async () => ['203.0.113.7'],
   getAgent: async () => AGENT,
+  // A TOKEN AND A `done`, by default: no token is no install now, and a halt
+  // is the template only once the VM has said done (vm-image.js, STOPPED IS
+  // NOT DONE; test/vm-image-report-token.test.js). A test about the wait
+  // itself passes its own vmReport over these.
+  reporter: async () => REPORT_TOKEN,
+  vmReport: () => ({ step: 'done', detail: null, at: 0 }),
   say: () => {},
   getImage: /** @type {any} */ (async () => downloaded),
   upload: /** @type {any} */ (async (/** @type {any} */ o) => {
@@ -1268,7 +1274,7 @@ test('a build that powers off becomes the template, tagged, in the set; one alre
   assert.deepEqual(create.VIFs, [{ network: 'net-uplink' }], 'built behind the edge router');
   // The install reaches the VM on a drive made once its disk is there, on that
   // disk's storage; and it is gone before the VM is a template.
-  assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params, { vm: 'build-vm', sr: 'sr-1', config: buildCloudConfig({ coordinatorUrl: 'https://fleet.test', agent: gzipSync(AGENT).toString('base64') }) });
+  assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vm.createCloudInitConfigDrive')).params, { vm: 'build-vm', sr: 'sr-1', config: buildCloudConfig({ coordinatorUrl: 'https://fleet.test', token: REPORT_TOKEN, addresses: ['203.0.113.7'], agent: gzipSync(AGENT).toString('base64') }) });
   assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'vdi.delete')).params, { id: 'cfg-1' });
   assert.deepEqual(p.disks.filter((d) => d.vm === 'build-vm').map((d) => d.vdi), ['build-vm-copy'], 'the template keeps its own disk and nothing else');
   assert.deepEqual(/** @type {any} */ (p.calls.find((c) => c.method === 'disk.resize')).params, { id: 'build-vm-copy', size: VM_IMAGE.diskSize }, 'the copy grows, the kept disk stays as published');
@@ -1466,6 +1472,7 @@ test('a build VM that never reports in is named as the likely problem, and one t
   const err = await ensureImage({
     ...buildArgs(p),
     reporter: async () => REPORT_TOKEN,
+    vmReport: () => null,
     now: () => at,
     sleep: async () => { at += 2 * 60_000; },
     say: (text) => shown.push(text),
@@ -1487,6 +1494,7 @@ test('a build VM that halts without saying it finished is kept, named for it, an
   const err = await ensureImage({
     ...buildArgs(p),
     reporter: async () => REPORT_TOKEN,
+    vmReport: () => null,
     now: () => at,
     sleep: async () => { at += 10_000; },
   }).catch((e) => e);

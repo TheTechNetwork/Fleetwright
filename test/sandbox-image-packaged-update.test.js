@@ -105,7 +105,12 @@ test('a registry that refuses does not fail the update', async () => {
   // The box has a working image; the registry is what went wrong.
   assert.equal(r.ok, true, 'a network hiccup is not an update failure');
   assert.equal(r.changed, false);
-  assert.match(r.text ?? '', /Could not refresh/);
+  // AND IT IS NOT CALLED DONE EITHER. `ok: true` with the reason in prose is
+  // how boxes stayed on an old image while /update said they were current;
+  // the step is incomplete, as data, and its sentence says NOT refreshed.
+  assert.equal(r.incomplete?.step, 'image');
+  assert.match(r.incomplete?.text ?? '', /no route to host/);
+  assert.match(r.text ?? '', /was NOT refreshed/);
 });
 
 test('the packaged update path calls the step', async () => {

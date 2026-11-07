@@ -53,13 +53,14 @@ wearing one coat:
 | **Needs a new intent verb** | `logs`, `update`, `upgrade`, `reboot`, `login`/`code` | protocol work — see below |
 | **Needs data nobody collects yet** | workspace path, context-window usage, plan limits, host version and whether it is behind | host-side reporting first |
 
-**The middle row is the real one, and it is deliberate.** `PROTOCOL_VERSION` is
-`1`, matched exactly with no negotiation, and there are eight fixed verbs:
-`list status peek health start resume stop forget`. Telegram reaches `logs`,
-`update`, `reboot` and `login` because it talks to `fleetwright` **on that box**,
-not through the fleet. An app talking to a coordinator has no such path, and
-adding one is a coordinated release of coordinator, Worker, host and both apps
-at once.
+**The middle row was the real one, and it was deliberate** (as of 2026-08, the
+day this scoreboard was written; the dated notes below say what moved). The
+protocol version was `1`, matched exactly with no negotiation, and there were
+eight fixed verbs: `list status peek health start resume stop forget`. Telegram
+reached `logs`, `update`, `reboot` and `login` because it talked to
+`fleetwright` **on that box**, not through the fleet. An app talking to a
+coordinator had no such path, and adding one was a coordinated release of
+coordinator, Worker, host and both apps at once.
 
 > **Closed, 2026-08-28.** Rows one and two are done, in one coordinated release
 > — `PROTOCOL_VERSION` is now `2` with thirteen verbs, and everything below
@@ -80,6 +81,19 @@ at once.
 > a host's version and whether it is behind are in the health frame now, which
 > is what `unknown_verb` and `unsupported_version` use to tell you which of the
 > two you are looking at.
+>
+> **Moved again, 2026-11-06.** `PROTOCOL_VERSION` is **17**, `PROTOCOL_MIN` is
+> **2**, and there are **45** verbs. The sentence above about "a coordinated
+> release ... at once" is no longer how a verb lands: `validateIntent` accepts
+> the range `[PROTOCOL_MIN, PROTOCOL_VERSION]`, the coordinator speaks each
+> host its own highest understood version and omits any param newer than it,
+> and a routine feature bump strands nobody ([`CONTRIBUTING.md`](../CONTRIBUTING.md),
+> [`protocol-negotiation.md`](./protocol-negotiation.md)). What that buys is
+> also what it costs: a box can be fifteen versions of behaviour behind, inside
+> the accepted range, and the apps learn which capability it lacks one refused
+> tap at a time (`unknown_verb`, `unsupported_version`). A per-machine line
+> naming what its spoken version cannot do is still to be built; it is on the
+> roadmap under the November readiness review.
 >
 > What is left of the filesystem exception is exactly the apps: the five verbs
 > ship on coordinator, Worker, host and MCP, and neither phone has a screen for
@@ -476,10 +490,12 @@ answers a member's with `not_admin` (`place`, `scheduler.js`). Each host in
 something for the person asking, false where the coordinator would refuse
 them, and absent from a coordinator too old to send it, which is cannot-tell.
 It comes from the same rule placement refuses with (`administers`,
-`hosts.js`), so the two cannot disagree. Both phones still draw the controls
-on every machine's page, so on the operator's machines and on ones other
-members enrolled a member meets that refusal after the tap; drawing them only
-where `administers` is true lands in the iOS and Android changes.
+`hosts.js`), so the two cannot disagree. Both phones draw those controls only
+where `administers` is true, and say once, at the top of the section, why they
+are absent otherwise (`HostView.swift` `mayActOnBox`, `MachinesScreen.kt`
+`actsOnBox`); "Check for updates" stays on every machine because `updates` is
+a read. A coordinator too old to send `administers` is cannot-tell and keeps
+the controls, with the box's own refusal to explain a tap.
 
 **An admin can view the fleet as a member** (You, This fleet, View as a member).
 Every request then carries `x-fleetwright-view: member` and the coordinator

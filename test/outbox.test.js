@@ -79,12 +79,41 @@ test('only a delivery failure is held, never a refusal', () => {
   assert.match(kotlin, /UnknownHostException/);
 });
 
-test('a held command expires rather than surprising somebody a day later', () => {
+test('a held command expires rather than surprising somebody a day later, and is shown as expired, not dropped', () => {
   assert.match(swift, /static let expiry/);
   assert.match(kotlin, /const val EXPIRY_MS/);
-  for (const [name, source] of [['iOS', swift], ['Android', kotlin]]) {
-    assert.match(source, /dropExpired/, `${name} never drops expired entries`);
+  // RULE 4, THE HALF THAT WAS NOT TRUE. Both files said an expired entry is
+  // "shown as expired rather than dropped quietly", and both flushes began
+  // with dropExpired(): a start queued on the train was deleted the next
+  // afternoon, and the list simply got shorter. A flush sends what is
+  // waiting and leaves what expired where a person can see it.
+  for (const [name, source, flushHead] of [
+    ['iOS', swift, 'func flush(using send'],
+    ['Android', kotlin, 'suspend fun flush(send'],
+  ]) {
+    const start = source.indexOf(flushHead);
+    assert.ok(start > 0, `${name}: no flush`);
+    const flush = source.slice(start, source.indexOf('\n    }', start) + 6);
+    assert.doesNotMatch(flush.replace(/\/\/[^\n]*/g, ''), /dropExpired\(\)/, `${name}: the flush still deletes expired commands`);
+    assert.match(flush, /for \(?entry in waiting/, `${name}: the flush must send only what has not expired`);
   }
+  assert.match(swift, /var expired: \[Held\] \{ held\.filter \{ \$0\.isExpired \} \}/);
+  assert.match(kotlin, /val expired: List<Held> get\(\) = held\.filter \{ it\.isExpired \}/);
+  // And each is drawn, in the person's own words, with a way to dismiss it.
+  const view = readFileSync(new URL('../apps/ios/Fleetwright/FleetView.swift', import.meta.url), 'utf8');
+  const main = readFileSync(
+    new URL('../apps/android/app/src/main/java/network/thetech/fleetwright/MainActivity.kt', import.meta.url),
+    'utf8',
+  );
+  assert.match(view, /ForEach\(outbox\.expired\)/);
+  assert.match(view, /Text\("Not sent: \\\(entry\.summary\)"\)/);
+  assert.match(view, /Button\("Dismiss"\) \{ outbox\.drop\(entry\.id\) \}/);
+  assert.match(main, /expired\.forEach \{ entry ->/);
+  assert.match(main, /Text\("Not sent: \$\{entry\.summary\}"/);
+  assert.match(main, /TextButton\(onClick = \{ outbox\.drop\(entry\.id\)/);
+  // Same sentence on both phones.
+  const sentence = 'Held for more than 12 hours while the fleet could not be reached, so it was not sent. Ask again if you still want it.';
+  assert.ok(view.includes(sentence) && main.includes(sentence));
 });
 
 test('a flush stops at the first thing it cannot send', () => {
@@ -108,7 +137,10 @@ test('both apps show what is being held', () => {
   assert.match(main, /held on this phone/);
   // And the count is kept current on refresh, not only after a flush — a
   // command queued a moment ago has to appear without waiting for the fleet.
-  assert.match(main, /pending = outbox\.held\.size/);
+  // The count is of what WILL be sent; what expired is listed, not counted.
+  assert.match(main, /pending = outbox\.waiting\.size/);
+  assert.doesNotMatch(main, /outbox\.held\.size/);
+  assert.match(view, /outbox\.waiting\.count/);
 });
 
 test('nothing recurses between refresh and flush', () => {

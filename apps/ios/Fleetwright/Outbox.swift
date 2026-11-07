@@ -64,7 +64,12 @@ final class Outbox {
         "writefile", "copyfile", "deletefile",
     ]
 
+    /// Everything held, expired or not. The screen draws the two apart.
     private(set) var held: [Held] = []
+    /// What will be sent when the fleet answers.
+    var waiting: [Held] { held.filter { !$0.isExpired } }
+    /// What will not be sent, and is shown as such until dismissed (rule 4).
+    var expired: [Held] { held.filter { $0.isExpired } }
 
     private let store: URL
 
@@ -104,6 +109,8 @@ final class Outbox {
         save()
     }
 
+    /// Forget every expired entry at once. Only a person's "dismiss all"
+    /// would want this; a flush never calls it (rule 4: shown, not dropped).
     func dropExpired() {
         let before = held.count
         held.removeAll { $0.isExpired }
@@ -123,9 +130,13 @@ final class Outbox {
     /// `resume` and `resume` then `stop` are different intentions.
     @discardableResult
     func flush(using send: (Held) async -> Result<Void, Error>) async -> Int {
-        dropExpired()
+        // EXPIRED ENTRIES ARE SKIPPED, NOT DROPPED. This called dropExpired()
+        // here, which deleted them on the next flush — so a start queued on
+        // the train was gone the next afternoon with nothing on any screen
+        // saying whether it ran. They stay, drawn as not sent, until the
+        // person dismisses them (FleetView).
         var sent = 0
-        for entry in held.sorted(by: { $0.queuedAt < $1.queuedAt }) {
+        for entry in waiting.sorted(by: { $0.queuedAt < $1.queuedAt }) {
             switch await send(entry) {
             case .success:
                 drop(entry.id)
@@ -152,7 +163,6 @@ final class Outbox {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         held = (try? decoder.decode([Held].self, from: data)) ?? []
-        dropExpired()
     }
 
     private func save() {

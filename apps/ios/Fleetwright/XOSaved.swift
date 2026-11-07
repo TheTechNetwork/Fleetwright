@@ -161,6 +161,14 @@ enum XOSaved {
         list(address, kept: false)
     }
 
+    /// Nothing kept for any address, and no memory of which machine got
+    /// through: what signing out does (Settings.signOut).
+    static func forgetAll() {
+        for address in UserDefaults.standard.stringArray(forKey: savedKey) ?? [] { forget(address) }
+        UserDefaults.standard.removeObject(forKey: savedKey)
+        UserDefaults.standard.removeObject(forKey: viaKey)
+    }
+
     private static func list(_ address: String, kept: Bool) {
         var all = (UserDefaults.standard.stringArray(forKey: savedKey) ?? []).filter { $0 != address }
         if kept { all.append(address) }

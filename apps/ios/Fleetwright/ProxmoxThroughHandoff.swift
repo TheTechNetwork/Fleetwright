@@ -60,6 +60,12 @@ enum ProxmoxThroughHandoff {
         save(pending().filter { $0.job != job })
     }
 
+    /// Every waiting key: what signing out does (Settings.signOut).
+    static func forgetAll() {
+        for entry in pending() { forget(job: entry.job) }
+        UserDefaults.standard.removeObject(forKey: pendingKey)
+    }
+
     /// Open the line a finished job handed back and keep it in the vault.
     /// Nil when there is nothing to collect: not this phone's job, not done
     /// yet, or already being collected.

@@ -603,6 +603,21 @@ build_image() {
   done
   [ "$(qm status "$ID" | awk '{print $2}')" = stopped ] ||
     build_failed "VM $ID was still building after 25 minutes, so the install did not finish."
+  # STOPPED IS NOT DONE. The build's cloud-config says `fleetwright-build:
+  # off` on its console in the last line before it powers off, and only that
+  # halt is an installed image. A VM stopped from the web interface, a node
+  # rebooted for maintenance or an install cut off mid-step is a stopped VM
+  # too, and this used to run `qm template` on any of them, so the next
+  # machine was cloned from half an install. The console is given a moment
+  # to catch up with the power state, since its reader is another process;
+  # then a halt without the word keeps the VM, stopped and named for it,
+  # and the template the pool had stays its image (build_unfinished).
+  for _ in $(seq 1 10); do
+    grep -q 'fleetwright-build: off' "$console" 2>/dev/null && break
+    sleep 0.5
+  done
+  grep -q 'fleetwright-build: off' "$console" 2>/dev/null ||
+    build_unfinished "VM $ID powered off before it said the install was done."
   kill "$reader" 2>/dev/null || true
   rm -f "$console"
   BUILDING=""
@@ -639,6 +654,21 @@ build_failed() {
   kill "$reader" 2>/dev/null || true
   rm -f "$console"
   die "$1${why:+ Its console said: $why} VM $ID was removed; running this again builds it afresh."
+}
+# A BUILD THAT STOPPED BEFORE IT SAID DONE IS KEPT: stopped, named for what
+# happened, and never a template, so what is on its disk can be looked at;
+# the image the pool had stays the image machines are made from. The next
+# run removes it, as it removes every build that did not finish, and builds
+# afresh. Said in full, because the phone shows this sentence and nothing
+# else about it.
+build_unfinished() {
+  local why
+  why="$(console_said)"
+  kill "$reader" 2>/dev/null || true
+  rm -f "$console"
+  qm set "$ID" --name "$name-build-stopped-before-done" >/dev/null 2>&1 || true
+  BUILDING=""
+  die "$1${why:+ Its console said: $why} It was not made the template; the pool keeps the image it had${existing:+ (template $existing)}. VM $ID is kept, stopped, as $name-build-stopped-before-done; running this again removes it and builds afresh."
 }
 
 if [ "$IMAGE" = 0 ]; then
