@@ -211,7 +211,7 @@ internal fun ProxmoxThroughSheet(
                 val fit = r.probes.filter { XoDeploy.canInstall(it) }
                 (if (auto) fit.firstOrNull() else fit.singleOrNull())?.let { chosen = it.hostId }
             } else {
-                probeText = r.text.ifBlank { "The fleet did not try that address." }
+                probeText = r.text.ifBlank { "No machine tried that address." }
             }
             probing = false
         }
@@ -343,7 +343,7 @@ internal fun ProxmoxThroughSheet(
                 continue
             }
             unanswered++
-            refusal = r.text.ifBlank { "The fleet did not answer about the setup." }
+            refusal = r.text.ifBlank { "No answer about the setup." }
             if (r.code == "unknown_job" || unanswered >= 5) break
         }
         val done = progress

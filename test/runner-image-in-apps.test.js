@@ -75,10 +75,10 @@ test('both phones offer a larger machine only when the fleet would take one, and
     assert.match(src, /"Allow larger machines"/, name);
   }
   // The same sentences on both, the switch's and the fleet's.
-  const sentence = /GitHub's larger macOS machines, 5 cores and 14 GB instead of 3 and 7, are billed by the minute to [^"]+'s owner on every plan\. (?:" \+\s*")?Off, New session does not offer them and the fleet refuses one\./;
+  const sentence = /GitHub's larger macOS machines, 5 cores and 14 GB instead of 3 and 7, are billed by the minute to [^"]+'s owner on every plan\. (?:" \+\s*")?Off, New session does not offer them and a request for one is refused\./;
   assert.match(YOU_IOS, sentence);
   assert.match(YOU_ANDROID, sentence);
-  for (const words of ["may be GitHub's larger ones, which its operator allowed.", 'are standard ones. Its operator decides about larger ones, since the fleet pays for them.']) {
+  for (const words of ["may be GitHub's larger ones, which its operator allowed.", 'are standard ones. Its operator decides about larger ones, since they are billed to its owner.']) {
     assert.ok(YOU_IOS.includes(words) && YOU_ANDROID.includes(words), words);
   }
 });

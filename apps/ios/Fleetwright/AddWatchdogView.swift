@@ -370,7 +370,7 @@ struct AddWatchdogView: View {
         do {
             let reply = try await fleet.xoprobe(address: trimmedAddress)
             guard reply.ok != false else {
-                probeText = reply.text ?? "The fleet did not try that address."
+                probeText = reply.text ?? "No machine tried that address."
                 return
             }
             guard let found = reply.probes else {
@@ -534,7 +534,7 @@ struct AddWatchdogView: View {
             if let state = reply.xosetup {
                 await apply(state)
             } else if reply.ok == false {
-                await apply(Fleet.SetupState(job: job, state: "failed", text: reply.text ?? "The fleet no longer knows this job."))
+                await apply(Fleet.SetupState(job: job, state: "failed", text: reply.text ?? "This job is no longer listed."))
             }
         }
     }

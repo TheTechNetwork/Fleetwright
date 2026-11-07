@@ -904,7 +904,7 @@ fun FleetScreen(
                                     Column(Modifier.weight(1f)) {
                                         Text("Not sent: ${entry.summary}", style = Design.Style.bodySmall, color = Design.Palette.attention.now)
                                         Text(
-                                            "Held for more than 12 hours while the fleet could not be reached, so it was not sent. Ask again if you still want it.",
+                                            "Held for more than 12 hours with no connection, so it was not sent. Ask again if you still want it.",
                                             style = Design.Style.label,
                                             color = Design.Palette.inkDim.now,
                                         )
