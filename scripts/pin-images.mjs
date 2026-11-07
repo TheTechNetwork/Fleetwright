@@ -163,7 +163,17 @@ async function main() {
   for (const p of PINNED) {
     const spec = /** @type {any} */ (images)[p.name];
     if (spec.url.includes(spec.build)) {
-      console.log(`${spec.os} ${spec.build}: already pinned`);
+      // PINNED HERE, AND THE SCRIPT MADE TO AGREE: a branch whose pin was
+      // committed without the setup script (the workflow once added `src`
+      // alone) is mended by the next run, from the pin it already has.
+      const synced = writeScriptPin(script, spec.key, { url: spec.url, field: p.field, digest: spec[p.field] });
+      if (synced !== script) {
+        script = synced;
+        wrote++;
+        console.log(`${spec.os} ${spec.build}: already pinned; install/fleetwright-pve-setup written to agree`);
+      } else {
+        console.log(`${spec.os} ${spec.build}: already pinned`);
+      }
       continue;
     }
     const url = addressFor(spec.url, p.build, spec.build);
