@@ -52,7 +52,7 @@ final class TelemetryTests: XCTestCase {
 
         // A hub restart lost the first three hours, and the line says so.
         let late = try session(#"{"name":"j","status":"running","startedAt":\#(nowMs - 300 * min),"phases":{"since":\#(nowMs - 120 * min),"current":"working","currentSince":\#(nowMs - 120 * min),"workingMs":0,"awaitingMs":0,"readyMs":0}}"#)
-        XCTAssertEqual(late.timeLine(now: now), "Worked 2h · counted for the last 2h")
+        XCTAssertEqual(late.timeLine(now: now), "Worked 2h · since 2h ago")
 
         let stopped = try session(#"{"name":"j","status":"stopped","phases":{"since":1,"current":"ready","currentSince":1,"workingMs":1,"awaitingMs":0,"readyMs":0}}"#)
         XCTAssertNil(stopped.timeLine(now: now))

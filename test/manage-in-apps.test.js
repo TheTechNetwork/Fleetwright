@@ -80,17 +80,19 @@ test('the table offers nothing a server does not list, and nothing for a state i
   }
 });
 
-test('cannot tell is said as cannot tell, never as zero', () => {
+test('cannot tell is said as Unknown, never as zero', () => {
   // C-5, in the rows a person reads: a host with no numbers, a VM with no
-  // state, storage with no size.
+  // state, storage with no size. The word is Unknown (docs/design-system.md,
+  // Words): §7 kept, as a word rather than a sentence naming what did not
+  // answer.
   const rows = Object.fromEntries(TABLE.components.map((/** @type {any} */ c) => [c.id, c]));
-  assert.equal(rows['0f1e2d3c4b5a'].state, 'cannot tell');
-  assert.match(rows['0f1e2d3c4b5a'].numbers, /cores: cannot tell · memory: cannot tell/);
-  assert.equal(rows['vm-7'].state, 'cannot tell');
-  assert.equal(rows['sr-3'].numbers, 'space: cannot tell');
-  for (const c of TABLE.components) assert.doesNotMatch(`${c.what} ${c.numbers}`, /\b0 (GiB|vCPUs|cores)\b|undefined|null|NaN/);
-  // A token that cannot see a host says so rather than naming none.
-  assert.equal(rows['vm-6'].what, 'VM on a host this token cannot see');
+  assert.equal(rows['0f1e2d3c4b5a'].state, 'Unknown');
+  assert.match(rows['0f1e2d3c4b5a'].numbers, /cores: Unknown · memory: Unknown/);
+  assert.equal(rows['vm-7'].state, 'Unknown');
+  assert.equal(rows['sr-3'].numbers, 'space: Unknown');
+  for (const c of TABLE.components) assert.doesNotMatch(`${c.what} ${c.numbers}`, /\b0 (GiB|vCPUs|cores)\b|undefined|null|NaN|cannot tell/);
+  // A host the pool's account cannot see is unknown, never none.
+  assert.equal(rows['vm-6'].what, 'VM on an unknown host');
 });
 
 test('iOS: the pin is checked in the TLS challenge, and nothing is sent to any other certificate', () => {

@@ -62,7 +62,7 @@ class TelemetryTest {
 
         // A hub restart lost the first three hours, and the line says so.
         val late = session(startedAt = now - 300 * min, phases = phases(now - 120 * min, "working", now - 120 * min, 0, 0, 0))
-        assertEquals("Worked 2h · counted for the last 2h", late.timeLine(now))
+        assertEquals("Worked 2h · since 2h ago", late.timeLine(now))
 
         assertNull(session(status = "stopped", phases = phases(1, "ready", 1, 1, 0, 0)).timeLine(now))
     }
