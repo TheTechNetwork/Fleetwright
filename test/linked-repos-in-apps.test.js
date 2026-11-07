@@ -41,7 +41,7 @@ test('the words about each role, and about a session’s archive, are the same o
     'none of the known shapes',
     'none linked',
     // A session's archive before its first push: said, never implied.
-    'before it stops. Nothing has been pushed yet.',
+    'when it stops. Not saved yet.',
   ]) {
     assert.ok(IOS.includes(words), `iOS lost: ${words}`);
     assert.ok(ANDROID.includes(words), `Android lost: ${words}`);

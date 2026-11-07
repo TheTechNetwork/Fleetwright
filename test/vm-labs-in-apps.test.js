@@ -24,6 +24,9 @@ const I_PAGE = IOS('VMMachineView.swift');
 /**
  * What both phones say, word for word: what a lab is, what each kind
  * reaches, that it costs no extra machine, and what changing them costs.
+ * On New session and the machine's page a lab is said in a sentence or a
+ * word (docs/reviews/copy-2026-11-06.md, 36 and 47); the policy form still
+ * explains it.
  */
 const SHARED = [
   'Labs',
@@ -41,17 +44,12 @@ const SHARED = [
   'In a lab',
   'No lab',
   'Open: reaches the internet',
-  'Closed: only the fleet and Claude',
-  'A lab is a network of its own on your edge router, and this machine is alone on it. ',
-  'It reaches the internet and nothing private: not your network, not the machines behind the router, not another lab.',
-  'It reaches the fleet and Claude and nothing else, so the session still runs, and everything else it tries is blocked.',
-  ' It costs no extra machine: the lab is an interface on the router you already have.',
-  'open: it reaches the internet and nothing private',
-  'closed: it reaches the fleet and Claude and nothing else',
+  'Closed: only Fleetwright and Claude',
+  'Alone on its own network. Reaches the internet only.',
+  'Alone on its own network. Reaches only Fleetwright and Claude.',
   // When a lab is free again, which is when its machine ends and not its
   // session, and labs per person.
   'Every lab on this pool is in use. One is free again when its machine ends.',
-  ' When its time runs out, or you end it on its page, the machine is removed and the lab is free for the next one.',
   'Labs per person',
   '"No limit"',
   '"At most one at once"',
@@ -76,11 +74,13 @@ test('iOS: the policy holds the host’s numbers, starts from the edge’s labs,
 
 test('iOS: a lab is offered only by kind while one is free, rides in `network`, and the page says which', () => {
   assert.match(I_SHEET, /if open \{ Text\("Open: reaches the internet"\)\.tag\("open"\) \}/);
-  assert.match(I_SHEET, /if closed \{ Text\("Closed: only the fleet and Claude"\)\.tag\("closed"\) \}/);
+  assert.match(I_SHEET, /if closed \{ Text\("Closed: only Fleetwright and Claude"\)\.tag\("closed"\) \}/);
   assert.match(I_FLEET, /func freeLab\(open: Bool\) -> Lab\? \{ labs\?\.first \{ \$0\.open == open && \$0\.free \} \}/);
   assert.match(I_SHEET, /!vmLab\.isEmpty \? chosenImage\?\.freeLab\(open: vmLab == "open"\)\?\.id/);
   assert.match(I_SHEET, /return vmLab\.isEmpty \? "vm" : "lab"/);
   assert.match(I_PAGE, /if let lab = m\.lab \{/);
+  // The lab and its kind, as a fact row and not a sentence.
+  assert.match(I_PAGE, /fact\("Lab", "\\\(lab\.name\) · " \+ \(lab\.open \? "open" : "closed"\)\)/);
 });
 
 test('iOS says it in the shared words', () => {
@@ -135,6 +135,7 @@ test('Android: a lab is offered only by kind while one is free, rides in `networ
   assert.match(A_SHEET, /platform = \(if \(platform == "vm" && vmLab\.isNotEmpty\(\)\) "lab" else platform\)\.ifBlank \{ null \},/);
   assert.match(A_MAIN, /status = if \(platform == "lab"\) \{/);
   assert.match(A_PAGE, /m\.lab\?\.let \{ l ->/);
+  assert.match(A_PAGE, /Fact\("Lab", "\$\{l\.name\} · " \+ if \(l\.open\) "open" else "closed"\)/);
 });
 
 test('Android says it in the shared words', () => {

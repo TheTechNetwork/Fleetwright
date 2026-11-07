@@ -137,8 +137,9 @@ struct FilesView: View {
         } message: {
             // NOT RECOVERABLE, and said plainly. `forget` keeps a session for
             // seven days; this keeps nothing, and the difference is the whole
-            // reason there is a confirmation here at all.
-            Text("This cannot be undone. Forgetting a session keeps it for seven days; deleting a file keeps nothing.")
+            // reason there is a confirmation here at all. The contrast with
+            // Forget is the reason for the dialog, not its text.
+            Text("This can't be undone.")
         }
     }
 

@@ -107,7 +107,9 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
             }
             r.onSuccess {
                 failed = !it.ok
-                message = it.text.ifBlank { if (failed) "The fleet refused that." else "Done." }
+                // The reason is the reply's own text where there is one; this
+                // is the verdict for a refusal that gave none.
+                message = it.text.ifBlank { if (failed) "Didn't work." else "Done." }
             }.onFailure {
                 failed = true
                 message = it.message ?: "that did not work"
@@ -156,8 +158,11 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
     FullScreen(name, onDismiss) {
         val m = machine
         when {
-            m == null && !loaded -> Hint("Asking the fleet…")
-            m == null -> Hint("The fleet has no report of this machine. The box holding your pool may not have looked yet, or it has been removed.")
+            m == null && !loaded -> Hint("Loading…")
+            // NO REPORT IS NOT "REMOVED" (C-5): the machine holding the pool
+            // may not have looked yet, and this page cannot tell that from a
+            // machine that is gone, so it says neither.
+            m == null -> Hint("No report of this machine yet.")
             else -> {
                 SectionHead("This machine")
                 Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
@@ -165,14 +170,15 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                     Fact("Made from", m.image ?: "Not reported")
                     Fact("On", m.address)
                     Fact("Network", m.network ?: "Not reported")
-                    // IN A GROUP: where the others reach it, by address and by name.
-                    m.group?.let { g -> Fact("Group", "$g, at ${m.groupIp ?: "an address not reported"} or ${m.name}.local") }
-                    // IN A LAB: which, and what its rules let it reach.
-                    m.lab?.let { l ->
-                        Fact("Lab", "${l.name}, " + if (l.open) "open: it reaches the internet and nothing private" else "closed: it reaches the fleet and Claude and nothing else")
-                    }
+                    // IN A GROUP: where the others reach it, by address and by
+                    // name. An address the pool has not reported is unknown,
+                    // not blank (C-5).
+                    m.group?.let { g -> Fact("Group", "$g · ${m.groupIp ?: "address unknown"} · ${m.name}.local") }
+                    // IN A LAB: which, and its kind. What each kind reaches is
+                    // New session's sentence, where the choice is made.
+                    m.lab?.let { l -> Fact("Lab", "${l.name} · " + if (l.open) "open" else "closed") }
                     Fact("Size", sizeWords(m))
-                    Fact("Ends", m.until?.let { "${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it))}, ${relative(it)}" } ?: "Cannot tell")
+                    Fact("Ends", m.until?.let { "${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it))}, ${relative(it)}" } ?: "Unknown")
                 }
 
                 SectionHead("On the network")
@@ -192,10 +198,10 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                 } else {
                     Hint(noTrafficWords(m))
                 }
-                Hint(
-                    "As the hypervisor counted it at this machine’s network interfaces, which nothing running on the machine can change. " +
-                        "It is how much went in and out, not where it went.",
-                )
+                // Who counted is the one fact that makes the figure trustworthy:
+                // nothing on the machine can change the hypervisor's count. That
+                // it is how much and not where to, the chart's two lines say.
+                Hint("Measured by the hypervisor.")
 
                 SectionHead("Reach it")
                 val ssh = m.sshCommand
@@ -211,7 +217,9 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                         ) { Text("Copy") }
                     }
                 } else {
-                    Hint("No address reported yet. Its guest agent says it once it has booted.")
+                    // Its guest agent reports the address once it is up; the
+                    // agent is mechanism, the boot is the news.
+                    Hint("No address yet. It appears once the machine boots.")
                 }
                 // IN THE APP where this phone holds the pool's token, for a machine
                 // that is running (a stopped one has no screen); Xen Orchestra's
@@ -221,10 +229,13 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                 } else {
                     m.consoleUrl?.let { page -> OpenRow("Open its console in Xen Orchestra") { uri.openUri(page) } }
                 }
+                // Nothing to add when the console opens in the app; that it is
+                // Xen Orchestra's own page, with its own sign-in, when it does
+                // not. How the one in the app holds the token and the
+                // certificate is this file's header, not the hint.
                 Hint(
-                    "SSH takes the public keys you keep under You › SSH keys, on machines made after you add them. " +
-                        if (holdsHere) "The console opens in the app with the pool’s token this phone holds, on the pool’s own network or through one of your machines from away; the page that draws it never sees the token."
-                        else "The console is Xen Orchestra’s own page, which asks you to sign in there: this phone does not hold the pool’s token.",
+                    "SSH uses the keys under You › SSH keys, on machines made after you add them." +
+                        if (holdsHere) "" else " The console opens Xen Orchestra, where you sign in.",
                 )
 
                 SectionHead("Work it")
@@ -256,10 +267,9 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                     Text("End it now", color = Design.Palette.bad.now)
                 }
                 if (message.isNotBlank()) Hint(message, if (failed) Design.Palette.bad.now else Design.Palette.ink.now)
-                Hint(
-                    "A machine lives at most ${Fleet.VmMachine.MAX_MINUTES} minutes from when it was made. A new size is " +
-                        "held to your pool’s limits, and the machine restarts at its old size if the pool refuses.",
-                )
+                // The one limit every button here runs into. A size the pool
+                // refuses is said in the reply when it happens, not in advance.
+                Hint("Machines last up to ${Fleet.VmMachine.MAX_MINUTES} minutes.")
             }
         }
     }
@@ -342,11 +352,12 @@ private fun totalWords(net: Fleet.VmMachine.Traffic): String {
 
 /**
  * Nothing reported is said for what it is: a stopped machine sends nothing,
- * a running one the pool did not answer for is cannot tell.
+ * a running one the pool did not answer for has no data yet, and one whose
+ * state is unknown is unknown here too (C-5).
  */
 private fun noTrafficWords(m: Fleet.VmMachine): String = when (m.state) {
-    "Running" -> "The pool has not said what it sent and received. The box holding it asks each time it looks."
-    null -> "Cannot tell."
+    "Running" -> "No traffic data yet."
+    null -> "Unknown."
     else -> "It is not running, so there is nothing to count."
 }
 
@@ -382,12 +393,12 @@ private fun canExtend(m: Fleet.VmMachine): Boolean {
     return until < made + Fleet.VmMachine.MAX_MINUTES * 60_000L
 }
 
-/** Xen Orchestra's power state in this app's words; null is cannot tell. The same as iOS. */
+/** Xen Orchestra's power state in this app's words; null is unknown, said as that and never as stopped (C-5). The same as iOS. */
 fun vmStateWords(state: String?): String = when (state) {
     "Running" -> "running"
     "Halted" -> "stopped"
     "Suspended" -> "suspended"
     "Paused" -> "paused"
-    null -> "cannot tell"
+    null -> "unknown"
     else -> state.lowercase()
 }

@@ -99,7 +99,7 @@ struct Fleet {
         var archiveLine: String? {
             guard let archive, !archive.isEmpty else { return nil }
             if archiveAt != nil, let text = archiveText, !text.isEmpty { return text }
-            return "Pushed to \(archive) before it stops. Nothing has been pushed yet."
+            return "Saves to \(archive) when it stops. Not saved yet."
         }
 
         struct Prompt: Codable, Hashable {
@@ -179,7 +179,7 @@ struct Fleet {
             var parts = ["Worked \(Self.span(working))"]
             if waiting >= 60_000 { parts.append("waited on you \(Self.span(waiting))") }
             if ready >= 60_000 { parts.append("at its prompt \(Self.span(ready))") }
-            if let startedAt, since - startedAt >= 300_000 { parts.append("counted for the last \(Self.span(nowMs - since))") }
+            if let startedAt, since - startedAt >= 300_000 { parts.append("since \(Self.span(nowMs - since)) ago") }
             return parts.joined(separator: " · ")
         }
 
@@ -964,7 +964,7 @@ struct Fleet {
 
     private static func object(_ data: Data) throws -> [String: Any] {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw FleetError.message("The coordinator answered with something that is not JSON.")
+            throw FleetError.message("The reply could not be read.")
         }
         return object
     }
@@ -1633,7 +1633,7 @@ struct Fleet {
         }
         let reply = try JSONDecoder().decode(Issued.self, from: data)
         guard reply.ok == true, let token = reply.token else {
-            throw FleetError.message(reply.text ?? "The coordinator refused the sign-in.")
+            throw FleetError.message(reply.text ?? "The sign-in was refused.")
         }
         // The name it chose looks like "iPhone (someone@example.com)" — the
         // address inside it is what the app shows, so a phone signed into the
@@ -2529,9 +2529,10 @@ struct Fleet {
         /// Why not, beside a false: `off`, `unsafe_args`, `userns_root`,
         /// `userns_docker` or `userns_host` (http.js uncontained). A box can
         /// have its sandbox on and still not contain a session, run as root,
-        /// so `resumeKept` names the reason and its way on from this rather
-        /// than saying the sandbox is off. Nil from a box too old to send it,
-        /// read as off, which is what such a box meant by false.
+        /// so the reason and its way on are the machine page's to name for
+        /// its admin; the session list says only that an admin can resume
+        /// (`resumeKept`). Nil from a box too old to send it, read as off,
+        /// which is what such a box meant by false.
         let sandboxedWhy: String?
         /// And every reason after it, in the box's order, because a box can
         /// have two (root with its sandbox off) and fixing the first alone
@@ -2777,12 +2778,12 @@ struct Fleet {
         /// page cannot back (C-5).
         var mayAdminister: Bool { administers != false }
 
-        /// Why a session here is not offered Resume, in one line, or nil where
-        /// it is (C-2). The coordinator resumes a session only on a machine
-        /// whose sessions are sandboxed or that this person administers
-        /// (hosts.js runsSessionsFor, docs/security.md G8), because without
-        /// the sandbox a session is a pane under the account that holds
-        /// everyone's credentials there.
+        /// Why a session here is not offered Resume, as the session's page
+        /// says it, or nil where it is (C-2). The coordinator resumes a
+        /// session only on a machine whose sessions are sandboxed or that this
+        /// person administers (hosts.js runsSessionsFor, docs/security.md G8),
+        /// because without the sandbox a session is a pane under the account
+        /// that holds everyone's credentials there.
         ///
         /// THE SAME RULE, read off the same two answers the snapshot carries.
         /// A box that has not said whether it is sandboxed is not, as the
@@ -2791,67 +2792,25 @@ struct Fleet {
         /// is older than the rule too, so nil offers Resume as before, and a
         /// refusal still says why.
         ///
-        /// WHY NOT IS THE BOX'S WORD TOO (`sandboxedWhy`). A box run as root
-        /// has its sandbox on and still does not contain a session, and
-        /// "without the sandbox" would send its operator to a switch that is
-        /// already on. So each reason is named with what opens it, in the
-        /// coordinator's words for the same refusal (scheduler.js
-        /// NOT_CONTAINED); a reason this app does not know is not guessed at.
-        ///
-        /// AND EVERY ONE OF THEM when there are more (`sandboxedAlso`). A box
-        /// run as root with its sandbox off would have read "until its sandbox
-        /// is on", and with it on, still not taken the session. So two or more
-        /// are named together with everything that has to change, from
-        /// `notContained`; one this app does not know makes the rest a
-        /// partial list, and then the line says only "not contained".
+        /// ONE SENTENCE, IN PERSON-WORDS. It named the box's reason
+        /// (`sandboxedWhy`, `sandboxedAlso`: root, docker, an environment
+        /// variable) and what to change, in the coordinator's words, on every
+        /// row of the session list. That is the machine's business and its
+        /// admin's, so it belongs on the machine's page, which still reads
+        /// the two fields; here a person who cannot resume is told that, and
+        /// who can. The row says less still: `resumeKeptRow`. The same words
+        /// as Android.
         var resumeKept: String? {
             guard administers == false, health?.sandboxed != true else { return nil }
             guard health?.sandboxed == false else {
-                return "\(hostId) has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
+                return "\(hostId) has not said whether it isolates sessions. Your admin can resume it."
             }
-            var said = ["off"]
-            if let first = health?.sandboxedWhy { said = [first] + (health?.sandboxedAlso ?? []) }
-            if said.count > 1 {
-                let known = said.compactMap { Self.notContained[$0] }
-                guard known.count == said.count else {
-                    return "\(hostId) says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
-                }
-                return "\(hostId) \(Self.together(known.map { $0.does })), so only this fleet’s admin, or the one person it works for, can resume one there until \(Self.together(known.map { $0.until }))."
-            }
-            switch said[0] {
-            case "off":
-                return "\(hostId) runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
-            case "unsafe_args":
-                return "\(hostId) lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out."
-            case "userns_root":
-                return "\(hostId) runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user."
-            case "userns_docker":
-                return "\(hostId) runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman."
-            case "userns_host":
-                return "\(hostId) has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap."
-            default:
-                return "\(hostId) says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
-            }
+            return "\(hostId) runs sessions without full isolation. Your admin can resume it."
         }
 
-        /// Each reason a machine can give, as `resumeKept` joins two or more:
-        /// what the machine does, in the coordinator's `short` words, and what
-        /// has to be true before it takes the session, its `step` said as a
-        /// condition (scheduler.js NOT_CONTAINED). Fleet.kt has the same table.
-        private static let notContained: [String: (does: String, until: String)] = [
-            "off": ("runs sessions without the sandbox", "its sandbox is on"),
-            "unsafe_args": ("lets FLEETWRIGHT_SANDBOX_ARGS end its sandbox", "the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox is taken out"),
-            "userns_root": ("runs fleetwright as root", "fleetwright runs as its own user"),
-            "userns_docker": ("runs its sandbox with docker", "its sessions run under podman"),
-            "userns_host": ("has FLEETWRIGHT_SANDBOX_USERNS=host", "FLEETWRIGHT_SANDBOX_USERNS is set back to nomap"),
-        ]
-
-        /// Clauses as one, joined as the coordinator joins them: `a and b`,
-        /// or `a, b, and c`.
-        private static func together(_ parts: [String]) -> String {
-            guard parts.count > 2 else { return parts.joined(separator: " and ") }
-            return parts.dropLast().joined(separator: ", ") + ", and " + parts[parts.count - 1]
-        }
+        /// The row's verdict where `resumeKept` is not nil: the list says who
+        /// can, and the page says why.
+        static let resumeKeptRow = "Only an admin can resume this"
 
         /// Is there anything of ours to apply? Asked once, so the version line
         /// and the buttons cannot disagree about whether this box is current.
@@ -3029,7 +2988,7 @@ struct Fleet {
             else { throw error }
             return Reply(
                 ok: true,
-                text: "Held on this phone. \(entry.summary) will be sent when the fleet answers again.",
+                text: "Held on this phone. \(entry.summary) will be sent once the connection is back.",
                 sessions: nil
             )
         }
@@ -3052,7 +3011,7 @@ struct Fleet {
         // Already normalised by Settings — scheme present, no whitespace, no
         // trailing slash — so this is a parse, not a repair.
         guard let url = URL(string: settings.coordinatorURL + path) else {
-            throw FleetError.message("That coordinator URL is not a URL")
+            throw FleetError.message("That fleet address is not a URL")
         }
         // NOT OVER CLEARTEXT. Every request from here carries a Bearer
         // credential, and the replies carry session names, prompts and the
@@ -3099,7 +3058,7 @@ struct Fleet {
                 await MainActor.run { settings.signOut() }
                 throw FleetError.message("This device is no longer allowed in. Sign in again.")
             }
-            throw FleetError.message("The coordinator refused that.")
+            throw FleetError.message("That was refused.")
         }
         return data
     }

@@ -36,7 +36,7 @@ const SHARED = [
   'Group networks are made in the way out’s pool: choose the way out. Nothing was changed.',
   'Work with others on',
   'No group',
-  'an address not reported',
+  'address unknown',
 ];
 
 test('iOS: the policy holds the host’s numbers and sends groups only to a machine that makes them', () => {
