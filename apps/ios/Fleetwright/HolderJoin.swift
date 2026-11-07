@@ -295,13 +295,16 @@ enum HolderJoin {
         guard let match = proven(w, secrets: secrets.map(\.value)) else { return .refused(notProven(w.hostId)) }
         do {
             let answer = try await fleet.approveHolder(w.hostId, key: match.request.key)
-            guard answer.ok == true else { return .refused(answer.text ?? "The fleet did not let \(w.hostId) in.") }
+            guard answer.ok == true else { return .refused(answer.text ?? "Your fleet refused \(w.hostId).") }
             if let secret = secrets.first(where: { $0.value == match.secret }) { spent(secret) }
             do {
                 _ = try await PhoneVault(settings: settings).approveHolder(fleet, hostId: w.hostId, key: match.request.publicJwk, address: w.address)
                 return .joined(joined(w.hostId, w.address))
             } catch {
-                return .joinedNotHolding(joinedNotHolding(w.hostId, error.localizedDescription))
+                // The vault's reason is not in the sentence: the card says
+                // the result and the one action, and the machine's page is
+                // where approving happens and where the reason shows.
+                return .joinedNotHolding(joinedNotHolding(w.hostId))
             }
         } catch {
             return .refused(error.localizedDescription)
@@ -320,29 +323,26 @@ enum HolderJoin {
 
     // MARK: What both phones say
 
-    static func asks(_ hostId: String) -> String { "\(hostId) asks to join" }
-    static func toHold(_ address: String) -> String {
-        "To hold \(address). This phone checks it is the machine you made before it lets it in."
-    }
-    static func notYet(_ hostId: String) -> String {
-        "\(hostId) has not asked to join yet. If it never does, make it again from the pool’s policy."
-    }
-    static func reason(_ hostId: String, _ address: String) -> String { "Let \(hostId) join and hold \(address)" }
+    // ONE SHORT SENTENCE EACH: the result, and the one thing to do. The
+    // custody reasoning (which phone made it, what the proof is, why nothing
+    // was let in) is this file's header, not the card's
+    // (docs/reviews/copy-2026-11-06.md, 155 to 159).
+    static func asks(_ hostId: String) -> String { "\(hostId) wants to join" }
+    static func toHold(_ address: String) -> String { "Pool machine for \(address)." }
+    static func notYet(_ hostId: String) -> String { "Waiting for \(hostId)…" }
+    static func reason(_ hostId: String, _ address: String) -> String { "Approve \(hostId) for \(address)" }
     static func notProven(_ hostId: String) -> String {
-        "None of the requests under \(hostId) was made by the machine this phone made, so nothing was let in. "
-            + "Decline it, and make the pool’s own machine again if it never asks."
+        "\(hostId) could not be verified. Decline it."
     }
     static func notThisPhone(_ hostId: String) -> String {
-        "This phone did not make \(hostId), so it cannot check it. Let it in from the phone that applied the policy, or make it again from this one."
+        "Approve \(hostId) from the phone that created it."
     }
-    static func joined(_ hostId: String, _ address: String) -> String { "\(hostId) has joined and holds \(address)." }
-    static func joinedNotHolding(_ hostId: String, _ why: String) -> String {
-        "\(hostId) has joined, and could not be approved to hold its pool: \(why) Approve it under its page."
+    static func joined(_ hostId: String, _ address: String) -> String { "\(hostId) joined and manages \(address)." }
+    static func joinedNotHolding(_ hostId: String) -> String {
+        "\(hostId) joined but still needs approval. Open its page."
     }
     /// Under a name nothing has asked under yet, on the phone that made it.
-    static func byItself(_ hostId: String) -> String {
-        "This phone made \(hostId), so it lets it in by itself once it asks. Nothing to tap."
-    }
+    static func byItself(_ hostId: String) -> String { "\(hostId) will join by itself." }
     /// The notification, once it is in: the title, and `joined` under it.
     static func joinedTitle(_ hostId: String) -> String { "\(hostId) joined" }
     /// The one action on the asks-to-join notification.

@@ -173,7 +173,7 @@ fun YouScreen(
             // WHY IT IS GREY, SAID OUT LOUD, about the field that really is just
             // above it now. Sign-in exchanges an identity with one fleet.
             if (url.isBlank()) {
-                Hint("Enter your fleet's address first — signing in means signing in to a fleet.")
+                Hint("Enter your fleet's address to sign in.")
             }
             if (signInResult.isNotBlank()) Hint(signInResult)
             // ONE TAP INTO A FLEET THAT ISN'T REAL. The real coordinator is
@@ -190,10 +190,10 @@ fun YouScreen(
                 signedIn = true
                 onSignedIn()
             }) { Text("Look around the demo fleet") }
-            Hint(
-                "This device gets a credential of its own, kept encrypted with a key that never leaves " +
-                    "the phone's keystore. A fleet allows people by email address.",
-            )
+            // Said before somebody taps and gets a refusal they cannot
+            // interpret. What this device is given, and how it is kept, is
+            // Devices' to say.
+            Hint("A fleet allows people by email address.")
         } else if (inDemo) {
             SectionHead("You")
             // Said plainly, and never as "signed in".
@@ -212,8 +212,10 @@ fun YouScreen(
             TextButton(onClick = { signOut() }) { Text("Sign out", color = Design.Palette.bad.now) }
 
             // THE OTHER ACCOUNT THIS PHONE HOLDS. It starts your temporary
-            // machines and it is how your vault knows you.
-            SectionHead("GitHub on this phone")
+            // machines and it is how your saved credentials know you. The
+            // view says what it is for when it offers the sign-in, so the
+            // header is only the name.
+            SectionHead("GitHub")
             PhoneGitHubSignIn(settings)
 
             Column {
@@ -280,7 +282,7 @@ fun YouScreen(
                     Switch(checked = viewAsMember, onCheckedChange = onViewAsMember)
                 }
                 if (viewAsMember) {
-                    Hint("Every screen shows what a member of this fleet sees: their own sessions, no People, no revoking. Your credential is still an admin's.")
+                    Hint("Showing the app as a member sees it. You are still an admin.")
                 }
             }
             Hint("Sign out to point this app at a different fleet.")
@@ -527,8 +529,8 @@ internal fun TemporaryMachinesSheet(settings: Settings, onDismiss: () -> Unit) {
  * sentences as YouView.swift.
  */
 internal fun describePushDoubt(doubt: PushKeyRule.Doubt): String = when (doubt) {
-    PushKeyRule.Doubt.KEY -> "Notifications sent to this phone may arrive without their words: it could not use its key the last time it tried. It tries again each time Fleetwright starts."
-    PushKeyRule.Doubt.SEAL -> "The last notification sealed for this phone arrived without its words. This goes once one arrives with them."
+    PushKeyRule.Doubt.KEY -> "Notifications may arrive without their text. Fleetwright tries again each time it starts."
+    PushKeyRule.Doubt.SEAL -> "The last notification arrived without its text."
 }
 
 /** "from owner/repo", or how it is not set up, for the row under You. */

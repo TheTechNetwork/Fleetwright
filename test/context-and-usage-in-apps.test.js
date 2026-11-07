@@ -76,5 +76,5 @@ test('both draw them where a person looks: the session row and page, and the acc
   assert.doesNotMatch(settings, /describeUsage\(/, 'not on the host card or page');
   // Coloured only when a window is nearly spent, and only from a figure.
   assert.match(SWIFT, /usage\.isNearLimit \? Design\.Palette\.attention/);
-  assert.match(KOTLIN, /if \(usage\.isNearLimit\) MaterialTheme\.colorScheme\.error/);
+  assert.match(KOTLIN, /if \(usage\.isNearLimit\) Design\.Palette\.attention else Design\.Palette\.inkDim/);
 });

@@ -260,8 +260,10 @@ test('neither app offers to sign a machine in, because there is nothing to sign 
   for (const [name, src] of [['iOS', ios], ['Android', android]]) {
     assert.ok(!/Sign in this machine/.test(code(src)), `${name} still offers to sign a machine in`);
     // And says what replaced it, because a screen that simply drops a button
-    // leaves somebody looking for the button.
-    assert.match(src, /no Claude account of its own|per person/i, `${name} does not explain the new model`);
+    // leaves somebody looking for the button. In person-words since the copy
+    // review (docs/reviews/copy-2026-11-06.md, 125): the footer says whose
+    // account a session runs on, not that the machine has none.
+    assert.match(src, /run on your own Claude account|no Claude account of its own|per person/i, `${name} does not explain the new model`);
   }
 
   // `scope: host` never reaches a host for Claude — refused at the mapping with

@@ -59,7 +59,7 @@ internal class PhoneVault(private val settings: Settings) {
     /** Seal one request, relay it, open the answer. */
     private suspend fun ask(fleet: Fleet, op: String, extra: JSONObject = JSONObject()): Pair<String, JSONObject> {
         val pin = PhoneGitHub(settings).minterKey(fleet)
-        val email = settings.signedInAs.trim().ifBlank { error("This phone does not know which fleet account it is signed in as. Sign in to the fleet again.") }
+        val email = settings.signedInAs.trim().ifBlank { error("Sign in to your fleet again.") }
         val github = PhoneGitHub(settings).accessToken(fleet)
         val reply = Seal.newKey()
         val payload = JSONObject(extra.toString())
@@ -70,7 +70,7 @@ internal class PhoneVault(private val settings: Settings) {
             .put("at", System.currentTimeMillis())
             .put("reply", reply.publicKey)
         val r = fleet.vault(Seal.seal(pin, Seal.VAULT_REQUEST_AAD, payload))
-        if (r.optBoolean("ok") != true) error(r.optString("text").ifBlank { "The vault refused that." })
+        if (r.optBoolean("ok") != true) error(r.optString("text").ifBlank { "Your fleet refused that." })
         val answer = Seal.open(reply, Seal.VAULT_REPLY_AAD, r.getJSONObject("sealed"))
         return r.optString("text") to answer
     }
@@ -131,7 +131,7 @@ internal class PhoneVault(private val settings: Settings) {
     /** Sign in to GitHub or Cloudflare for the vault: this phone runs the page, the minter keeps the result. */
     suspend fun connect(context: Context, fleet: Fleet, provider: String): Result<String> = runCatching {
         val start = if (provider == "github") fleet.githubDeviceStart() else fleet.cloudflareDeviceStart()
-        if (start.optBoolean("ok") != true) error(start.optString("text").ifBlank { "The fleet cannot start that sign-in." })
+        if (start.optBoolean("ok") != true) error(start.optString("text").ifBlank { "Your fleet cannot start that sign-in." })
         val back = if (provider == "github") {
             DeviceSignIn.run(
                 context,
@@ -160,7 +160,7 @@ internal class PhoneVault(private val settings: Settings) {
     }
 
     suspend fun approve(fleet: Fleet, host: Fleet.Host): Result<String> = runCatching {
-        val key = host.publicJwk ?: error("The fleet did not list ${host.hostId}'s key, so it cannot be approved from here. Update the fleet.")
+        val key = host.publicJwk ?: error("${host.hostId} cannot be approved yet. Update your fleet first.")
         ask(fleet, "grant", JSONObject().put("hostKey", key).put("label", host.hostId)).first
     }
 
@@ -250,11 +250,10 @@ internal class PhoneVault(private val settings: Settings) {
         /** What forgetting one costs, said before it is done. */
         fun forgetting(name: String): String = when (name) {
             "claude" ->
-                "Runners you start go back to the runner repository's API key, and boxes stop being given it. " +
-                    "Getting it back means a new token from claude setup-token."
+                "Your sessions stop using it. Getting it back means adding it again."
             "github", "cloudflare" ->
-                "Boxes stop being given it when they next ask. Getting it back means signing in again from this page."
-            else -> "Boxes stop being given it when they next ask. Getting it back means typing it in again."
+                "Machines you approved stop being given it. Getting it back means signing in again."
+            else -> "Machines you approved stop being given it. Getting it back means typing it in again."
         }
 
         /** How a vault item is named to a person. */

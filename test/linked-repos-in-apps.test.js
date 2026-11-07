@@ -19,19 +19,22 @@ const ANDROID = androidSources();
 
 test('the words about each role, and about a session’s archive, are the same on both phones', () => {
   for (const words of [
-    // What each role is, said before its button.
-    'Private. Each session you start is pushed here, on a branch of its own, before it stops and every ten minutes while it runs. A public repository is refused: this is your work, and possibly a client\'s.',
-    'Public, because Actions minutes are free only there. Your temporary machines start here. Anyone can read it, logs included, so it is a launcher and nothing else: no session writes into it.',
+    // What each role is, said before its button: the requirement and what
+    // the role does, not the mechanism (docs/reviews/copy-2026-11-06.md,
+    // 151, 152).
+    'Must be private. Sessions you start save their work here, each on its own branch.',
+    'Must be public, so Actions minutes are free. Anyone can read it, logs included.',
     'Public or private. Skills, presets, configs and workflows a session can read when you ask it to. Nothing in it runs by itself.',
     // The controls and the screen.
     'Linked repositories',
     'Check and link',
     'Unlink',
-    'Asking the fleet…',
-    'The fleet did not say what you have linked: ',
-    'Ask again',
+    'Loading…',
+    // The result, with the transport's reason smaller under it (154).
+    'Could not load your repositories.',
+    'Try again',
     // What is linked, and what a check found.
-    'Nothing linked. Sessions you start are not pushed anywhere when they stop.',
+    'Nothing linked. Session work is not saved.',
     'Linked: ',
     'Private: ',
     'You can push: ',
