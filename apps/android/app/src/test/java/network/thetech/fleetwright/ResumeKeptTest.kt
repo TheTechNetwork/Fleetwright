@@ -101,7 +101,8 @@ class ResumeKeptTest {
     fun aRefusalThatIsAMachineSettingIsTitledAsOne() {
         assertEquals("Not started: only admins run sessions there", refused("unsandboxed").refusedStartTitle)
         assertEquals("Not started: the machine needs an update", refused("host_outdated").refusedStartTitle)
-        assertEquals("Could not start a session", refused("no_hosts").refusedStartTitle)
-        assertEquals("Could not start a session", refused(null).refusedStartTitle)
+        // Any other code is titled by its code (ReasonWords.refusal), and no code is "Refused".
+        assertEquals("No machine available", refused("no_hosts").refusedStartTitle)
+        assertEquals("Refused", refused(null).refusedStartTitle)
     }
 }
