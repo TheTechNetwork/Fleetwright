@@ -21,11 +21,13 @@ import { androidSources } from './helpers/android-sources.js';
 const IOS = iosSources();
 const ANDROID = androidSources();
 
+// A row's words (docs/reviews/copy-2026-11-06.md, 10): what the sessions run
+// on, or that nothing is there to run them, in three words.
 const SAID = [
-  'Sessions run on the Claude login its owner keeps for runners',
-  "Sessions run on the runner repository's API key",
-  "No Claude login is kept for this runner's owner and its repository has no API key — sessions will not start",
-  'Fetching the Claude login its sessions will run on',
+  "Owner's Claude login",
+  'Repository API key',
+  'No Claude login or API key',
+  'Getting Claude login…',
 ];
 
 test('iOS: a runner row says what its sessions run on', () => {

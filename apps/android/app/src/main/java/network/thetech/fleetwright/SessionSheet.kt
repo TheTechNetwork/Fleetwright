@@ -137,7 +137,7 @@ fun SessionSheet(
             // bin keeps a forgotten session and says so.
             text = { Text("It stays in the bin for seven days, where Restore brings it back. After that its conversation and workspace are deleted.") },
             confirmButton = {
-                TextButton(onClick = { confirmingForget = false; act { it.forget(session.name, session.hostId) } }) { Text("Forget — move it to the bin") }
+                TextButton(onClick = { confirmingForget = false; act { it.forget(session.name, session.hostId) } }) { Text("Move to bin") }
             },
             dismissButton = { TextButton(onClick = { confirmingForget = false }) { Text("Cancel") } },
         )
@@ -213,12 +213,22 @@ fun SessionSheet(
                         }
                     }
                 } else if (prompt != null) {
+                    // A QUESTION THIS APP CANNOT SHOW: a permission dialog
+                    // names a command, and without the fleet switch its words
+                    // do not leave the machine. The one action is the button
+                    // under it, where the question can be read and answered.
                     Text("It is asking", style = Design.Style.section, color = Design.Palette.ink.now)
                     Text(
-                        "Waiting for an answer. The options are not shown because this fleet does not send prompt text off the box.",
+                        "It's asking something this app can't show.",
                         style = Design.Style.bodySmall,
                         color = Design.Palette.inkDim.now,
                     )
+                    if (rcUrl != null) {
+                        OutlinedButton(
+                            onClick = { uriHandler.openUri(rcUrl) },
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        ) { Text("Continue in Remote Control") }
+                    }
                 } else if (session.isRunning && rcUrl != null) {
                     // FRONT AND CENTRE WHEN THERE IS NO PROMPT. Demoting this
                     // to a footer would be wrong: it is the only way to say
@@ -229,7 +239,7 @@ fun SessionSheet(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Continue in Remote Control") }
                     Text(
-                        "Your shell on this session, in the browser. Anything typed there goes to the session as if you were at the box.",
+                        "Opens this session in Claude, where you can type to it.",
                         style = Design.Style.micro,
                         color = Design.Palette.inkDim.now,
                     )
@@ -257,19 +267,17 @@ fun SessionSheet(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
                     )
                     session.isRunning -> Text("Reading the screen…", style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
-                    // Resume is promised only where it is offered.
-                    else -> Text(
-                        if (resumeKept == null) "Not running, so there is no screen to read. Output has what it printed; Resume brings the conversation back."
-                        else "Not running, so there is no screen to read. Output has what it printed.",
-                        style = Design.Style.bodySmall,
-                        color = Design.Palette.inkDim.now,
-                    )
+                    // No screen to read: the buttons below say what there is
+                    // to do about it, and promise nothing this one does not.
+                    else -> Text("Not running.", style = Design.Style.bodySmall, color = Design.Palette.inkDim.now)
                 }
+                // LIVE WHILE IT IS WATCHED, and when it was last read once it
+                // is not, with the button that reads it again.
                 paneAt?.let { at ->
                     Row {
-                        val time = DateFormat.getTimeInstance(DateFormat.MEDIUM).format(Date(at))
+                        val time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(at))
                         Text(
-                            if (watchEnded) "As of $time. No longer watching." else "As of $time. Watching.",
+                            if (watchEnded) "Updated $time" else "Live",
                             style = Design.Style.micro,
                             color = Design.Palette.inkDim.now,
                         )
@@ -297,7 +305,7 @@ fun SessionSheet(
                     // container's output outlives the pane.
                     TextButton(
                         onClick = {
-                            act(nothingSaid = "${session.label} has printed nothing that this machine could read.") {
+                            act(nothingSaid = "No output yet.") {
                                 it.logs(host = session.hostId, session = session.name)
                             }
                         },
@@ -309,7 +317,7 @@ fun SessionSheet(
                 }
 
                 if (result.isNotBlank()) {
-                    Text("Reply", style = Design.Style.section, color = Design.Palette.ink.now)
+                    Text("Result", style = Design.Style.section, color = Design.Palette.ink.now)
                     Text(result, style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
                 }
             }

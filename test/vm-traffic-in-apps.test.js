@@ -25,10 +25,9 @@ const SHARED = [
   'Received is the solid line, sent the dashed one.',
   'Not counted in the last minute',
   ' not counted',
-  'The pool has not said what it sent and received. The box holding it asks each time it looks.',
+  'No traffic data yet.',
   'It is not running, so there is nothing to count.',
-  'As the hypervisor counted it at this machine’s network interfaces, which nothing running on the machine can change. ',
-  'It is how much went in and out, not where it went.',
+  'Measured by the hypervisor.',
   ', received at most ',
   'nothing counted',
 ];

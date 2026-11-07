@@ -139,7 +139,7 @@ class Fleet(
         val archiveLine: String? get() {
             val repo = archive?.takeIf { it.isNotBlank() } ?: return null
             if (archiveAt != null) archiveText?.takeIf { it.isNotBlank() }?.let { return it }
-            return "Pushed to $repo before it stops. Nothing has been pushed yet."
+            return "Saves to $repo when it stops. Not saved yet."
         }
 
         // Not `Context`: android.content.Context is imported in this file, and a
@@ -212,7 +212,7 @@ class Fleet(
             if (waiting >= 60_000) parts += "waited on you ${span(waiting)}"
             if (ready >= 60_000) parts += "at its prompt ${span(ready)}"
             val started = startedAt
-            if (started != null && since - started >= 300_000) parts += "counted for the last ${span(now - since)}"
+            if (started != null && since - started >= 300_000) parts += "since ${span(now - since)} ago"
             return parts.joinToString(" · ")
         }
 
@@ -619,9 +619,10 @@ class Fleet(
          * Why not, beside a false: `off`, `unsafe_args`, `userns_root`,
          * `userns_docker` or `userns_host` (http.js uncontained). A box can
          * have its sandbox on and still not contain a session, run as root,
-         * so [resumeKept] names the reason and its way on from this rather
-         * than saying the sandbox is off. Null from a box too old to send it,
-         * read as off, which is what such a box meant by false.
+         * so the reason and its way on are the machine page's to name for its
+         * admin; the session list says only that an admin can resume
+         * ([resumeKept]). Null from a box too old to send it, read as off,
+         * which is what such a box meant by false.
          */
         val sandboxedWhy: String? = null,
         /**
@@ -766,12 +767,12 @@ class Fleet(
             get() = helper == "stale"
 
         /**
-         * Why a session here is not offered Resume, in one line, or null where
-         * it is (C-2). The coordinator resumes a session only on a machine
-         * whose sessions are sandboxed or that this person administers
-         * (hosts.js runsSessionsFor, docs/security.md G8), because without the
-         * sandbox a session is a pane under the account that holds everyone's
-         * credentials there.
+         * Why a session here is not offered Resume, as the session's sheet
+         * says it, or null where it is (C-2). The coordinator resumes a
+         * session only on a machine whose sessions are sandboxed or that this
+         * person administers (hosts.js runsSessionsFor, docs/security.md G8),
+         * because without the sandbox a session is a pane under the account
+         * that holds everyone's credentials there.
          *
          * THE SAME RULE, read off the same two answers the snapshot carries,
          * and the same words as iOS's `FleetHost.resumeKept`. A box that has
@@ -781,73 +782,24 @@ class Fleet(
          * the rule too, so null offers Resume as before, and a refusal still
          * says why.
          *
-         * WHY NOT IS THE BOX'S WORD TOO ([sandboxedWhy]). A box run as root
-         * has its sandbox on and still does not contain a session, and
-         * "without the sandbox" would send its operator to a switch that is
-         * already on. So each reason is named with what opens it, in the
-         * coordinator's words for the same refusal (scheduler.js
-         * NOT_CONTAINED), and the same words as iOS; a reason this app does
-         * not know is not guessed at.
-         *
-         * AND EVERY ONE OF THEM when there are more ([sandboxedAlso]). A box
-         * run as root with its sandbox off would have read "until its sandbox
-         * is on", and with it on, still not taken the session. So two or more
-         * are named together with everything that has to change, from
-         * [NOT_CONTAINED]; one this app does not know makes the rest a partial
-         * list, and then the line says only "not contained".
+         * ONE SENTENCE, IN PERSON-WORDS. It named the box's reason
+         * ([sandboxedWhy], [sandboxedAlso]: root, docker, an environment
+         * variable) and what to change, in the coordinator's words, on every
+         * card of the session list. That is the machine's business and its
+         * admin's, so it belongs on the machine's page, which still reads the
+         * two fields; here a person who cannot resume is told that, and who
+         * can. The card says less still: [RESUME_KEPT_ROW].
          */
         val resumeKept: String?
             get() = when {
                 administers != false || sandboxed == true -> null
-                sandboxed == false && saidWhy.size > 1 -> {
-                    val known = saidWhy.mapNotNull { NOT_CONTAINED[it] }
-                    if (known.size != saidWhy.size) {
-                        "$hostId says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
-                    } else {
-                        "$hostId ${together(known.map { it.first })}, so only this fleet’s admin, or the one person it works for, can resume one there until ${together(known.map { it.second })}."
-                    }
-                }
-                sandboxed == false -> when (saidWhy[0]) {
-                    "off" ->
-                        "$hostId runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there."
-                    "unsafe_args" ->
-                        "$hostId lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out."
-                    "userns_root" ->
-                        "$hostId runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user."
-                    "userns_docker" ->
-                        "$hostId runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman."
-                    "userns_host" ->
-                        "$hostId has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap."
-                    else ->
-                        "$hostId says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there."
-                }
-                else ->
-                    "$hostId has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated."
+                sandboxed == false -> "$hostId runs sessions without full isolation. Your admin can resume it."
+                else -> "$hostId has not said whether it isolates sessions. Your admin can resume it."
             }
 
-        /** Every reason this box gave, in its order; a box too old to say why is off. */
-        private val saidWhy: List<String>
-            get() = sandboxedWhy?.let { listOf(it) + sandboxedAlso } ?: listOf("off")
-
-        private companion object {
-            /**
-             * Each reason a machine can give, as [resumeKept] joins two or
-             * more: what the machine does, in the coordinator's `short` words,
-             * and what has to be true before it takes the session, its `step`
-             * said as a condition (scheduler.js NOT_CONTAINED). Fleet.swift
-             * has the same table.
-             */
-            val NOT_CONTAINED = mapOf(
-                "off" to ("runs sessions without the sandbox" to "its sandbox is on"),
-                "unsafe_args" to ("lets FLEETWRIGHT_SANDBOX_ARGS end its sandbox" to "the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox is taken out"),
-                "userns_root" to ("runs fleetwright as root" to "fleetwright runs as its own user"),
-                "userns_docker" to ("runs its sandbox with docker" to "its sessions run under podman"),
-                "userns_host" to ("has FLEETWRIGHT_SANDBOX_USERNS=host" to "FLEETWRIGHT_SANDBOX_USERNS is set back to nomap"),
-            )
-
-            /** Clauses as one, joined as the coordinator joins them: `a and b`, or `a, b, and c`. */
-            fun together(parts: List<String>): String =
-                if (parts.size < 3) parts.joinToString(" and ") else parts.dropLast(1).joinToString(", ") + ", and " + parts.last()
+        companion object {
+            /** The card's verdict where [resumeKept] is not null: the list says who can, and the sheet says why. */
+            const val RESUME_KEPT_ROW = "Only an admin can resume this"
         }
 
         val appPending: Boolean
@@ -1872,7 +1824,7 @@ class Fleet(
         runCatching {
             val json = post("/api/devices/test", body)
             Reply(ok = json.optBoolean("ok", false), text = json.optString("text"), sessions = emptyList())
-        }.getOrElse { Reply(ok = false, text = it.message ?: "could not reach the coordinator", sessions = emptyList()) }
+        }.getOrElse { Reply(ok = false, text = it.message ?: "could not reach your fleet", sessions = emptyList()) }
     }
 
     /**
@@ -1918,7 +1870,7 @@ class Fleet(
             runCatching {
                 val json = post("/api/oauth/finish", body)
                 Reply(ok = json.optBoolean("ok", false), text = json.optString("text"), sessions = emptyList())
-            }.getOrElse { Reply(ok = false, text = it.message ?: "could not reach the coordinator", sessions = emptyList()) }
+            }.getOrElse { Reply(ok = false, text = it.message ?: "could not reach your fleet", sessions = emptyList()) }
         }
 
     /**
@@ -2096,10 +2048,10 @@ class Fleet(
         val body = JSONObject().put("idToken", idToken).put("deviceName", deviceName)
         val json = post("/api/session", body, authenticated = false)
         if (!json.optBoolean("ok", false)) {
-            throw IllegalStateException(json.optString("text").ifBlank { "The coordinator refused the sign-in." })
+            throw IllegalStateException(json.optString("text").ifBlank { "The sign-in was refused." })
         }
         val token = json.optString("token")
-        if (token.isBlank()) throw IllegalStateException("The coordinator issued no credential.")
+        if (token.isBlank()) throw IllegalStateException("The sign-in gave no credential.")
         // The name it chose looks like "Pixel 9 (someone@example.com)". The
         // address inside it is what the app shows, so a phone signed into the
         // wrong account is visible rather than merely wrong.
@@ -2725,7 +2677,7 @@ class Fleet(
         runCatching {
             val json = send("DELETE", "/api/hosts/" + hostId, null)
             Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
-        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+        }.getOrElse { Reply(false, it.message ?: "could not reach your fleet", emptyList()) }
     }
 
     /**
@@ -2852,14 +2804,14 @@ class Fleet(
         runCatching {
             val json = post("/api/invites", body)
             Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
-        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+        }.getOrElse { Reply(false, it.message ?: "could not reach your fleet", emptyList()) }
     }
 
     suspend fun uninvite(email: String): Reply = withContext(Dispatchers.IO) {
         runCatching {
             val json = send("DELETE", "/api/invites/" + java.net.URLEncoder.encode(email, "UTF-8"), null)
             Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
-        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+        }.getOrElse { Reply(false, it.message ?: "could not reach your fleet", emptyList()) }
     }
 
     /** What this person signed for the fleet to send in their name later (docs/signed-intents.md, "Delegations"). */
@@ -2883,7 +2835,7 @@ class Fleet(
         runCatching {
             val json = post("/api/delegations", JSONObject().put("delegation", d))
             Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
-        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+        }.getOrElse { Reply(false, it.message ?: "could not reach your fleet", emptyList()) }
     }
 
     /**
@@ -2896,7 +2848,7 @@ class Fleet(
                 runCatching { send("DELETE", "/api/delegations/" + d.id, null) }
                 Reply(true, said, emptyList())
             },
-            onFailure = { Reply(false, it.message ?: "the minter could not be reached, so boxes still take it", emptyList()) },
+            onFailure = { Reply(false, it.message ?: "not revoked yet, so your machines still accept it", emptyList()) },
         )
     }
 
@@ -2904,7 +2856,7 @@ class Fleet(
         runCatching {
             val json = send("DELETE", "/api/clients/" + id, null)
             Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
-        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+        }.getOrElse { Reply(false, it.message ?: "could not reach your fleet", emptyList()) }
     }
 
     /**
@@ -2948,7 +2900,7 @@ class Fleet(
         runCatching {
             val json = send("DELETE", "/api/runner-tokens/" + id, null)
             Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
-        }.getOrElse { Reply(false, it.message ?: "could not reach the coordinator", emptyList()) }
+        }.getOrElse { Reply(false, it.message ?: "could not reach your fleet", emptyList()) }
     }
 
     /**
@@ -3281,11 +3233,11 @@ class Fleet(
                 if (entry != null) {
                     Reply(
                         ok = true,
-                        text = "Held on this phone. ${entry.summary} will be sent when the fleet answers again.",
+                        text = "Held on this phone. ${entry.summary} will be sent once the connection is back.",
                         sessions = emptyList(),
                     )
                 } else {
-                    Reply(ok = false, text = e.message ?: "could not reach the coordinator", sessions = emptyList())
+                    Reply(ok = false, text = e.message ?: "could not reach your fleet", sessions = emptyList())
                 }
             }
         }
@@ -3678,11 +3630,11 @@ class Fleet(
             }
             throw IllegalStateException(
                 runCatching { JSONObject(text).optString("text") }.getOrNull()?.ifBlank { null }
-                    ?: "The coordinator refused that.",
+                    ?: "That was refused.",
             )
         }
         return runCatching { JSONObject(text) }
-            .getOrElse { throw IllegalStateException("Unexpected reply from the coordinator (HTTP $status)") }
+            .getOrElse { throw IllegalStateException("Unexpected reply (HTTP $status)") }
     }
 }
 
@@ -4058,12 +4010,14 @@ class Settings(context: Context) {
  */
 fun String.said(nothing: String = ""): String = trim().ifEmpty { nothing }
 
-/** Where this person's machines come from, in one sentence. The same words
- * on both phones; test/runner-repo-in-apps.test.js holds them together. */
+/** Where this person's machines come from, as a row's status: the repository
+ * in use, or that none is linked. How to link one is the screen's footer, said
+ * once. The same words on both phones; test/runner-repo-in-apps.test.js holds
+ * them together. */
 fun describeRunnerRepoSetting(saved: String?, fleet: String?): String = when {
-    saved != null -> "Your machines come from $saved."
-    fleet != null -> "Your machines come from the fleet's repository, $fleet. Set your own to use your free Actions minutes."
-    else -> "Make a public repository from github.com/TheTechNetwork/Fleetwright-Runners-Template, install the Fleetwright GitHub App on it, and your machines come from there."
+    saved != null -> "Using $saved"
+    fleet != null -> "Using the fleet's: $fleet"
+    else -> "Nothing linked"
 }
 
 /** What a runner repository check found, one answer per fact. "can't tell"

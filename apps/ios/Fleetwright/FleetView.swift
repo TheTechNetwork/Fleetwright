@@ -264,12 +264,13 @@ struct FleetView: View {
                 // WHAT IS WAITING, because a queue nobody can see is not a
                 // queue — it is a surprise arriving later. The count is enough:
                 // each command says what it is when it lands, and a list of
-                // them here would be a second inbox to read.
+                // them here would be a second inbox to read. Where it waits
+                // and what sends it (Outbox) is mechanism, not news.
                 if !outbox.held.isEmpty {
                     Label(
                         outbox.held.count == 1
-                            ? "1 command is held on this phone and will be sent when the fleet answers."
-                            : "\(outbox.held.count) commands are held on this phone and will be sent when the fleet answers.",
+                            ? "1 action waiting to send."
+                            : "\(outbox.held.count) actions waiting to send.",
                         systemImage: "tray.full"
                     )
                     .fleetType(.bodySmall)
@@ -298,10 +299,9 @@ struct FleetView: View {
                         // at an empty list, they are looking at a setup step.
                         if needsSetup {
                             ContentUnavailableView {
-                                Label("Nothing set up yet", systemImage: "person.badge.key")
+                                Label("Set up Claude to start sessions", systemImage: "person.badge.key")
                             } description: {
-                                Text("A session runs on YOUR Claude account. Keep your login in your vault "
-                                     + "once, and every machine you approve uses it.")
+                                Text("Sessions use your Claude account. You sign in once.")
                             } actions: {
                                 // THE VAULT'S CLAUDE ROWS, the same as Set up
                                 // Claude everywhere else: one login a person,
@@ -311,10 +311,10 @@ struct FleetView: View {
                                 }
                             }
                         } else {
+                            // The title is the whole of it: the reassurance
+                            // line above has already said nothing is running.
                             ContentUnavailableView {
                                 Label("No sessions", systemImage: "moon.zzz")
-                            } description: {
-                                Text("Nothing is running on any machine in this fleet.")
                             } actions: {
                                 Button("Start one") { showingStart = true }
                                     .disabled(!settings.configured)
@@ -524,10 +524,10 @@ struct FleetView: View {
             let label = request.imageLabel ?? newMachineChoices.first { $0.platform == platform }?.label ?? "New machine"
             let lowered = label.prefix(1).lowercased() + label.dropFirst()
             status = platform == "lab"
-                ? "Asking your hypervisor for a \(lowered), in a lab of its own. The session starts on it when it joins."
+                ? "Making a \(lowered) in a lab of its own. Your session starts when it's ready."
                 : platform == "vm"
-                ? "Asking your hypervisor for a \(lowered). The session starts on it when it joins."
-                : "Asking GitHub for a \(lowered). The session starts on it when it joins."
+                ? "Making a \(lowered). Your session starts when it's ready."
+                : "Starting a \(lowered) on GitHub. Your session starts when it's ready."
             var start: [String: String] = [:]
             if let title = request.title { start["title"] = title }
             if let brief = request.brief { start["brief"] = brief }
@@ -586,7 +586,7 @@ struct FleetView: View {
                 // new key.
                 let timedOut = (error as NSError).code == NSURLErrorTimedOut
                 let text = timedOut
-                    ? "Still starting, or started — the answer did not come back in time. Pull to refresh to see."
+                    ? "Not sure it started. Pull to refresh."
                     : error.localizedDescription
                 await MainActor.run { status = text }
                 LocalNotice.post(title: timedOut ? "Session may be starting" : "Could not start a session", body: text)
@@ -644,7 +644,9 @@ struct FleetView: View {
             fleetHosts = try await reporting
             hostsHeard = true
         } catch {
-            if !hostsHeard && status.isEmpty { status = "The fleet did not say which machines report: \(error.localizedDescription)" }
+            // The verdict, then the error on its own line: it is quoted
+            // evidence, not the sentence.
+            if !hostsHeard && status.isEmpty { status = "Couldn't load machines.\n\(error.localizedDescription)" }
         }
 
     }
@@ -842,9 +844,10 @@ private struct SessionRow: View {
                 .transition(questionArrives)
             } else if session.prompt != nil {
                 // A permission dialog names a command, so without the fleet
-                // switch its labels do not leave the box. Saying so beats
-                // showing nothing.
-                Text("Waiting for an answer. The options are not shown because this fleet does not send prompt text off the box.")
+                // switch its labels do not leave the machine. The row says
+                // the state; the page says that this app cannot show the
+                // question, with Remote Control under it.
+                Text("Waiting for you")
                     .fleetType(.bodySmall)
                     .foregroundStyle(Design.Palette.inkDim)
             }
@@ -861,11 +864,12 @@ private struct SessionRow: View {
                         // driving the session. The same words as its page.
                         Link("Continue in Remote Control", destination: link)
                     }
-                } else if session.isResumable, let why = resumeKept {
-                    // WHY, IN PLACE OF A BUTTON THE FLEET WOULD REFUSE (C-2):
-                    // the machine runs sessions without the sandbox, or has not
-                    // said, and this person does not administer it.
-                    Text(why)
+                } else if session.isResumable, resumeKept != nil {
+                    // THE VERDICT, IN PLACE OF A BUTTON THE FLEET WOULD REFUSE
+                    // (C-2): the machine runs sessions without the sandbox, or
+                    // has not said, and this person does not administer it.
+                    // The sentence (`resumeKept`) is the page's.
+                    Text(Fleet.FleetHost.resumeKeptRow)
                         .foregroundStyle(Design.Palette.inkDim)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if session.isResumable {
@@ -978,22 +982,27 @@ struct SessionKindsView: View {
                         TextField("Title prefix (optional)", text: $kind.titlePrefix)
                             .fleetType(.label)
                             .foregroundStyle(Design.Palette.inkDim)
-                        // HOW A START OF THIS KIND RUNS. Box default saves no
-                        // mode, so the machine's own setting decides; prompts
-                        // on asks for them wherever it starts. Bypassing is
-                        // not offered here: a spoken start has no screen to
-                        // show the machine's setting on, and a machine set to
-                        // ask refuses it. A kind saved with it before still
-                        // shows it, so what it holds is never drawn as
-                        // something else (C-5).
+                        // HOW A START OF THIS KIND RUNS. The machine's setting
+                        // saves no mode, so the machine's own setting decides;
+                        // prompts on asks for them wherever it starts.
+                        // Bypassing is not offered here: a spoken start has no
+                        // screen to show the machine's setting on, and a
+                        // machine set to ask refuses it. A kind saved with it
+                        // before still shows it, so what it holds is never
+                        // drawn as something else (C-5).
                         Picker("Permissions", selection: $kind.mode) {
-                            Text("Box default").tag(String?.none)
+                            Text("Machine's setting").tag(String?.none)
                             Text("Permission prompts on").tag(String?.some("safe"))
                             if kind.mode == "dangerous" {
                                 Text("Permissions bypassed").tag(String?.some("dangerous"))
                             }
                         }
                         .fleetType(.label)
+                        // What the two choices do, under the picker they are
+                        // in, once, and not in the section's footer with Siri.
+                        Text("Machine's setting leaves it to the machine. Permission prompts on asks before each tool.")
+                            .fleetType(.micro)
+                            .foregroundStyle(Design.Palette.inkDim)
                         // Only when the fleet has answered with something. A
                         // picker whose only entry is "Nothing" is furniture,
                         // and on a fleet with no profiles it would be furniture
@@ -1030,17 +1039,10 @@ struct SessionKindsView: View {
                     .foregroundStyle(Design.Palette.ink)
                     .textCase(nil)
             } footer: {
-                // Said, because otherwise the first thing anybody does is add a
-                // word and then wonder why Siri has not heard of it.
-                Text("""
-                Say "start a dev session on my fleet". A new word can take a moment before \
-                Siri recognises it. A prefix groups sessions in the list: "dev: refactor auth". \
-                A task makes the word do something: spoken, that is the only way a session gets \
-                one, because there is no screen to drive it from afterwards. \
-                Box default leaves permissions to the machine. Permission prompts on asks before \
-                each tool wherever it starts. Bypassing them is chosen on New session, where each \
-                machine's setting is shown.
-                """)
+                // What a word is for, and what a prefix does: the two things
+                // somebody adding one needs. The permissions sentence is under
+                // the Permissions picker, and the task picker speaks for itself.
+                Text("Say \"start a dev session\". A prefix groups sessions: \"dev: refactor auth\".")
             }
         }
         // The design's ground, and the rows on the card colour, so this screen
@@ -1110,24 +1112,23 @@ func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?,
     // A RUNNER IS ASKED A DIFFERENT QUESTION. Nobody links an account on a
     // GitHub job; its sessions run on the login its owner keeps for runners or
     // on the runner repository's key, and the host says which. This line said
-    // "Nobody has connected a Claude account here — sessions will not start"
-    // on a runner whose sessions would start, beside the word "healthy".
+    // a Claude account was missing on a runner whose sessions would start,
+    // beside the word "healthy".
     if accounts == 0 {
         switch runnerAuth {
-        case "owner": return "Sessions run on the Claude login its owner keeps for runners"
-        case "key": return "Sessions run on the runner repository's API key"
-        case "none":
-            return "No Claude login is kept for this runner's owner and its repository has no API key — sessions will not start"
+        case "owner": return "Owner's Claude login"
+        case "key": return "Repository API key"
+        case "none": return "No Claude login or API key"
         default:
             // Cannot tell yet, which is not a fault (C-5).
-            if runner { return "Fetching the Claude login its sessions will run on" }
+            if runner { return "Getting Claude login…" }
         }
     }
-    // THE ZERO CASE KEEPS ITS WORDS. It is the only real fault here, and
-    // "Nobody" alone says what is wrong without saying what to do about it —
-    // naming the Claude account is what makes it actionable. The other cases
-    // are not faults and do not need a sentence.
-    if accounts == 0 { return "Nobody has connected a Claude account here — sessions will not start" }
+    // THE ZERO CASE IS THE ONE FAULT HERE, and it is a row: the verdict, in the
+    // attention colour its callers give it (whoCanStartIsFault). What it
+    // means, that sessions cannot start until someone connects a Claude
+    // account, is the machine page's sentence, not every row's.
+    if accounts == 0 { return "No Claude account" }
     var parts: [String] = ["\(accounts) \(accounts == 1 ? "person" : "people")"]
     if let email = account?.email, !email.isEmpty { parts.append(email) }
     if let plan = account?.plan, !plan.isEmpty { parts.append(plan) }
@@ -1139,14 +1140,14 @@ func describeWhoCanStart(_ accounts: Int, account: Fleet.HostHealth.Account?,
 
 /// What a pool's own machine is, in place of who can start sessions on it.
 /// The same words on both phones (test/holder-sessions-in-apps.test.js).
-let holderLine = "This pool’s own machine. It holds the pool for the fleet and runs no sessions."
+let holderLine = "Manages this pool. Runs no sessions."
 
 /// Make it again, offered on a pool's own machine's page: what it does, said
-/// before the policy screen it opens. The same words on both phones
+/// before the policy screen it opens. The sign-in it may ask for is that
+/// screen's to say. The same words on both phones
 /// (test/holder-sessions-in-apps.test.js).
 let holderAgainTitle = "Make it again"
-let holderAgainLine = "Removes this machine, disk and all, and makes a new one from the newest build of its suite, which asks to join; this phone lets it in. "
-    + "It asks for the pool’s admin sign-in, or opens the one this phone kept, and does the rest by itself."
+let holderAgainLine = "Replaces this machine with a fresh one. Its disk is erased."
 
 /// Whether the who-can-start line adds anything. A box degraded with nobody's
 /// account on it already says so in the fleet's reason above the line, and
@@ -1155,12 +1156,14 @@ func whoCanStartIsNews(_ accounts: Int, state: String?) -> Bool {
     !(accounts == 0 && state == "degraded")
 }
 
-/// Where this person's machines come from, in one sentence. The same words
-/// on both phones; test/runner-repo-in-apps.test.js holds them together.
+/// Where this person's machines come from, as a row's status: the repository
+/// in use, or that none is linked. How to link one is the screen's footer,
+/// said once. The same words on both phones; test/runner-repo-in-apps.test.js
+/// holds them together.
 func describeRunnerRepoSetting(saved: String?, fleet: String?) -> String {
-    if let saved { return "Your machines come from \(saved)." }
-    if let fleet { return "Your machines come from the fleet's repository, \(fleet). Set your own to use your free Actions minutes." }
-    return "Make a public repository from github.com/TheTechNetwork/Fleetwright-Runners-Template, install the Fleetwright GitHub App on it, and your machines come from there."
+    if let saved { return "Using \(saved)" }
+    if let fleet { return "Using the fleet's: \(fleet)" }
+    return "Nothing linked"
 }
 
 /// What a runner repository check found, one answer per fact. "can't tell"
@@ -1255,7 +1258,8 @@ func describeRunning(_ host: Fleet.FleetHost) -> String {
     }
     if let channel = host.health?.channel, !channel.isEmpty {
         // Pinned is worth a word, because it is why the picker is missing.
-        parts.append(host.health?.channelPinned == true ? "\(channel), set on the box" : channel)
+        // Where it was fixed is the machine page's to say.
+        parts.append(host.health?.channelPinned == true ? "\(channel) (fixed)" : channel)
     }
     return parts.isEmpty ? "version not reported" : parts.joined(separator: " · ")
 }
@@ -1272,7 +1276,7 @@ func whoCanStartIsFault(_ accounts: Int, runnerAuth: String?, runner: Bool, hold
     }
 }
 
-/// "Nobody has connected a Claude account here", or how many people have.
+/// "No Claude account", or how many people have one here.
 ///
 /// A function rather than a nested ternary inside the view, and NOT a style
 /// preference: the host row's body grew past what the Swift type checker will
@@ -1280,7 +1284,7 @@ func whoCanStartIsFault(_ accounts: Int, runnerAuth: String?, runner: Bool, hold
 /// — because this was the expression it happened to run out of time on. The
 /// error names a line nobody edited, which is the whole difficulty with it.
 private func describeAccounts(_ accounts: Int) -> String {
-    if accounts == 0 { return "Nobody has connected a Claude account here — sessions will not start" }
+    if accounts == 0 { return "No Claude account" }
     if accounts == 1 { return "1 person can start sessions here" }
     return "\(accounts) people can start sessions here"
 }

@@ -31,7 +31,8 @@ const SHARED = [
   'Keep them ready',
   'kept ready',
   ', ready now',
-  'Behind the edge router',
+  // The default network, named by what it gives the machine.
+  'Default (internet only)',
 ];
 
 test('iOS: what is kept ready is read from the snapshot and set through the fleet, 0 to 3', () => {

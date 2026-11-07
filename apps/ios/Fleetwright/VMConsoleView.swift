@@ -45,14 +45,25 @@ struct VMConsoleView: View {
                 .background(Design.Palette.card)
                 .transition(.opacity)
             } else if let via = model.via {
-                // FROM AWAY, said once and quietly: how the screen got here.
-                Text(Manage.Words.consoleAwayVia(via))
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.inkDim)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(Design.Space.inside)
-                    .background(Design.Palette.card)
-                    .transition(.opacity)
+                // FROM AWAY, said once and quietly, AS A CHIP: which machine
+                // carries the screen, in the small type on its own small
+                // surface, not a banner across the top of a console somebody
+                // is working in. The words are Manage.Words', the pool page's.
+                HStack {
+                    Text(Manage.Words.consoleAwayVia(via))
+                        .fleetType(.micro)
+                        .foregroundStyle(Design.Palette.inkDim)
+                        .padding(.horizontal, Design.Space.insideTight)
+                        .padding(.vertical, Design.Space.hair)
+                        .background(
+                            Design.Palette.card,
+                            in: RoundedRectangle(cornerRadius: Design.Radius.chip, style: .continuous)
+                        )
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, Design.Space.inside)
+                .padding(.vertical, Design.Space.insideTight)
+                .transition(.opacity)
             }
             ZStack {
                 ConsoleWeb(model: model)

@@ -39,7 +39,7 @@ test('neither phone prices anything: the dollars are Claude Code\'s, and only sa
 });
 
 test('the words are the same on both phones', () => {
-  for (const words of ['Waiting for you · ', 'Worked ', 'waited on you ', 'at its prompt ', 'counted for the last ', 'under 1m', 'at least ', ' at API prices', ' tokens', ' out', 'as of ', ' ago']) {
+  for (const words of ['Waiting for you · ', 'Worked ', 'waited on you ', 'at its prompt ', 'since ', 'under 1m', 'at least ', ' at API prices', ' tokens', ' out', 'as of ', ' ago']) {
     assert.ok(SWIFT.includes(words), `iOS lost: ${words}`);
     assert.ok(KOTLIN.includes(words), `Android lost: ${words}`);
   }

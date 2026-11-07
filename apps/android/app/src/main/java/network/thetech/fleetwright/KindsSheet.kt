@@ -58,13 +58,11 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                // What a word is for, and what a prefix does: the two things
+                // somebody adding one needs. The permissions sentence is under
+                // the Permissions chips, and the task picker speaks for itself.
                 Text(
-                    "Say \"start a dev session\". A word here becomes a shortcut straight away — "
-                        + "nothing else to set up. A task makes the word do something: spoken, that is the "
-                        + "only way a session gets one, because there is no screen to drive it from afterwards. "
-                        + "Box default leaves permissions to the machine. Permission prompts on asks before "
-                        + "each tool wherever it starts. Bypassing them is chosen on New session, where each "
-                        + "machine's setting is shown.",
+                    "Say \"start a dev session\". A prefix groups sessions: \"dev: refactor auth\".",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 kinds.forEachIndexed { i, k ->
@@ -88,11 +86,11 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    // HOW A START OF THIS KIND RUNS. Box default saves no
-                    // mode, so the machine's own setting decides; prompts on
-                    // asks for them wherever it starts. Bypassing is not
-                    // offered here: an Assistant start has no screen to show
-                    // the machine's setting on, and a machine set to ask
+                    // HOW A START OF THIS KIND RUNS. The machine's setting
+                    // saves no mode, so the machine's own setting decides;
+                    // prompts on asks for them wherever it starts. Bypassing
+                    // is not offered here: an Assistant start has no screen to
+                    // show the machine's setting on, and a machine set to ask
                     // refuses it. A kind saved with it before still shows it,
                     // so what it holds is never drawn as something else
                     // (C-5). Stacked rather than in a row, so a long label
@@ -102,7 +100,7 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                         Text("Permissions", style = MaterialTheme.typography.labelMedium)
                         AssistChip(
                             onClick = { kinds[i] = k.copy(mode = null) },
-                            label = { Text(if (k.mode == null) "Box default \u2713" else "Box default") },
+                            label = { Text(if (k.mode == null) "Machine's setting \u2713" else "Machine's setting") },
                         )
                         AssistChip(
                             onClick = { kinds[i] = k.copy(mode = "safe") },
@@ -114,6 +112,13 @@ fun KindsSheet(settings: Settings, onDismiss: () -> Unit) {
                                 label = { Text("Permissions bypassed \u2713") },
                             )
                         }
+                        // What the two choices do, under the chips they are
+                        // in, once, and not in the sheet's opening text with
+                        // the Assistant. The same words as iOS.
+                        Text(
+                            "Machine's setting leaves it to the machine. Permission prompts on asks before each tool.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                     // A TEXT FIELD WOULD HAVE BEEN SMALLER AND WRONG: a
                     // mistyped profile name saves fine, pre-fills nothing, and

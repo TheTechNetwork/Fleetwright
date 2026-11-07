@@ -11,15 +11,19 @@ import org.junit.Test
  * WHAT IS PINNED: the coordinator's rule (hosts.js runsSessionsFor), that a
  * resume runs only where sessions are sandboxed or for someone who
  * administers the machine; that a box which has not said is not taken for
- * sandboxed and is named as not having said (C-5); that a box which says why
- * it does not contain a session is told by that reason and its way on, or
- * by every reason and every way on when it gives more than one, and one
- * too old to say why reads as off; that a coordinator too old
- * to send `administers` offers Resume as before; and that a refusal which is a
+ * sandboxed and is named as not having said (C-5); that whichever reason a
+ * box gives for not containing a session, and however many, the session's
+ * sheet says the same one sentence, who can resume it, because the reason
+ * and its way on are the machine page's (docs/reviews/copy-2026-11-06.md,
+ * 1); that the card says less still; that a coordinator too old to send
+ * `administers` offers Resume as before; and that a refusal which is a
  * setting on the machine is titled as one. Where the line and the button sit
  * is read by test/unsandboxed-resume-android-in-apps.test.js.
  */
 class ResumeKeptTest {
+
+    private val without = "deb132 runs sessions without full isolation. Your admin can resume it."
+    private val notSaid = "deb132 has not said whether it isolates sessions. Your admin can resume it."
 
     private fun host(administers: Boolean?, sandboxed: Boolean?, sandboxedWhy: String? = null, sandboxedAlso: List<String> = emptyList()) =
         Fleet.FleetHost(
@@ -53,78 +57,39 @@ class ResumeKeptTest {
     }
 
     @Test
-    fun aMemberIsToldWhyOnAMachineWithoutTheSandbox() {
-        assertEquals(
-            "deb132 runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there.",
-            host(administers = false, sandboxed = false).resumeKept,
-        )
+    fun aMemberIsToldWhoCanOnAMachineWithoutTheSandbox() {
+        assertEquals(without, host(administers = false, sandboxed = false).resumeKept)
     }
 
     @Test
-    fun aMachineWithItsSandboxOnIsToldForWhatItSaid() {
-        // Run as root, a box has its sandbox on and root in a session is root
-        // on the machine; "without the sandbox" sent its operator to a switch
-        // that was already on. Each reason with its way on, as the coordinator
-        // words the same refusal.
-        val said = { why: String -> host(administers = false, sandboxed = false, sandboxedWhy = why).resumeKept }
-        assertEquals(
-            "deb132 runs fleetwright as root, and root in a session is root on the machine, so only this fleet’s admin, or the one person it works for, can resume one there until fleetwright runs as its own user.",
-            said("userns_root"),
-        )
-        assertEquals(
-            "deb132 runs its sandbox with docker, which does not keep root in a session apart from the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until its sessions run under podman.",
-            said("userns_docker"),
-        )
-        assertEquals(
-            "deb132 has FLEETWRIGHT_SANDBOX_USERNS=host, which makes root in a session the account that holds everyone’s credentials, so only this fleet’s admin, or the one person it works for, can resume one there until that is set back to nomap.",
-            said("userns_host"),
-        )
-        assertEquals(
-            "deb132 lets an option in FLEETWRIGHT_SANDBOX_ARGS end its sandbox, so only this fleet’s admin, or the one person it works for, can resume one there until that option is taken out.",
-            said("unsafe_args"),
-        )
-        assertEquals(
-            "deb132 runs sessions without the sandbox, so only this fleet’s admin, or the one person it works for, can resume one there.",
-            said("off"),
-        )
-        assertEquals(
-            "deb132 says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there.",
-            said("a_reason_from_later"),
-        )
+    fun aMachineThatSaysWhyIsToldTheSameSentence() {
+        // Root, docker, an environment variable: each is the machine's
+        // business and its admin's, said on the machine's page. A member
+        // reading the session is told the same thing whichever it is, and
+        // nothing a later box might say changes that.
+        for (why in listOf("userns_root", "userns_docker", "userns_host", "unsafe_args", "off", "a_reason_from_later")) {
+            assertEquals(why, without, host(administers = false, sandboxed = false, sandboxedWhy = why).resumeKept)
+        }
     }
 
     @Test
-    fun aMachineWithMoreThanOneReasonIsToldEveryOne() {
-        // Run as root with its sandbox off, "until its sandbox is on" was half
-        // of it: with the sandbox on, root still kept the session out. Every
-        // reason the machine gives, and everything that has to change, in the
-        // iPhone's words.
+    fun aMachineWithMoreThanOneReasonIsToldTheSameSentence() {
         val said = { why: String, also: List<String> ->
             host(administers = false, sandboxed = false, sandboxedWhy = why, sandboxedAlso = also).resumeKept
         }
-        assertEquals(
-            "deb132 runs sessions without the sandbox and runs fleetwright as root, so only this fleet’s admin, or the one person it works for, can resume one there until its sandbox is on and fleetwright runs as its own user.",
-            said("off", listOf("userns_root")),
-        )
-        assertEquals(
-            "deb132 lets FLEETWRIGHT_SANDBOX_ARGS end its sandbox, has FLEETWRIGHT_SANDBOX_USERNS=host, and runs fleetwright as root, so only this fleet’s admin, or the one person it works for, can resume one there until the option in FLEETWRIGHT_SANDBOX_ARGS that ends its sandbox is taken out, FLEETWRIGHT_SANDBOX_USERNS is set back to nomap, and fleetwright runs as its own user.",
-            said("unsafe_args", listOf("userns_host", "userns_root")),
-        )
-        // One it does not know makes the rest a partial list: no way on named.
-        assertEquals(
-            "deb132 says its sessions are not contained, so only this fleet’s admin, or the one person it works for, can resume one there.",
-            said("userns_root", listOf("a_reason_from_later")),
-        )
-        // An empty list is one reason, in its own sentence.
-        assertEquals(said("userns_root", emptyList()), host(administers = false, sandboxed = false, sandboxedWhy = "userns_root").resumeKept)
+        assertEquals(without, said("off", listOf("userns_root")))
+        assertEquals(without, said("unsafe_args", listOf("userns_host", "userns_root")))
+        assertEquals(without, said("userns_root", listOf("a_reason_from_later")))
     }
 
     @Test
     fun aMachineThatHasNotSaidIsNotTakenForSandboxed() {
-        assertEquals(
-            "deb132 has not said whether its sessions are sandboxed, so only this fleet’s admin, or the one person it works for, can resume one there until it is updated.",
-            host(administers = false, sandboxed = null).resumeKept,
-        )
+        assertEquals(notSaid, host(administers = false, sandboxed = null).resumeKept)
+    }
+
+    @Test
+    fun theCardSaysOnlyWhoCan() {
+        assertEquals("Only an admin can resume this", Fleet.FleetHost.RESUME_KEPT_ROW)
     }
 
     @Test

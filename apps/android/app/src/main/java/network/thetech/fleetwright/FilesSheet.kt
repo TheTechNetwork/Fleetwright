@@ -314,8 +314,9 @@ fun FilesSheet(
             title = { Text("Delete ${target.name}?") },
             // NOT RECOVERABLE, and said plainly. `forget` keeps a session for
             // seven days; this keeps nothing, which is the whole reason there
-            // is a confirmation here at all.
-            text = { Text("This cannot be undone. Forgetting a session keeps it for seven days; deleting a file keeps nothing.") },
+            // is a confirmation here at all. The contrast with Forget is the
+            // reason for the dialog, not its text.
+            text = { Text("This can't be undone.") },
             confirmButton = {
                 TextButton(onClick = {
                     val entry = target
