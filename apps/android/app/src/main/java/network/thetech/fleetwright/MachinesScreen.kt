@@ -1,5 +1,8 @@
 package network.thetech.fleetwright
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -284,14 +287,14 @@ fun MachinesScreen(
             item { Spacer(Modifier.heightIn(min = Design.Space.hair)) }
             when {
                 !settings.configured -> item {
-                    Hint("Sign in to a fleet under You, and its machines are listed here.")
+                    Hint("Sign in under You to see your machines.")
                 }
-                !loaded -> item { Hint("Asking the fleet…") }
+                !loaded -> item { Hint("Loading…") }
+                // THE TITLE ALONE. The Add a machine row is right below it,
+                // and a body saying how a machine joins was that row's job
+                // said twice.
                 fleetHosts.isEmpty() && hosts.isEmpty() -> item {
-                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-                        Text("No machines yet", style = Design.Style.section, color = Design.Palette.ink.now)
-                        Hint("A machine joins with a pin from Add a machine and one line typed on it.")
-                    }
+                    Text("No machines yet", style = Design.Style.section, color = Design.Palette.ink.now)
                 }
             }
             // FIRST, THE ONES ASKING. A pool's own machine that has asked to
@@ -554,6 +557,9 @@ private fun MachinePage(
     var confirmingRevoke by remember { mutableStateOf(false) }
     var pin by remember { mutableStateOf("") }
     var poolPage by remember { mutableStateOf(false) }
+    // Whether the one explanation on this page, under the grants, is open.
+    // Closed by default: it is the mechanism, read once.
+    var howGrantsWork by remember { mutableStateOf(false) }
 
     /** Re-read this machine from the fleet. A failure keeps what was there. */
     suspend fun reload() {
@@ -614,18 +620,18 @@ private fun MachinePage(
     if (confirmingRevoke) {
         AlertDialog(
             onDismissRequest = { confirmingRevoke = false },
-            title = { Text("Revoke $hostId?") },
+            title = { Text("Remove $hostId?") },
             text = {
                 Text(
                     "It is disconnected immediately, and its sessions keep running without it. " +
-                        "Getting it back means a new pin, typed on that box.",
+                        "Getting it back means a new pairing code, typed on it.",
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     confirmingRevoke = false
                     run { it.revokeHost(hostId) }
-                }) { Text("Revoke") }
+                }) { Text("Remove") }
             },
             dismissButton = { TextButton(onClick = { confirmingRevoke = false }) { Text("Cancel") } },
         )
@@ -641,26 +647,28 @@ private fun MachinePage(
                 style = Design.Style.bodyStrong,
                 color = if (state == "healthy") Design.Palette.ok.now else Design.Palette.attention.now,
             )
+            // The reason names the one remedy for a reinstall; a revoked
+            // machine's remedy is the button below, and the state word above
+            // already says revoked. Same words as iOS (MachinesView).
             val reason = h?.reason ?: if (member?.revoked == true) {
-                "Its key was revoked. Readmit mints the pin that brings it back."
+                "Not connected since it was revoked."
             } else {
-                "Not connected to the fleet. Reinstalled? Replace key mints the pin its new key needs."
+                "Not connected. If you reinstalled it, use New pairing code."
             }
             if (reason.isNotBlank() && state != "healthy") Hint(reason)
             if (h != null) HealthLines(h)
-            // THE GAP, in the attention colour: the one line that says the box
-            // is not running what it holds. Same sentence as iOS, held equal by
-            // test/restart-waiting.test.js.
+            // THE GAP, in the attention colour: the one line that says the
+            // machine is not running what it holds. Same sentence as iOS, held
+            // equal by test/restart-waiting.test.js.
             h?.restartWaitingFor?.let { waiting ->
-                Hint("$waiting is on this box and not yet running. A restart applies it.", color = Design.Palette.attention.now)
+                Hint("$waiting is installed and not yet running. A restart applies it.", color = Design.Palette.attention.now)
             }
             // ROOT'S HALF, in the same colour and for the same reason. What
             // still works comes first, so it reads as one command and not a
-            // broken box. Same sentence as iOS.
+            // broken machine. Same sentence as iOS.
             if (h?.rootHalfBehind == true) {
                 Hint(
-                    "The update helper on this box is older than the release it runs. Updates still land and the services restart, " +
-                        "but nothing root owns is refreshed. Check shows the one command that fixes it, once.",
+                    "The update helper is out of date. Updates still apply; Check for updates shows the fix.",
                     color = Design.Palette.attention.now,
                 )
             }
@@ -703,7 +711,7 @@ private fun MachinePage(
         if (h != null) {
             SectionHead("Software")
             if (!administers) {
-                Hint("Only this fleet’s admin, or the one person this machine works for, can update it, reboot it or change how it is set up.")
+                Hint("Only an admin can change this machine.")
             }
             // CHECK ALWAYS; APPLY ONLY WHEN THERE IS SOMETHING TO APPLY.
             Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
@@ -718,14 +726,36 @@ private fun MachinePage(
                 if (h.systemPending && h.grantUpgrades != false && actsOnBox) {
                     OutlinedButton(enabled = !busy, onClick = { run { it.upgrade(hostId, apply = true) } }) { Text("Apply upgrade") }
                 }
-                // WHAT THIS BOX ALLOWS FROM THE APP, said only when it is off: the
-                // allowed case is the ordinary one and not news. Same words as iOS,
-                // held equal by test/grants-in-apps.test.js. Not said to somebody
-                // who could not act on it: the line is typed on the box.
+                // WHAT THIS MACHINE ALLOWS FROM THE APP, said only when it is
+                // off: the allowed case is the ordinary one and not news. Said
+                // HERE AND ONLY HERE, with the line that turns it on; the
+                // reboot grant used to be said again, command and all, under
+                // This machine, the same fact twice on one page. Same words as
+                // iOS, held equal by test/grants-in-apps.test.js. Not said to
+                // somebody who could not act on it: the line is typed on the
+                // machine. The mechanism (a root-owned rule, sudo fleetwright
+                // grant) is the one explanation on this page, behind How this
+                // works.
                 h.grantUpgrades?.let { allowed ->
                     if (!allowed) {
-                        Hint("System upgrades from the app: not allowed")
-                        GrantOff("Turning it on is one line on the box:", grantLine("upgrades"))
+                        Hint("System upgrades: Off")
+                        GrantOff("To turn it on, run this on the machine:", grantLine("upgrades"))
+                    }
+                }
+                h.grantReboot?.let { allowed ->
+                    if (!allowed) {
+                        Hint("Reboot: Off")
+                        GrantOff("To turn it on, run this on the machine:", grantLine("reboot"))
+                    }
+                }
+                if (h.grantUpgrades == false || h.grantReboot == false) {
+                    TextButton(onClick = { howGrantsWork = !howGrantsWork }, modifier = Modifier.heightIn(min = 48.dp)) { Text("How this works") }
+                    AnimatedVisibility(
+                        visible = howGrantsWork,
+                        enter = fadeIn(Design.Motion.change()),
+                        exit = fadeOut(Design.Motion.change()),
+                    ) {
+                        Hint("Each one is a root-owned rule on the machine, set by somebody with a shell there. Nothing on a phone can change it; sudo fleetwright grant does, and sessions keep running.")
                     }
                 }
             }
@@ -744,7 +774,7 @@ private fun MachinePage(
             // equal by test/pinned-admins-in-apps.test.js.
             val admins = h.admins
             if (administers && admins != null && admins.count != 0) {
-                SectionHead("Pinned admins")
+                SectionHead("This machine’s admins")
                 // WHAT IS WRONG, when something is: a record the machine cannot
                 // read, or nobody pinned who can sign. The coordinator's words.
                 admins.problem?.let { Hint(it, color = Design.Palette.attention.now) }
@@ -767,7 +797,7 @@ private fun MachinePage(
                         OutlinedTextField(
                             value = newAdmin,
                             onValueChange = { newAdmin = it },
-                            label = { Text("Address to pin") },
+                            label = { Text("Email address") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(
                                 capitalization = KeyboardCapitalization.None,
@@ -785,11 +815,11 @@ private fun MachinePage(
                                 newAdmin = ""
                                 run { it.pinAdmin(hostId, email, add = true) }
                             },
-                        ) { Text("Pin") }
+                        ) { Text("Add") }
                     }
-                    Hint("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from these people. The last one can be removed only on the machine itself.")
+                    Hint("Only these people can update or reboot this machine. The last one is removed on the machine itself.")
                 } else if (admins.left == null && admins.count != null) {
-                    Hint("This machine takes updates, upgrades, reboots, a new release channel or session image, and restoring somebody else’s work only from the admins pinned on it, and you are not one of them.")
+                    Hint("Only this machine’s admins can change it, and you are not one of them.")
                 }
             }
 
@@ -798,15 +828,15 @@ private fun MachinePage(
             SectionHead("Logs")
             val logs = h.logs
             when {
-                // NULL IS CANNOT TELL: this page has not been told which of the
-                // three journals exist here.
-                logs == null -> Hint("This host has not said which logs it can read.")
-                logs.isEmpty() -> Hint("None of the services this app knows are installed here.")
+                // NULL IS CANNOT TELL (§7): this page has not been told which
+                // of the three journals exist here. One word, never "none".
+                logs == null -> Hint("Unknown")
+                logs.isEmpty() -> Hint("No logs here")
                 else -> logs.forEach { source ->
                     OutlinedButton(onClick = { run { it.logs(hostId, service = source) } }, enabled = !busy) { Text(logName(source)) }
                 }
             }
-            Hint("The last forty lines of a service's journal. A session's own output is under the session, as Output.")
+            Hint("The last 40 lines. A session's own output is on its page, as Output.")
         }
 
         if (result.isNotBlank()) Quoted(result)
@@ -833,7 +863,7 @@ private fun MachinePage(
             h.channel?.let { current ->
                 SectionHead("Releases")
                 if (h.channelPinned) {
-                    Hint("$current, set on the box")
+                    Hint("$current, fixed on this machine")
                 } else if (!actsOnBox) {
                     Hint(current)
                 } else {
@@ -855,11 +885,12 @@ private fun MachinePage(
             SectionHead("Session image")
             val v = variant
             when {
-                // NULL IS CANNOT TELL. A control defaulted to "no browser" would
-                // tell somebody their box has no Chromium when it might.
-                v == null -> Hint("This host has not said which image it runs sessions in.")
+                // NULL IS CANNOT TELL (§7). A control defaulted to "no browser"
+                // would tell somebody their machine has no Chromium when it
+                // might. One word, never "none".
+                v == null -> Hint("Unknown")
                 pinned || (v != "minimal" && v != "browser") -> Text(
-                    (if (pinned) "Set on the box: " else "Not one of ours: ") + h.sandboxImage.orEmpty(),
+                    (if (pinned) "Fixed on this machine: " else "Custom image: ") + h.sandboxImage.orEmpty(),
                     style = Design.Style.label,
                     fontFamily = FontFamily.Monospace,
                     color = Design.Palette.inkDim.now,
@@ -878,10 +909,10 @@ private fun MachinePage(
                     }
                 }
             }
-            Hint("The browser image is the same one with Chromium in it, for a session that has to look at a page it built. Running sessions keep the image they started in.")
+            Hint("Browser includes Chromium. Running sessions keep the image they started in.")
 
             SectionHead("Labels")
-            if (labels.isEmpty()) Hint("No labels, so only work that names this host can land here.")
+            if (labels.isEmpty()) Hint("No labels")
             labels.forEach { label ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
                     // REMOVE APPEARS ON EXACTLY THE ONES IT WORKS FOR. The host
@@ -903,7 +934,7 @@ private fun MachinePage(
                         }
                     } else {
                         InputChip(selected = false, enabled = false, onClick = {}, label = { Text(label) })
-                        Hint("from the machine")
+                        Hint("automatic")
                     }
                 }
             }
@@ -925,7 +956,7 @@ private fun MachinePage(
                 Spacer(Modifier.width(Design.Space.insideTight))
                 TextButton(onClick = { addLabel() }, enabled = !busy && newLabel.isNotBlank()) { Text("Add") }
             }
-            Hint("Labels are how work is aimed: a session asked for with a tag lands on a host carrying it. The ones the machine works out about itself cannot be removed.")
+            Hint("Sessions asked for with a label run on machines that have it.")
 
             // WHAT THIS BOX PUTS INTO EVERY SESSION, and what it costs. NULL
             // DRAWS NOTHING: the normal case and an older host. Same words as
@@ -933,11 +964,11 @@ private fun MachinePage(
             h.houseRules?.let { houseRules ->
                 SectionHead("House rules")
                 if (houseRules == 0) {
-                    Hint("A rules file is on this box and is not being used. The box's /profiles says why.", color = Design.Palette.attention.now)
+                    Hint("The house rules file is not being used.", color = Design.Palette.attention.now)
                 } else {
-                    Hint("Every new session here starts with $houseRules characters of house rules, read on every turn.")
+                    Hint("$houseRules characters, added to every new session.")
                 }
-                Hint("One file on the box, written into each new session as its CLAUDE.md. Changing it needs a shell there, and reaches the next session rather than a running one.")
+                Hint("Edit it on the machine. New sessions pick it up.")
             }
         }
 
@@ -949,14 +980,14 @@ private fun MachinePage(
             OpenRow("On your hypervisor: console, SSH, size and end") { poolPage = true }
         }
         // NOR FOR ONE THE COORDINATOR REFUSES: a reboot's first step names
-        // every session on the box, whoever's, and its second ends them.
+        // every session on the machine, whoever's, and its second ends them.
         // AND NOT WHERE THE MACHINE PINS ITS ADMINS AND THIS PERSON IS NOT ONE.
-        if (h != null && actsOnBox) {
-            // NO BUTTON FOR A THING THE BOX REFUSES. Same words as iOS, held
-            // equal by test/grants-in-apps.test.js.
-            if (h.grantReboot == false) {
-                GrantOff("Reboot from the app is off on this box.", grantLine("reboot"))
-            } else if (!rebooting) {
+        // NOR WHERE THE MACHINE REFUSES IT, and nothing in its place: Software
+        // above already says Reboot: Off with the one line that changes it,
+        // and saying it here again was the same fact twice on one page. Held
+        // by test/grants-in-apps.test.js.
+        if (h != null && actsOnBox && h.grantReboot != false) {
+            if (!rebooting) {
                 OutlinedButton(enabled = !busy, onClick = { rebooting = true; rebootPin = ""; rebootConfirm = "" }) {
                     Text("Reboot", color = Design.Palette.bad.now)
                 }
@@ -964,13 +995,13 @@ private fun MachinePage(
                 // TWO STEPS, and the second asks for the hostname typed out. The
                 // pin is issued by the BOX: a coordinator that could mint it
                 // could reboot the fleet.
-                Hint("Every session on this box dies — a reboot takes the tmux server with it.")
-                OutlinedButton(enabled = !busy, onClick = { run { it.reboot(hostId) } }) { Text("Ask for a pin") }
+                Hint("Every session on this machine ends.")
+                OutlinedButton(enabled = !busy, onClick = { run { it.reboot(hostId) } }) { Text("Ask $hostId for a PIN") }
                 OutlinedTextField(
                     value = rebootPin,
                     onValueChange = { rebootPin = it },
                     singleLine = true,
-                    label = { Text("Pin from the box") },
+                    label = { Text("PIN from $hostId") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -996,10 +1027,12 @@ private fun MachinePage(
             // AN ADMIN'S, AND DRAWN FOR AN ADMIN. The coordinator refuses it to
             // anybody else, and the refusal used to arrive after the dialog.
             if (!member.revoked && admin == true) {
-                TextButton(enabled = !busy, onClick = { confirmingRevoke = true }) { Text("Revoke this host", color = Design.Palette.bad.now) }
+                TextButton(enabled = !busy, onClick = { confirmingRevoke = true }) { Text("Remove this machine", color = Design.Palette.bad.now) }
             }
             // THE TWO CASES AN UNBOUND PIN IS REFUSED FOR, each with its own
-            // pin bound to this machine.
+            // pin bound to this machine: Let it back in for a revoked one, a
+            // New pairing code for one that was reinstalled
+            // (test/bound-pin.test.js).
             OutlinedButton(
                 enabled = !busy,
                 onClick = {
@@ -1007,11 +1040,11 @@ private fun MachinePage(
                         busy = true
                         pin = runCatching { Fleet(settings).mintHostPin(hostId = hostId, readmit = member.revoked) }
                             .map { it.code }
-                            .getOrElse { result = it.message ?: "could not mint a pin"; "" }
+                            .getOrElse { result = it.message ?: "could not make a pairing code"; "" }
                         busy = false
                     }
                 },
-            ) { Text(if (member.revoked) "Readmit" else "Replace key") }
+            ) { Text(if (member.revoked) "Let it back in" else "New pairing code") }
             if (pin.isNotBlank()) {
                 SelectionContainer {
                     Text(
@@ -1022,8 +1055,8 @@ private fun MachinePage(
                     )
                 }
                 // NAMED, because a bound pin is refused anywhere else and the
-                // refusal arrives on the box rather than here.
-                Hint("for $hostId only — on that box: fleetwright-sidecar enrol $pin", color = Design.Palette.attention.now)
+                // refusal arrives on the machine rather than here.
+                Hint("Run on $hostId: fleetwright-sidecar enrol $pin", color = Design.Palette.attention.now)
             }
         }
     }
@@ -1092,19 +1125,15 @@ private fun AddMachineSheet(settings: Settings, onDismiss: () -> Unit) {
     if (showTemporary) TemporaryMachinesSheet(settings, onDismiss = { showTemporary = false })
 
     FullScreen(title = "Add a machine", onDismiss = onDismiss) {
-        SectionHead("A box you have")
-        // TEMPORARY IS A PROPERTY OF THE PIN, not of the box.
+        SectionHead("A machine you have")
+        // TEMPORARY IS A PROPERTY OF THE PIN, not of the machine.
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = 48.dp)) {
             Switch(checked = ephemeralPin, onCheckedChange = { ephemeralPin = it }, enabled = !busy)
             Spacer(Modifier.width(Design.Space.insideTight))
-            Text("Temporary host (CI runner)", style = Design.Style.body, color = Design.Palette.ink.now)
+            Text("Temporary machine (CI runner)", style = Design.Style.body, color = Design.Palette.ink.now)
         }
         if (ephemeralPin) {
-            Hint(
-                "Retired the moment it disconnects, and its key revoked. Never chosen " +
-                    "automatically for work — it has the most free capacity in the fleet " +
-                    "precisely because it is about to disappear.",
-            )
+            Hint("Removed the moment it disconnects. Never chosen for work automatically.")
         }
         OutlinedButton(
             enabled = !busy,
@@ -1115,11 +1144,11 @@ private fun AddMachineSheet(settings: Settings, onDismiss: () -> Unit) {
                     pin = runCatching { Fleet(settings).mintHostPin(ephemeralPin) }
                         .onSuccess { pinInstall = it.install ?: "" }
                         .map { it.code }
-                        .getOrElse { result = it.message ?: "could not mint a pin"; "" }
+                        .getOrElse { result = it.message ?: "could not make a pairing code"; "" }
                     busy = false
                 }
             },
-        ) { Text("Mint a pin for a new host") }
+        ) { Text("New pairing code") }
         if (pin.isNotBlank()) {
             // 123 456 — read down a phone, typed into a terminal.
             SelectionContainer {
@@ -1131,8 +1160,8 @@ private fun AddMachineSheet(settings: Settings, onDismiss: () -> Unit) {
                 )
             }
             if (pinInstall.isNotBlank()) {
-                // THE LINE IS THE PRODUCT. On a fresh box this is the whole join.
-                Hint("On a fresh box, as root — installs it and joins it:")
+                // THE LINE IS THE PRODUCT. On a fresh machine this is the whole join.
+                Hint("On a fresh machine, as root — installs it and joins it:")
                 SelectionContainer {
                     Text(pinInstall, style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
                 }
@@ -1144,7 +1173,7 @@ private fun AddMachineSheet(settings: Settings, onDismiss: () -> Unit) {
                 )
             } else {
                 Text(
-                    "On that box: fleetwright-sidecar enrol $pin\nGood for ten minutes, once.",
+                    "On that machine: fleetwright-sidecar enrol $pin\nGood for ten minutes, once.",
                     style = Design.Style.label,
                     fontFamily = FontFamily.Monospace,
                     color = Design.Palette.ink.now,
@@ -1152,7 +1181,7 @@ private fun AddMachineSheet(settings: Settings, onDismiss: () -> Unit) {
             }
         }
         if (result.isNotBlank()) Hint(result, color = Design.Palette.bad.now)
-        Hint("A pin is good for ten minutes, once. It needs a shell on the box to type it.")
+        Hint("A pairing code works once, for ten minutes, typed on the machine.")
 
         if (runnersAnswered) {
             SectionHead("A machine for a while")
@@ -1160,19 +1189,18 @@ private fun AddMachineSheet(settings: Settings, onDismiss: () -> Unit) {
             if (repo != null) {
                 // SAID ONCE, IN THE WORDS NEW SESSION USES.
                 Hint(
-                    "Under New session, pick a new machine in Where. It comes from $repo, boots in a few minutes, " +
-                        "and the session starts on it when it joins.",
+                    "Under New session, pick a new machine in Where. It comes from $repo and is ready in a few minutes.",
                     color = Design.Palette.ink.now,
                 )
             } else {
-                Hint("This fleet cannot start one yet. Set up temporary machines under You first.")
+                Hint("Set up temporary machines under You first.")
             }
             OpenRow("Temporary machines") { showTemporary = true }
         }
 
         SectionHead("A repository's workflow")
         OpenRow("Runner tokens") { showRunnerTokens = true }
-        Hint("A machine started from New session needs no token. A workflow you start yourself needs one, minted here for its repository.")
+        Hint("Only a workflow you start yourself needs one, for its repository.")
     }
 }
 
@@ -1184,6 +1212,6 @@ private fun AddMachineSheet(settings: Settings, onDismiss: () -> Unit) {
 private fun logName(source: String): String = when (source) {
     "hub" -> "The session manager"
     "coordinator" -> "The fleet coordinator"
-    "sidecar" -> "This box as a fleet host"
+    "sidecar" -> "Fleetwright host"
     else -> source
 }
