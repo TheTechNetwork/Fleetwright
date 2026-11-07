@@ -32,14 +32,14 @@ const SHARED = [
   'Labs',
   'Open labs',
   'Closed labs',
-  ': each reaches the internet and nothing private',
-  ': each reaches the fleet and Claude and nothing else',
-  // Changing the labs, as the box says its cost: the new router is built
-  // beside the old one (ONE_BOOT in src/fleet/host/edge-router.js), so the
-  // way out is gone for one boot and not for the whole build.
-  'Apply rebuilds the edge router to change the labs: machines behind it keep their way out while the new one is built, and have none while it starts.',
-  'A lab is a network of its own on the edge router, for one machine at a time: New session › Where puts a machine in one. ',
-  'It costs no extra machine, only an interface on the router. Up to four in all.',
+  ' · internet only',
+  ' · Claude and Fleetwright only',
+  // Changing the labs rebuilds the router: the new one is built beside the
+  // old one (ONE_BOOT in src/fleet/host/edge-router.js), so internet access
+  // is gone for one boot and not for the whole build. Said once, beside
+  // Apply, where edge-block-in-apps.test.js pins how it is shown.
+  'Applying rebuilds the router. VMs behind it lose internet while the new one starts.',
+  'One VM per lab. Up to four labs.',
   'Labs are on the edge router, and that pool has none yet. Build the router with them. Nothing was changed.',
   'In a lab',
   'No lab',
@@ -53,7 +53,7 @@ const SHARED = [
   'Labs per person',
   '"No limit"',
   '"At most one at once"',
-  ' Labs per person is how many one person may hold at once. With no limit, one person may take every lab that is free.',
+  ' Labs per person caps how many one person holds at once.',
   'With no labs, labs per person is no limit. Nothing was changed.',
   ', the labs there are. Nothing was changed.',
 ];

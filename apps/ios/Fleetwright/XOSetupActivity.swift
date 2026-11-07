@@ -95,7 +95,7 @@ enum XOSetupWords {
         case "resource-set": return "Setting what it may use"
         case "token": return "Making its token"
         case "updates": return "Turning on updates"
-        case "hand-off": return "Handing over"
+        case "hand-off": return "Sending the token"
         // A policy job's own two steps (XOPOLICY_STEPS), in the words the
         // host leaves on the job (STEP_WORDS in xo-setup.js). Its first three
         // are onboarding's, above.
@@ -181,15 +181,14 @@ enum XOSetupWords {
         let edge = build == "edge"
         switch key {
         case "download": return edge ? "Downloading OPNsense" : "Downloading the image"
-        case "read": return "Reading the blocks the configuration goes in"
-        case "keep": return edge ? "Writing OPNsense to the pool, to keep" : "Writing the image to the pool, to keep"
+        case "read": return "Configuring"
+        case "keep": return edge ? "Saving OPNsense to the pool" : "Saving the image to the pool"
         case "write": return edge ? "Writing the edge router’s disk" : "Writing the disk"
         default: return nil
         }
     }
 
-    /// "Reading the blocks the configuration goes in: 192 of 2238 MB" while
-    /// a part's bytes move, which is what the screen's sentence from the
+    /// "Configuring: 192 of 2238 MB" while a part's bytes move, which is what the screen's sentence from the
     /// machine says with the release and the storage named. Nil while none
     /// move; a key never met still says "192 of 2238 MB" (C-5: the phone
     /// knows the numbers, so it says the numbers).

@@ -35,7 +35,7 @@ const SCREEN = read('apps/ios/Fleetwright/DeployXOView.swift');
 
 /** The sentences a person reads on the install screen, which Android says too. */
 const DEPLOY_SENTENCES = Object.freeze([
-  'This pool has no Xen Orchestra yet',
+  'Needs the pool master’s root password.',
   'Install Xen Orchestra',
   'Address of the pool master',
   'Find a machine that can reach it over SSH',

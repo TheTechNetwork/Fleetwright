@@ -116,8 +116,8 @@ test('iOS: the machine is asked whether it can open a reconnect’s sign-in befo
   // which sentence is run by XOReconnectTests.swift.
   const RECONNECT = read('apps/ios/Fleetwright/XOReconnect.swift');
   const refusal = RECONNECT.slice(RECONNECT.indexOf('static func refusal(can: [String], machine: String) -> String? {'));
-  assert.match(bare(refusal), /^static func refusal\(can: \[String\], machine: String\) -> String\? \{\s*if !can\.contains\("reconnect"\) \{\s*return "\\\(machine\) is older than reconnecting Xen Orchestra’s servers, so the sign-in was not sent\."\s*\}\s*if !can\.contains\("reconnect-signin"\) \{\s*return "\\\(machine\) is too old to open the sign-in this app seals for a reconnect, so the sign-in was not sent\."\s*\}\s*return nil/);
-  for (const at of [begin.slice(askAt), send.slice(refusedAt)]) assert.match(at, /refuse\("\\\(why\) Update that machine, then try again\."\)/);
+  assert.match(bare(refusal), /^static func refusal\(can: \[String\], machine: String\) -> String\? \{\s*if !can\.contains\("reconnect"\) \{\s*return "\\\(machine\) needs an update to reconnect servers\. Nothing was sent\."\s*\}\s*if !can\.contains\("reconnect-signin"\) \{\s*return "\\\(machine\) needs an update to take the sign-in\. Nothing was sent\."\s*\}\s*return nil/);
+  for (const at of [begin.slice(askAt), send.slice(refusedAt)]) assert.match(at, /refuse\(why\)/);
 });
 
 test('iOS: a reconnect starts where it was asked from: the address named, the machine that noticed, the sign-in Face ID opens', () => {
@@ -150,8 +150,8 @@ test('iOS: a reconnect for an address this phone does not know asks the fleet no
   // that says where it came from, and the probe it runs is the first thing
   // anything asks of the fleet.
   assert.match(SCREEN, /askFirst \? "Ask your machines to reach \\\(trimmedAddress\)"/);
-  assert.ok(SCREEN.includes('Text("This phone has not set up \\(trimmedAddress), kept a sign-in for it or pinned its certificate. "'));
-  assert.ok(SCREEN.includes('+ "The address came from one of your machines, so none of them is asked to reach it until you say so.")'));
+  assert.ok(SCREEN.includes('Text(preferred.map { "New address, from \\($0). Connect only if you recognise it." }'));
+  assert.ok(SCREEN.includes('?? "New address from one of your machines. Connect only if you recognise it.")'));
   assert.match(fn(SCREEN, 'probe'), /^private func probe\(\) async \{\s*probing = true\s*defer \{ probing = false \}\s*askFirst = false/);
 });
 

@@ -24,11 +24,11 @@ const IOS_POLICY = read('apps/ios/Fleetwright/XOPolicy.swift');
 
 /** What both phones say, word for word. */
 const SHARED = [
-  'Keep its token in the fleet',
+  'Let my machines use this pool',
   'Machines from this pool',
-  'The boxes you approved can then make machines on it for your sessions. They hold its token in memory only, ',
+  'Your approved machines can then create VMs here.',
   'Make the machine image for sessions',
-  'about 220 MB, and installs Fleetwright on it, which takes about ten minutes. Sessions can then start on a new ',
+  'Debian 13 · 20 GiB disk · 220 MB download · about 10 min',
   'Nothing in the way out’s pool has 20 GiB free for the machine image’s disk.',
   'The machine image is built behind the edge router, and that pool has none yet. Build the router with it.',
   // New session's footer and the start's status, in one sentence each

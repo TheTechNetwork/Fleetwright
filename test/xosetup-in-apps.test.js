@@ -76,9 +76,12 @@ test('iOS: a machine that reached the address is offered, HTTPS with a certifica
   assert.match(SCREEN, /filter \{ \$0\.reachable == true && \$0\.tls == true && \$0\.cert != nil \}/);
   assert.match(SCREEN, /ForEach\(offered\)/);
   assert.match(SCREEN, /private var offered: \[Fleet\.Probe\] \{ reached \+ plainReached \}/);
-  // What the person reads when nothing can run it, and what to check. Plain
-  // HTTP is offered now, so no sentence on the screen claims setup needs HTTPS.
-  assert.ok(SCREEN.includes('No machine reached \\(trimmedAddress). Check the address and the port, that Xen Orchestra is up, and that one '));
+  // What the person reads when nothing can run it: the result, with which
+  // machines tried under it. Plain HTTP is offered now, so no sentence on
+  // the screen claims setup needs HTTPS.
+  assert.ok(SCREEN.includes('return "Could not reach \\(trimmedAddress)."'));
+  assert.ok(SCREEN.includes('return "Tried from \\(tried.map(\\.hostId).sorted().joined(separator: ", "))."'));
+  assert.ok(SCREEN.includes('return "No machines online. Add or start one first."'));
   assert.ok(!SCREEN.includes('Setup needs HTTPS'));
   assert.ok(!SCREEN.includes('needs HTTPS'));
   // How to give it HTTPS instead is said, and never that it has HTTPS already.
@@ -88,8 +91,8 @@ test('iOS: a machine that reached the address is offered, HTTPS with a certifica
   // be compared against a terminal, and `begin` pins exactly that one.
   assert.match(SCREEN, /Text\(XOSetupKey\.grouped\(cert\)\)/);
   assert.match(SCREEN, /if let cert = probe\.cert \{\s*pin = cert\s*plain = false[\s\S]{0,2000}?beginSetup\(address: target, pin: pin, host: probe\.hostId, trust: trust, plain: plain,/);
-  // Cannot tell is said as cannot tell.
-  assert.ok(SCREEN.includes('cannot tell whether it is Xen Orchestra'));
+  // Cannot tell is said as Unknown, never rounded to either answer (C-5).
+  assert.match(SCREEN, /else if probe\.xo == false \{ what = "Not Xen Orchestra" \}\s*else \{ what = "Unknown" \}/);
 });
 
 test('iOS: a machine that reached the address over plain HTTP is offered after the HTTPS ones, behind a warning the person accepts', () => {
@@ -97,22 +100,17 @@ test('iOS: a machine that reached the address over plain HTTP is offered after t
   // and that, in as many words, is what is offered: a machine that said
   // neither is not rounded to either.
   assert.match(IOS, /var plainHTTP: Bool \{ reachable == true && tls == false \}/);
-  // The row says what it reached and how; cannot tell stays cannot tell.
-  for (const words of [
-    'Reached Xen Orchestra over plain HTTP',
-    'Reached something over plain HTTP, and it does not look like Xen Orchestra',
-    'Reached something over plain HTTP; cannot tell whether it is Xen Orchestra',
-  ]) {
-    assert.ok(SCREEN.includes(`"${words}"`), words);
-  }
-  // The warning: the heading in the attention tone, then the two things that
-  // would travel in the clear and between which machines, then the lines of
-  // xo-install.cfg that would make it HTTPS. The same words as Android.
-  assert.match(SCREEN, /Text\("This Xen Orchestra answers without HTTPS"\)\s*\.fleetType\(\.bodyStrong\)\s*\.foregroundStyle\(Design\.Palette\.attention\)/);
-  assert.ok(SCREEN.includes('The admin password you type, and the token the fleet keeps afterwards, would cross the network between '));
-  assert.ok(SCREEN.includes('\\(probe.hostId) and \\(trimmedAddress) unencrypted. Anything on that network could read them.'));
-  assert.ok(SCREEN.includes('To give it HTTPS instead: in the installer\'s xo-install.cfg, set PORT=\\"443\\", PATH_TO_HTTPS_CERT, '));
-  assert.ok(SCREEN.includes('PATH_TO_HTTPS_KEY and AUTOCERT=\\"true\\", then run it again.'));
+  // The row says what it reached, then the path; cannot tell stays Unknown.
+  assert.ok(SCREEN.includes('if probe.plainHTTP { return "\\(what) · no HTTPS" }'));
+  assert.ok(SCREEN.includes('if probe.throughPhone { return "\\(what) · via this phone" }'));
+  // The warning: the headline in the attention tone, one sentence naming
+  // what would travel in the clear and between which machines, then the
+  // lines of xo-install.cfg that would make it HTTPS behind one disclosure.
+  // The same words as Android.
+  assert.match(SCREEN, /Text\("No HTTPS"\)\s*\.fleetType\(\.bodyStrong\)\s*\.foregroundStyle\(Design\.Palette\.attention\)/);
+  assert.ok(SCREEN.includes('Your password would cross the network between \\(probe.hostId) and \\(trimmedAddress) unencrypted.'));
+  assert.match(SCREEN, /DisclosureGroup\(isExpanded: \$httpsHowOpen\) \{\s*Text\("In the installer's xo-install\.cfg, set PORT=\\"443\\", PATH_TO_HTTPS_CERT, PATH_TO_HTTPS_KEY and AUTOCERT=\\"true\\", then run it again\."\)/);
+  assert.ok(SCREEN.includes('Text("How to turn on HTTPS")'));
   assert.ok(!SCREEN.includes('on by default'));
   // Shown only when there is no certificate: never both questions at once.
   // The toggle stands unless the person's kept word for plain HTTP does.
@@ -161,17 +159,17 @@ test('iOS: the key is checked as the machine’s before anything is sealed to it
   assert.ok(!begin.includes('Seal.seal('), 'begin seals before send');
   assert.ok(begin.indexOf('await send()') > checkAt, 'send is reachable before the signature is checked');
   // A bad signature is a hard stop, and the job is dropped on the machine.
-  assert.match(begin, /guard XOSetupKey\.isSigned\([^\n]*\) else \{\s*_ = try\? await fleet\.cancelSetup\(job: begunJob\)\s*refuse\("The key \\\(machine\) answered with did not come from that machine, so the sign-in was not sent\."\)/);
+  assert.match(begin, /guard XOSetupKey\.isSigned\([^\n]*\) else \{\s*_ = try\? await fleet\.cancelSetup\(job: begunJob\)\s*refuse\("That key did not come from \\\(machine\)\. Nothing was sent\."\)/);
 
   // The fingerprint is the vault's fingerprint, worked out from the key the
   // same way, and the key compared with what the vault approved for that
   // machine (PhoneVault.approval, below).
   assert.match(begin, /let fingerprint = PhoneVault\.fingerprint\(hostKey\)/);
   assert.match(begin, /switch await vaultApproval\(of: machine, key: hostKey\) \{\s*case \.approved:\s*await send\(\)/);
-  assert.match(begin, /case \.anotherKey:[\s\S]{0,300}?did not come from that machine: it is not the key this phone approved for it/);
+  assert.match(begin, /case \.anotherKey:[\s\S]{0,300}?is not the one this phone approved\. The sign-in was not sent\./);
   assert.match(begin, /case \.none:\s*toCompare = fingerprint/);
   // And when the vault has not vouched, the person compares it with the box.
-  assert.ok(SCREEN.includes('fleetwright-sidecar identity'));
+  assert.ok(SCREEN.includes('Text("First time using \\(begun?.hostId ?? "that machine"). On it, run fleetwright-sidecar identity and check it shows this:")'));
   assert.ok(SCREEN.includes('"They match"'));
 });
 
@@ -237,7 +235,7 @@ test('iOS: the token comes back to this phone, to a key sent inside the seal, an
   // The screen collects when it sees done, and says where the token is only
   // once it knows (C-5).
   assert.match(SCREEN, /let \(outcome, inFleet\) = await XOSetupHandoff\.collectAndKeep\(job: job, state: state, settings: settings\)\s*if let outcome \{ handedBack = outcome \}/);
-  assert.match(SCREEN, /case \.kept:\s*Text\("The token is in this phone’s Keychain now\. No machine in the fleet keeps it on disk\."\)/);
+  assert.match(SCREEN, /case \.kept:\s*Text\("Saved on this phone\."\)/);
   // Kept in the Keychain, this device only, and never anywhere else.
   assert.match(HANDOFF, /Keychain\.set\(text, for: tokenAccount\(at\)\)/);
   assert.match(IOS, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
@@ -355,13 +353,13 @@ test('iOS: the bar is the edge router’s build while it says how far, and the d
   // And what the bytes are doing, worded from the key the coordinator
   // pushes, never from the machine's sentence, which names the storage.
   assert.match(WIDGET, /if !stale, let bytes = XOSetupWords\.bytes\(state\) \{\s*Text\(bytes\)/);
-  assert.ok(IOS.includes('case "read": return "Reading the blocks the configuration goes in"'));
+  assert.ok(IOS.includes('case "read": return "Configuring"'));
   assert.ok(IOS.includes('case "write": return edge ? "Writing the edge router’s disk" : "Writing the disk"'));
   assert.ok(!WIDGET.includes('state.text') && !IOS.includes('text: progress.text'), 'the machine’s sentence reached the activity');
   assert.ok(!SCREEN.includes('building the edge router'), 'the screen names one build for every build again');
   assert.ok(SCREEN.includes('if choice.edgeDiskChoice, choice.building(in: inv).edge || choice.building(in: inv).image {'));
   assert.ok(SCREEN.includes('edgeDisk: begun.can.contains("edge-disk")'));
-  assert.ok(SCREEN.includes('Its disk is on \\($0).'));
+  assert.ok(SCREEN.includes(' · disk on \\($0)'));
   assert.ok(WIDGET.includes('purpose == "policy" ? "What the fleet may use, on \\(hostId)" : "Hypervisor setup on \\(hostId)"'));
 });
 
@@ -424,7 +422,7 @@ test('iOS: a certificate that does not check out is shown in full and accepted b
     'Issued for a different name than',
     'This machine could not read the certificate’s details.',
     'Not trusted by that machine, which did not say why.',
-    'Its certificate checks out',
+    'Certificate trusted',
   ]) {
     assert.ok(SCREEN.includes(words), words);
   }
@@ -465,5 +463,5 @@ test('iOS: a setup goes only to a machine new enough to hand the token back, che
   assert.ok(guard < SCREEN.indexOf('guard XOSetupKey.isSigned('), 'checked after the key, so after the comparison could begin');
   const block = SCREEN.slice(guard, SCREEN.indexOf('return', guard));
   assert.match(block, /fleet\.cancelSetup\(job: begunJob\)/);
-  assert.match(block, /keeps the pool’s token itself instead of handing it to this phone\. Nothing was sent\./);
+  assert.match(block, /refuse\("\\\(machine\) needs an update\. Nothing was sent\."\)/);
 });

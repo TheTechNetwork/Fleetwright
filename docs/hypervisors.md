@@ -32,7 +32,7 @@ What happens, from the phone to a session on a VM:
 1. **The pool's token is kept in your vault.** Setup seals the limited user's
    token to your phone (the hand-off, below). The phone now also puts that
    record in your vault as `hypervisor:<address>`, after setup and from the
-   hypervisor's page (Machines › the pool › Keep its token in the fleet) for
+   hypervisor's page (Machines › the pool › Let my machines use this pool) for
    a pool set up before. The minter checks the record names that address.
 2. **The boxes you approved hold it, in memory only.** Each sidecar pass
    (every ten minutes) hands an approved box everything you keep, and the box
@@ -108,7 +108,7 @@ setup-token cannot open Remote Control, so, as on a runner, the
 notification that matters is the one when its task is done.
 
 **The machine image** is built by the policy job, which already holds the
-admin sign-in: switch on "Make the machine image for sessions" under Way out.
+admin sign-in: switch on "Make the machine image for sessions" under Internet access.
 It is Debian 13's own cloud image, pinned by its published SHA-512, with
 Fleetwright installed from this fleet's `/install` and not enrolled, built
 behind the edge router on the storage picked, and turned into a template in
@@ -317,7 +317,7 @@ rebuild or remove", under Templates).
 ### A machine of its own
 
 **The policy screen offers to make the pool a Fleetwright machine of its
-own**, under Way out, from a machine whose setup offers it (`holder` in
+own**, under Internet access, from a machine whose setup offers it (`holder` in
 `can`). Until then, the boxes that hold a pool's token are whichever machines
 its owner approved, and that is often the laptop that set the pool up. When
 the laptop sleeps, nothing can start a machine on the pool. The pool's own
@@ -1462,8 +1462,7 @@ only "part 2 of 3". That sentence is the host's and names the release and the
 storage, so it is never pushed. Beside a part whose bytes are moving the host
 now reports a key from `XOBUILD_DOING` (`download`, `read`, `keep` or
 `write`) and the megabytes done and in all (`doing`, `done`, `total`), and
-the phones word the key themselves: "Reading the blocks the configuration
-goes in: 192 of 2238 MB". A part that moves no bytes, such as the install on
+the phones word the key themselves: "Configuring: 192 of 2238 MB". A part that moves no bytes, such as the install on
 the image, carries none, and a key a phone has never met still gets its
 megabytes said.
 
@@ -1954,7 +1953,7 @@ Android), so the boxes you approved can make machines on the pool
 ("Machines from your pool"); a phone not signed in to GitHub is told to sign
 in first, since the vault is kept under that account, and says when the
 fleet refused. That is the default, not a choice: the switch a pool set up
-before it offers (Machines › the pool › Keep its token in the fleet) is for
+before it offers (Machines › the pool › Let my machines use this pool) is for
 catching up, and nothing on either phone keeps a token out of the vault
 except not being signed in. The record also carries the pool master's
 addresses as setup saw them (`masters`, the management one first), shown on
@@ -1971,8 +1970,8 @@ was refused, and the machine's state directory was empty afterwards.
 > Deploying Xen Orchestra with the installer's `xo-remote-deploy.sh`.
 
 **Built, and not yet run on a real pool.** When every machine that answered
-the probe found no Xen Orchestra at the address, Add a hypervisor offers *This
-pool has no Xen Orchestra yet*. A machine of the fleet then installs Xen
+the probe found no Xen Orchestra at the address, Add a hypervisor offers *Install
+Xen Orchestra*. A machine of the fleet then installs Xen
 Orchestra on the pool with XenOrchestraInstallerUpdater's own script and adds
 the pool to the fleet through it, in one job, so the phone can close at the
 first step and collects the token at the end as from any setup.

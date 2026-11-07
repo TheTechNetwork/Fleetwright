@@ -171,8 +171,8 @@ test('both phones say it in the same words', () => {
 test('the policy form offers to make it again, and says what the new one does, in the same words', () => {
   const lines = [
     ['Make it again'],
-    ['Removes {name}, disk and all, and makes a new one that asks to join. For one that never joined the fleet.'],
-    ['to be awake. Once it is up it asks to join, and this phone ', 'lets it in to hold the pool by itself, as the phone that made it.'],
+    ['Removes {name} and makes a new one. For one that never joined.'],
+    ['An always-on VM that manages this pool, so ', ' need not stay awake.'],
   ];
   for (const p of PHONES) {
     for (const pieces of lines) {
