@@ -1131,7 +1131,7 @@ test('a notification the app has work behind wakes it on iOS, alongside the aler
       return new Response('{}', { status: 200 });
     },
   });
-  const ask = { title: 'holder-0a1b2c asks to join', body: 'The pool’s own machine for xo.lan.', category: 'fleet.holder.join', drawnByApp: true, wake: true, data: { kind: 'holder-join', hostId: 'holder-0a1b2c' } };
+  const ask = { title: 'holder-0a1b2c is ready to join', body: 'The pool’s own machine for xo.lan.', category: 'fleet.holder.join', drawnByApp: true, wake: true, data: { kind: 'holder-join', hostId: 'holder-0a1b2c' } };
   await pusher.send([{ token: 'ios-1', platform: 'ios' }, { token: 'android-1', platform: 'android' }], ask);
   await pusher.send([{ token: 'ios-1', platform: 'ios' }], { title: 'Session waiting', body: 'is waiting for you' });
   const [ios, android, plain] = bodies.map((b) => b.message);

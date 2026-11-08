@@ -485,6 +485,14 @@ class Fleet(
         val hostId: String,
         val state: String?,
         val reason: String?,
+        /**
+         * The code beside [reason] (registry.js), set in the same branches:
+         * `ok`, `no_login`, `silent`, `connecting` and the rest. The row's
+         * word comes from it ([ReasonWords.host]) and the sentence moves to
+         * the page's Details. Null from a coordinator too old to send it,
+         * and then the row shows the sentence as it always did.
+         */
+        val reasonCode: String? = null,
         val loggedIn: Boolean?,
         /**
          * How many people have connected a Claude account on this machine.
@@ -732,6 +740,20 @@ class Fleet(
          */
         val admins: PinnedAdmins? = null,
     ) {
+        /**
+         * The row's word for why it is not healthy ([ReasonWords.host]), or
+         * null: a healthy machine, a code never met, or an older coordinator
+         * that sent none. Null puts the sentence on the row, as before.
+         */
+        val reasonWord: String? get() = ReasonWords.host(reasonCode)
+
+        /**
+         * What the Machines row shows under the state: the word where there
+         * is one, else the sentence. The same rule as iOS's
+         * `FleetHost.reasonRow`.
+         */
+        val reasonRow: String? get() = reasonWord ?: reason
+
         /**
          * Whether the box takes update, upgrade, reboot, a new channel and a
          * new image from this person as far as its pins go. True where it pins
@@ -1016,7 +1038,24 @@ class Fleet(
          * setup poll to stop asking.
          */
         val code: String? = null,
+        /**
+         * Which `host_unavailable` it is (scheduler.js, core.js): `offline`,
+         * `not_yours`, `enrolled_by_other`, `pools_own`, `temporary_other` or
+         * `no_credentials`. Null on every other code and from a coordinator
+         * too old to say, which titles the refusal by its code alone.
+         */
+        val why: String? = null,
     ) {
+        /**
+         * The title over a refusal: its code's word ([ReasonWords.refusal]),
+         * or `Refused` for a reply that carried no code. On the Sessions
+         * status card and over a notification; the sentence is the card's
+         * Details and the notification's body. The same words as iOS's
+         * `Fleet.Reply.refusalTitle`.
+         */
+        val title: String
+            get() = ReasonWords.refusal(code, why)
+
         /**
          * The title over a start the fleet refused. Two refusals are a
          * setting on the machine and not a fault in the asking, and asking
@@ -1024,14 +1063,15 @@ class Fleet(
          * contain a session and so runs them only for its admins (G8), and
          * `host_outdated`, one too old to carry what was asked. Those are
          * titled as the reason, and the coordinator's sentence beneath says
-         * which setting; anything else is a start that could not happen.
-         * The same words as iOS's `Fleet.Reply.refusedStartTitle`.
+         * which setting; anything else is titled by its code ([title]),
+         * which was one sentence for every refusal before the codes had
+         * words. The same words as iOS's `Fleet.Reply.refusedStartTitle`.
          */
         val refusedStartTitle: String
             get() = when (code) {
                 "unsandboxed" -> "Not started: only admins run sessions there"
                 "host_outdated" -> "Not started: the machine needs an update"
-                else -> "Could not start a session"
+                else -> title
             }
     }
 
@@ -2499,7 +2539,15 @@ class Fleet(
         /** Why the last one did not come, kept until one does. */
         val failed: Failure? = null,
     ) {
-        data class Failure(val at: Long, val text: String)
+        /**
+         * [code] is which way it failed (vm-standby.js): `not_joined`,
+         * `refused` or `unreachable`, worded by [ReasonWords.standby] with
+         * [text] under Details. Null from an older coordinator shows the text.
+         */
+        data class Failure(val at: Long, val text: String, val code: String? = null) {
+            /** The line's word, or the sentence where there is none. */
+            val word: String get() = ReasonWords.standby(code) ?: text
+        }
     }
 
     /**
@@ -2580,7 +2628,13 @@ class Fleet(
             starting = o.optInt("starting", 0),
             since = o.optLong("since", 0L).takeIf { it > 0 },
             failed = o.optJSONObject("failed")?.let { f ->
-                f.optString("text").takeIf { it.isNotBlank() }?.let { VmStandby.Failure(at = f.optLong("at", 0L), text = it) }
+                f.optString("text").takeIf { it.isNotBlank() }?.let {
+                    VmStandby.Failure(
+                        at = f.optLong("at", 0L),
+                        text = it,
+                        code = f.optString("code").takeIf { c -> c.isNotBlank() && c != "null" },
+                    )
+                }
             },
         )
     }
@@ -3087,6 +3141,7 @@ class Fleet(
                     ok = json.optBoolean("ok", false),
                     text = json.optString("text", ""),
                     code = json.optJSONObject("error")?.optString("code")?.takeIf { it.isNotBlank() && it != "null" },
+                    why = json.optJSONObject("error")?.optString("why")?.takeIf { it.isNotBlank() && it != "null" },
                     sessions = parseSessions(json.optJSONArray("sessions")),
                     connections = parseConnections(json.optJSONObject("connections")),
                     entries = json.optJSONArray("entries")?.let { a ->
@@ -3305,6 +3360,7 @@ class Fleet(
                     hostId = o.optString("hostId"),
                     state = o.optString("state").takeIf { it.isNotBlank() },
                     reason = o.optString("reason").takeIf { it.isNotBlank() && it != "null" },
+                    reasonCode = o.optString("reasonCode").takeIf { it.isNotBlank() && it != "null" },
                     loggedIn = if (health?.has("loggedIn") == true) health.optBoolean("loggedIn") else null,
                     claudeAccounts = if (health?.has("claudeAccounts") == true && !health.isNull("claudeAccounts")) {
                         health.optInt("claudeAccounts")

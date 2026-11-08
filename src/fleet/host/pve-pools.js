@@ -723,7 +723,7 @@ export class PvePools {
     if (lab && group) return { ok: false, text: 'A machine in a lab is on the lab’s network alone, so it joins no group. It was not made.' };
     const name = `vm-${m[1]}`;
     const found = [...this.held.entries()].find(([k, h]) => h.owner === who && this.seen.get(k)?.images?.some((/** @type {any} */ i) => i.id === template));
-    if (!found) return { ok: false, text: 'This box holds no pool of yours with that machine image.' };
+    if (!found) return { ok: false, text: 'This machine manages no pool of yours with that machine image.' };
     const [k, { record }] = found;
     const seen = this.seen.get(k);
     const image = /** @type {PveImage} */ (seen.images.find((/** @type {any} */ i) => i.id === template));
@@ -1014,17 +1014,17 @@ export class PvePools {
     const who = String(owner || '').toLowerCase();
     const id = String(name);
     if (this.handing.has(id)) return { ok: false, text: `${name} is being handed its login already, so this ask is handed nothing.` };
-    if (this.handed.has(id)) return { ok: false, text: `${name} was handed its login by this box already, so this ask is handed nothing.` };
+    if (this.handed.has(id)) return { ok: false, text: `${name} was handed its login by this machine already, so this ask is handed nothing.` };
     const token = this.claude.get(who);
-    if (!token) return { ok: false, notHere: true, text: `This box holds no Claude login of ${who}’s to hand ${name}.` };
-    if (!this.holdsFor(who)) return { ok: false, notHere: true, text: `This box holds none of ${who}’s clusters, so it cannot see ${name}.` };
+    if (!token) return { ok: false, notHere: true, text: `This machine has no Claude login of ${who}’s to hand ${name}.` };
+    if (!this.holdsFor(who)) return { ok: false, notHere: true, text: `This machine manages none of ${who}’s clusters, so it cannot see ${name}.` };
     this.handing.add(id);
     try {
       const { found, unreachable } = await this.#find(who, id);
       if (!found) {
         return unreachable.length
           ? { ok: false, unreachable: true, text: `${name} is not on the clusters of yours that answered, and the rest could not be reached from here: ${unreachable.join('; ')}` }
-          : { ok: false, notHere: true, text: `${name} is not on any of ${who}’s clusters this box holds.` };
+          : { ok: false, notHere: true, text: `${name} is not on any of ${who}’s clusters this machine manages.` };
       }
       // THE MAKER KNOWS THE NUMBER it cloned to; a name somebody gave another VM is not it.
       const made = this.made.get(id);
@@ -1051,12 +1051,12 @@ export class PvePools {
   async control({ owner, name, action, minutes = null, cpus = null, memory = null }) {
     const who = String(owner || '').toLowerCase();
     if (!NAME_RE.test(String(name))) return { ok: false, text: 'That is not the name of a machine this fleet made.' };
-    if (!this.holdsFor(who)) return { ok: false, notHere: true, text: 'This box holds none of your clusters.' };
+    if (!this.holdsFor(who)) return { ok: false, notHere: true, text: 'This machine manages none of your clusters.' };
     const { found, unreachable, held } = await this.#find(who, String(name));
     if (!found) {
       return unreachable.length
         ? { ok: false, unreachable: true, text: unreachable.length === held ? `Your clusters could not be reached from here: ${unreachable.join('; ')}` : `${name} is not on the clusters of yours that answered, and the rest could not be reached from here: ${unreachable.join('; ')}` }
-        : { ok: false, notHere: true, text: `${name} is not on any of your clusters this box holds.` };
+        : { ok: false, notHere: true, text: `${name} is not on any of your clusters this machine manages.` };
     }
     const { api, base, mark, record } = found;
     const wait = async (/** @type {Promise<any>} */ p) => api.waitTask(await p, { sleep: this.sleep });

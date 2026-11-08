@@ -273,6 +273,7 @@ class ManageParityTest {
             "edgeHeading" to Manage.Words.edgeHeading, "edgeNobody" to Manage.Words.edgeNobody,
             "edgeUnasked" to Manage.Words.edgeUnasked, "edgeEvents" to Manage.Words.edgeEvents, "edgeNotListening" to Manage.Words.edgeNotListening,
             "edgeUnreachable" to Manage.Words.edgeUnreachable,
+            "edgeUnreached" to Manage.Words.edgeUnreached, "edgeUnknown" to Manage.Words.edgeUnknown, "details" to Manage.Words.details,
         )
         for ((key, value) in fixed) assertEquals(key, words.getString(key), value)
 
@@ -280,7 +281,7 @@ class ManageParityTest {
             "connecting" to Manage.Words::connecting, "plainPool" to Manage.Words::plainPool, "noToken" to Manage.Words::noToken,
             "wrongCertificate" to Manage.Words::wrongCertificate, "limitedUser" to Manage.Words::limitedUser,
             "typePrompt" to Manage.Words::typePrompt, "refused" to Manage.Words::refused, "lost" to Manage.Words::lost,
-            "askingFleet" to Manage.Words::askingFleet, "edgeUnreached" to Manage.Words::edgeUnreached, "holder" to Manage.Words::holder,
+            "askingFleet" to Manage.Words::askingFleet, "holder" to Manage.Words::holder,
             "savedPage" to Manage.Words::savedPage, "consoleOpening" to Manage.Words::consoleOpening, "consoleAwayVia" to Manage.Words::consoleAwayVia, "consoleRefused" to Manage.Words::consoleRefused,
         )
         for ((key, say) in single) assertEquals(key, arg(key, 1), say(arg(key, 0)))

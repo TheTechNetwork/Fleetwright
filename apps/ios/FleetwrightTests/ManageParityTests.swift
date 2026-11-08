@@ -259,6 +259,7 @@ final class ManageParityTests: XCTestCase {
             "edgeHeading": Manage.Words.edgeHeading, "edgeNobody": Manage.Words.edgeNobody,
             "edgeUnasked": Manage.Words.edgeUnasked, "edgeEvents": Manage.Words.edgeEvents, "edgeNotListening": Manage.Words.edgeNotListening,
             "edgeUnreachable": Manage.Words.edgeUnreachable,
+            "edgeUnreached": Manage.Words.edgeUnreached, "edgeUnknown": Manage.Words.edgeUnknown, "details": Manage.Words.details,
         ]
         for (key, value) in fixed { XCTAssertEqual(value, str(key), key) }
 
@@ -266,7 +267,7 @@ final class ManageParityTests: XCTestCase {
             "connecting": Manage.Words.connecting, "plainPool": Manage.Words.plainPool, "noToken": Manage.Words.noToken,
             "wrongCertificate": Manage.Words.wrongCertificate, "limitedUser": Manage.Words.limitedUser,
             "typePrompt": Manage.Words.typePrompt, "refused": Manage.Words.refused, "lost": Manage.Words.lost,
-            "askingFleet": Manage.Words.askingFleet, "edgeUnreached": Manage.Words.edgeUnreached, "holder": Manage.Words.holder,
+            "askingFleet": Manage.Words.askingFleet, "holder": Manage.Words.holder,
             "savedPage": Manage.Words.savedPage, "consoleOpening": Manage.Words.consoleOpening, "consoleAwayVia": Manage.Words.consoleAwayVia, "consoleRefused": Manage.Words.consoleRefused,
         ]
         for (key, say) in single { XCTAssertEqual(say(arg(key, 0)), arg(key, 1), key) }

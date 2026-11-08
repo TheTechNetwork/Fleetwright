@@ -81,14 +81,18 @@ test('a machine asking under the name is kept for its owner, who is told once', 
   assert.equal(pushed.length, 1);
   assert.equal(pushed[0].message.data.kind, 'holder-join');
   assert.equal(pushed[0].message.data.hostId, minted.hostId);
-  assert.match(pushed[0].message.title, /asks to join/);
+  // THE RESULT IN THE TITLE, ONE ACTION IN THE BODY (docs/design-system.md,
+  // "Words"), and none of this file's narration: "asks to join" and "lets it
+  // in" are retired from anything a person reads (test/design-words.test.js).
+  assert.equal(pushed[0].message.title, `${minted.hostId} is ready to join`);
+  assert.doesNotMatch(`${pushed[0].message.title} ${pushed[0].message.body}`, /asks to join|lets it in/);
   // THE PHONE THAT MADE IT LETS IT IN FROM THIS PUSH: iOS woken for it, Android
   // handed it as data, and Let it in under the category for a phone that
   // could not settle it by itself.
   assert.equal(pushed[0].message.category, 'fleet.holder.join');
   assert.equal(pushed[0].message.drawnByApp, true);
   assert.equal(pushed[0].message.wake, true);
-  assert.match(pushed[0].message.body, /The phone that made it lets it in by itself/);
+  assert.match(pushed[0].message.body, /^The pool’s own machine for .+\. The phone that made it approves it by itself; from any other phone, open Fleetwright to approve it\.$/);
   // Asking again with the same key and proof, as a machine that retries does,
   // keeps the one request and does not tell anybody twice.
   assert.equal((await core.holderJoin(first.body)).status, 202);

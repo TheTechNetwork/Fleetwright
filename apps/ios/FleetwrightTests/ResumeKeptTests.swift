@@ -95,13 +95,13 @@ final class ResumeKeptTests: XCTestCase {
         )
         XCTAssertEqual(
             try reply(#"{"ok":false,"error":{"code":"no_hosts"},"text":"No hosts."}"#).refusedStartTitle,
-            "Could not start a session"
+            "No machine available"
         )
     }
 
     func testAnErrorThatIsASentenceStillDecodes() throws {
         let r = try reply(#"{"ok":false,"error":"a push token is required"}"#)
         XCTAssertNil(r.error?.code)
-        XCTAssertEqual(r.refusedStartTitle, "Could not start a session")
+        XCTAssertEqual(r.refusedStartTitle, "Refused")
     }
 }

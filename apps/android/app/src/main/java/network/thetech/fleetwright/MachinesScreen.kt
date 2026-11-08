@@ -428,8 +428,12 @@ private fun MachineCard(host: Fleet.FleetHost, onClick: () -> Unit) {
             )
         }
         // ONLY WHEN IT IS NEWS. "reporting normally" under "healthy" is the
-        // same fact twice.
-        host.reason?.takeIf { it.isNotBlank() && host.state != "healthy" }?.let {
+        // same fact twice. THE WORD, NOT THE SENTENCE: the fleet's code for
+        // the reason becomes the row's one to three words (ReasonWords.host),
+        // and the sentence is the page's, under Details. A coordinator too
+        // old to send a code leaves the sentence here, as before
+        // (FleetHost.reasonRow).
+        host.reasonRow?.takeIf { it.isNotBlank() && host.state != "healthy" }?.let {
             Text(it, style = Design.Style.label, color = Design.Palette.inkDim.now)
         }
         HealthLines(host)
@@ -655,7 +659,21 @@ private fun MachinePage(
             } else {
                 "Not connected. If you reinstalled it, use New pairing code."
             }
-            if (reason.isNotBlank() && state != "healthy") Hint(reason)
+            // THE WORD AS THE STATUS LINE (ReasonWords.host) and the fleet's
+            // sentence under Details: the sentence is the mechanism, which
+            // this page says once, behind a disclosure (docs/design-system.md,
+            // Words). With no code, from an older coordinator or for a silent
+            // or revoked machine whose sentence this screen composed, the
+            // sentence is the line, as before. Same as iOS (HostView).
+            if (reason.isNotBlank() && state != "healthy") {
+                val word = h?.reasonWord
+                if (word != null) {
+                    Hint(word)
+                    Details(reason)
+                } else {
+                    Hint(reason)
+                }
+            }
             if (h != null) HealthLines(h)
             // THE GAP, in the attention colour: the one line that says the
             // machine is not running what it holds. Same sentence as iOS, held

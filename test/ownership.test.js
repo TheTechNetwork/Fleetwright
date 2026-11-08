@@ -679,6 +679,8 @@ test('a member’s health and updates go only to boxes that act for her', async 
     delivered.length = 0;
     const named = await core.dispatch({ verb, params: {}, actor: ALICE.email, requester: ALICE, preferHost: 'mal-box' });
     assert.equal(named.error?.code, 'host_unavailable', verb);
+    // With the word the phones title it by, carried from placement to the reply.
+    assert.equal(named.error?.why, 'enrolled_by_other', verb);
     assert.deepEqual(delivered, [], `alice’s ${verb} reached mallory’s box by naming it`);
   }
   // mallory asks her own box, and the admin any box.

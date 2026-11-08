@@ -55,7 +55,11 @@ test('a row says one status from the fixed set, and the page one sentence', () =
   // THE PAGE: one sentence first, then Machines, then Details.
   for (const [name, src] of [['iOS', swift], ['Android', kotlin]]) {
     const page = src.slice(src.indexOf('HypervisorWords.answer(row.fleet)'));
-    assert.ok(page.indexOf('"Machines"') > 0 && page.indexOf('"Details"') > page.indexOf('"Machines"'), `${name}: the page is not sentence, Machines, Details`);
+    // The Details SECTION, by the call that makes a section of it: each
+    // machine's row has a Details disclosure of its own for its problem
+    // (test/reasons-in-apps.test.js), which is not the page's Details.
+    const details = name === 'iOS' ? 'Section("Details")' : 'SectionHead("Details")';
+    assert.ok(page.indexOf('"Machines"') > 0 && page.indexOf(details) > page.indexOf('"Machines"'), `${name}: the page is not sentence, Machines, Details`);
   }
 });
 

@@ -831,7 +831,12 @@ internal object Manage {
             answered != null -> edgeNames(answered, blocked ?: 0, null) to false
             else -> edgeDns(dns) to false
         }
-        fun edgeUnreached(why: String) = "Unreachable: $why"
+        /** A router no machine reached: the verdict, with the machine's words on why under Details. It was "Unreachable: " and the sentence on one line; the sentence is the mechanism. */
+        const val edgeUnreached = "Unreachable"
+        /** A router nothing has asked yet: Unknown, never a sentence naming what did not answer (docs/design-system.md, Words, §7). */
+        const val edgeUnknown = "Unknown"
+        /** The disclosure under a verdict that holds the sentence behind it. */
+        const val details = "Details"
         /** Its last log line, as the machine reading it heard it. None is said as none received: whether the router logged nothing or sends its log elsewhere is not known from here. */
         fun edgeHeard(time: String?) = time?.let { "Last log line $it" } ?: "No log lines received"
         /** The way out with dpinger's numbers, once a router measures it (edge-router.js, MEASURED); a router built before that has none, and the flag alone is said. */

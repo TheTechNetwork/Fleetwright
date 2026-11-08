@@ -147,7 +147,9 @@ test('a box that enforces is sent what a person signed, and nothing unsigned tha
   // Signed, then tidied here: checkParams collapses the two spaces.
   const changed = await ask('start', { name: 'strict-tidy', title: 'two  spaces' }, 'box-strict');
   assert.equal(changed.r.error?.code, 'signature_required');
-  assert.match(changed.r.text, /changed on its way through the fleet/);
+  // The result and no action, because there is none a person can take; the
+  // mechanism (the tidying) is the code's comment, not the sentence.
+  assert.match(changed.r.text, /changed on its way there, so your signature no longer holds and nothing was sent\.$/);
   assert.deepEqual(changed.frames, []);
 
   // `list` needs no signature anywhere, so the fan-out still reaches it.
@@ -222,7 +224,9 @@ test('a refusal for want of a signature says what would have carried it, from wh
   // from the box's refusal and from the coordinator's own alike.
   const { ask } = await fleet();
   const steps = /open the Fleetwright app on your phone, go to You → Delegations/;
-  const listing = /Your phone signs what it sends once its key is listed with the minter, which happens after you sign in to GitHub under Runners\. Sign in there if you have not, then ask again\./;
+  // The result and the one action, with the custody detail (the key listed
+  // with the minter) left to the code: docs/design-system.md, "Words".
+  const listing = /Your phone signs what it sends once you have signed in to GitHub under Runners\. Sign in there if you have not, then ask again\./;
   const notDelegated = /An MCP client is never delegated update, which restarts a machine somebody may be working on\. Apply it from the Fleetwright app, on the machine’s page, or run fleetwright-sidecar update on the box\./;
 
   // FROM A PHONE before its key is listed, refused by the box: how a phone

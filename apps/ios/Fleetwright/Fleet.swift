@@ -436,16 +436,35 @@ struct Fleet {
 
         struct Refusal: Codable, Hashable {
             let code: String?
+            /// Which `host_unavailable` it is (scheduler.js, core.js):
+            /// `offline`, `not_yours`, `enrolled_by_other`, `pools_own`,
+            /// `temporary_other` or `no_credentials`. Nil on every other code
+            /// and from a coordinator too old to say, which titles the
+            /// refusal by its code alone.
+            let why: String?
 
-            /// AN OBJECT ON THE FLEET'S OWN REFUSALS, `{ code }`, and a bare
-            /// sentence on a few older routes, which carry no code. Read either
-            /// way, because a reply that failed to decode over the shape of a
-            /// field it does not need would lose the text that it does.
+            /// AN OBJECT ON THE FLEET'S OWN REFUSALS, `{ code, why }`, and a
+            /// bare sentence on a few older routes, which carry no code. Read
+            /// either way, because a reply that failed to decode over the
+            /// shape of a field it does not need would lose the text that it
+            /// does.
             init(from decoder: Decoder) throws {
                 let keyed = try? decoder.container(keyedBy: CodingKeys.self)
                 code = (try? keyed?.decodeIfPresent(String.self, forKey: .code)) ?? nil
+                why = (try? keyed?.decodeIfPresent(String.self, forKey: .why)) ?? nil
             }
+
+            /// The title over this refusal, from its code and why
+            /// (ReasonWords.refusal): the row's word, with the coordinator's
+            /// sentence under Details. The same words as Android.
+            var title: String { ReasonWords.refusal(code: code, why: why) }
         }
+
+        /// The title over a refusal: its code's word, or `Refused` for a reply
+        /// that carried no code (ReasonWords.refused). On the Sessions status
+        /// card and over a notification; the sentence is the card's Details
+        /// and the notification's body.
+        var refusalTitle: String { error?.title ?? ReasonWords.refused }
 
         /// The title over a start the fleet refused. Two refusals are a setting
         /// on the machine and not a fault in the asking, and asking again
@@ -453,12 +472,13 @@ struct Fleet {
         /// session and so runs them only for its admins (G8), and `host_outdated`, one
         /// too old to carry what was asked. Those are titled as the reason, and
         /// the coordinator's sentence beneath says which setting; anything else
-        /// is a start that could not happen.
+        /// is titled by its code (`refusalTitle`), which was one sentence for
+        /// every refusal before the codes had words.
         var refusedStartTitle: String {
             switch error?.code {
             case "unsandboxed": return "Not started: only admins run sessions there"
             case "host_outdated": return "Not started: the machine needs an update"
-            default: return "Could not start a session"
+            default: return refusalTitle
             }
         }
 
@@ -2078,6 +2098,13 @@ struct Fleet {
         struct Failure: Codable, Hashable {
             let at: Double
             let text: String
+            /// Which way it failed (vm-standby.js): `not_joined`, `refused`
+            /// or `unreachable`, worded by ReasonWords.standby, with `text`
+            /// under Details. Nil from an older coordinator shows the text.
+            var code: String? = nil
+
+            /// The line's word, or the sentence where there is none.
+            var word: String { ReasonWords.standby(code) ?? text }
         }
     }
 
@@ -2793,6 +2820,12 @@ struct Fleet {
         let hostId: String
         let state: String?
         let reason: String?
+        /// The code beside `reason` (registry.js), set in the same branches:
+        /// `ok`, `no_login`, `silent`, `connecting` and the rest. The row's
+        /// word comes from it (ReasonWords.host) and the sentence moves to
+        /// the page's Details. Nil from a coordinator too old to send it,
+        /// and then the row shows the sentence as it always did.
+        var reasonCode: String?
         let health: HostHealth?
         /// A runner: a machine somebody started for an hour, expected to vanish.
         var ephemeral: Bool?
@@ -2859,6 +2892,16 @@ struct Fleet {
         /// Is there anything of ours to apply? Asked once, so the version line
         /// and the buttons cannot disagree about whether this box is current.
         var updatePending: Bool { health?.updates?.appUpdatePending == true }
+
+        /// The row's word for why it is not healthy (ReasonWords.host), or
+        /// nil: a healthy machine, a code never met, or an older coordinator
+        /// that sent none. Nil puts the sentence on the row, as before.
+        var reasonWord: String? { ReasonWords.host(reasonCode) }
+
+        /// What the Machines row shows under the state: the word where there
+        /// is one, else the sentence. The same rule as Android's
+        /// `FleetHost.reasonRow`.
+        var reasonRow: String? { reasonWord ?? reason }
     }
 
     struct Host: Codable, Identifiable, Hashable {

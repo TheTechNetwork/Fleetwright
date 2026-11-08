@@ -391,8 +391,8 @@ The phone seals the secret to the job with the rest of the choice
    whole SHA-256 of the key (`src/fleet/protocol/holder-join.js`). It asks
    again every ten minutes while the name is held, checks every minute whether
    it is in, and wipes the secret once it is. The coordinator keeps at most
-   three requests a name, pushes `<name> asks to join` to its owner, and never
-   sees the secret.
+   three requests a name, pushes `<name> is ready to join` to its owner, and
+   never sees the secret.
 3. **The phone checks it, not the coordinator, and the phone that made it
    lets it in by itself.** The secrets this phone made for that address are
    its own to read (kept as the fleet credential is: after the first unlock,
@@ -1205,7 +1205,11 @@ page, which has the rest, for each router in this order:
 - its leases, none out said as "No leases" and a count not read as "Leases:
   Unknown";
 - its last log line, or "No log lines received", which is all the machine
-  reading it knows; or why it could not be reached;
+  reading it knows; or, for one it could not reach, "Unreachable" (and
+  "Unknown" for one nothing has asked yet) with the machine's words on why
+  under a Details disclosure, the way every sentence the fleet sends sits
+  behind the row's word on both phones (`docs/design-system.md`, "Words";
+  `test/reasons-in-apps.test.js`);
 - that the machine reading them cannot listen for their log lines, when
   another program has the port ("Router logs not received: another program
   has the port.");

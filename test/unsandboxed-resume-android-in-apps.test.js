@@ -75,6 +75,8 @@ test('Android titles a refused start by the coordinator’s code, as the iPhone 
   assert.ok(ANDROID.includes(`"unsandboxed" -> "${unsandboxed}"`));
   assert.ok(ANDROID.includes(`"host_outdated" -> "${outdated}"`));
   for (const t of TITLES) assert.ok(IOS.includes(`"${t}"`), `iOS does not say: ${t}`);
-  assert.ok(ANDROID.includes('else -> "Could not start a session"'));
+  // Any other refusal is titled by its code's word (ReasonWords.refusal,
+  // test/reasons-in-apps.test.js); it was one sentence for every code.
+  assert.ok(ANDROID.includes('else -> title'));
   // Which notification carries it is claude-setup-in-apps.test.js's.
 });

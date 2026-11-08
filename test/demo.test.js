@@ -18,7 +18,7 @@ test('the demo fleet answers /api/hosts in the coordinator shape', () => {
   assert.deepEqual(Object.keys(r).sort(), ['devices', 'events', 'hosts', 'ok', 'protocol']);
   assert.equal(r.hosts.length, 2);
   for (const h of r.hosts) {
-    assert.deepEqual(Object.keys(h).sort(), ['connected', 'connectedAt', 'health', 'healthAt', 'hostId', 'reason', 'state']);
+    assert.deepEqual(Object.keys(h).sort(), ['connected', 'connectedAt', 'health', 'healthAt', 'hostId', 'reason', 'reasonCode', 'state']);
     assert.match(h.hostId, /^demo-/, 'a demo host says so, so nobody reading a support question is misled');
   }
 });

@@ -83,8 +83,13 @@ fun VmStandbyScreen(settings: Settings, images: List<Fleet.VmImage>, onDismiss: 
         )
         // WHY THE LAST ONE DID NOT COME. The count alone went from "1 being
         // made" to "0 being made" and said nothing about the machine that had
-        // failed in between.
-        kept?.failed?.let { Hint("${clock(it.at)}: ${it.text}", Design.Palette.bad.now) }
+        // failed in between. THE WORD ON THE LINE (ReasonWords.standby) and
+        // the machine's sentence under Details; a coordinator too old to send
+        // the code leaves the sentence on the line, as before. Same as iOS.
+        kept?.failed?.let {
+            Hint("${clock(it.at)}: ${it.word}", Design.Palette.bad.now)
+            if (it.word != it.text) Details(it.text)
+        }
         images.forEach { image ->
             AssistChip(
                 onClick = { template = image.template; network = "" },

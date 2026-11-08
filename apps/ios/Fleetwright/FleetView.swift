@@ -168,6 +168,12 @@ struct FleetView: View {
         return claude == .missing || claude == .needsGitHub
     }
     @State private var status = ""
+    /// THE TITLE OVER A REFUSAL (Fleet.Reply.refusalTitle), when the status
+    /// is one: the card then leads with the word and keeps the coordinator's
+    /// sentence under Details, collapsed. Nil for anything else the card
+    /// quotes, which is drawn as it always was. Set beside every `status` a
+    /// refusal can set.
+    @State private var statusTitle: String?
     @State private var busy = false
     @State private var showingStart = false
     /// Counted rather than flagged, so the same feedback twice in a row is
@@ -253,13 +259,37 @@ struct FleetView: View {
                     // THE COORDINATOR'S OWN WORDS, on an inner surface rather
                     // than a card: this is evidence quoted from somewhere else,
                     // and it should not look like something this screen said.
-                    Text(status)
-                        .fleetType(.labelMono)
-                        .foregroundStyle(Design.Palette.ink)
-                        .textSelection(.enabled)
+                    // A REFUSAL LEADS WITH ITS TITLE (statusTitle), the one to
+                    // three words for its code, and keeps the sentence under
+                    // Details, collapsed: the row says the verdict, the
+                    // mechanism waits to be asked for (docs/design-system.md,
+                    // Words). Same as Android.
+                    if let statusTitle {
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            Text(statusTitle)
+                                .fleetType(.body)
+                                .foregroundStyle(Design.Palette.ink)
+                            DisclosureGroup("Details") {
+                                Text(status)
+                                    .fleetType(.labelMono)
+                                    .foregroundStyle(Design.Palette.ink)
+                                    .textSelection(.enabled)
+                            }
+                            .fleetType(.label)
+                            .frame(minHeight: 44)
+                        }
                         .fleetCard(radius: Design.Radius.row, padding: Design.Space.inside,
                                    fill: Design.Palette.inner)
                         .fleetRow()
+                    } else {
+                        Text(status)
+                            .fleetType(.labelMono)
+                            .foregroundStyle(Design.Palette.ink)
+                            .textSelection(.enabled)
+                            .fleetCard(radius: Design.Radius.row, padding: Design.Space.inside,
+                                       fill: Design.Palette.inner)
+                            .fleetRow()
+                    }
                 }
                 // WHAT IS WAITING, because a queue nobody can see is not a
                 // queue — it is a surprise arriving later. The count is enough:
@@ -521,7 +551,10 @@ struct FleetView: View {
                 // A REFUSAL COUNTS AS DELIVERED. The fleet answered — "that
                 // session is gone", "you cannot stop that" — and holding a
                 // command it has already judged would retry it forever.
-                if reply.ok == false, let text = reply.text { status = text }
+                if reply.ok == false, let text = reply.text {
+                    status = text
+                    statusTitle = reply.refusalTitle
+                }
                 return .success(())
             } catch {
                 return .failure(error)
@@ -573,11 +606,16 @@ struct FleetView: View {
                         .provision(platform: platform, minutes: request.minutes, start: start, template: request.template,
                                    network: request.network, group: request.group, image: request.runnerImage)
                     let text = reply.text ?? "Asked for it."
-                    await MainActor.run { status = text }
-                    LocalNotice.post(title: reply.ok == false ? "Could not ask for a machine" : "Machine on its way", body: text)
+                    // TITLED BY WHICH REFUSAL (Fleet.Reply.refusalTitle), with
+                    // the coordinator's sentence as the body: "No machine
+                    // available" and "Not your machine" are different news,
+                    // and one title for every refusal made them the same.
+                    let title: String? = reply.ok == false ? reply.refusalTitle : nil
+                    await MainActor.run { status = text; statusTitle = title }
+                    LocalNotice.post(title: title ?? "Machine on its way", body: text)
                 } catch {
                     let text = error.localizedDescription
-                    await MainActor.run { status = text }
+                    await MainActor.run { status = text; statusTitle = nil }
                     LocalNotice.post(title: "Could not ask for a machine", body: text)
                 }
                 await refresh(keepStatus: true)
@@ -604,7 +642,10 @@ struct FleetView: View {
                     task: request.task
                 )
                 let text = reply.text ?? "Started."
-                await MainActor.run { status = text }
+                await MainActor.run {
+                    status = text
+                    statusTitle = reply.ok == false ? reply.refusedStartTitle : nil
+                }
                 // BY WHAT THE FLEET SAID, not by whether it answered. A refusal
                 // is an answer, and "Session ready" over "unknown (connected,
                 // no health report yet)" told somebody to go and look at a
@@ -622,7 +663,7 @@ struct FleetView: View {
                 let text = timedOut
                     ? "Not sure it started. Pull to refresh."
                     : error.localizedDescription
-                await MainActor.run { status = text }
+                await MainActor.run { status = text; statusTitle = nil }
                 LocalNotice.post(title: timedOut ? "Session may be starting" : "Could not start a session", body: text)
             }
             await refresh(keepStatus: true)
@@ -660,11 +701,14 @@ struct FleetView: View {
             // completely different problems.
             if reply.ok == false {
                 status = reply.text ?? ""
+                statusTitle = reply.refusalTitle
             } else if !keepStatus {
                 status = ""
+                statusTitle = nil
             }
         } catch {
             status = error.localizedDescription
+            statusTitle = nil
         }
         // THE BIN'S CONTENTS, which `list` does not carry: a bin entry is not
         // a session, it is a session that stopped being one. A separate
@@ -708,9 +752,11 @@ struct FleetView: View {
             let reply = try await work()
             let said = (reply.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             status = said.isEmpty ? (nothingSaid ?? "") : said
+            statusTitle = reply.ok == false ? reply.refusalTitle : nil
             if reply.ok == false { refused += 1 } else { accepted += 1 }
         } catch {
             status = error.localizedDescription
+            statusTitle = nil
             refused += 1
         }
         busy = false

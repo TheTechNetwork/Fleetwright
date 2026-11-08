@@ -339,9 +339,17 @@ private fun RouterRows(r: Fleet.VmEdges.Router) {
     Column(Modifier.semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
         Text(r.name, style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
         val problem = r.problem
+        // THE VERDICT ON THE ROW, THE SENTENCE UNDER DETAILS. Not reached is the word in the attention tone; not asked is Unknown, never a sentence
+        // naming what did not answer (docs/design-system.md, Words, §7). The machine's own words on why open beneath, for whoever is troubleshooting.
         when {
-            r.reached == false && problem != null -> Text(Manage.Words.edgeUnreached(problem), style = Design.Style.label, color = Design.Palette.attention.now)
-            r.reached == null && problem != null -> Text(problem, style = Design.Style.label, color = Design.Palette.inkDim.now)
+            r.reached == false && problem != null -> {
+                Text(Manage.Words.edgeUnreached, style = Design.Style.label, color = Design.Palette.attention.now)
+                Details(problem)
+            }
+            r.reached == null && problem != null -> {
+                Text(Manage.Words.edgeUnknown, style = Design.Style.label, color = Design.Palette.inkDim.now)
+                Details(problem)
+            }
             else -> {
                 Manage.Words.edgeRole(r.role)?.let { Text(it, style = Design.Style.label, color = Design.Palette.ink.now) }
                 // The way out first: it is what the machines behind the router have or have not, and the one line read when something is wrong. Names, leases and the log follow, in that order.

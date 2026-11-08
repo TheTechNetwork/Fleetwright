@@ -870,7 +870,7 @@ export class XoPools {
     // G14). The shared token is what a pool still runs on until then, and
     // what a box this fleet has not named is left with.
     const found = (this.boxId && candidates.find(([, h]) => h.record.box === this.boxId)) || candidates.find(([, h]) => !h.record.box);
-    if (!found) return { ok: false, text: 'This box holds no pool of yours with that machine image.' };
+    if (!found) return { ok: false, text: 'This machine manages no pool of yours with that machine image.' };
     const [k, { record }] = found;
     const image = /** @type {Image} */ (this.seen.get(k)?.images.find((i) => i.id === template));
     // A NETWORK OF THE PERSON'S CHOOSING, only one this box saw for that pool.
@@ -1055,7 +1055,7 @@ export class XoPools {
     const mine = Boolean(made && made.owner === who);
     if (!mine) {
       if (this.handing.has(id)) return { ok: false, text: `${name} is being handed its login already, so this ask is handed nothing.` };
-      if (this.handed.has(id)) return { ok: false, text: `${name} was handed its login by this box already, so this ask is handed nothing.` };
+      if (this.handed.has(id)) return { ok: false, text: `${name} was handed its login by this machine already, so this ask is handed nothing.` };
     }
     const token = this.claude.get(who);
     if (!token) {
@@ -1063,12 +1063,12 @@ export class XoPools {
         ok: false,
         notHere: true,
         text: mine
-          ? `This box made ${name} but holds no Claude login of ${who}’s to hand it${this.holderFor ? ', being the pool’s own machine, which holds the pool and nothing else of theirs' : ''}; another of their machines may.`
-          : `This box holds no Claude login of ${who}’s to hand ${name}.`,
+          ? `This machine made ${name} but has no Claude login of ${who}’s to hand it${this.holderFor ? ', being the pool’s own machine, which manages the pool and nothing else of theirs' : ''}; another of their machines may.`
+          : `This machine has no Claude login of ${who}’s to hand ${name}.`,
       };
     }
     const held = [...this.held.values()].filter((h) => h.owner === who);
-    if (!held.length) return { ok: false, notHere: true, text: `This box holds none of ${who}’s pools, so it cannot see ${name}.` };
+    if (!held.length) return { ok: false, notHere: true, text: `This machine manages none of ${who}’s pools, so it cannot see ${name}.` };
     // CLAIMED, before anything is waited on.
     if (mine) this.made.delete(id);
     this.handing.add(id);
@@ -1140,7 +1140,7 @@ export class XoPools {
     spent();
     return mine
       ? { ok: false, text: `${name} is not on any of your pools any more, so it is handed nothing.` }
-      : { ok: false, notHere: true, text: `${name} is not on any of ${who}’s pools this box holds.` };
+      : { ok: false, notHere: true, text: `${name} is not on any of ${who}’s pools this machine manages.` };
   }
 
   /**
@@ -1161,7 +1161,7 @@ export class XoPools {
     // The pool it was last seen on first, then the rest of this person's.
     const mine = [...this.held.entries()].filter(([, h]) => h.owner === who);
     mine.sort(([a], [b]) => Number(this.#saw(b, name)) - Number(this.#saw(a, name)));
-    if (!mine.length) return { ok: false, notHere: true, text: 'This box holds none of your pools.' };
+    if (!mine.length) return { ok: false, notHere: true, text: 'This machine manages none of your pools.' };
     /** @type {string[]} */
     const unreachable = [];
     for (const [k, { record }] of mine) {
@@ -1212,7 +1212,7 @@ export class XoPools {
             : `${name} is not on the pools of yours that answered, and the rest could not be reached from here: ${unreachable.join('; ')}`,
       };
     }
-    return { ok: false, notHere: true, text: `${name} is not on any of your pools this box holds.` };
+    return { ok: false, notHere: true, text: `${name} is not on any of your pools this machine manages.` };
   }
 
   /**
@@ -1297,7 +1297,7 @@ export class XoPools {
    */
   async look({ owner, address, reply }) {
     const held = this.#heldAt(owner, address);
-    if (!held) return { ok: false, notHere: true, text: `This box holds no token of yours for ${address}.` };
+    if (!held) return { ok: false, notHere: true, text: `This machine has no token of yours for ${address}.` };
     /** @type {any} */
     let rpc = null;
     try {
@@ -1365,7 +1365,7 @@ export class XoPools {
     const checked = xoActionArgs(method, args);
     if (!checked.ok) return { ok: false, text: checked.error };
     const held = this.#heldAt(owner, address);
-    if (!held) return { ok: false, notHere: true, text: `This box holds no token of yours for ${address}.` };
+    if (!held) return { ok: false, notHere: true, text: `This machine has no token of yours for ${address}.` };
     /** @type {any} */
     let rpc = null;
     try {

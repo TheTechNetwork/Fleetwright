@@ -33,11 +33,21 @@ struct VMStandbyView: View {
                     .foregroundStyle(Design.Palette.inkDim)
                 // WHY THE LAST ONE DID NOT COME. The count alone went from "1
                 // being made" to "0 being made" and said nothing about the
-                // machine that had failed in between.
+                // machine that had failed in between. THE WORD ON THE LINE
+                // (ReasonWords.standby) and the machine's sentence under
+                // Details; a coordinator too old to send the code leaves the
+                // sentence on the line, as before.
                 if let failed = kept?.failed {
-                    Text("\(Self.clock(failed.at)): \(failed.text)")
+                    Text("\(Self.clock(failed.at)): \(failed.word)")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.bad)
+                    if failed.word != failed.text {
+                        DisclosureGroup("Details") {
+                            Text(failed.text).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
+                        }
+                        .fleetType(.label)
+                        .frame(minHeight: 44)
+                    }
                 }
                 Picker("Image", selection: $template) {
                     ForEach(images) { image in Text(image.label).tag(image.template) }

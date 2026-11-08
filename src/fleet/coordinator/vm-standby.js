@@ -54,8 +54,21 @@ export const PENDING_MS = 15 * 60_000;
 /**
  * @typedef {{ template: string, count: number, network: string|null }} Wish
  * @typedef {{ owner: string, template: string, network: string|null, at: number, enrolled: boolean }} Kept
- * @typedef {{ at: number, text: string }} Failure
+ * @typedef {{ at: number, text: string, code: FailureCode }} Failure
  */
+
+/**
+ * WHY THE LAST ONE DID NOT COME, AS ONE WORD beside the sentence (`failed.code`
+ * on the snapshot). The phones say the word on the row and keep the sentence
+ * for the details (docs/design-system.md, "Words"); the sentence stays for a
+ * terminal and an older phone. Additive: an old phone ignores it.
+ *
+ *   not_joined   asked for and never enrolled within PENDING_MS
+ *   refused      the machine managing the pool would not make it
+ *   unreachable  the pool could not be reached to make it
+ */
+export const FAILURE_CODES = /** @type {const} */ (['not_joined', 'refused', 'unreachable']);
+/** @typedef {typeof FAILURE_CODES[number]} FailureCode */
 
 export class VmStandby {
   /** @param {{ now?: () => number }} [opts] */
@@ -127,14 +140,15 @@ export class VmStandby {
   }
 
   /**
-   * Why a machine this person keeps ready did not come, in a sentence, kept
-   * until one does. Only for somebody who still keeps some.
+   * Why a machine this person keeps ready did not come, in a sentence and a
+   * word (FAILURE_CODES), kept until one does. Only for somebody who still
+   * keeps some.
    *
-   * @param {string} owner @param {string} text
+   * @param {string} owner @param {string} text @param {FailureCode} code
    */
-  noteFailed(owner, text) {
+  noteFailed(owner, text, code) {
     if (!this.wishes.has(owner)) return;
-    this.failures.set(owner, { at: this.now(), text: String(text).slice(0, 300) });
+    this.failures.set(owner, { at: this.now(), text: String(text).slice(0, 300), code });
   }
 
   /** @param {string} owner @returns {Failure|null} */
@@ -189,6 +203,7 @@ export class VmStandby {
             owner,
             `${id} did not join the fleet within ${PENDING_MS / 60_000} minutes of being asked for, so it was given up on and another is asked for. ` +
               'A machine that cannot look up names or reach this fleet from its network never joins.',
+            'not_joined',
           );
         }
         continue;
@@ -243,7 +258,11 @@ export class VmStandby {
     }
     for (const e of Array.isArray(s.failures) ? s.failures.slice(0, MAX_PEOPLE) : []) {
       if (!Array.isArray(e) || typeof e[0] !== 'string' || !this.wishes.has(e[0]) || !e[1] || typeof e[1].text !== 'string') continue;
-      this.failures.set(e[0], { at: Number(e[1].at) || 0, text: e[1].text.slice(0, 300) });
+      // A failure saved before the word was kept is read as the machine
+      // refused, which is the one the sentence most often was; a word that is
+      // not one of ours is not believed.
+      const code = FAILURE_CODES.includes(e[1].code) ? /** @type {FailureCode} */ (e[1].code) : 'refused';
+      this.failures.set(e[0], { at: Number(e[1].at) || 0, text: e[1].text.slice(0, 300), code });
     }
   }
 }

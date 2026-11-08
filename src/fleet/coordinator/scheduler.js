@@ -74,10 +74,32 @@ const PINNED = new Set([
 /** Verbs answered by asking every host and merging. */
 const FANOUT = new Set(['list', 'profiles', 'secrets']);
 
-/** Why no machine may take an admin's hypervisor probe or setup. */
+/**
+ * Why no machine may take an admin's hypervisor probe or setup: the result,
+ * with the fact that makes it so, in the person's nouns (docs/design-system.md,
+ * "Words").
+ */
 const NO_OWN_MACHINE =
-  'No connected permanent machine is one of the fleet\u2019s own. A box a member enrolled acts only for them, ' +
-  'and is sent nobody else\u2019s probe or setup.';
+  'No connected permanent machine of your fleet\u2019s own can take this: a machine a member enrolled acts only for them.';
+
+/**
+ * Why a `host_unavailable` refusal was made, as one word beside its sentence
+ * (`why` on the placement, `error.why` on the reply). The phones title the
+ * refusal from it and keep the sentence for the details; a terminal prints
+ * the sentence. Additive, like the registry's reasonCode: an old phone
+ * ignores it, and a phone sent none titles the refusal "Machine unavailable",
+ * which is also what a host that is merely degraded or unknown gets, because
+ * neither of those is `offline` and the title must not say so (C-5).
+ *
+ *   offline           the named host is not connected
+ *   not_yours         the named host does not act for this person
+ *   enrolled_by_other the named host acts for the member who enrolled it
+ *   pools_own         the named host is a pool's own machine, which runs no sessions
+ *   temporary_other   the named host is a temporary machine somebody else asked for
+ *   no_credentials    the named host holds no credentials of this person's
+ */
+export const UNAVAILABLE_WHY = /** @type {const} */ (['offline', 'not_yours', 'enrolled_by_other', 'pools_own', 'temporary_other', 'no_credentials']);
+/** @typedef {typeof UNAVAILABLE_WHY[number]} UnavailableWhy */
 
 /** Verbs that carry, or act with, one person's credential. See `whose` in place(). */
 const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify', 'setuptoken']);
@@ -89,6 +111,7 @@ const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify', 'setupt
  * @property {Array<import('./registry.js').HostEntry & {send: Function}>} [hosts]
  * @property {string} [reason]
  * @property {string} [code]
+ * @property {UnavailableWhy} [why]  beside `code: 'host_unavailable'`, which kind (UNAVAILABLE_WHY)
  */
 
 /**
@@ -137,6 +160,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       return {
         kind: 'refused',
         code: 'host_unavailable',
+        why: 'no_credentials',
         reason: `${preferHost} does not hold credentials for you. It acts for the person who enrolled it, or asked for it, and nobody else.`,
       };
     }
@@ -372,6 +396,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
         : {
             kind: 'refused',
             code: 'host_unavailable',
+            why: 'offline',
             reason: `${preferHost} is not connected. These are: ${hosts.map((h) => h.hostId).join(', ')}.`,
           };
     }
@@ -421,13 +446,19 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       const chosen = durable.find((h) => h.hostId === preferHost);
       return chosen
         ? { kind: 'host', host: chosen }
-        : {
-            kind: 'refused',
-            code: 'host_unavailable',
-            reason: permanent.some((h) => h.hostId === preferHost)
-              ? `${preferHost} acts for the person who enrolled it, and runs nobody else\u2019s setup.`
-              : `${preferHost} is not a connected permanent machine. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
-          };
+        : permanent.some((h) => h.hostId === preferHost)
+          ? {
+              kind: 'refused',
+              code: 'host_unavailable',
+              why: 'enrolled_by_other',
+              reason: `${preferHost} acts for the person who enrolled it, and runs nobody else\u2019s setup.`,
+            }
+          : {
+              kind: 'refused',
+              code: 'host_unavailable',
+              why: 'offline',
+              reason: `${preferHost} is not a connected permanent machine. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
+            };
     }
     if (durable.length === 1) return { kind: 'host', host: durable[0] };
     return {
@@ -464,13 +495,19 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       const chosen = durable.find((h) => h.hostId === preferHost);
       return chosen
         ? { kind: 'host', host: chosen }
-        : {
-            kind: 'refused',
-            code: 'host_unavailable',
-            reason: permanent.some((h) => h.hostId === preferHost)
-              ? `${preferHost} does not act for you. It acts for the person who enrolled it, and nobody else.`
-              : `${preferHost} is not a connected permanent host. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
-          };
+        : permanent.some((h) => h.hostId === preferHost)
+          ? {
+              kind: 'refused',
+              code: 'host_unavailable',
+              why: 'not_yours',
+              reason: `${preferHost} does not act for you. It acts for the person who enrolled it, and nobody else.`,
+            }
+          : {
+              kind: 'refused',
+              code: 'host_unavailable',
+              why: 'offline',
+              reason: `${preferHost} is not a connected permanent host. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
+            };
     }
     if (durable.length === 1) return { kind: 'host', host: durable[0] };
     return {
@@ -585,6 +622,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
         : {
             kind: 'refused',
             code: 'host_unavailable',
+            why: 'offline',
             reason: `${preferHost} is not connected. Reachable: ${reachable.map((h) => h.hostId).join(', ')}.`,
           };
     }
@@ -744,6 +782,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     return {
       kind: 'refused',
       code: 'host_unavailable',
+      why: 'pools_own',
       reason: `${preferHost} is a pool's own machine. It holds the pool for the fleet and runs no sessions.`,
     };
   }
@@ -794,9 +833,15 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       // dials back. "Not a host this fleet knows" sent the caller to look for
       // a typo in a name they had just used.
       const dropped = known ? null : registry.recentlyDropped?.(preferHost);
+      // `why` ONLY WHEN IT IS TRUE: a known host that is offline, or one that
+      // dropped, is offline; one that is degraded or unknown is not, and a
+      // name this fleet does not know is nothing at all. Those two go without,
+      // and the phone titles them "Machine unavailable" (C-5).
+      const offline = known ? known.state === 'offline' : Boolean(dropped);
       return {
         kind: 'refused',
         code: 'host_unavailable',
+        ...(offline ? { why: 'offline' } : {}),
         reason: known
           ? `${preferHost} is ${known.state}: ${known.reason}`
           : dropped
@@ -815,6 +860,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       return {
         kind: 'refused',
         code: 'host_unavailable',
+        why: 'temporary_other',
         reason: `${preferHost} is a temporary machine somebody else asked for. It takes work only from them.`,
       };
     }
@@ -822,6 +868,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       return {
         kind: 'refused',
         code: 'host_unavailable',
+        why: 'enrolled_by_other',
         reason: `${preferHost} acts for the person who enrolled it, and takes work only from them.`,
       };
     }
@@ -983,7 +1030,7 @@ function describeWhyNoHosts(registry) {
  */
 function describeWhyNoHolders(registry) {
   if (!registry.reachable().length) return describeWhyNoHosts(registry);
-  return 'No connected host holds credentials for you. A box another member enrolled, or a temporary machine somebody else asked for, acts only for them.';
+  return 'No connected machine holds credentials for you: a machine another member enrolled, or a temporary one somebody else asked for, acts only for them.';
 }
 
 /**

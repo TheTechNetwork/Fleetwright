@@ -1351,7 +1351,7 @@ export class Sidecar {
       // this is the whole reason, rather than reading it out of the sentence.
       return {
         ok: false,
-        text: 'This box holds no GitHub App key, so it cannot mint repository tokens.',
+        text: 'This machine has no GitHub App key, so it cannot make repository tokens.',
         error: { code: 'not_a_minter' },
         needsMinter: true,
       };

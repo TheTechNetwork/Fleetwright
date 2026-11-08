@@ -39,6 +39,12 @@ struct HostView: View {
     let initialHealth: Fleet.HostHealth?
     let initialState: String?
     let initialReason: String?
+    /// The code beside the reason (Fleet.FleetHost.reasonCode), which gives
+    /// the page its status word and puts the sentence under Details. Nil
+    /// from an older coordinator, and for a silent or revoked machine, whose
+    /// sentence this screen's list composed itself: then the sentence is
+    /// the status line, as before.
+    var initialReasonCode: String? = nil
     /// The membership record: fingerprint and whether it has been revoked.
     let enrolled: Fleet.Host?
     /// A pool's own machine, as the list last said (Fleet.FleetHost.holder).
@@ -72,6 +78,7 @@ struct HostView: View {
     @State private var health: Fleet.HostHealth?
     @State private var state: String?
     @State private var reason: String?
+    @State private var reasonCode: String?
     @State private var holder = false
     @State private var holds: String?
     @State private var busy = false
@@ -283,6 +290,7 @@ struct HostView: View {
             health = initialHealth
             state = initialState
             reason = initialReason
+            reasonCode = initialReasonCode
             holder = initialHolder
             holds = initialHolds
             channel = initialHealth?.channel
@@ -310,9 +318,23 @@ struct HostView: View {
                 Spacer(minLength: 0)
             }
             // Only when it is news. "reporting normally" under the word
-            // "healthy" is the same fact twice.
+            // "healthy" is the same fact twice. THE WORD AS THE STATUS LINE
+            // (ReasonWords.host) and the fleet's sentence under Details: the
+            // sentence is the mechanism, which this page says once, behind a
+            // disclosure (docs/design-system.md, Words). With no code, from
+            // an older coordinator or for a machine the list composed the
+            // sentence for, the sentence is the line, as before.
             if let reason, !reason.isEmpty, state != "healthy" {
-                Text(reason).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                if let word = ReasonWords.host(reasonCode) {
+                    Text(word).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                    DisclosureGroup("Details") {
+                        Text(reason).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
+                    }
+                    .fleetType(.label)
+                    .frame(minHeight: 44)
+                } else {
+                    Text(reason).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                }
             }
             if let accounts = health?.claudeAccounts, whoCanStartIsNews(accounts, state: state) {
                 let runner = enrolled?.ephemeral == true
@@ -978,6 +1000,7 @@ struct HostView: View {
         health = mine.health
         state = mine.state
         reason = mine.reason
+        reasonCode = mine.reasonCode
         holder = mine.holder == true
         if let now = mine.health?.channel { channel = now }
         channelPinned = mine.health?.channelPinned ?? channelPinned

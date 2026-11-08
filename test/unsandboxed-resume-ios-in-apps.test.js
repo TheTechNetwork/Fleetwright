@@ -101,6 +101,8 @@ test('iOS titles a refused start by the coordinator’s code, not as a failure t
   const [unsandboxed, outdated] = TITLES;
   assert.ok(IOS.includes(`case "unsandboxed": return "${unsandboxed}"`));
   assert.ok(IOS.includes(`case "host_outdated": return "${outdated}"`));
-  assert.match(IOS, /default: return "Could not start a session"/);
+  // Any other refusal is titled by its code's word (ReasonWords.refusal,
+  // test/reasons-in-apps.test.js); it was one sentence for every code.
+  assert.match(IOS, /default: return refusalTitle/);
   // Which notification carries it is claude-setup-in-apps.test.js's.
 });
