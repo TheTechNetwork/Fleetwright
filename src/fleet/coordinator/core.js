@@ -296,6 +296,7 @@ export const EDGE_REPORT = Object.freeze({
  *   pools: string[], version: string|null, supported: boolean|null, fenced: boolean|null,
  *   images: number, machines: number,
  *   holder: { name: string, running: boolean }|false|null,
+ *   edge: { running: boolean, blocks: boolean }|false|null,
  * }} HypervisorRow
  */
 
@@ -7550,7 +7551,7 @@ export class CoordinatorCore {
         const key = `${kind} ${address}`;
         let row = found.get(key);
         if (!row) {
-          row = { address, kind, boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, holder: null, imageIds: new Set(), machineNames: new Set() };
+          row = { address, kind, boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, holder: null, edge: null, imageIds: new Set(), machineNames: new Set() };
           found.set(key, row);
         }
         row.boxes.push({ hostId: host.hostId, reachable: typeof e.reachable === 'boolean' ? e.reachable : null, problem: e.reachable === false ? text(e.problem, 200) : null });
@@ -7574,6 +7575,15 @@ export class CoordinatorCore {
             const was = row.holder || null;
             row.holder = { name: text(h.name, 80) ?? '', running: Boolean(was?.running) || h.running === true };
           } else row.holder ??= false;
+        }
+        // ITS EDGE ROUTER (docs/proxmox.md, "The edge router"), said the same
+        // way: false only from a box that looked, running when any saw it up.
+        if (Array.isArray(e.edges)) {
+          const r = e.edges.find((/** @type {any} */ x) => typeof x?.name === 'string');
+          if (r) {
+            const was = row.edge || null;
+            row.edge = { running: Boolean(was?.running) || r.running === true, blocks: Boolean(was?.blocks) || r.blocks === true };
+          } else row.edge ??= false;
         }
       }
     }
