@@ -493,8 +493,53 @@ cat >"$SNIPPET_DIR/fleetwright-pve-vendor.yaml" <<'VENDOR'
 # Fleetwright: a machine cloned from this template joins the fleet by itself
 # (docs/proxmox.md). The join is in its SMBIOS serial, put there by the box
 # that cloned it; this reads it as root on the first boot.
+write_files:
+  - path: /usr/local/sbin/fleetwright-join-report
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      # Says on the console how this machine's join is going, until it has joined
+      # (docs/proxmox.md, "A machine that does not join"). The box that made it
+      # reads the console; nothing here is sent anywhere else.
+      out=/dev/ttyS0
+      say() { printf 'fleetwright-join: %s\n' "$*" >"$out" 2>/dev/null || true; }
+      joined() { [ -s /var/lib/fleetwright-sidecar/host-id.json ]; }
+      url() { sed -n 's/^FLEETWRIGHT_COORDINATOR_URL=//p' /etc/fleetwright-sidecar.env 2>/dev/null | head -n 1; }
+      report() {
+        u="$(url)"
+        h="$(printf '%s' "$u" | sed -E 's#^https://([^/:]+).*#\1#')"
+        say "not joined yet, $(cut -d. -f1 /proc/uptime) seconds after boot"
+        say "addresses: $(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2 " " $4}' | tr '\n' ' ')"
+        say "route: $(ip -4 route show default 2>/dev/null | head -n 1)"
+        if command -v resolvectl >/dev/null 2>&1; then
+          say "name servers: $(resolvectl dns 2>/dev/null | tr '\n' ' ')"
+        else
+          say "name servers: $(awk '/^nameserver/ {print $2}' /etc/resolv.conf | tr '\n' ' ')"
+        fi
+        if [ -n "$h" ]; then
+          a="$(getent ahostsv4 "$h" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')"
+          say "$h: ${a:-no answer from the name server}"
+          c="$(curl -sS -o /dev/null -m 10 -w '%{http_code}' "$u/" 2>&1 | tr '\n' ' ' | cut -c1-200)"
+          say "the fleet at $u answers: $c"
+        else
+          say "no fleet named yet: the join has not run"
+        fi
+        say "services: fleetwright $(systemctl is-active fleetwright 2>/dev/null), sidecar $(systemctl is-active fleetwright-sidecar 2>/dev/null)"
+        journalctl -u fleetwright-sidecar -n 12 --no-pager -o cat 2>/dev/null |
+          sed -E 's/fwt_[0-9a-f_]+/[ticket]/g; s/[A-Za-z0-9_+\/=.-]{32,}/[removed]/g' | cut -c1-240 |
+          while IFS= read -r l; do say "sidecar: $l"; done
+      }
+      t=0
+      while [ "$t" -le 780 ]; do
+        if joined; then say "joined"; exit 0; fi
+        case "$t" in 60 | 180 | 420 | 720) report ;; esac
+        sleep 15
+        t=$((t + 15))
+      done
+      say "gave up saying: not joined after 13 minutes"
 runcmd:
   - [sh, -c, 'umask 077; mkdir -p /run/fleetwright && cat /sys/class/dmi/id/product_serial >/run/fleetwright/join.json']
+  - [systemd-run, --unit=fleetwright-join-report, --no-block, --quiet, /usr/local/sbin/fleetwright-join-report]
   - [sh, -c, 'j=/usr/local/sbin/fleetwright-vm-join; [ -x "$j" ] || j=/opt/fleetwright/current/install/fleetwright-vm-join; exec "$j" "$0"', /run/fleetwright/join.json]
 VENDOR
 cat <<'BUILD' | sed "s/@CHANNEL@/$CHANNEL/" >"$SNIPPET_DIR/fleetwright-pve-build.yaml"

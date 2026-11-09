@@ -178,17 +178,27 @@ export function connectPinnedTls({ host, port, pin, timeoutMs = 15_000, via = nu
 /**
  * A WebSocket client on a socket that is already connected and checked.
  *
+ * HEADERS AND BINARY, for Proxmox VE's console (pve-console.js): its
+ * `vncwebsocket` wants the API token in `Authorization` on the upgrade itself
+ * and speaks in binary frames. `headers` names each one; a value with a line
+ * break is refused, so nothing put in one can add a header of its own.
+ * `binary` takes binary frames as messages, read as UTF-8, where Xen
+ * Orchestra's link refuses them. `who` is the server, in what a failure says.
+ *
  * @param {import('node:tls').TLSSocket} socket
- * @param {{ host: string, port: number, path?: string, timeoutMs?: number }} opts
+ * @param {{ host: string, port: number, path?: string, timeoutMs?: number, headers?: Record<string, string>, binary?: boolean, who?: string }} opts
  * @returns {Promise<WebSocketLink>}
  */
-export function upgrade(socket, { host, port, path = '/api/', timeoutMs = 15_000 }) {
+export function upgrade(socket, { host, port, path = '/api/', timeoutMs = 15_000, headers: extra = {}, binary = false, who = 'Xen Orchestra' }) {
+  for (const [k, v] of Object.entries(extra)) {
+    if (!/^[A-Za-z0-9-]+$/.test(k) || /[\r\n]/.test(String(v))) return Promise.reject(new Error(`not a header to send: ${k}`));
+  }
   return new Promise((resolve, reject) => {
     const key = randomBytes(16).toString('base64');
     const expect = createHash('sha1').update(key + GUID).digest('base64');
     const hostHeader = net.isIPv6(host) ? `[${host}]:${port}` : `${host}:${port}`;
     let head = Buffer.alloc(0);
-    const timer = setTimeout(() => fail(new Error('Xen Orchestra did not accept the WebSocket upgrade in time')), timeoutMs);
+    const timer = setTimeout(() => fail(new Error(`${who} did not accept the WebSocket upgrade in time`)), timeoutMs);
     let settled = false;
     /** @param {Error} e */
     const fail = (e) => {
@@ -202,14 +212,14 @@ export function upgrade(socket, { host, port, path = '/api/', timeoutMs = 15_000
     };
     // A server that hangs up mid-handshake is said so at once, not after the
     // whole timeout spent waiting for an answer that cannot come.
-    const onClose = () => fail(new Error('Xen Orchestra closed the connection before accepting the API upgrade'));
+    const onClose = () => fail(new Error(`${who} closed the connection before accepting the API upgrade`));
     socket.once('close', onClose);
     /** @param {Buffer} chunk */
     const onData = (chunk) => {
       head = Buffer.concat([head, chunk]);
       const end = head.indexOf('\r\n\r\n');
       if (end < 0) {
-        if (head.length > 16 * 1024) fail(new Error('Xen Orchestra answered the upgrade with something that is not HTTP'));
+        if (head.length > 16 * 1024) fail(new Error(`${who} answered the upgrade with something that is not HTTP`));
         return;
       }
       clearTimeout(timer);
@@ -224,15 +234,17 @@ export function upgrade(socket, { host, port, path = '/api/', timeoutMs = 15_000
       }));
       if (!status || status[1] !== '101' || headers.get('sec-websocket-accept') !== expect) {
         socket.destroy();
-        reject(new Error(`Xen Orchestra refused the API connection (${status ? status[1] : 'no status'})`));
+        reject(new Error(`${who} refused the API connection (${status ? status[1] : 'no status'})`));
         return;
       }
-      resolve(new WebSocketLink(socket, head.subarray(end + 4)));
+      resolve(new WebSocketLink(socket, head.subarray(end + 4), { binary }));
     };
     socket.on('data', onData);
     socket.write(
       `GET ${path} HTTP/1.1\r\nHost: ${hostHeader}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
-        `Sec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+        `Sec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n` +
+        Object.entries(extra).map(([k, v]) => `${k}: ${v}\r\n`).join('') +
+        '\r\n',
     );
   });
 }
@@ -242,9 +254,11 @@ export class WebSocketLink {
   /**
    * @param {import('node:net').Socket} socket
    * @param {Buffer} [rest] bytes that arrived with the upgrade answer
+   * @param {{ binary?: boolean }} [opts] binary frames are messages too
    */
-  constructor(socket, rest = Buffer.alloc(0)) {
+  constructor(socket, rest = Buffer.alloc(0), { binary = false } = {}) {
     this.socket = socket;
+    this.binary = binary;
     this.buffer = Buffer.alloc(0);
     /** @type {Buffer[]} */
     this.fragments = [];
@@ -301,7 +315,7 @@ export class WebSocketLink {
       } else if (opcode === 0x8) {
         this.#closed('Xen Orchestra closed the connection');
         return;
-      } else if (opcode === 0x1 || opcode === 0x0) {
+      } else if (opcode === 0x1 || opcode === 0x0 || (opcode === 0x2 && this.binary)) {
         this.fragments.push(payload);
         const size = this.fragments.reduce((n, b) => n + b.length, 0);
         if (size > MAX_MESSAGE_BYTES) {

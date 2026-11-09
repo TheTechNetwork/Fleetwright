@@ -43,6 +43,7 @@
 // recorded with its unguarded matcher, which are truncated or missing outright
 // on any pane that is not exactly 80 columns wide.
 
+import { BootConsoles, bootLogAnswer } from './pve-console.js';
 import os from 'node:os';
 import { validateIntent, isMutating, PROTOCOL_VERSION, PROTOCOL_MIN, REPO_RE, LINK_ROLES } from '../protocol/intents.js';
 import { readConfigFrame } from '../protocol/config-frame.js';
@@ -1158,6 +1159,14 @@ export class Sidecar {
       // A LAB IS A VM in a lab of its own (xo-pools.js, make), never a runner.
       if (intent.verb === 'provision' && (intent.params?.platform === 'vm' || intent.params?.platform === 'lab')) return reply(await this.#makeVm(intent));
       if (intent.verb === 'vmctl') return reply(await this.#vmctl(intent));
+      // WHAT A MACHINE IT MADE PRINTED AS IT BOOTED, kept in this process
+      // (pve-console.js), for the machine that never joined. The hub has no
+      // part in it, so it is answered here, past the same check a journal is.
+      if (intent.verb === 'logs' && intent.params?.service === 'boot' && !intent.params?.name) {
+        const pve = /** @type {any} */ (this.pools)?.pve;
+        const p = intent.params;
+        return reply(bootLogAnswer(pve?.consoles ?? new BootConsoles(), { machine: p.machine ? String(p.machine) : null, lines: p.lines ? Number(p.lines) : null }));
+      }
       // A MACHINE THIS BOX MADE ASKING FOR ITS OWNER'S CLAUDE LOGIN, which is
       // in this process's memory from their vault and goes out sealed to the
       // machine's key (xo-pools.js, handLogin).
@@ -2302,7 +2311,9 @@ export class Sidecar {
       // Null on a host too old to send it, which is CANNOT TELL: the verb
       // still works there, the frame just does not say which of the three
       // will answer with something.
-      logs: this.#logSources(),
+      // `boot` WHERE THIS BOX MAKES PROXMOX VE MACHINES: what each printed as
+      // it booted (pve-console.js), which a phone offers beside the journals.
+      logs: this.#withBoot(this.#logSources()),
       // WHAT THIS BOX PUTS INTO EVERY SESSION, as a number rather than a flag.
       //
       // House rules are read on every turn of every session, so their size IS
@@ -2754,6 +2765,12 @@ export class Sidecar {
    * above, which a phone can change and which are read on every frame.
    * @returns {string[]|null}
    */
+  /** @param {string[]|null} sources */
+  #withBoot(sources) {
+    if (!sources || !(/** @type {any} */ (this.pools)?.pve?.held?.size)) return sources;
+    return [...sources, 'boot'];
+  }
+
   #logSources() {
     if (!this.hubConfig?.systemctlBin) return null;
     this.logSources ??= Object.entries(LOG_SOURCES)

@@ -1159,7 +1159,15 @@ export const VERBS = Object.freeze({
       // A FIXED SET, not a service name. The host runs `journalctl -u <x>`,
       // and an enum is the difference between naming three units this project
       // installed and handing a remote caller the unit namespace of the box.
-      service: { type: 'enum', required: false, values: ['hub', 'coordinator', 'sidecar'] },
+      //
+      // `boot` IS NOT A JOURNAL: it is what a Proxmox VE machine this box
+      // made printed on its console while it booted, which the box kept for
+      // the machine that never joins and that nothing can reach
+      // (src/fleet/host/pve-console.js). Read like a journal, because it is
+      // everybody's on the box the same way: what the machines it made for
+      // anybody said. With `machine`, that one machine's; without, the list.
+      service: { type: 'enum', required: false, values: ['hub', 'coordinator', 'sidecar', 'boot'] },
+      machine: { type: 'name', required: false, since: 18 },
       lines: { type: 'int', required: false, min: 1, max: 200 },
     },
     // READ-ONLY, but not a fan-out: logs are per-box by nature and merging
@@ -1173,7 +1181,8 @@ export const VERBS = Object.freeze({
     // reason to think this was it.
     summary:
       'Read output. With `name`, a session\'s own console output — this survives after the session ends, ' +
-      'unlike its pane. With `service`, a service journal on one host.',
+      'unlike its pane. With `service`, a service journal on one host. With `service` boot, what a ' +
+      'Proxmox VE machine this host made printed while it booted, for one that never joined: name it with `machine`.',
   },
   // --- the workspace ------------------------------------------------------
   //

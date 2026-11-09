@@ -560,6 +560,50 @@ real node: the image under KVM's virtio, which it was checked under QEMU
 with, `import-from` with the storage the setup chose, and the router's
 guest agent reporting its WAN address to the token.
 
+### A machine that does not join
+
+Asked for: *"add some troubleshooting for VMs that dont join as we cant ssh
+and get the logs"*. A machine that never joins is the one nothing reaches: no
+session to read, SSH only from a network the person is on, and an edge router
+with no login. What it said is on its serial console, which is also its screen,
+so **the box that made it keeps what its console printed** while it boots
+(`src/fleet/host/pve-console.js`):
+
+- **From the moment it starts**, through `termproxy` and `vncwebsocket` with
+  the token's console privilege, the one the phone's console already uses
+  (VM.Console). Nothing is typed into the machine: the console is read, and
+  the only things sent are the login Proxmox VE asks for and a keepalive.
+- **For 15 minutes at most**, the time a machine has to join, or until it says
+  it has joined, or until its console closes. The last 48 KB of each, the 16
+  newest machines, for a day, in the box's memory. While the box reads it,
+  Proxmox VE's own Console button on that machine waits.
+- **What is on it**: the kernel, systemd and cloud-init as they boot, the join
+  script's own lines, and `fleetwright-join:` lines from the report every
+  machine now boots with (the vendor snippet, `JOIN_REPORT` in
+  `pve-pools.js`). At one, three, seven and twelve minutes, while it has not
+  joined, the report says its addresses, its route, its name servers, what they
+  say for the fleet's name, whether the fleet answers, both services' states
+  and the sidecar's last twelve lines, with anything shaped like a ticket or a
+  token taken out. `fleetwright-join: joined` once the coordinator has named it.
+  The report is in the snippet, so **a cluster has it once the setup runs
+  again**, with the image it already has.
+
+**Reading it**: `fleet_logs` on the box that made it, with `service: boot`.
+Without `machine` it lists the machines it made, newest first, and whether each
+joined; with `machine: vm-…` it is that machine's console. It is read as a
+journal is: by the fleet's admin, or by the one person a box acts for. On the
+phones, a box's page lists it under Logs as **Machines it made**.
+
+What it usually says, and what it means:
+
+| The report says | What it means |
+|---|---|
+| no address on any interface | the network it is on gives none: a lab with no DHCP, or an edge router not up yet |
+| an address, no route | the network has no gateway for it |
+| the fleet's name: no answer from the name server | DNS: the edge router's Unbound is down, or the lab's gateway answers nothing |
+| a name, and the fleet answers `000` | the name resolves and nothing gets there: a firewall, the router's threat rules, or no way out |
+| the fleet answers `200` and the sidecar says it was refused | the ticket: spent, or older than 15 minutes |
+
 ## Not built
 
 - The direct path's steps on the Lock Screen and in Android's ongoing
