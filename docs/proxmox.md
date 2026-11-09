@@ -419,7 +419,15 @@ files, logging, or dropping inline.
   whether it drops, or **Make it again**, builds a new one and removes the old
   once the new image is ready, so machines lose their way out only while
   the new one starts.
-- It needs about 4 GB free in `/var/tmp` on the node while it is built.
+- It needs about 4 GB free in `/var/tmp` on the node while it is built. An
+  edge that cannot be built says why and costs the cluster its edge, not its
+  setup: the token's line still comes at the end.
+
+**On the phones** it is an option of the setup, **An edge router**, on unless
+turned off, with **Drop what the threat rules match** under it, and a section
+of the cluster's page: running and whether it drops or logs, or off, with
+**Make it again**, or **Make the edge router** where a box looked and saw
+none.
 
 **Not built yet**: watching it from the phone (its CARP, Unbound and
 gateway status and its syslog, which Xen Orchestra's routers send to the

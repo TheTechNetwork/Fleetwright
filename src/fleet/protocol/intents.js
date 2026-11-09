@@ -320,6 +320,7 @@ export const PVESETUP_STEPS = Object.freeze([
   'fence',
   'networks',
   'image',
+  'edge',
   'holder',
   'line',
 ]);

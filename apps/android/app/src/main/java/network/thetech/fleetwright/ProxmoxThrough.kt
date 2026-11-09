@@ -74,6 +74,7 @@ internal object ProxmoxThrough {
         "fence" to "Making the firewall group",
         "networks" to "Making lab and group networks",
         "image" to "Building the machine image",
+        "edge" to "Building the edge router",
         "holder" to "Making its own machine",
         "line" to "Sending the token to this phone",
     )

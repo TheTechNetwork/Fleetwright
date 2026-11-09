@@ -2237,12 +2237,17 @@ class Fleet(
         val machines: Int?,
         /** ITS OWN MACHINE (docs/proxmox.md): null is no box said, never none. */
         val holder: OwnMachine? = null,
+        /** ITS EDGE ROUTER (docs/proxmox.md): null is no box said, never none. */
+        val edge: EdgeRouter? = null,
     ) {
         val onProxmox: Boolean get() = kind == "proxmox"
     }
 
     /** A box looked and saw none ([name] null), or the machine and whether it is up. */
     data class OwnMachine(val name: String?, val running: Boolean)
+
+    /** A box looked and saw none ([there] false), or the router, whether it is up, and whether it drops. */
+    data class EdgeRouter(val there: Boolean, val running: Boolean, val blocks: Boolean)
 
     /** What one box holding a hypervisor last saw: null is it has not looked yet, never no. */
     data class HypervisorBox(val hostId: String, val reachable: Boolean?, val problem: String?)
@@ -2272,6 +2277,13 @@ class Fleet(
                     fenced = flag(o, "fenced"),
                     images = count(o, "images"),
                     machines = count(o, "machines"),
+                    edge = o.opt("edge").let { e ->
+                        when {
+                            e == false -> EdgeRouter(false, false, false)
+                            e is JSONObject -> EdgeRouter(true, e.optBoolean("running", false), e.optBoolean("blocks", false))
+                            else -> null
+                        }
+                    },
                     holder = o.opt("holder").let { h ->
                         when {
                             h == false -> OwnMachine(null, false)
