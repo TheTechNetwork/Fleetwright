@@ -292,6 +292,28 @@ run, which fetches the script from this repository's `main`, and takes the
 line. It keeps the line in the vault as `hypervisor:<address>`, and the
 boxes pick it up on their next vault pass, within ten minutes.
 
+### The cluster's page
+
+A cluster's page on the phones is a Xen Orchestra pool's page in shape, card
+for card, because the two side by side were *"Two completely dif UIs"*:
+
+1. **How it is**: the one sentence (Ready, and which machines make machines
+   on it, or what is wrong), with the facts the machines could tell under
+   it: its Proxmox VE version, its pool, whether the datacenter firewall is on.
+2. **Edge routers**: the very card a pool's page has
+   (`EdgeRoutersCard` on iOS, `EdgeCard` on Android), one word per router and
+   its DNS, opening the routers' page. A cluster adds one line of its own,
+   running and whether they drop or log, and says so before any machine has
+   read them. Where it has none, the card says that.
+3. **Machines**: the machines that reached it, a card each, as a pool's hosts.
+4. **Its own machine**: its name and whether it runs.
+5. At the foot, what can be done, each with what it costs: **Make the edge
+   router again**, **Make its own machine again**, **Turn on the datacenter
+   firewall** where it is off, and **Set it up again**.
+
+`test/pve-holder-in-apps.test.js` holds both pages to the one card, in the
+same place.
+
 ### What it makes
 
 Finding each first, so it is safe to run again:
@@ -427,7 +449,7 @@ files, logging, or dropping inline.
   hold it to the internet. A router that is off is no way out, and nothing
   is put behind it.
 - **Running the setup again keeps it**, and starts it if it is off. Changing
-  whether it drops, or **Make it again**, builds a new one and removes the old
+  whether it drops, or **Make the edge router again**, builds a new one and removes the old
   once the new image is ready, so machines lose their way out only while
   the new one starts.
 - It needs about 4 GB free in `/var/tmp` on the node while it is built. An
@@ -436,9 +458,9 @@ files, logging, or dropping inline.
 
 **On the phones** it is an option of the setup, **An edge router**, on unless
 turned off, with **Drop what the threat rules match** under it, and a section
-of the cluster's page: running and whether it drops or logs, or off, with
-**Make it again**, or **Make the edge router** where a box looked and saw
-none.
+of the cluster's page: the **Edge routers** card, saying running and whether
+it drops or logs, or off, and at the foot of the page **Make the edge router
+again**, or **Make the edge router** where a box looked and saw none.
 
 #### Watching it
 
@@ -477,15 +499,17 @@ the same card on the cluster's page and the same page behind it.
   router and waits up to three minutes for one just made to say. With no
   machine of its own running, the router is built sending its logs nowhere,
   and its state is still read. Where the logs go is not a reason to build it
-  again: **Make it again** sends them to the machine there now.
+  again: **Make the edge router again** sends them to the machine there now.
 - **A router from before this** has no key, and the next setup run makes it
   again once to give it one, as a Xen Orchestra pool's is.
 - **Which box reads it**: one that reached the cluster's Proxmox VE, and no
   other, since the router answers on the same network. A box that cannot is
   shown as cannot tell, never as down, in Proxmox VE's words.
 
-**On the phones**, the cluster's page has **How it is** under its edge
-router: the one word a pool's card gives each router (Internet up or down,
+**On the phones**, the cluster's page has the **Edge routers** card a pool's
+page has, the same card in the same place, second, under the card that says
+how the cluster is (asked for on seeing the two pages side by side: *"Two
+completely dif UIs"*). It names each router with the one word a pool's card gives it (Internet up or down,
 Primary or Standby where there are two, Unknown when no machine could read
 it), opening the same page a pool's routers have: the numbers, the names it
 refused most and the log lines lately, Suricata's among them. Before any
@@ -527,7 +551,7 @@ gave it, and the second updates itself an hour after the first.
 **On the phones** it is **Two edge routers**, under the edge router's
 options. The cluster's page says "Two running" and lists each by name with
 its own word (Primary, Standby, or what is wrong), opening the routers' page;
-**Make it again** makes two again.
+**Make the edge router again** makes two again.
 
 #### Labs behind it
 

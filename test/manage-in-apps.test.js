@@ -390,7 +390,7 @@ test('both phones keep the routers’ key a policy job seals back, beside the po
   assert.match(bare(read('apps/android/app/src/main/java/network/thetech/fleetwright/XoHandoff.kt')), /record\.put\("edge", JSONObject\(\)\.put\("key", edgeKey\)\.put\("secret", secret\)\.put\("pin", pin\)\.put\("routers", routers\)\)/);
   // The card, under the status, on both; only once the fleet was asked, and not from a coordinator too old to say.
   assert.match(bare(IOS_SCREEN), /statusCard\s*\.fleetRow\(\)\s*if edgesAsked && edgesKnown \{\s*edgeCard/);
-  assert.match(bare(KT_SCREEN), /StatusCard\(watch, masters, onSetUpAgain = [^\n]*\)\s*if \(edgesAsked && edgesKnown\) EdgeCard\(edges, edgesFailed\) \{ showingEdges = true \}/);
+  assert.match(bare(KT_SCREEN), /StatusCard\(watch, masters, onSetUpAgain = [^\n]*\)\s*if \(edgesAsked && edgesKnown\) EdgeCard\(edges, empty = if \(edgesFailed\) Manage\.Words\.edgeUnasked else Manage\.Words\.edgeNobody\) \{ showingEdges = true \}/);
   // MEASURED (edge-router.js): the way out with its numbers, names by count
   // and what was refused most, and a machine that cannot listen, on both: on
   // the routers' own page, which the card on the pool's page opens, since the

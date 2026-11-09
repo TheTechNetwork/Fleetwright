@@ -159,73 +159,11 @@ struct PoolManageView: View {
         edgesAsked = true
     }
 
-    /// THE CARD IS THE VERDICT, AND THE PAGE IS THE REST (docs/reviews/copy-2026-11-06.md,
-    /// "The rule to adopt"): one word per router, its DNS beneath, and a tap
-    /// through to EdgeRoutersView for the numbers, the log and what was
-    /// refused. Before any machine has read them, what is known is said.
+    /// The pool's routers on the card both hypervisor pages share
+    /// (EdgeRoutersCard), in the same place: second, under how current the
+    /// page is. Before any machine has read them, what is known is said.
     private var edgeCard: some View {
-        Group {
-            if let e = edges {
-                NavigationLink {
-                    EdgeRoutersView(edges: e)
-                } label: {
-                    edgeSummary(e)
-                }
-                .fleetCard(radius: Design.Radius.cardSmall)
-            } else {
-                VStack(alignment: .leading, spacing: Design.Space.insideTight) {
-                    Text(Manage.Words.edgeHeading)
-                        .fleetType(.section)
-                        .foregroundStyle(Design.Palette.ink)
-                        .accessibilityAddTraits(.isHeader)
-                    Text(edgesFailed ? Manage.Words.edgeUnasked : Manage.Words.edgeNobody)
-                        .fleetType(.label)
-                        .foregroundStyle(Design.Palette.inkDim)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fleetCard(radius: Design.Radius.cardSmall)
-            }
-        }
-    }
-
-    /// One row per router: its name, the one word for it on the right, and
-    /// its DNS under that. What is wrong is the one thing set in the
-    /// attention tone, and the word carries it without the colour.
-    private func edgeSummary(_ e: Fleet.VMEdges) -> some View {
-        VStack(alignment: .leading, spacing: Design.Space.insideTight) {
-            Text(Manage.Words.edgeHeading)
-                .fleetType(.section)
-                .foregroundStyle(Design.Palette.ink)
-                .accessibilityAddTraits(.isHeader)
-            Text(Manage.Words.edgeRead(e.hostId, relativeTime(e.at)))
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.inkDim)
-            ForEach(e.routers, id: \.name) { r in
-                let status = Manage.Words.edgeStatus(reached: r.reached, problem: r.problem, gateway: r.gateway, role: r.role)
-                VStack(alignment: .leading, spacing: Design.Space.hair) {
-                    HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
-                        Text(r.name)
-                            .fleetType(.bodyStrong)
-                            .foregroundStyle(Design.Palette.ink)
-                        Spacer(minLength: 0)
-                        Text(status.word)
-                            .fleetType(.label)
-                            .foregroundStyle(status.trouble ? Design.Palette.attention : Design.Palette.ink)
-                            .contentTransition(.opacity)
-                            .animation(Design.Motion.change, value: status.word)
-                    }
-                    if let dns = Manage.Words.edgeDnsLine(reached: r.reached, dns: r.dns, answered: r.answered, blocked: r.blocked) {
-                        Text(dns.word)
-                            .fleetType(.label)
-                            .foregroundStyle(dns.trouble ? Design.Palette.attention : Design.Palette.inkDim)
-                    }
-                }
-                .accessibilityElement(children: .combine)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: 44, alignment: .leading)
-        .accessibilityHint("Opens the routers’ page")
+        EdgeRoutersCard(edges: edges, empty: edgesFailed ? Manage.Words.edgeUnasked : Manage.Words.edgeNobody)
     }
 
     // MARK: How current it is
@@ -698,6 +636,99 @@ struct TypedConfirm: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+/// THE EDGE ROUTERS CARD, ONE FOR BOTH KINDS OF HYPERVISOR: a Xen Orchestra
+/// pool's page and a Proxmox VE cluster's page show this same card in the
+/// same place, second, under the card that says how current the page is.
+/// Asked for, on seeing the two side by side: "Two completely dif UIs".
+///
+/// THE CARD IS THE VERDICT, AND THE PAGE IS THE REST (docs/reviews/copy-2026-11-06.md,
+/// "The rule to adopt"): one word per router, its DNS beneath, and a tap
+/// through to EdgeRoutersView for the numbers, the log and what was
+/// refused. Before any machine has read them, `empty` says what is known,
+/// never that they are fine (C-5). `note` is what the hypervisor itself says
+/// of them, which only Proxmox VE does: running or off, and whether they drop
+/// what their rules match; trouble is set in the attention tone.
+struct EdgeRoutersCard: View {
+    let edges: Fleet.VMEdges?
+    var note: (text: String, trouble: Bool)? = nil
+    let empty: String
+
+    var body: some View {
+        if let e = edges, !e.routers.isEmpty {
+            NavigationLink {
+                EdgeRoutersView(edges: e)
+            } label: {
+                summary(e)
+            }
+            .fleetCard(radius: Design.Radius.cardSmall)
+        } else {
+            VStack(alignment: .leading, spacing: Design.Space.insideTight) {
+                heading
+                noteLine
+                Text(empty)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fleetCard(radius: Design.Radius.cardSmall)
+        }
+    }
+
+    private var heading: some View {
+        Text(Manage.Words.edgeHeading)
+            .fleetType(.section)
+            .foregroundStyle(Design.Palette.ink)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    @ViewBuilder
+    private var noteLine: some View {
+        if let note {
+            Text(note.text)
+                .fleetType(.label)
+                .foregroundStyle(note.trouble ? Design.Palette.attention : Design.Palette.inkDim)
+        }
+    }
+
+    /// One row per router: its name, the one word for it on the right, and
+    /// its DNS under that. What is wrong is the one thing set in the
+    /// attention tone, and the word carries it without the colour.
+    private func summary(_ e: Fleet.VMEdges) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.insideTight) {
+            heading
+            Text(Manage.Words.edgeRead(e.hostId, relativeTime(e.at)))
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+            noteLine
+            ForEach(e.routers, id: \.name) { r in
+                let status = Manage.Words.edgeStatus(reached: r.reached, problem: r.problem, gateway: r.gateway, role: r.role)
+                VStack(alignment: .leading, spacing: Design.Space.hair) {
+                    HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                        Text(r.name)
+                            .fleetType(.bodyStrong)
+                            .foregroundStyle(Design.Palette.ink)
+                        Spacer(minLength: 0)
+                        Text(status.word)
+                            .fleetType(.label)
+                            .foregroundStyle(status.trouble ? Design.Palette.attention : Design.Palette.ink)
+                            .contentTransition(.opacity)
+                            .animation(Design.Motion.change, value: status.word)
+                    }
+                    if let dns = Manage.Words.edgeDnsLine(reached: r.reached, dns: r.dns, answered: r.answered, blocked: r.blocked) {
+                        Text(dns.word)
+                            .fleetType(.label)
+                            .foregroundStyle(dns.trouble ? Design.Palette.attention : Design.Palette.inkDim)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: 44, alignment: .leading)
+        .accessibilityHint("Opens the routers’ page")
     }
 }
 
