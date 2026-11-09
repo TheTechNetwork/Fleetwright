@@ -339,9 +339,10 @@ export class EdgeWatch {
       for (const [k, { record }] of watched) {
         const can = this.#canTry(k, record);
         if (can === true) await this.#reread(k);
-        // A PROXMOX VE CLUSTER HAS ONE, which the setup made and named; a
-        // pool's are the ones its policy job made (record.edge.routers).
-        const one = this.#hypervisor(k) === 'Proxmox VE' ? [NAMES[0]] : [];
+        // A PROXMOX VE CLUSTER HAS ONE OR TWO, which the setup made and named
+        // and its API lists (fromXo); one until it has said. A pool's are the
+        // ones its policy job made (record.edge.routers).
+        const one = this.#hypervisor(k) === 'Proxmox VE' && !this.fromXo.get(k)?.routers?.size ? [NAMES[0]] : [];
         const names = [...new Set([...one, ...(record.edge.routers || []).map((/** @type {any} */ r) => r?.name), ...(this.learned.get(k)?.keys() ?? []), ...(this.fromXo.get(k)?.routers?.keys() ?? [])])].filter((n) => NAMES.includes(n));
         /** @type {RouterState[]} */
         const routers = [];

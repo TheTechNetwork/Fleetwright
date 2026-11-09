@@ -61,7 +61,7 @@ export function setupCommand(coordinator, vmids = null, options = null) {
  *   channel?: 'stable'|'rolling', storage?: string, bridge?: string,
  *   expireDays?: number, groups?: number, labsOpen?: number, labsClosed?: number,
  *   holder?: boolean, holderAgain?: boolean, holderSecret?: string,
- *   edge?: boolean, edgeBlock?: boolean, edgeAgain?: boolean,
+ *   edge?: boolean, edgeBlock?: boolean, edgeAgain?: boolean, edgePair?: boolean,
  *   grants?: { upgrades?: boolean, reboot?: boolean },
  * }} PveOptions
  */
@@ -131,13 +131,14 @@ export function pveOptionsOf(v) {
   // make it again, the secret the person's phone made for it to ask to join
   // with (src/fleet/protocol/holder-join.js), and what it may do from chat.
   // AN EDGE ROUTER (docs/proxmox.md, "The edge router"): whether to make one,
-  // whether it drops what the threat rules match, and whether to make it again.
-  for (const k of ['edge', 'edgeBlock', 'edgeAgain']) {
+  // whether it drops what the threat rules match, whether to make it again,
+  // and whether there are two of them (`edgePair`).
+  for (const k of ['edge', 'edgeBlock', 'edgeAgain', 'edgePair']) {
     if (o[k] === undefined || o[k] === null) continue;
     if (typeof o[k] !== 'boolean') return no(`${k} is yes or no`);
     if (o[k]) /** @type {any} */ (out)[k] = true;
   }
-  if ((out.edgeBlock || out.edgeAgain) && !out.edge) return no('the edge router drops and is made again only while it is asked for');
+  if ((out.edgeBlock || out.edgeAgain || out.edgePair) && !out.edge) return no('the edge router drops, is made again and comes in two only while it is asked for');
   for (const k of ['holder', 'holderAgain']) {
     if (o[k] === undefined || o[k] === null) continue;
     if (typeof o[k] !== 'boolean') return no(`${k} is yes or no`);
@@ -186,6 +187,7 @@ export function optionArgs(options) {
     o.labsClosed !== undefined ? ` --labs-closed ${o.labsClosed}` : '',
     o.edge ? (o.edgeBlock ? ' --edge-block' : ' --edge') : '',
     o.edge && o.edgeAgain ? ' --edge-again' : '',
+    o.edge && o.edgePair ? ' --edge-pair' : '',
   ].join('');
 }
 

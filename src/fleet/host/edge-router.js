@@ -283,10 +283,22 @@ export const PVE_WATCH_MARKS = Object.freeze({
   cert: '<!--fleetwright-watch-cert-->\n',
   certref: '<!--fleetwright-watch-certref-->',
   syslog: '<!--fleetwright-watch-syslog-->\n',
+  /**
+   * THE PAIR'S CARP PASSWORD, which signs each router's advertisements of the
+   * gateway address they share: made on the node and kept beside the key
+   * (`carp_keep`), so it is the cluster's and never in a published file.
+   */
+  carp: '<!--fleetwright-carp-->',
 });
 
-/** The two configurations, as the setup script is given them. @param {boolean} block */
-export const pveEdgeConfig = (block) => edgeConfig({ ...PVE_EDGE, block, marks: PVE_WATCH_MARKS });
+/**
+ * The configurations, as the setup script is given them: one router, or
+ * either of a pair (`node`, EDGE_HA), filtering or dropping.
+ *
+ * @param {boolean} block @param {0|1|null} [node]
+ */
+export const pveEdgeConfig = (block, node = null) =>
+  edgeConfig({ ...PVE_EDGE, block, marks: PVE_WATCH_MARKS, ha: node === null ? null : { node, password: PVE_WATCH_MARKS.carp } });
 
 /**
  * TWO EDGES (`ha` in edgeConfig): the CARP group of the uplink, each lab's
@@ -532,13 +544,14 @@ export function fleetHosts(coordinatorUrl) {
  * plugin the daily update keeps (`plugin`), so Proxmox shows its addresses;
  * and the watch's parts as marks the node fills in (`marks`, PVE_WATCH_MARKS).
  *
- * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null, watch?: import('./edge-credentials.js').Watch|null, syslog?: string[], plugin?: string, marks?: { user: string, cert: string, certref: string, syslog: string }|null }} [opts]
+ * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null, watch?: import('./edge-credentials.js').Watch|null, syslog?: string[], plugin?: string, marks?: { user: string, cert: string, certref: string, syslog: string, carp?: string }|null }} [opts]
  * @returns {Buffer}
  */
 export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], ha = null, watch = null, syslog = [], plugin = EDGE_UPDATES.plugin, marks = null, length = EDGE_IMAGE.grow.room } = {}) {
   const watched = marks ?? (watch ? watchConfig(watch, syslog) : null);
   const { address, prefix } = EDGE.lan;
-  if (ha && !((ha.node === 0 || ha.node === 1) && /^[0-9a-f]{16,64}$/.test(ha.password))) throw new Error('a pair of edges needs which one this is and their shared password');
+  // A PASSWORD, or the mark the node fills one in at (PVE_WATCH_MARKS.carp).
+  if (ha && !((ha.node === 0 || ha.node === 1) && (/^[0-9a-f]{16,64}$/.test(ha.password) || (marks !== null && ha.password === marks.carp)))) throw new Error('a pair of edges needs which one this is and their shared password');
   /** This router's own address on a network whose gateway is `gw` (x.y.z.1). @param {string} gw */
   const own = (gw) => (ha ? gw.replace(/\.1$/, `.${2 + ha.node}`) : gw);
   /** This router's share of a network's DHCP range. @param {string} gw */
