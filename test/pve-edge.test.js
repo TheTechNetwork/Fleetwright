@@ -13,8 +13,8 @@ import { closeSync, mkdtempSync, openSync, readFileSync, readSync, statSync, wri
 import os from 'node:os';
 import path from 'node:path';
 
-import { EDGE_IMAGE, EDGE_FILTER, PVE_EDGE, PVE_WATCH_MARKS, edgeConfig, pveEdgeConfig } from '../src/fleet/host/edge-router.js';
-import { OUTPUTS } from '../scripts/build-pve-edge.mjs';
+import { EDGE_IMAGE, EDGE_FILTER, PVE_EDGE, PVE_LAB_LAYOUTS, PVE_WATCH_MARKS, edgeConfig, fleetHosts, pveEdgeConfig } from '../src/fleet/host/edge-router.js';
+import { LAB_DIR, LAB_OUTPUTS, OUTPUTS } from '../scripts/build-pve-edge.mjs';
 import { newWatch } from '../src/fleet/host/edge-credentials.js';
 import { PvePools, edgeKeyOf, pveRecord } from '../src/fleet/host/pve-pools.js';
 import { Pools } from '../src/fleet/host/pools.js';
@@ -208,7 +208,7 @@ test('the node makes the key once, in the shape the boxes take, and keeps it', (
 
 test('an edge without the key is made again once, and the line carries the key of one with it', () => {
   // Kept only as asked: one alone with its key, or either of a pair.
-  assert.match(SCRIPT, /if \[ "\$EDGE_PAIR" = 1 \]; then want="\$\{EDGE_BLOCK\}10 \$\{EDGE_BLOCK\}11 "; else want="\$\{EDGE_BLOCK\}1- "; fi/);
+  assert.match(SCRIPT, /if \[ "\$EDGE_PAIR" = 1 \]; then want="\$\{EDGE_BLOCK\}10\$\{LAB_KEY\} \$\{EDGE_BLOCK\}11\$\{LAB_KEY\} "; else want="\$\{EDGE_BLOCK\}1-\$\{LAB_KEY\} "; fi/);
   assert.ok(SCRIPT.includes('    --edge-pair) EDGE=1; EDGE_PAIR=1; shift ;;'));
   assert.match(SCRIPT, /ename=fleetwright-edge; \[ "\$n" = 1 \] && ename=fleetwright-edge-b/);
   assert.match(SCRIPT, /etags="\$EDGE_TAG;\$EDGE_WATCH_TAG"/);
@@ -339,4 +339,53 @@ test('a pair is read as two routers, each where its agent says, each by its own 
   w.hear('<30>Nov  9 03:00:00 fleetwright-edge-b.internal kernel: carp: 1@vtnet1: BACKUP -> MASTER (master timed out)', '10.69.10.62');
   assert.deepEqual(w.reportFor('me@example.com', RECORD.address)?.events.map((e) => [e.router, e.kind]), [['fleetwright-edge-b', 'carp']]);
   w.stop();
+});
+
+test('with labs, every layout is the boxes’ own, listed by its SHA-256 in the list the script pins', () => {
+  // Open first, then closed, four at most together: what the setup takes.
+  assert.equal(PVE_LAB_LAYOUTS.length, 14);
+  assert.equal(LAB_OUTPUTS.length, 14 * 6);
+  const list = readFileSync(new URL('SHA256SUMS', LAB_DIR));
+  assert.equal(pin('EDGE_LABS_SUMS_SHA'), sha(list), 'the script pins another SHA256SUMS: run scripts/build-pve-edge.mjs');
+  const listed = new Map(list.toString('utf8').trim().split('\n').map((l) => /** @type {[string, string]} */ (l.split('  ').reverse())));
+  assert.equal(listed.size, LAB_OUTPUTS.length);
+  for (const { name, block, node, labs } of LAB_OUTPUTS) {
+    const kept = readFileSync(new URL(name, LAB_DIR));
+    assert.ok(kept.equals(pveEdgeConfig(block, node, labs)), `${name} is not what scripts/build-pve-edge.mjs builds: run it`);
+    assert.equal(listed.get(name), sha(kept));
+    const xml = kept.toString('utf8');
+    // Each lab on virtio's next interface, and a closed lab's fleet a mark.
+    for (let i = 1; i <= labs.open + labs.closed; i++) assert.match(xml, new RegExp(`<if>vtnet${i + 1}</if><descr>LAB${i}</descr>`));
+    assert.equal(xml.includes(PVE_WATCH_MARKS.fleetHosts), labs.closed > 0);
+    // Filled in, the largest still fits the image's block.
+    const ha = node === null ? null : { node, password: 'ab'.repeat(32) };
+    assert.doesNotThrow(() => edgeConfig({ ...PVE_EDGE, block, ha, labs: [...Array(labs.open).fill(true), ...Array(labs.closed).fill(false)], fleet: fleetHosts('https://fleetwright.example.workers.dev'), watch: newWatch(), syslog: ['10.69.10.51'] }), name);
+  }
+});
+
+test('the node fills a closed lab’s fleet in as the boxes do, and pads it to the block', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'pve-labs-'));
+  const watch = newWatch();
+  const carp = 'ab'.repeat(32);
+  const file = path.join(dir, 'watch.json');
+  writeFileSync(file, JSON.stringify({ ...watch, carp }));
+  const required = /^REQUIRED="([^"]*)"$/m.exec(SCRIPT)?.[1] ?? '';
+  for (const [labs, node, coord] of /** @type {Array<[{ open: number, closed: number }, 0|1|null, string]>} */ ([[{ open: 1, closed: 1 }, null, 'Fleet.Example.workers.dev'], [{ open: 0, closed: 4 }, 1, 'fleet.example.workers.dev'], [{ open: 2, closed: 0 }, 0, '']])) {
+    const cfg = path.join(dir, 'config.xml');
+    writeFileSync(cfg, pveEdgeConfig(true, node, labs));
+    const ran = spawnSync('bash', ['-c', `set -euo pipefail\nEDGE_ROOM=${EDGE_IMAGE.grow.room}\nCOORD_HOST="$4"\nREQUIRED="$5"\n${fn('edge_fill')}\nedge_fill "$1" "$2" "$3"`, 'fill', cfg, file, '10.69.10.51', coord, required], { encoding: 'utf8' });
+    assert.equal(ran.status, 0, ran.stderr);
+    const want = edgeConfig({ ...PVE_EDGE, block: true, ha: node === null ? null : { node, password: carp }, labs: [...Array(labs.open).fill(true), ...Array(labs.closed).fill(false)], fleet: fleetHosts(coord ? `https://${coord}` : null), watch, syslog: ['10.69.10.51'] });
+    assert.equal(readFileSync(cfg, 'utf8'), want.toString('utf8'), `labs ${labs.open}+${labs.closed}`);
+  }
+});
+
+test('labs go behind the router: their own interfaces, its tag, and no gateway on the node', () => {
+  assert.match(SCRIPT, /labnics="\$labnics --net\$\(\(l \+ 1\)\) virtio,bridge=fwlab\$l"/);
+  assert.match(SCRIPT, /\[ "\$LAB_KEY" = - \] \|\| etags="\$etags;\$EDGE_LABS_TAG\$LAB_KEY"/);
+  assert.match(SCRIPT, /want="\$\{EDGE_BLOCK\}1-\$\{LAB_KEY\} "/);
+  // With the router asked for, a lab's subnet on the node is taken away and
+  // the node's own lab service is off; without it, both are as before.
+  assert.match(SCRIPT, /if \[ "\$EDGE" = 1 \]; then\n\s+# BEHIND THE EDGE ROUTER/);
+  assert.match(SCRIPT, /if \[ "\$EDGE" = 1 \] && \[ -n "\$OPEN_IF\$CLOSED_IF" \]; then\n\s+for kind in open closed; do systemctl disable --now "fleetwright-lab-dns@\$kind"/);
 });
