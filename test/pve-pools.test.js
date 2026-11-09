@@ -808,3 +808,35 @@ test('the look says the cluster’s own machine, and the box that is it says so'
     await pve.close();
   }
 });
+
+// BEHIND THE EDGE ROUTER, while one is up (docs/proxmox.md, "The edge
+// router"): a machine made on the default network goes on the router's LAN,
+// whose rules hold it to the internet, so it is made there even with the
+// datacenter's firewall off.
+test('a machine goes behind the edge router while one is up, and the look says it is there', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf, firewall: false });
+  try {
+    pve.state.perms['/sdn/zones/fwedge/fwedge'] = { 'SDN.Use': 1, 'SDN.Audit': 1 };
+    pve.state.vnets.push({ vnet: 'fwedge', zone: 'fwedge', alias: 'fleetwright-edge-uplink' });
+    pve.state.vms.set(160, { vmid: 160, node: 'pve1', name: 'fleetwright-edge', template: 0, tags: 'fleetwright-edge;fleetwright-edge-blocks', status: 'running', pool: null, config: {} });
+    const pools = new PvePools({ now: () => NOW, ...fast });
+    pools.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    await pools.refresh();
+    const [seen] = pools.report();
+    assert.deepEqual(seen.edges.map((/** @type {any} */ e) => [e.name, e.running, e.blocks]), [['fleetwright-edge', true, true]]);
+    assert.equal(seen.networks.find((/** @type {any} */ n) => n.name === 'fwedge')?.edge, true);
+    const r = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: TICKET, minutes: 90, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(r.ok, true, r.text);
+    assert.match(r.text, /behind the edge router/);
+    assert.match(pve.state.vms.get(200).config.net0, /bridge=fwedge/);
+    assert.match(pve.state.vms.get(200).config.net0, /firewall=1/, 'still behind the cluster’s firewall too');
+    // A ROUTER THAT IS OFF is no way out: the machine is not put behind it.
+    pve.state.vms.get(160).status = 'stopped';
+    await pools.refresh();
+    const off = await pools.make({ owner: OWNER, template: pools.report()[0].images[0].id, ticket: `fwt_0123456789ac_${'c'.repeat(48)}`, minutes: 90, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(off.ok, false, 'with the firewall off and no router up, nothing is made by default');
+  } finally {
+    await pve.close();
+  }
+});

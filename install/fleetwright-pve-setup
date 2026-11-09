@@ -25,6 +25,10 @@
 #      others (Ubuntu 24.04 and 26.04 too), each checked against its
 #      published checksum, with Fleetwright installed and not joined, as a
 #      template in the pool, one for each.
+#   5b. An edge router, when --edge asks for one: the fleet's OPNsense image,
+#      the same as a Xen Orchestra pool's, outside the pool, its LAN on a
+#      network of its own (fwedge) that machines are put on, so their names
+#      are filtered for threats and Suricata watches, or drops, what they do.
 #   6. A machine of its own, when --holder-join names the file the app wrote
 #      for it: a fleet host cloned from the Debian image outside the pool,
 #      so the fleet's token can see it and do nothing to it, which joins
@@ -42,9 +46,10 @@
 #                         [--line-file PATH] [--coordinator URL] [--vmids FROM-TO]
 #                         [--groups 0-4] [--labs-open 0-4] [--labs-closed 0-4]
 #                         [--holder-join PATH] [--holder-again]
+#                         [--edge] [--edge-block] [--edge-again]
 #
 # Lines for the phone, beside the ones for a person:
-#   fleetwright-step: NAME     pool, user, token, fence, networks, image, holder, line, done
+#   fleetwright-step: NAME     pool, user, token, fence, networks, image, edge, holder, line, done
 #   fleetwright-holder-removed: NAME  a machine of its own this run removed, to be made again
 #   fleetwright-part: FILL TEXT  how far into the step it is: thousandths, or
 #                              `-` when it cannot tell, and what it is doing
@@ -66,6 +71,23 @@ FENCE=fleetwright-fence
 # row here and an entry there. Asked for: "Other images Ubuntu Rocky or
 # whatever else". Only systems the fleet's apt package installs on are here.
 IMAGE_KEYS="debian-13 ubuntu-24.04 ubuntu-26.04"
+
+# THE EDGE ROUTER'S IMAGE, the fleet's own OPNsense build, and how its
+# configuration is written into it: the free block it moves to and each byte
+# of the file system that records the move, each checked before it is
+# replaced (src/fleet/host/edge-router.js, EDGE_IMAGE and imagePatches; the
+# test holds the two equal). The configurations themselves are built from
+# the boxes' own code (scripts/build-pve-edge.mjs) and pinned here.
+EDGE_URL=https://github.com/TheTechNetwork/Fleetwright/releases/download/edge-image/26.7.8_1-20261031-17/fleetwright-edge-26.7-26.7.8_1-amd64.img.zst
+EDGE_SUM=3d82c2192015d683f7d0c6cab5c22a5bc761e2e98b7498a45b9960f425dda5fa
+EDGE_PACKED=423882241
+EDGE_RAW=3221225472
+EDGE_ROOM=32768
+EDGE_DATA=32014336
+EDGE_EDITS="66552:1c51000000000000:1b51000000000000 66568:df0d000000000000:e10d000000000000 131100:59:58 147545:ff:00 162026:fe:fc 1833744:72140000000000001000000000000000:00800000000000004000000000000000 1833840:daa7020000000000:881e000000000000 31555584:a613000059030000fab3000056010000:a613000058030000fab3000056010000 31555600:1e0000008101000086de0100da000000:1e0000008101000086de0100dc000000 502399012:da:dc 502399036:10:11 502420899:00:0c"
+EDGE_CONFIG_URL=https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install
+EDGE_CONFIG_SHA=f55ef7d12897828d760482dcb6648ea2f528b219cb74bcf6651c0d917291e1a1
+EDGE_CONFIG_BLOCK_SHA=c88a643249883a74fecf4abacf6f93ef6525879523de2a58661a7a73b4297a5e
 pinned() {
   case "$1" in
     debian-13) OS="Debian 13" URL=https://cloud.debian.org/images/cloud/trixie/20261103-2651/debian-13-genericcloud-amd64-20261103-2651.qcow2 SUM=sha512:d25999de0770d4cde1be72c299ba3ad94eac7ea8fd4d18f8cc86c69df69337e2e8a91d64465a9bfd8f2a78c566fcbcb0842eacc91c09efdef72d719d9f13b535 ;;
@@ -100,6 +122,11 @@ LINE_FILE=""
 # name the fleet gave it, and whether the one there is made again.
 HOLDER_JOIN=""
 HOLDER_AGAIN=0
+# AN EDGE ROUTER (step 5b): whether to make one, whether it drops what the
+# threat rules match, and whether the one there is made again.
+EDGE=0
+EDGE_BLOCK=0
+EDGE_AGAIN=0
 # THE NUMBERS THE FLEET'S MACHINES TAKE: empty for whatever is next free,
 # FROM-TO to keep them apart from the cluster's own. The image is built in
 # it, and the line carries it, so every machine a box clones takes one too.
@@ -169,8 +196,11 @@ while [ $# -gt 0 ]; do
     --vmids) VMIDS="${2:?--vmids needs FROM-TO}"; shift 2 ;;
     --holder-join) HOLDER_JOIN="${2:?--holder-join needs the path the app wrote}"; shift 2 ;;
     --holder-again) HOLDER_AGAIN=1; shift ;;
+    --edge) EDGE=1; shift ;;
+    --edge-block) EDGE=1; EDGE_BLOCK=1; shift ;;
+    --edge-again) EDGE=1; EDGE_AGAIN=1; shift ;;
     # Read from stdin there is no file to print the head of.
-    -h | --help) if [ -f "$0" ]; then sed -n '2,53p' "$0"; else echo "see docs/proxmox.md, \"Setting it up\""; fi; exit 0 ;;
+    -h | --help) if [ -f "$0" ]; then sed -n '2,58p' "$0"; else echo "see docs/proxmox.md, \"Setting it up\""; fi; exit 0 ;;
     *) die "unknown option $1 (--help says what there is)" ;;
   esac
 done
@@ -704,6 +734,114 @@ else
     case " $IMAGES " in *" $key "*) continue ;; esac
     for t in $(templates_of "$key"); do say "kept template $t, $key, which this run was not asked to build"; done
   done
+fi
+
+# --- 5b. an edge router ----------------------------------------------------------
+# docs/proxmox.md, "The edge router". THE SAME ROUTER A XEN ORCHESTRA POOL HAS
+# (docs/hypervisors.md, "The edge router"): OPNsense with no login, its rules
+# written once into its configuration, Unbound refusing names on the threat
+# lists, Suricata watching what machines do, and dropping what the threat
+# rules match when --edge-block says so. Its WAN is on the bridge, its LAN on
+# a network of its own, fwedge, which the fleet's machines are put on. Made
+# here, as root, outside the pool, so the fleet's token can neither change
+# nor remove it; it can see it, by VM.Audit on it alone.
+step edge
+EDGE_TAG=fleetwright-edge
+EDGE_BLOCKS_TAG=fleetwright-edge-blocks
+# The cluster's edge routers: outside the pool, not templates, tagged. One to
+# a line, `vmid node status blocks`, lowest number first.
+edges() {
+  pvesh get /cluster/resources --type vm --output-format json |
+    TAG="$EDGE_TAG" BTAG="$EDGE_BLOCKS_TAG" IN_POOL="$POOL" perl -MJSON::PP -e '
+      my $d = decode_json(join("", <STDIN>));
+      print map { my $t = $_->{tags} // ""; "$_->{vmid} $_->{node} " . ($_->{status} // "unknown") . " " . ($t =~ /(^|[;, ])\Q$ENV{BTAG}\E($|[;, ])/ ? 1 : 0) . "\n" }
+        sort { $a->{vmid} <=> $b->{vmid} } grep {
+        ($_->{type} // "") eq "qemu" && ($_->{pool} // "") ne $ENV{IN_POOL} && ($_->{template} // 0) != 1
+          && ($_->{tags} // "") =~ /(^|[;, ])\Q$ENV{TAG}\E($|[;, ])/
+      } @$d;'
+}
+# BUILT, OR SAID WHY NOT: an edge router that cannot be built costs the cluster
+# its edge, not its setup, so the token's line still comes at the end.
+edge_no() { say "the edge router was not built: $*"; }
+build_edge() {
+    # THE IMAGE, downloaded and checked, unpacked, and its configuration
+    # written in, every byte replaced checked against what must be there.
+    command -v zstd >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zstd >/dev/null
+    work=/var/tmp/fleetwright-edge
+    mkdir -p "$work"
+    free_kb="$(df -Pk "$work" | awk 'NR==2 {print $4}')"
+    [ "$free_kb" -ge $(( (EDGE_RAW + EDGE_PACKED) / 1024 + 262144 )) ] ||
+      { edge_no "the edge router needs $(( (EDGE_RAW + EDGE_PACKED) / 1073741824 + 1 )) GB free in /var/tmp to be built, and this node has $(( free_kb / 1048576 )) GB"; return 1; }
+    if ! [ -f "$work/edge.img.zst" ] || [ "$(sha256sum "$work/edge.img.zst" | awk '{print $1}')" != "$EDGE_SUM" ]; then
+      part - "downloading the edge router's image"
+      curl -fsSL --retry 3 -o "$work/edge.img.zst.part" "$EDGE_URL" || { edge_no "could not download the edge router's image from $EDGE_URL"; return 1; }
+      mv -f "$work/edge.img.zst.part" "$work/edge.img.zst"
+      [ "$(sha256sum "$work/edge.img.zst" | awk '{print $1}')" = "$EDGE_SUM" ] || { rm -f "$work/edge.img.zst"; { edge_no "the edge router's image did not match its pinned SHA-256, so it was not used"; return 1; }; }
+    fi
+    if [ "$EDGE_BLOCK" = 1 ]; then cfg=fleetwright-pve-edge-block.xml; cfgsum="$EDGE_CONFIG_BLOCK_SHA"; else cfg=fleetwright-pve-edge.xml; cfgsum="$EDGE_CONFIG_SHA"; fi
+    curl -fsSL --retry 3 -o "$work/config.xml" "$EDGE_CONFIG_URL/$cfg" || { edge_no "could not download the edge router's configuration"; return 1; }
+    [ "$(sha256sum "$work/config.xml" | awk '{print $1}')" = "$cfgsum" ] || { edge_no "the edge router's configuration did not match its pinned SHA-256, so it was not used"; return 1; }
+    part - "unpacking the edge router's image"
+    zstd -q -d -f -o "$work/edge.raw" "$work/edge.img.zst" || { edge_no "could not unpack the edge router's image"; return 1; }
+    [ "$(stat -c %s "$work/edge.raw")" = "$EDGE_RAW" ] || { edge_no "the edge router's image unpacked to the wrong size"; return 1; }
+    EDGE_EDITS="$EDGE_EDITS" ROOM="$EDGE_ROOM" DATA="$EDGE_DATA" perl -e '
+      open my $f, "+<", $ARGV[0] or die "cannot open the image\n"; binmode $f;
+      open my $c, "<", $ARGV[1] or die "cannot open the configuration\n"; binmode $c; local $/; my $cfg = <$c>;
+      die "the configuration is not $ENV{ROOM} bytes\n" unless length($cfg) == $ENV{ROOM};
+      for my $e (split / /, $ENV{EDGE_EDITS}) {
+        my ($at, $was, $becomes) = split /:/, $e;
+        seek $f, $at, 0; read $f, my $got, length($was) / 2;
+        die "the image does not have what it should at $at\n" unless unpack("H*", $got) eq $was;
+        seek $f, $at, 0; print $f pack("H*", $becomes);
+      }
+      seek $f, $ENV{DATA}, 0; read $f, my $free, $ENV{ROOM};
+      die "the block the configuration moves to is not free\n" if $free =~ /[^\0]/;
+      seek $f, $ENV{DATA}, 0; print $f $cfg; close $f or die "could not write the image\n";' "$work/edge.raw" "$work/config.xml" ||
+      { edge_no "the edge router's image could not be given its configuration"; return 1; }
+    # THE ONE THERE GOES once the new image is ready, so machines lose their
+    # way out only while the new router starts.
+    while read -r oid onode _ _; do
+      [ -n "$oid" ] || continue
+      pvesh create "/nodes/$onode/qemu/$oid/status/stop" --skiplock 1 >/dev/null 2>&1 || true
+      pvesh delete "/nodes/$onode/qemu/$oid" --purge 1 --destroy-unreferenced-disks 1 >/dev/null || { edge_no "could not remove the edge router there (VM $oid) to make it again"; return 1; }
+      say "removed the edge router there (VM $oid) to make it again"
+    done <<<"$there"
+    eid="$(free_vmid)"
+    etags="$EDGE_TAG"; [ "$EDGE_BLOCK" = 0 ] || etags="$etags;$EDGE_BLOCKS_TAG"
+    part - "making the edge router, VM $eid"
+    qm create "$eid" --name fleetwright-edge --ostype other --cores 2 --memory 2048 --agent 1 --onboot 1 \
+      --scsihw virtio-scsi-pci --net0 "virtio,bridge=$BRIDGE" --net1 "virtio,bridge=fwedge" --serial0 socket --tags "$etags" \
+      --description "The fleet's edge router: the way out of every Fleetwright machine on this cluster, filtering what they do for threats. Made by fleetwright-pve-setup; it has no login." >/dev/null
+    qm set "$eid" --scsi0 "$STORAGE:0,import-from=$work/edge.raw" --boot order=scsi0 >/dev/null ||
+      { qm destroy "$eid" --purge 1 >/dev/null 2>&1 || true; { edge_no "could not import the edge router's disk onto $STORAGE"; return 1; }; }
+    role FleetwrightHolder "VM.Audit"
+    pveum acl modify "/vms/$eid" --users "$USER_ID" --roles FleetwrightHolder
+    qm start "$eid" >/dev/null
+    rm -f "$work/edge.raw" "$work/config.xml"
+    say "the edge router (VM $eid) is starting, its way out on $BRIDGE$([ "$EDGE_BLOCK" = 1 ] && echo ', dropping what the threat rules match')"
+}
+if [ "$EDGE" = 1 ]; then
+  # ITS LAN, a network with no address of the node's on it: what is on it
+  # reaches the world only through the router. The fleet's token may put a
+  # machine on it.
+  zone fwedge
+  vnet fwedge fwedge "fleetwright-edge-uplink"
+  pvesh set /cluster/sdn >/dev/null
+  sleep 5
+  there="$(edges)"
+  read -r eid enode estatus eblocks <<<"$(head -n 1 <<<"$there")"
+  if [ -n "$there" ] && [ "$EDGE_AGAIN" = 0 ] && [ "$eblocks" = "$EDGE_BLOCK" ]; then
+    if [ "$estatus" = stopped ]; then
+      pvesh create "/nodes/$enode/qemu/$eid/status/start" >/dev/null
+      say "the edge router (VM $eid) was off and has been started"
+    else
+      say "the edge router (VM $eid) is already there"
+    fi
+  else
+    build_edge || true
+  fi
+else
+  say "no edge router was asked for$( [ -n "$(edges)" ] && echo '; the one there is kept')"
 fi
 
 # --- 6. a machine of its own -----------------------------------------------------
