@@ -246,6 +246,49 @@ export function holdersIn(out, pool = 'fleetwright') {
 }
 
 /**
+ * WHAT THE NODE HAS TO CHOOSE FROM, so the setup's storage and bridge are
+ * picked from a list rather than typed blind. Asked for, of the two text
+ * fields: "Why not list networks and storage instead of asking blindly".
+ * Read as root over the same SSH the setup starts on, before it is started:
+ * the storages on this node that hold machine disks and are enabled, and its
+ * bridges, one JSON answer each, on lines of their own.
+ */
+export const CHOICES_FIND =
+  'n="$(hostname)"; printf \'storage: \'; pvesh get "/nodes/$n/storage" --content images --enabled 1 --output-format json; echo; ' +
+  'printf \'bridges: \'; pvesh get "/nodes/$n/network" --type any_bridge --output-format json; echo';
+
+/**
+ * The storages and bridges in CHOICES_FIND's answer, each only when its name
+ * is one the script takes (`--storage`, `--bridge`): storages that are
+ * active, with what is free when the node said, and bridges with the address
+ * the node has on them. Either list is empty when its line is missing or not
+ * JSON, and the phone then keeps the field it can type in.
+ *
+ * @param {string} out
+ * @returns {{ storages: Array<{ id: string, type: string, free: number|null, shared: boolean }>, bridges: Array<{ name: string, address: string|null, comment: string|null }> }}
+ */
+export function choicesOf(out) {
+  const line = (/** @type {string} */ key) => {
+    const m = new RegExp(`^${key}: (.*)$`, 'm').exec(String(out || ''));
+    try {
+      const v = JSON.parse(m?.[1] ?? '');
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  };
+  const storages = line('storage')
+    .filter((s) => PVE_STORAGE_RE.test(String(s?.storage ?? '')) && Number(s.active ?? 1) !== 0)
+    .map((s) => ({ id: String(s.storage), type: String(s.type ?? ''), free: Number.isFinite(Number(s.avail)) && s.avail !== undefined ? Number(s.avail) : null, shared: Number(s.shared) === 1 }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const bridges = line('bridges')
+    .filter((b) => PVE_BRIDGE_RE.test(String(b?.iface ?? '')))
+    .map((b) => ({ name: String(b.iface), address: typeof b.cidr === 'string' && b.cidr ? b.cidr : typeof b.address === 'string' && b.address ? b.address : null, comment: typeof b.comments === 'string' && b.comments.trim() ? b.comments.trim().slice(0, 80) : null }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { storages, bridges };
+}
+
+/**
  * THE ADDRESS THE LINE WILL CARRY, worked out on the node as the script works
  * it out (its first address, port 8006), before a pin is asked for: the
  * machine of its own is reserved for that address, proves its request with
