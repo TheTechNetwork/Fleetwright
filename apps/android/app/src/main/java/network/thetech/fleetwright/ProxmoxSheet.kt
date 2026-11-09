@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.selection.selectable
@@ -537,6 +538,13 @@ internal object ProxmoxWords {
     const val EDGE_BLOCK_HINT = "Otherwise it logs it and lets it through."
     const val EDGE_PAIR = "Two edge routers"
     const val EDGE_PAIR_HINT = "One carries the machines while the other restarts or updates."
+    // WHAT ITS MACHINES MAY DO FROM CHAT, a Xen Orchestra pool's words. Same as iOS.
+    const val GRANTS_HEADER = "Machines made here"
+    const val GRANTS_UPDATES = "Update their system from the app"
+    const val GRANTS_UPDATES_HINT = "Sessions keep running while it updates."
+    const val GRANTS_REBOOT = "Reboot from the app"
+    const val GRANTS_REBOOT_HINT = "A reboot ends every session on that machine."
+    const val GRANTS_FOOTER = "Applies to new VMs and its own machine when made. Existing ones keep their setting."
     const val HOLDER_NEEDS_IMAGE = "It’s made from the cluster’s Debian image, so one has to be there already."
 }
 
@@ -576,7 +584,31 @@ internal data class ProxmoxOptions(
     val edgeAgain: Boolean? = null,
     /** TWO OF THEM, sharing the gateway (docs/proxmox.md, "Two of them"). */
     val edgePair: Boolean = false,
+    /**
+     * WHAT ITS MACHINES MAY DO FROM CHAT (src/core/grants.js): null is unsaid,
+     * and each machine keeps its image's answer, as every run did before there
+     * was a choice. Both are set together, the way the script takes them.
+     */
+    val machineUpdates: Boolean? = null,
+    val machineReboot: Boolean? = null,
 ) {
+    /** One answer changed, and the other said too, so both go to the script. Same as iOS. */
+    fun withGrants(updates: Boolean? = null, reboot: Boolean? = null) =
+        copy(machineUpdates = updates ?: machineUpdates ?: false, machineReboot = reboot ?: machineReboot ?: false)
+
+    /** The script's `--grants`, when both were said: pve-setup.js grantsArg. */
+    val grantsArg: String?
+        get() {
+            val u = machineUpdates ?: return null
+            val r = machineReboot ?: return null
+            return when {
+                u && r -> "upgrades,reboot"
+                u -> "upgrades"
+                r -> "reboot"
+                else -> "none"
+            }
+        }
+
     private val trimmedStorage get() = storage.trim()
 
     fun builds(key: String) = key in systems
@@ -618,6 +650,7 @@ internal data class ProxmoxOptions(
             if (edge) a.append(if (edgeBlock) " --edge-block" else " --edge")
             if (edge && edgeAgain == true) a.append(" --edge-again")
             if (edge && edgePair) a.append(" --edge-pair")
+            grantsArg?.let { a.append(" --grants $it") }
             return a.toString()
         }
 
@@ -648,6 +681,9 @@ internal data class ProxmoxOptions(
             p.put("holder", true)
             if (holderAgain == true) p.put("holderAgain", true)
         }
+        val u = machineUpdates
+        val r = machineReboot
+        if (u != null && r != null) p.put("grants", JSONObject().put("upgrades", u).put("reboot", r))
         return p
     }
 
@@ -656,6 +692,7 @@ internal data class ProxmoxOptions(
         .put("firewall", firewall).put("image", image).put("channel", channel).put("storage", storage).put("bridge", bridge)
         .put("expireDays", expireDays).put("groups", groups).put("labsOpen", labsOpen).put("labsClosed", labsClosed)
         .put("systems", JSONArray(systems)).put("holder", holder).put("edge", edge).put("edgeBlock", edgeBlock).put("edgePair", edgePair)
+        .apply { machineUpdates?.let { put("machineUpdates", it) }; machineReboot?.let { put("machineReboot", it) } }
         .toString()
 
     companion object {
@@ -690,6 +727,8 @@ internal data class ProxmoxOptions(
                 edge = o.optBoolean("edge", true),
                 edgeBlock = o.optBoolean("edgeBlock", false),
                 edgePair = o.optBoolean("edgePair", false),
+                machineUpdates = if (o.has("machineUpdates")) o.optBoolean("machineUpdates") else null,
+                machineReboot = if (o.has("machineReboot")) o.optBoolean("machineReboot") else null,
             )
         }.getOrDefault(ProxmoxOptions())
     }
@@ -826,6 +865,22 @@ internal fun ProxmoxOptionsBlock(
         }
         Hint(HypervisorWords.MAKE_OWN_AGAIN_FOOTER)
     }
+    // WHAT ITS MACHINES MAY DO FROM CHAT, in a Xen Orchestra pool's words:
+    // updates and reboot, put in the line every box reads, and in its own
+    // machine. Asked for: "no way to allow updates and reboots for proxmox
+    // vms those exist in xen". Same as iOS.
+    Text(ProxmoxWords.GRANTS_HEADER, style = Design.Style.bodyStrong, color = Design.Palette.ink.now, modifier = Modifier.padding(top = Design.Space.insideTight))
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(ProxmoxWords.GRANTS_UPDATES, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+        Switch(checked = options.machineUpdates == true, onCheckedChange = { onChange(options.withGrants(updates = it)) }, enabled = enabled)
+    }
+    Hint(ProxmoxWords.GRANTS_UPDATES_HINT)
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(ProxmoxWords.GRANTS_REBOOT, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+        Switch(checked = options.machineReboot == true, onCheckedChange = { onChange(options.withGrants(reboot = it)) }, enabled = enabled)
+    }
+    Hint(ProxmoxWords.GRANTS_REBOOT_HINT)
+    Hint(ProxmoxWords.GRANTS_FOOTER)
     options.problem?.let { Hint(it, Design.Palette.bad.now) }
 }
 

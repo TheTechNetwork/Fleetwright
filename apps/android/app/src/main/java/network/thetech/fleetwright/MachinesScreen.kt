@@ -204,6 +204,7 @@ fun MachinesScreen(
             admin = admin,
             holdsHere = fleetHosts.firstOrNull { it.hostId == id }?.holds?.let { a -> held.any { it.address == a } } == true,
             onMakeAgain = { againFor = it },
+            onMakeProxmoxAgain = { node -> showing = null; proxmoxAt = node; proxmoxFirewall = false; proxmoxEdge = ""; proxmoxOwn = "again"; addingProxmox = true },
             onDismiss = { showing = null },
             onChanged = { scope.launch { loadHosts() } },
         )
@@ -551,6 +552,8 @@ private fun MachinePage(
     holdsHere: Boolean = false,
     /** Opens the pool's policy with Make it again on, for the pool named. */
     onMakeAgain: (String) -> Unit = {},
+    /** Opens a Proxmox VE cluster's setup with its own machine made again, for the node named. */
+    onMakeProxmoxAgain: (String) -> Unit = {},
     onDismiss: () -> Unit,
     onChanged: () -> Unit,
 ) {
@@ -573,6 +576,16 @@ private fun MachinePage(
     var rebootPin by remember { mutableStateOf("") }
     var rebootConfirm by remember { mutableStateOf("") }
     var confirmingRevoke by remember { mutableStateOf(false) }
+    // WHETHER WHAT IT HOLDS IS A PROXMOX VE CLUSTER, as the fleet's list of
+    // hypervisors says (`kind`), for Make it again where the Xen Orchestra
+    // one is not offered. Same as iOS.
+    var holdsProxmox by remember(hostId) { mutableStateOf(false) }
+    LaunchedEffect(hostId, reporting?.holds, holdsHere, admin) {
+        val a = reporting?.holds
+        if (reporting?.holder == true && a != null && !holdsHere && admin == true) {
+            holdsProxmox = Fleet(settings).hypervisors().getOrNull()?.any { it.address == a && it.kind == "proxmox" } == true
+        }
+    }
     var pin by remember { mutableStateOf("") }
     var poolPage by remember { mutableStateOf(false) }
     // What the Proxmox VE machines it made showed as they booted (BootLogs.kt).
@@ -725,6 +738,16 @@ private fun MachinePage(
         if (h?.holder == true && holds != null && holdsHere && admin == true) {
             SectionHead(holds)
             OpenRow(HOLDER_AGAIN_TITLE) { onMakeAgain(holds) }
+            Hint(HOLDER_AGAIN_LINE)
+        }
+        // A PROXMOX VE CLUSTER'S OWN MACHINE, made again the way the cluster's
+        // page does it: its setup, run again over SSH with the machine of its
+        // own made again, which needs the node's sign-in and no token on this
+        // phone. Asked for: "the make it again from the holder page on xen
+        // doesnt exist on holder on proxmox". The admin's. Same as iOS.
+        if (h?.holder == true && holds != null && !holdsHere && holdsProxmox && admin == true) {
+            SectionHead(holds)
+            OpenRow(HOLDER_AGAIN_TITLE) { onMakeProxmoxAgain(HypervisorAddress.node(holds)) }
             Hint(HOLDER_AGAIN_LINE)
         }
 
