@@ -994,6 +994,13 @@ export class Fleet {
       if (url.pathname === '/api/holders' && request.method === 'GET') {
         return json({ ok: true, holders: this.core.holdersFor(requesterFor(client)) });
       }
+      // A PIN AND A NAME for one about to be made by the phone's own setup of
+      // a Proxmox VE node, which runs no job a box could ask with.
+      if (url.pathname === '/api/holders' && request.method === 'POST') {
+        const answer = this.core.holderPinFor(requesterFor(client), await readJson(request));
+        if (answer.status === 200) await this.#saveEnrollment();
+        return json(answer.body, answer.status);
+      }
       const m = /^\/api\/holders\/([^/]+)\/(approve|decline)$/.exec(url.pathname);
       if (m && request.method === 'POST') {
         const body = await readJson(request);

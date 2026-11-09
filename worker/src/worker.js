@@ -2176,6 +2176,14 @@ const OPENAPI = JSON.stringify({
                           },
                           "machines": {
                             "type": "integer"
+                          },
+                          "holder": {
+                            "description": "Its own machine, `{ name, running }` (docs/proxmox.md, \u201cA machine of its own\u201d): false when a box looked and saw none, null when no box said, as a Xen Orchestra entry\u2019s boxes do not.",
+                            "type": [
+                              "object",
+                              "boolean",
+                              "null"
+                            ]
                           }
                         }
                       }
@@ -3386,6 +3394,51 @@ const OPENAPI = JSON.stringify({
           },
           "403": {
             "description": "not signed in as a person"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "A pin for a pool\u2019s own machine you are about to make",
+        "description": "`{ address }`, the cluster it holds. For a phone setting up a Proxmox VE node itself, which runs no job a box could ask with: the same single-use pin, name and day-long reservation a setup job is given (`holder-pin`). The setup script clones the machine as root, outside the fleet\u2019s pool, booted to join with this. A few waiting at once each. See docs/proxmox.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "address"
+                ],
+                "properties": {
+                  "address": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`{ pin, hostId, expiresAt, until }`"
+          },
+          "400": {
+            "description": "no address, or not one"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "429": {
+            "description": "`too_many`: as many as one may have waiting already"
+          },
+          "507": {
+            "description": "`pins_full`"
           }
         }
       }
