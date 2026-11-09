@@ -43,6 +43,8 @@ internal fun SshKeysScreen(settings: Settings, onDismiss: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
+    // Whether this phone's own key is in the vault: null before the vault has said.
+    var phoneKept by remember { mutableStateOf<Boolean?>(null) }
     val vault = remember { PhoneVault(settings) }
 
     val lines = draft.lines().map { it.trim() }.filter { it.isNotEmpty() }
@@ -52,6 +54,7 @@ internal fun SshKeysScreen(settings: Settings, onDismiss: () -> Unit) {
         // A refusal is cannot tell, and leaves the line saying so.
         val contents = runCatching { vault.list(Fleet(settings)) }.getOrNull() ?: return
         keptAt = contents.items.firstOrNull { it.name == "secret:$SSH_SECRET" }?.at
+        phoneKept = contents.items.any { it.name == "secret:${PhoneSshKey.itemName(settings)}" }
         answered = true
     }
 
@@ -105,6 +108,20 @@ internal fun SshKeysScreen(settings: Settings, onDismiss: () -> Unit) {
             "A machine made on your hypervisor after you keep them lets you in as fleetwright, with sudo: " +
                 "ssh fleetwright@ and its address, on its page under Machines. Machines already running keep what they were made with.",
         )
+        // THIS PHONE'S OWN KEY, for the terminal in the app (TerminalPage):
+        // made here, kept here, its public half in the vault as an item of
+        // its own, so the keys above stay as pasted. The same as iOS.
+        SectionHead(TerminalWords.PHONE_HEADER)
+        when (phoneKept) {
+            true -> Hint(TerminalWords.PHONE_KEPT)
+            false -> OutlinedButton(
+                onClick = { run { PhoneSshKey.add(settings) } },
+                enabled = !busy,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text(if (busy) TerminalWords.ADDING else TerminalWords.ADD_KEY) }
+            null -> {}
+        }
+        Hint(TerminalWords.PHONE_FOOTER)
     }
 }
 

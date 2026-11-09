@@ -3328,6 +3328,7 @@ final class Settings {
         ProxmoxDirectHandoff.forgetAll()
         ProxmoxThroughHandoff.forgetAll()
         ProxmoxKept.forgetAll()
+        PhoneSSHKey.forgetAll()
         HolderJoin.forgetAll()
     }
 

@@ -198,6 +198,17 @@ struct VMMachineView: View {
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
+            // A TERMINAL IN THE APP, from home and from away (SSHTerminalView):
+            // offered for a running machine whose address its guest agent has
+            // said, which is what SSH needs to reach it.
+            if m.state == "Running", let ip = m.ip {
+                NavigationLink {
+                    SSHTerminalView(settings: settings, machine: m.name, address: m.address, ip: ip)
+                } label: {
+                    Label(TerminalWords.open, systemImage: "terminal")
+                        .frame(minHeight: 44)
+                }
+            }
             // IN THE APP where this phone holds the pool's token, for a machine
             // that is running (a stopped one has no screen); Xen Orchestra's
             // own page otherwise, where you sign in.

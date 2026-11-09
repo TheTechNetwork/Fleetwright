@@ -3904,7 +3904,7 @@ class Settings(context: Context) {
         val prefixes = listOf(
             "secret.hypervisor.", "secret.xosetup-reply.", "secret.pvesetup-reply.",
             "secret.pvedirect-password.", "secret.pvedirect-line.", "xoSaved.", "holderSecrets.",
-            "secret.proxmox-record.",
+            "secret.proxmox-record.", "secret.ssh-phone-key", "secret.ssh-host-keys",
         )
         val whole = setOf("xoHeld", "xoPending", "pveDirectPending", "pvePending", "xoVia", "xoLooked", "pveHeld")
         val gone = prefs.all.keys.filter { k -> k in whole || prefixes.any { k.startsWith(it) } }
