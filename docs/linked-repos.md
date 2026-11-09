@@ -159,6 +159,17 @@ and the refusal names it as the thing to make a private copy from. One
 repository, like the templates starter: an archive is per person and the
 fleet keeps none.
 
+**Create one from the starter.** Each role on the phones' linking screen, with
+nothing of the person's own linked, has a button that opens GitHub's
+new-repository page with that role's starter chosen as the template and the
+visibility already picked: private for the archive and templates, public for
+runners. GitHub documents the query parameters it takes. The phone opens the
+page and does not make the repository itself, because creating one needs the
+GitHub App's Administration permission, which `src/core/repo-tokens.js` refuses
+to ask for. Installing the App on the new repository, when its installation is
+not on all repositories, is the same: GitHub's own page, the person's choice.
+They come back, type the name, and Check and link says what is still missing.
+
 ### What it cannot do
 
 - **A runner on an owner outside `FLEETWRIGHT_GITHUB_MINT_OWNERS`** has no token

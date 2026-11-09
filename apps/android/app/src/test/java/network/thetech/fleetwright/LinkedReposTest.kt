@@ -60,6 +60,14 @@ class LinkedReposTest {
     }
 
     @Test
+    fun eachRoleOpensItsStarterWithTheVisibilityItNeeds() {
+        assertEquals("https://github.com/new?template_owner=TheTechNetwork&template_name=Fleetwright-Archive&name=fleetwright-archive&visibility=private", linkedRoleStarter("archive"))
+        assertEquals("https://github.com/new?template_owner=TheTechNetwork&template_name=Fleetwright-Runners-Template&name=fleetwright-runners&visibility=public", linkedRoleStarter("runners"))
+        assertEquals("https://github.com/new?template_owner=TheTechNetwork&template_name=Fleetwright-Templates&name=fleetwright-templates&visibility=private", linkedRoleStarter("templates"))
+        assertNull(linkedRoleStarter("scratch"))
+    }
+
+    @Test
     fun aSessionSaysWhetherItsArchiveLanded() {
         fun session(archive: String?, at: Long? = null, ok: Boolean? = null, text: String? = null) =
             Fleet.Session(

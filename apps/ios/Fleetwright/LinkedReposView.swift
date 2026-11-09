@@ -76,6 +76,9 @@ struct LinkedReposView: View {
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
                 .fixedSize(horizontal: false, vertical: true)
+            if links[role] == nil, let starter = linkedRoleStarter(role) {
+                Link("Create one from the starter", destination: starter)
+            }
             TextField(linkedRoleField(role), text: draftBinding(role))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -204,6 +207,23 @@ func describeLinkedRole(_ role: String, linked: String?, fleetRunners: String?) 
     case "templates": return "Nothing linked. Start one from github.com/TheTechNetwork/Fleetwright-Templates."
     default: return "Nothing linked."
     }
+}
+
+/// GitHub's new-repository page with the role's starter chosen as the template,
+/// and the visibility the role needs already picked: private for the archive
+/// and templates, public for runners. GitHub documents these query parameters
+/// (docs: "Creating a new repository"). Opened in the browser, not created
+/// from here: making a repository needs the GitHub App's Administration
+/// permission, which this app does not ask for (src/core/repo-tokens.js).
+func linkedRoleStarter(_ role: String) -> URL? {
+    let starter: (name: String, repo: String, visibility: String)
+    switch role {
+    case "archive": starter = ("fleetwright-archive", "Fleetwright-Archive", "private")
+    case "runners": starter = ("fleetwright-runners", "Fleetwright-Runners-Template", "public")
+    case "templates": starter = ("fleetwright-templates", "Fleetwright-Templates", "private")
+    default: return nil
+    }
+    return URL(string: "https://github.com/new?template_owner=TheTechNetwork&template_name=\(starter.repo)&name=\(starter.name)&visibility=\(starter.visibility)")
 }
 
 /// What a check found, one answer per fact, "can't tell" kept apart from "no".
