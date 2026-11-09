@@ -761,3 +761,25 @@ test('a console from away reaches only a cluster this box holds for that person'
   assert.equal(pools.consoleAddress(OWNER, '10.69.10.11:8006'), null, 'an address this box holds nothing at');
   assert.equal(pools.consoleAddress(OWNER, '10.69.10.10:22'), null, 'another port at the node');
 });
+
+// WHERE SSH FROM AWAY GOES: a running machine made for the person asking, at
+// the address a look saw, port 22, and nothing for anybody else's machine,
+// one not running or one with no address yet. A phone's own key is a second
+// item beside the pasted list, and a machine takes both.
+test('SSH from away reaches only the asker’s running machine, and a phone’s key joins the pasted ones', async () => {
+  const { sshTarget, isSshKeysItem, SSH_PHONE_KEY_PREFIX } = await import('../src/fleet/host/xo-pools.js');
+  const seen = new Map([[`${OWNER} pve.lan:8006`, { address: 'pve.lan:8006', owner: OWNER, machines: [
+    { name: 'vm-aaaaaaaaaaaa', state: 'Running', ip: '10.69.10.57' },
+    { name: 'vm-bbbbbbbbbbbb', state: 'Running', ip: '10.69.10.58' },
+    { name: 'vm-cccccccccccc', state: 'Halted', ip: '10.69.10.59' },
+    { name: 'vm-dddddddddddd', state: 'Running', ip: null },
+  ] }]]);
+  const owners = new Map([['pve.lan:8006 vm-aaaaaaaaaaaa', OWNER], ['pve.lan:8006 vm-bbbbbbbbbbbb', 'sam@example.com'], ['pve.lan:8006 vm-cccccccccccc', OWNER], ['pve.lan:8006 vm-dddddddddddd', OWNER]]);
+  assert.deepEqual(sshTarget(seen, owners, OWNER, 'pve.lan:8006', 'vm-aaaaaaaaaaaa'), { host: '10.69.10.57', port: 22 });
+  for (const name of ['vm-bbbbbbbbbbbb', 'vm-cccccccccccc', 'vm-dddddddddddd', 'vm-eeeeeeeeeeee']) assert.equal(sshTarget(seen, owners, OWNER, 'pve.lan:8006', name), null, name);
+  assert.equal(sshTarget(seen, owners, OWNER, 'other.lan:8006', 'vm-aaaaaaaaaaaa'), null);
+  assert.equal(isSshKeysItem('secret:SSH_AUTHORIZED_KEYS'), true);
+  assert.equal(isSshKeysItem(`${SSH_PHONE_KEY_PREFIX}iphone-1a2b`), true);
+  assert.equal(isSshKeysItem(`${SSH_PHONE_KEY_PREFIX}../x`), false);
+  assert.equal(isSshKeysItem('secret:GITHUB_TOKEN'), false);
+});

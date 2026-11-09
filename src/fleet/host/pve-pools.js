@@ -59,7 +59,7 @@ import { splitAddress } from './xo-ws.js';
 import { seal, claudeBindingFor } from '../seal.js';
 import { machineGrantsOf } from '../../core/grants.js';
 import { lookup } from 'node:dns/promises';
-import { HYPERVISOR_ITEM, MAX_MINUTES, SSH_KEYS_ITEM, sshKeys, groupPlace } from './xo-pools.js';
+import { HYPERVISOR_ITEM, MAX_MINUTES, isSshKeysItem, sshKeys, sshTarget, groupPlace } from './xo-pools.js';
 import { fleetHosts } from './edge-router.js';
 import { IMAGES, JOIN_RUNCMD } from './vm-image.js';
 
@@ -521,6 +521,8 @@ export class PvePools {
     this.handing = new Set();
     /** Records passed over, and why, so each is said once. @type {Map<string, string>} */
     this.refused = new Map();
+    /** Whose each machine is, `<address> <name>` to the person it was made for. @type {Map<string, string>} */
+    this.machineOwners = new Map();
   }
 
   /** @param {PveRecord} record */
@@ -549,7 +551,7 @@ export class PvePools {
       if (!owner) continue;
       for (const i of Array.isArray(a?.items) ? a.items : []) {
         if (i?.name === 'claude' && typeof i.value === 'string' && CLAUDE_RE.test(i.value)) claude.set(owner, i.value);
-        if (i?.name === SSH_KEYS_ITEM) ssh.set(owner, sshKeys(i.value));
+        if (isSshKeysItem(i?.name)) ssh.set(owner, [...(ssh.get(owner) ?? []), ...sshKeys(i.value)].slice(0, 20));
         const record = pveRecord(String(i?.name || ''), i?.value);
         if (record) held.set(`${owner} ${record.address}`, { owner, record });
         const problem = record ? null : pveProblem(String(i?.name || ''), i?.value);
@@ -595,6 +597,18 @@ export class PvePools {
     if (!held) return null;
     const { host, port } = splitAddress(String(held.record.address), PVE_PORT);
     return Number.isInteger(port) && port > 0 && port < 65536 ? { host, port } : null;
+  }
+
+  /**
+   * WHERE SSH FROM AWAY DIALS: a running machine made for THIS person on a
+   * cluster this box holds for them, at the address its guest agent said,
+   * port 22. The same rule as Xen Orchestra's (xo-pools.js, sshTarget).
+   *
+   * @param {string} owner @param {string} address @param {string} name
+   */
+  sshAddress(owner, address, name) {
+    const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
+    return held ? sshTarget(this.seen, this.machineOwners, owner, address, name) : null;
   }
 
   /** Whether this box holds a cluster of this person's at all. @param {string} owner */
@@ -683,6 +697,9 @@ export class PvePools {
           this.log.warn(`sidecar: could not remove ${v.name} from ${record.address}: ${/** @type {Error} */ (e).message}`);
         }
       }
+      // WHOSE IT IS, kept here alone: SSH from away reaches only a machine
+      // made for the person asking (sshAddress).
+      this.machineOwners.set(`${record.address} ${v.name}`, String(mark.for || '').toLowerCase());
       machines.push({
         name: String(v.name),
         vm: pveIdOf(record.address, 'vm', `${v.vmid}:${mark.made}`),

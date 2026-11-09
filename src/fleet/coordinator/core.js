@@ -2133,7 +2133,7 @@ export class CoordinatorCore {
    *
    * @param {{ email?: string|null }|null} requester
    * @param {string|null} device
-   * @param {{ address?: unknown }} ask
+   * @param {{ address?: unknown, machine?: unknown }} ask
    * @param {{ send: (msg: Record<string, unknown>) => void, close: (code: number, reason: string) => void }} phone
    * @returns {{ ok: true, tunnel: string, hostId: string } | { ok: false, error: { code: string }, text: string }}
    */
@@ -2153,6 +2153,13 @@ export class CoordinatorCore {
     const address = typeof ask?.address === 'string' ? ask.address : '';
     if (address.length > 260 || !XO_ADDRESS_RE.test(address)) {
       return refuse({ ok: false, error: { code: 'bad_params' }, text: 'Say which pool: the address Xen Orchestra answers on.' });
+    }
+    // SSH TO A MACHINE OF THEIRS on that pool, when one is named
+    // (docs/hypervisors.md, "SSH in the app"): the same boxes, and the box
+    // checks the machine is this person's and running before it dials.
+    const machine = ask?.machine === undefined || ask?.machine === null || ask?.machine === '' ? null : String(ask.machine);
+    if (machine !== null && !/^vm-[0-9a-f]{12}$/.test(machine)) {
+      return refuse({ ok: false, error: { code: 'bad_params' }, text: 'Say which machine: its name, vm- and twelve hex digits.' });
     }
     /** @type {Array<{ host: any, reached: boolean }>} */
     const holders = [];
@@ -2179,9 +2186,9 @@ export class CoordinatorCore {
     // THE ONE THAT LAST REACHED THE POOL, as the page asks first.
     holders.sort((a, b) => Number(b.reached) - Number(a.reached) || a.host.hostId.localeCompare(b.host.hostId));
     const hostId = holders[0].host.hostId;
-    const started = this.tunnels.start({ owner, device, hostId, address, toPhone: phone.send, closePhone: phone.close });
+    const started = this.tunnels.start({ owner, device, hostId, address, machine, toPhone: phone.send, closePhone: phone.close });
     if (!started.ok) return refuse(started);
-    this.record({ event: 'console.away', actor: owner, hostId, text: `${owner} opened a console from away through ${hostId}` });
+    this.record({ event: 'console.away', actor: owner, hostId, text: machine ? `${owner} opened SSH to ${machine} from away through ${hostId}` : `${owner} opened a console from away through ${hostId}` });
     try {
       phone.send({ op: 'ready', tunnel: started.tunnel.id, hostId, maxBytes: TUNNEL_MAX_BYTES, ttlMs: TUNNEL_TTL_MS });
     } catch { /* the socket is going; its close ends the tunnel */ }

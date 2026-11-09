@@ -32,7 +32,7 @@ export class ConsoleTunnels {
   /**
    * @param {{
    *   send: (frame: Record<string, unknown>) => unknown,
-   *   where: (owner: string, address: string) => { host: string, port: number }|null,
+   *   where: (owner: string, address: string, machine: string|null) => { host: string, port: number }|null,
    *   connect?: (opts: { host: string, port: number }) => net.Socket,
    *   connectTimeoutMs?: number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
@@ -57,7 +57,7 @@ export class ConsoleTunnels {
   onFrame(msg) {
     const id = typeof msg?.tunnel === 'string' && TUNNEL_ID_RE.test(msg.tunnel) ? msg.tunnel : null;
     if (!id) return;
-    if (msg.op === 'open') return this.#open(id, String(msg.owner || ''), String(msg.address || ''));
+    if (msg.op === 'open') return this.#open(id, String(msg.owner || ''), String(msg.address || ''), typeof msg.machine === 'string' && /^vm-[0-9a-f]{12}$/.test(msg.machine) ? msg.machine : null);
     const socket = this.open.get(id);
     if (!socket) return;
     if (msg.op === 'data') {
@@ -69,12 +69,25 @@ export class ConsoleTunnels {
     }
   }
 
-  /** @param {string} id @param {string} owner @param {string} address */
-  #open(id, owner, address) {
+  /**
+   * SSH TO A MACHINE OF THE PERSON'S, when the frame names one: its address
+   * on the pool's network and port 22, and only a running machine made for
+   * them (Pools.consoleAddress). The phone speaks SSH through the bytes, so
+   * this box carries ciphertext as it does for a console.
+   *
+   * @param {string} id @param {string} owner @param {string} address @param {string|null} machine
+   */
+  #open(id, owner, address, machine) {
     if (this.open.has(id)) return;
-    const target = owner && address ? this.where(owner.toLowerCase(), address) : null;
+    const target = owner && address ? this.where(owner.toLowerCase(), address, machine) : null;
     if (!target) {
-      this.send({ tunnel: id, op: 'refused', text: `This machine holds no pool of yours at ${address}, so it does not connect there.` });
+      this.send({
+        tunnel: id,
+        op: 'refused',
+        text: machine
+          ? `This machine sees no running machine of yours called ${machine} with an address yet, so it does not connect there.`
+          : `This machine holds no pool of yours at ${address}, so it does not connect there.`,
+      });
       return;
     }
     if (this.open.size >= MAX_BOX_TUNNELS) {
