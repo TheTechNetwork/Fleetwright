@@ -172,6 +172,31 @@ struct HostView: View {
                 .listRowBackground(Design.Palette.card)
             }
 
+            // PAGES THROUGH THIS MACHINE (docs/browse.md): the names its owner
+            // listed and the web, where its owner turned either on. Only for
+            // somebody who administers it, because the coordinator opens it
+            // for nobody else, and only where it opens something (C-2). A
+            // session's own ports are opened from the session's page.
+            if mayAdminister, let opens = health?.browse, opens.web == true || !(opens.hosts ?? []).isEmpty {
+                Section {
+                    NavigationLink {
+                        BrowseView(settings: settings, host: hostId, session: nil)
+                    } label: {
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            Text(BrowseWords.browse).fleetType(.body)
+                            Text(BrowseWords.opensLine(web: opens.web == true, hosts: opens.hosts ?? []))
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(minHeight: 44)
+                    }
+                } header: {
+                    sectionHead(BrowseWords.pagesHead)
+                }
+                .listRowBackground(Design.Palette.card)
+            }
+
             Section {
                 Button("Check for updates") { run { try await fleet.updates(host: hostId) } }
                 if mayActOnBox && health?.updates?.appUpdatePending == true {

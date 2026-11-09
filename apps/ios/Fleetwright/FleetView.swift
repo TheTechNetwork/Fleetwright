@@ -387,7 +387,7 @@ struct FleetView: View {
                     // at the top of the list, off screen for the sixth card
                     // of eight. The card answers, stops, resumes and opens;
                     // the page does the rest, with its reply beside it.
-                    SessionRow(session: session, busy: busy, resumeKept: resumeKept(session), fleet: fleet,
+                    SessionRow(session: session, busy: busy, resumeKept: resumeKept(session), opensPorts: opensPorts(session), fleet: fleet,
                                stop: { await act { try await fleet.stop(session.name, host: session.hostId) } },
                                resume: { await act { try await fleet.resume(session.name, choice: "summary", host: session.hostId) } },
                                answer: { option in
@@ -508,7 +508,7 @@ struct FleetView: View {
                 }
             }
             .navigationDestination(item: $opened) { session in
-                SessionView(fleet: fleet, initial: session, resumeKept: resumeKept(session),
+                SessionView(fleet: fleet, initial: session, resumeKept: resumeKept(session), opensPorts: opensPorts(session),
                             onChange: { await refresh(keepStatus: true) })
                     // A NEW PAGE FOR A NEW SESSION: see the row's link below.
                     .id(session.id)
@@ -736,6 +736,12 @@ struct FleetView: View {
         fleetHosts.first { $0.hostId == session.hostId }?.resumeKept
     }
 
+    /// Whether this session's machine opens its sessions' ports for a phone
+    /// (Fleet.FleetHost.opensSessionPorts).
+    private func opensPorts(_ session: Fleet.Session) -> Bool {
+        fleetHosts.first { $0.hostId == session.hostId }?.opensSessionPorts == true
+    }
+
     /// Run one verb and quote what came back.
     ///
     /// `nothingSaid` is for the verbs whose whole job is to bring text back. A
@@ -769,6 +775,8 @@ private struct SessionRow: View {
     let busy: Bool
     /// Why Resume is not offered here, or nil where it is (Fleet.FleetHost.resumeKept).
     let resumeKept: String?
+    /// Whether the session's machine opens its ports for this phone.
+    let opensPorts: Bool
     /// The client, for the one action that is a DESTINATION rather than a
     /// closure: browsing pushes a screen, and a screen needs something to call
     /// while it is open.
@@ -801,7 +809,7 @@ private struct SessionRow: View {
             // Forget. The row keeps answering and stopping, so the list stays
             // the place to act on what is asking; the page is where to look.
             NavigationLink {
-                SessionView(fleet: fleet, initial: session, resumeKept: resumeKept, onChange: changed)
+                SessionView(fleet: fleet, initial: session, resumeKept: resumeKept, opensPorts: opensPorts, onChange: changed)
                     // A NEW PAGE FOR A NEW SESSION. Beside the list (an iPad,
                     // an unfolded Duo) tapping another row put the other
                     // session's page where the first one was, and SwiftUI kept
