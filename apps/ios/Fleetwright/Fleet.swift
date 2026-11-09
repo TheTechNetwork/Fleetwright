@@ -1901,8 +1901,34 @@ struct Fleet {
         let fenced: Bool?
         let images: Int?
         let machines: Int?
+        /// ITS OWN MACHINE (docs/proxmox.md, "A machine of its own"). Nil is
+        /// no box said, from an older box or coordinator, never "none".
+        var holder: OwnMachine? = nil
         var id: String { "\(kind) \(address)" }
         var onProxmox: Bool { kind == "proxmox" }
+
+        /// `false` from a box that looked and saw none, or the machine.
+        enum OwnMachine: Codable, Hashable {
+            case none
+            case there(name: String, running: Bool)
+
+            private struct Named: Codable { let name: String; let running: Bool? }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.singleValueContainer()
+                if let seen = try? c.decode(Bool.self), seen == false { self = .none; return }
+                let named = try c.decode(Named.self)
+                self = .there(name: named.name, running: named.running == true)
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.singleValueContainer()
+                switch self {
+                case .none: try c.encode(false)
+                case let .there(name, running): try c.encode(Named(name: name, running: running))
+                }
+            }
+        }
 
         struct Box: Codable, Hashable {
             let hostId: String
@@ -2115,6 +2141,18 @@ struct Fleet {
         let data = try await get("/api/holders")
         struct Reply: Decodable { let holders: [HolderJoin.Waiting]? }
         return (try? JSONDecoder().decode(Reply.self, from: data))?.holders ?? []
+    }
+
+    /// A PIN AND A NAME for a Proxmox VE cluster's own machine this phone's
+    /// own setup of the node is about to make, reserved for `address`, the
+    /// one its line will carry (docs/proxmox.md, "A machine of its own").
+    func holderPin(address: String) async throws -> (pin: String, hostId: String) {
+        struct Given: Decodable { let ok: Bool?; let pin: String?; let hostId: String?; let text: String? }
+        let given = try JSONDecoder().decode(Given.self, from: try await post("/api/holders", body: ["address": address]))
+        guard given.ok == true, let pin = given.pin, let hostId = given.hostId else {
+            throw FleetError.message(given.text ?? "Your fleet gave no pin for the cluster’s own machine. Update it, or set the cluster up without one.")
+        }
+        return (pin, hostId)
     }
 
     /// Let one in, by the key of the request this phone checked: it joins

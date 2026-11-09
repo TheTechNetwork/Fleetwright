@@ -55,8 +55,11 @@ internal object ProxmoxSsh {
      * for running it by hand, and the line to a file. A run already going is
      * stopped first: the person asked again.
      */
-    fun startCommand(coordinator: String, vmids: String = "", options: ProxmoxOptions = ProxmoxOptions()): String {
-        val run = ProxmoxLine.setupCommand(coordinator, vmids, options) + " --line-file $LINE_FILE"
+    fun startCommand(coordinator: String, vmids: String = "", options: ProxmoxOptions = ProxmoxOptions(), holderJoin: Boolean = false): String {
+        // ITS OWN MACHINE only with the file its pin was written to, and made
+        // again only then: the script refuses one without the other.
+        val holder = if (holderJoin) " " + HOLDER_JOIN_FLAG + " " + HOLDER_JOIN_FILE + (if (options.holderAgain == true) " " + HOLDER_AGAIN_FLAG else "") else ""
+        val run = ProxmoxLine.setupCommand(coordinator, vmids, options) + holder + " --line-file $LINE_FILE"
         return "systemctl stop $UNIT 2>/dev/null; systemctl reset-failed $UNIT 2>/dev/null; rm -f $LINE_FILE; " +
             "systemd-run --unit=$UNIT --collect /bin/bash -c '$run'"
     }
@@ -73,6 +76,41 @@ internal object ProxmoxSsh {
 
     /** The line, read once and removed. */
     const val TAKE_LINE = "cat $LINE_FILE && rm -f $LINE_FILE"
+
+    // A MACHINE OF ITS OWN (docs/proxmox.md): pve-setup.js's commands, which
+    // test/pvesetup-in-apps.test.js holds equal.
+
+    /** Where the pin and name it joins with are written; the script removes it. */
+    const val HOLDER_JOIN_FILE = "/root/.fleetwright-holder-join"
+    /** The script's flags for it, by themselves. */
+    const val HOLDER_JOIN_FLAG = "--holder-join"
+    const val HOLDER_AGAIN_FLAG = "--holder-again"
+    /** The cluster's guests, to see whether it has one already. */
+    const val HOLDER_FIND = "pvesh get /cluster/resources --type vm --output-format json"
+    /** The node's first address, which the line will carry with port 8006. */
+    const val ADDRESS_FIND = "hostname -I | awk '{print \$1}'"
+
+    /** Its own machines in [HOLDER_FIND]'s answer: outside the pool, not templates, tagged `fleetwright-holder`. */
+    fun holdersIn(out: String): List<String> {
+        val all = runCatching { org.json.JSONArray(out.trim()) }.getOrNull() ?: return emptyList()
+        return (0 until all.length()).mapNotNull { all.optJSONObject(it) }.filter { v ->
+            v.optString("type") == "qemu" && v.optString("pool") != "fleetwright" && v.optInt("template", 0) != 1 &&
+                v.optString("tags").split(';', ',', ' ').contains("fleetwright-holder")
+        }.map { it.optString("name") }
+    }
+
+    /** The address the line will carry, from [ADDRESS_FIND]'s answer, or null. */
+    fun lineAddressOf(out: String): String? {
+        val ip = out.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
+        return if (ip.length in 2..45 && ip.all { it.isLetterOrDigit() && it.lowercaseChar() in "0123456789abcdef" || it == '.' || it == ':' }) "$ip:8006" else null
+    }
+
+    /** The file written root-only in one command: the JSON in base64, so nothing in it reaches the shell as words. */
+    fun holderJoinCommand(hostId: String, pin: String, address: String, secret: String?): String {
+        val join = org.json.JSONObject().put("hostId", hostId).put("pin", pin).put("address", address)
+        if (secret != null) join.put("secret", secret)
+        return "umask 077; printf %s ${Base64.getEncoder().encodeToString(join.toString().toByteArray())} | base64 -d >$HOLDER_JOIN_FILE"
+    }
 
     /** What a poll said; [part] is how far into the step it is on, null when it said nothing of this step. */
     data class Progress(val steps: List<String>, val error: String?, val running: Boolean, val lineReady: Boolean, val part: Part? = null)
@@ -107,6 +145,7 @@ internal object ProxmoxSsh {
         "fence" -> "The firewall group"
         "networks" -> "Lab and group networks"
         "image" -> "The machine image, which takes a few minutes"
+        "holder" -> "Its own machine"
         "line" -> "Saving the token"
         "done" -> "Done"
         else -> step

@@ -217,6 +217,31 @@ struct HypervisorPageView: View {
                     }
                 }
             }
+            if row.proxmox, let own = row.fleet?.holder {
+                // ITS OWN MACHINE (docs/proxmox.md): there, or the setup that
+                // makes one. Unsaid by an older box, so nothing is drawn.
+                Section {
+                    switch own {
+                    case let .there(name, running):
+                        Text(HypervisorWords.ownThere(name, running: running)).fleetType(.body).foregroundStyle(running ? Design.Palette.ink : Design.Palette.attention)
+                            .frame(minHeight: 44, alignment: .leading)
+                        NavigationLink(HypervisorWords.makeOwnAgain) {
+                            AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(holder: true, holderAgain: true))
+                        }
+                        .frame(minHeight: 44)
+                    case .none:
+                        Text(HypervisorWords.ownNone).fleetType(.body).foregroundStyle(Design.Palette.inkDim)
+                        NavigationLink(HypervisorWords.makeOwn) {
+                            AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(holder: true))
+                        }
+                        .frame(minHeight: 44)
+                    }
+                } header: {
+                    Text(HypervisorWords.ownHeader)
+                } footer: {
+                    if case .there = own { Text(HypervisorWords.makeOwnAgainFooter) }
+                }
+            }
             if row.proxmox {
                 Section {
                     // THE SAME SETUP, again: it finds what it made, keeps the
@@ -435,6 +460,13 @@ enum HypervisorWords {
     static let noBox = "None yet"
     static let turnOnFirewall = "Turn on the datacenter firewall"
     static let againFooter = "Keeps what it made; the old access stops working."
+    // ITS OWN MACHINE, the same words on Android (HypervisorsScreen.kt).
+    static let ownHeader = "Its own machine"
+    static let ownNone = "None. Your machines with its access manage it while they’re on."
+    static let makeOwn = "Make its own machine"
+    static let makeOwnAgain = "Make it again"
+    static let makeOwnAgainFooter = "Replaces it with a fresh one. Its disk is erased."
+    static func ownThere(_ name: String, running: Bool) -> String { running ? "\(name), running" : "\(name), off. Setting it up again starts it." }
     static let xoElsewhere = "Its page opens on the phone that set it up."
     static let xoChoice = "A pool of XCP-ng hosts, through Xen Orchestra."
     static let pveChoice = "A Proxmox VE 9 node or cluster, set up over SSH."
