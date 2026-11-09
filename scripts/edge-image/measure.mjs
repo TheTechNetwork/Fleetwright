@@ -114,6 +114,7 @@ export function manifest(m) {
     freebsd_version: facts['freebsd-version'],
     kernel: facts.uname,
     os_xen: facts['os-xen'],
+    os_qemu_guest_agent: facts['os-qemu-guest-agent'],
     accel: facts.accel,
     upstream_url: m.upstreamUrl,
     upstream_sha256: m.upstreamSha256,
@@ -160,10 +161,10 @@ export function notes(m) {
     '**What ran inside**, over the serial console (`scripts/edge-image/drive.mjs`):',
     '',
     `1. \`opnsense-update -pt opnsense\`, then \`opnsense-update -bk\` when \`-bk -c\` offered one, then a reboot — the order OPNsense's own update takes.`,
-    '2. `pkg install -y os-xen`, `register.php install os-xen`, `pkg autoremove -y` — how OPNsense installs a plugin.',
+    '2. `pkg install -y os-xen os-qemu-guest-agent`, `register.php install` each, `pkg autoremove -y` — how OPNsense installs a plugin: the Xen guest agent for Xen Orchestra pools, QEMU\'s for Proxmox VE clusters.',
     '3. Caches, logs, leases, history, SSH host keys, the host id and the saved entropy removed; `/conf/config.xml` removed so the host\'s own configuration applies on first boot.',
     '',
-    `**Versions**: core ${short(`${m.core_package} ${m.opnsense_version}`)}, os-xen ${short(m.os_xen)}, ${m.freebsd_version}.`,
+    `**Versions**: core ${short(`${m.core_package} ${m.opnsense_version}`)}, os-xen ${short(m.os_xen)}, os-qemu-guest-agent ${short(m.os_qemu_guest_agent)}, ${m.freebsd_version}.`,
     '',
     `**The configuration file** \`${m.config.path}\` is at offset ${m.config.offset}, ${m.config.length} bytes, SHA-256 ${short(m.config.sha256)}${m.config.same_as_pinned ? ' (the same bytes at the same place as the upstream image)' : ' (**not** where or what the upstream image has: the host-side pin must change with it)'}. The block it moves to for room is at ${m.grow.data.offset}; \`manifest.json\` carries the full plan.`,
     '',
@@ -185,7 +186,7 @@ async function main() {
   const o = options(process.argv.slice(2));
   /** @type {Record<string, string>} */
   const facts = JSON.parse(readFileSync(path.join(o.facts, 'facts.json'), 'utf8'));
-  for (const k of ['opnsense-version', 'config-inode', 'config-length', 'config-sha256', 'packages', 'os-xen']) {
+  for (const k of ['opnsense-version', 'config-inode', 'config-length', 'config-sha256', 'packages', 'os-xen', 'os-qemu-guest-agent']) {
     if (!facts[k]) throw new Error(`facts.json has no ${k}: the drive did not get that far`);
   }
   const plan = room(o.image, Number(facts['config-inode']));
@@ -201,7 +202,7 @@ async function main() {
   });
   writeFileSync(o.manifest, `${JSON.stringify(m, null, 2)}\n`);
   writeFileSync(o.notes, notes(m));
-  console.log(`wrote ${o.manifest} and ${o.notes}: OPNsense ${m.opnsense_version}, os-xen ${m.os_xen}, ${m.packages.length} packages, configuration ${m.config.same_as_pinned ? 'as pinned' : 'DIFFERENT from the pin'}`);
+  console.log(`wrote ${o.manifest} and ${o.notes}: OPNsense ${m.opnsense_version}, os-xen ${m.os_xen}, os-qemu-guest-agent ${m.os_qemu_guest_agent}, ${m.packages.length} packages, configuration ${m.config.same_as_pinned ? 'as pinned' : 'DIFFERENT from the pin'}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url).pathname) {

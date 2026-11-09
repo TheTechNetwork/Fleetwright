@@ -463,8 +463,17 @@ files, logging, or dropping inline.
   byte checked against what must be there before it is replaced.
 - **For virtio**: its WAN `vtnet0` on the setup's bridge, its LAN `vtnet1` on
   `fwedge`, a network of its own with no address of the node's on it, and
-  QEMU's guest agent as the plugin its daily update keeps, so Proxmox shows
-  its addresses.
+  QEMU's guest agent, so Proxmox shows its addresses.
+- **QEMU's guest agent is in the image**, beside Xen's, so it answers from
+  the first boot. Before it was, the agent came only with the router's first
+  daily update, a day away at worst, and until then the phone read the
+  routers as Unknown, *"Proxmox VE has no address for it yet"*, while they
+  were up. A router made before this gets it by **Make the edge router
+  again**.
+- **The agent tells and does nothing else.** It refuses to run a command,
+  read or write a file, or set a password, the clock or the hardware
+  (`QEMU_AGENT_BLOCKED` in `edge-router.js`), so a router nobody can log in
+  to still has no way in, whatever the node's root asks of it.
 - **Outside the pool**, as the cluster's own machine is, so the token can
   neither change nor remove it, and seen by it with `VM.Audit` on it alone.
 - **Machines go behind it.** While it is up, a machine made on the default

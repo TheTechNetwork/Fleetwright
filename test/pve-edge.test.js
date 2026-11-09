@@ -13,7 +13,7 @@ import { closeSync, mkdtempSync, openSync, readFileSync, readSync, statSync, wri
 import os from 'node:os';
 import path from 'node:path';
 
-import { EDGE_IMAGE, EDGE_FILTER, PVE_EDGE, PVE_LAB_LAYOUTS, PVE_WATCH_MARKS, edgeConfig, fleetHosts, pveEdgeConfig } from '../src/fleet/host/edge-router.js';
+import { EDGE_IMAGE, EDGE_FILTER, PVE_EDGE, PVE_LAB_LAYOUTS, PVE_WATCH_MARKS, QEMU_AGENT_BLOCKED, edgeConfig, fleetHosts, pveEdgeConfig } from '../src/fleet/host/edge-router.js';
 import { LAB_DIR, LAB_OUTPUTS, OUTPUTS } from '../scripts/build-pve-edge.mjs';
 import { newWatch } from '../src/fleet/host/edge-credentials.js';
 import { PvePools, edgeKeyOf, pveRecord } from '../src/fleet/host/pve-pools.js';
@@ -45,9 +45,16 @@ test('the configurations beside the script are the boxes’ own, for virtio, and
     if (node !== null) assert.match(xml, new RegExp(`<ipaddr>10\\.254\\.0\\.${2 + node}</ipaddr>`));
   }
   // The same router a Xen Orchestra pool has, but for the interface names,
-  // the guest agent, and the watch's parts as marks the node fills in.
-  const xen = edgeConfig({ marks: PVE_WATCH_MARKS }).toString('utf8').replace(/xn0/g, 'vtnet0').replace(/xn1/g, 'vtnet1').replace('os-xen', 'os-qemu-guest-agent');
+  // the guest agent and what it may do, and the watch's parts as marks the
+  // node fills in.
+  const agent = `<QemuGuestAgent><general><Enabled>1</Enabled><LogDebug>0</LogDebug><DisabledRPCs>${QEMU_AGENT_BLOCKED.join(',')}</DisabledRPCs></general></QemuGuestAgent>\n`;
+  const xen = edgeConfig({ marks: PVE_WATCH_MARKS }).toString('utf8').replace(/xn0/g, 'vtnet0').replace(/xn1/g, 'vtnet1').replace('os-xen', 'os-qemu-guest-agent').replace('</OPNsense>\n</opnsense>', `${agent}</OPNsense>\n</opnsense>`);
   assert.equal(pveEdgeConfig(false).toString('utf8').trimEnd(), xen.trimEnd());
+  // The agent tells where the router is and does nothing else: no command,
+  // no file, no password. The Xen router has no QEMU agent to tell.
+  for (const rpc of ['guest-exec', 'guest-file-read', 'guest-file-write', 'guest-set-user-password']) assert.ok(QEMU_AGENT_BLOCKED.includes(rpc), rpc);
+  for (const rpc of ['guest-network-get-interfaces', 'guest-ping', 'guest-shutdown']) assert.ok(!QEMU_AGENT_BLOCKED.includes(rpc), rpc);
+  assert.ok(!edgeConfig({ marks: PVE_WATCH_MARKS }).toString('utf8').includes('QemuGuestAgent'));
 });
 
 test('the script pins the image the boxes do, and moves the configuration in with the same edits', () => {

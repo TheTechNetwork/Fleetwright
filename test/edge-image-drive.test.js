@@ -67,7 +67,8 @@ process.stdin.on('data', (d) => {
     else if (cmd === 'stat -f %z /usr/local/etc/config.xml') text = '5234';
     else if (cmd === 'sha256 -q /usr/local/etc/config.xml') text = '1e81cde6bebe59e0aa769bd6b187f2247bd1155cddb52253ca1f2a17c51fe2e5';
     else if (cmd === 'pkg query %v os-xen') text = '1.5_1';
-    else if (cmd === "pkg query '%n-%v' | sort") text = 'opnsense-26.7.5\\r\\nos-xen-1.5_1\\r\\nxe-guest-utilities-6.2.0';
+    else if (cmd === 'pkg query %v os-qemu-guest-agent') text = '1.3';
+    else if (cmd === "pkg query '%n-%v' | sort") text = 'opnsense-26.7.5\\r\\nos-qemu-guest-agent-1.3\\r\\nos-xen-1.5_1\\r\\nqemu-guest-agent-10.1.0\\r\\nxe-guest-utilities-6.2.0';
     else if (cmd.startsWith('cat /tmp/manifest-in-vm.txt')) text = 'opnsense-version: 26.7.5';
     else if (cmd.startsWith('freebsd-version')) text = '15.0-RELEASE-p3 15.0-RELEASE-p3 15.0-RELEASE-p3';
     else if (cmd === 'uname -a') text = 'FreeBSD OPNsense.internal 15.0-RELEASE-p3 FreeBSD 15.0-RELEASE-p3 stable/26.7-n123 SMP amd64';
@@ -97,7 +98,7 @@ test('the driver logs in, updates, reboots and logs in again, installs the agent
   /** @type {string[]} */
   const said = [];
   await main(['--image', image, '--accel', 'tcg', '--log', log, '--facts', facts, '--qemu', guest], { out: { write: (s) => said.push(s) } });
-  assert.match(said.at(-1) ?? '', /^done: OPNsense 26\.7\.5, os-xen 1\.5_1, configuration inode 6523 \(5234 bytes/);
+  assert.match(said.at(-1) ?? '', /^done: OPNsense 26\.7\.5, os-xen 1\.5_1, os-qemu-guest-agent 1\.3, configuration inode 6523 \(5234 bytes/);
 
   // Each line as typed, less the sentinel, so a command is matched whole:
   // `opnsense-update -bk` is not `opnsense-update -bk -c`.
@@ -117,11 +118,13 @@ test('the driver logs in, updates, reboots and logs in again, installs the agent
   assert.ok(secondUpdate > 0, 'the update is not asked again after the reboot');
   // The agent as OPNsense installs one, after the system is current.
   const agent = INSIDE.agent.map((c) => at(c));
-  assert.ok(agent[0] > secondUpdate && agent[1] > agent[0] && agent[2] > agent[1]);
+  assert.ok(agent[0] > secondUpdate && agent.every((a, i) => i === 0 || a > agent[i - 1]));
+  // Both agents, the Xen one and QEMU's, in the one image.
+  assert.ok(INSIDE.agent[0].includes('os-xen') && INSIDE.agent[0].includes('os-qemu-guest-agent'));
   // Cleanup after the agent, facts after cleanup, and forgetting the boot is
   // the last thing before power-off.
   const lastCleanup = Math.max(...INSIDE.cleanup.map((c) => at(c)));
-  assert.ok(lastCleanup > agent[2]);
+  assert.ok(lastCleanup > (agent.at(-1) ?? 0));
   assert.ok(at('stat -f %i /usr/local/etc/config.xml') > lastCleanup, 'facts are read before cleanup is done');
   assert.equal(typed.at(-1), 'shutdown -p now');
   assert.deepEqual(typed.slice(-1 - INSIDE.forget.length, -1), INSIDE.forget, 'the last commands before power-off are not forgetting this boot');
@@ -146,7 +149,8 @@ test('the driver logs in, updates, reboots and logs in again, installs the agent
   assert.equal(got['config-inode'], '6523');
   assert.equal(got['config-length'], '5234');
   assert.equal(got['os-xen'], '1.5_1');
-  assert.deepEqual(got.packages.split('\n'), ['opnsense-26.7.5', 'os-xen-1.5_1', 'xe-guest-utilities-6.2.0']);
+  assert.equal(got['os-qemu-guest-agent'], '1.3');
+  assert.deepEqual(got.packages.split('\n'), ['opnsense-26.7.5', 'os-qemu-guest-agent-1.3', 'os-xen-1.5_1', 'qemu-guest-agent-10.1.0', 'xe-guest-utilities-6.2.0']);
   assert.match(got['update-base-kernel-check'], /^exit 0/);
   assert.match(got['update-base-kernel-check-again'], /^exit 1/);
   assert.equal(got['qemu-exit'], '0');
