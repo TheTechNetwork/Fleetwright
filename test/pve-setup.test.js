@@ -418,3 +418,12 @@ test('the holder options are checked, and the script reads its flags and writes 
   assert.match(script, /printf '#cloud-config\\nhostname: %s\\nwrite_files:\\n  - path: \/run\/fleetwright\/join\.json\\n'/);
   assert.ok(xo.startsWith('#cloud-config\nhostname: holder-0a0b0c\nwrite_files:\n  - path: /run/fleetwright/join.json\n    permissions: \'0600\'\n    owner: root:root\n    content: |\n'));
 });
+
+test('the options carry what the machines may do from chat to the script, both answers or neither', async () => {
+  const { optionArgs } = await import('../src/fleet/host/pve-setup.js');
+  assert.equal(optionArgs({ grants: { upgrades: true, reboot: true } }), ' --grants upgrades,reboot');
+  assert.equal(optionArgs({ grants: { upgrades: false, reboot: true } }), ' --grants reboot');
+  assert.equal(optionArgs({ grants: { upgrades: false, reboot: false } }), ' --grants none');
+  assert.equal(optionArgs({ grants: { upgrades: true } }), '', 'half an answer went to the script');
+  assert.equal(optionArgs({}), '');
+});

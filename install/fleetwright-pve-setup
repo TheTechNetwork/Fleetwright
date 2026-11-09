@@ -38,7 +38,8 @@
 #      With --edge-pair, two of them, sharing 10.254.0.1 by CARP, so one
 #      restarting or updating leaves the machines their way out.
 #   7. The line: `fleetwright-pve:1:` and the address, the token, the pool,
-#      the edge router's key when it has one,
+#      the edge router's key when it has one, what its machines may do from
+#      chat when --grants said (updates, reboot, both or none),
 #      the numbers its machines take when --vmids gave them, and how to trust
 #      this cluster: its own CA, read from
 #      /etc/pve/pve-root-ca.pem, which signs every node's certificate.
@@ -52,6 +53,7 @@
 #                         [--groups 0-4] [--labs-open 0-4] [--labs-closed 0-4]
 #                         [--holder-join PATH] [--holder-again]
 #                         [--edge] [--edge-block] [--edge-again] [--edge-pair]
+#                         [--grants upgrades,reboot|upgrades|reboot|none]
 #
 # Lines for the phone, beside the ones for a person:
 #   fleetwright-step: NAME     pool, user, token, fence, networks, image, holder, edge, line, done
@@ -132,6 +134,10 @@ LINE_FILE=""
 # name the fleet gave it, and whether the one there is made again.
 HOLDER_JOIN=""
 HOLDER_AGAIN=0
+# WHAT ITS MACHINES MAY DO FROM CHAT (src/core/grants.js): updates, reboot,
+# both or none, as a Xen Orchestra pool's policy says it. Empty is unsaid,
+# and each machine keeps its image's answer.
+GRANTS=""
 # AN EDGE ROUTER (step 5b): whether to make one, whether it drops what the
 # threat rules match, and whether the one there is made again.
 EDGE=0
@@ -213,6 +219,7 @@ while [ $# -gt 0 ]; do
     --edge-block) EDGE=1; EDGE_BLOCK=1; shift ;;
     --edge-again) EDGE=1; EDGE_AGAIN=1; shift ;;
     --edge-pair) EDGE=1; EDGE_PAIR=1; shift ;;
+    --grants) GRANTS="${2:?--grants needs upgrades, reboot, both as upgrades,reboot, or none}"; shift 2 ;;
     # Read from stdin there is no file to print the head of.
     -h | --help) if [ -f "$0" ]; then sed -n '2,58p' "$0"; else echo "see docs/proxmox.md, \"Setting it up\""; fi; exit 0 ;;
     *) die "unknown option $1 (--help says what there is)" ;;
@@ -220,6 +227,16 @@ while [ $# -gt 0 ]; do
 done
 
 case "$CHANNEL" in stable | rolling) ;; *) die "--channel is stable or rolling" ;; esac
+GRANT_UPGRADES=""
+GRANT_REBOOT=""
+case "$GRANTS" in
+  '') ;;
+  none) GRANT_UPGRADES=0; GRANT_REBOOT=0 ;;
+  upgrades) GRANT_UPGRADES=1; GRANT_REBOOT=0 ;;
+  reboot) GRANT_UPGRADES=0; GRANT_REBOOT=1 ;;
+  upgrades,reboot | reboot,upgrades) GRANT_UPGRADES=1; GRANT_REBOOT=1 ;;
+  *) die "--grants is upgrades, reboot, upgrades,reboot or none" ;;
+esac
 # THE IMAGES ASKED FOR, each once, in the order asked, and every one known.
 wanted=""
 for k in ${IMAGES//,/ }; do
@@ -871,7 +888,7 @@ if [ -n "$there" ]; then
   [ -z "$HOLDER_JOIN" ] || rm -f "$HOLDER_JOIN"
 elif [ -n "$HOLDER_JOIN" ]; then
   # THE PIN AND THE NAME, read and checked, and the file gone either way.
-  join_said="$(ADDRESS="$ADDRESS" COORD="$COORDINATOR" perl -MJSON::PP -e '
+  join_said="$(ADDRESS="$ADDRESS" COORD="$COORDINATOR" GU="$GRANT_UPGRADES" GR="$GRANT_REBOOT" perl -MJSON::PP -e '
     local $/; open my $f, "<", $ARGV[0] or die "unreadable\n"; my $j = eval { decode_json(<$f>) } or die "not JSON\n";
     my $id = $j->{hostId} // ""; my $pin = $j->{pin} // ""; my $sec = $j->{secret};
     die "it was asked for at " . ($j->{address} // "no address") . ", and this node is set up as $ENV{ADDRESS}\n" unless ($j->{address} // "") eq $ENV{ADDRESS};
@@ -881,6 +898,8 @@ elif [ -n "$HOLDER_JOIN" ]; then
     my ($origin) = $ENV{COORD} =~ m{\A(https://[A-Za-z0-9.-]+(?::\d+)?)}; die "no fleet address\n" unless $origin;
     my %g; my $g = $j->{grants};
     if (ref $g eq "HASH") { for my $k (qw(upgrades reboot)) { $g{$k} = $g->{$k} ? JSON::PP::true : JSON::PP::false if exists $g->{$k} } }
+    # THE RUN’S --grants, where the app’s file says nothing of them.
+    unless (%g) { $g{upgrades} = $ENV{GU} ? JSON::PP::true : JSON::PP::false if length $ENV{GU}; $g{reboot} = $ENV{GR} ? JSON::PP::true : JSON::PP::false if length $ENV{GR}; }
     my %out = (v => 1, coordinator => $origin, pin => $pin, hostId => $id, holder => $ENV{ADDRESS});
     $out{secret} = $sec if defined $sec;
     $out{grants} = \%g if %g;
@@ -1289,7 +1308,7 @@ fi
 # reads how it is with (edge-watch.js), kept by the app beside the token.
 WATCH_FILE=""
 if [ -n "${EDGE_WATCH_FILE:-}" ] && [ -s "$EDGE_WATCH_FILE" ] && edges | awk '$5 == 1 {found=1} END {exit !found}'; then WATCH_FILE="$EDGE_WATCH_FILE"; fi
-LINE="$(KIND=proxmox ADDRESS="$ADDRESS" NAME="$NAME" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POOL="$POOL" TRUST="$TRUST" CA_FILE="$CA" VMID_FROM="${VMID_FROM:-}" VMID_TO="${VMID_TO:-}" WATCH_FILE="$WATCH_FILE" perl -MJSON::PP -MMIME::Base64 -e '
+LINE="$(KIND=proxmox ADDRESS="$ADDRESS" NAME="$NAME" TOKEN="$USER_ID!$TOKEN_NAME=$SECRET" POOL="$POOL" TRUST="$TRUST" CA_FILE="$CA" VMID_FROM="${VMID_FROM:-}" VMID_TO="${VMID_TO:-}" WATCH_FILE="$WATCH_FILE" GU="$GRANT_UPGRADES" GR="$GRANT_REBOOT" perl -MJSON::PP -MMIME::Base64 -e '
   my %r = (kind => $ENV{KIND}, address => $ENV{ADDRESS}, token => $ENV{TOKEN}, pool => $ENV{POOL});
   if (length $ENV{WATCH_FILE}) {
     local $/; open my $w, "<", $ENV{WATCH_FILE} or die; my $j = decode_json(<$w>);
@@ -1297,6 +1316,9 @@ LINE="$(KIND=proxmox ADDRESS="$ADDRESS" NAME="$NAME" TOKEN="$USER_ID!$TOKEN_NAME
   }
   $r{name} = $ENV{NAME} if length $ENV{NAME};
   $r{vmids} = { from => $ENV{VMID_FROM} + 0, to => $ENV{VMID_TO} + 0 } if length $ENV{VMID_FROM};
+  # WHAT ITS MACHINES MAY DO FROM CHAT, which every box puts in each machine
+  # it makes (pve-pools.js, machineGrantsOf). Unsaid, the record says nothing.
+  $r{grants} = { upgrades => ($ENV{GU} ? JSON::PP::true : JSON::PP::false), reboot => ($ENV{GR} ? JSON::PP::true : JSON::PP::false) } if length $ENV{GU};
   # THE CERTIFICATE BLOCKS ALONE, with plain line ends: a file a tool wrote
   # may carry Windows line ends or subject= lines between them, which
   # OpenSSL reads and the fleet once refused (pve-pools.js, certsOf).

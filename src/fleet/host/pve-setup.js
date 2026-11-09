@@ -188,7 +188,22 @@ export function optionArgs(options) {
     o.edge ? (o.edgeBlock ? ' --edge-block' : ' --edge') : '',
     o.edge && o.edgeAgain ? ' --edge-again' : '',
     o.edge && o.edgePair ? ' --edge-pair' : '',
+    // WHAT ITS MACHINES MAY DO FROM CHAT, put in the line every box reads
+    // and in its own machine's join: both answers, only when both are given.
+    o.grants && o.grants.upgrades !== undefined && o.grants.reboot !== undefined ? ` --grants ${grantsArg(o.grants)}` : '',
   ].join('');
+}
+
+/**
+ * The script's `--grants`: updates, reboot, both, or none.
+ *
+ * @param {{ upgrades?: boolean, reboot?: boolean }} g
+ */
+export function grantsArg(g) {
+  if (g.upgrades && g.reboot) return 'upgrades,reboot';
+  if (g.upgrades) return 'upgrades';
+  if (g.reboot) return 'reboot';
+  return 'none';
 }
 
 /**
