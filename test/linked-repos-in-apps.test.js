@@ -29,6 +29,7 @@ test('the words about each role, and about a session’s archive, are the same o
     'Linked repositories',
     'Check and link',
     'Unlink',
+    'Create one from the starter',
     'Loading…',
     // The result, with the transport's reason smaller under it (154).
     'Could not load your repositories.',
@@ -50,6 +51,21 @@ test('the words about each role, and about a session’s archive, are the same o
     assert.ok(IOS.includes(words), `iOS lost: ${words}`);
     assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
   }
+});
+
+test('both phones open the same starter for each role, with the visibility it needs', () => {
+  // A private archive or templates copy from its first commit is the reason
+  // the starters are templates and not forks (docs/linked-repos.md).
+  for (const [repo, name, visibility] of [
+    ['Fleetwright-Archive', 'fleetwright-archive', 'private'],
+    ['Fleetwright-Runners-Template', 'fleetwright-runners', 'public'],
+    ['Fleetwright-Templates', 'fleetwright-templates', 'private'],
+  ]) {
+    assert.match(IOS, new RegExp(`\\("${name}", "${repo}", "${visibility}"\\)`), `iOS: ${repo}`);
+    assert.match(ANDROID, new RegExp(`Triple\\("${name}", "${repo}", "${visibility}"\\)`), `Android: ${repo}`);
+  }
+  const url = 'https://github.com/new?template_owner=TheTechNetwork&template_name=';
+  assert.ok(IOS.includes(url) && ANDROID.includes(url));
 });
 
 test('the same three roles, in the same order, on both phones', () => {

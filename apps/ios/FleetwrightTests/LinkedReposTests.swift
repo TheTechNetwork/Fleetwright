@@ -36,6 +36,13 @@ final class LinkedReposTests: XCTestCase {
         XCTAssertEqual(describeLinkedRepos(2), "2 of 3 linked")
     }
 
+    func testEachRoleOpensItsStarterWithTheVisibilityItNeeds() {
+        XCTAssertEqual(linkedRoleStarter("archive")?.absoluteString, "https://github.com/new?template_owner=TheTechNetwork&template_name=Fleetwright-Archive&name=fleetwright-archive&visibility=private")
+        XCTAssertEqual(linkedRoleStarter("runners")?.absoluteString, "https://github.com/new?template_owner=TheTechNetwork&template_name=Fleetwright-Runners-Template&name=fleetwright-runners&visibility=public")
+        XCTAssertEqual(linkedRoleStarter("templates")?.absoluteString, "https://github.com/new?template_owner=TheTechNetwork&template_name=Fleetwright-Templates&name=fleetwright-templates&visibility=private")
+        XCTAssertNil(linkedRoleStarter("scratch"))
+    }
+
     func testASessionSaysWhetherItsArchiveLanded() throws {
         func session(_ extra: String) throws -> Fleet.Session {
             try JSONDecoder().decode(Fleet.Session.self, from: Data(#"{"name":"job","status":"running"\#(extra)}"#.utf8))

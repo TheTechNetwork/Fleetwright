@@ -19,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -52,6 +53,7 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun LinkedReposSheet(settings: Settings, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
     // Three states, each said: asking (neither set), answered, and failed with
     // the reason. `asked` is bumped by Try again, which runs the load again.
     var failed by remember { mutableStateOf<String?>(null) }
@@ -92,6 +94,11 @@ internal fun LinkedReposSheet(settings: Settings, onDismiss: () -> Unit) {
             else -> linkedRoles.forEach { role ->
                 SectionHead(linkedRoleTitle(role))
                 Hint(linkedRoleSentence(role))
+                if (links[role] == null) {
+                    linkedRoleStarter(role)?.let { starter ->
+                        TextButton(onClick = { uriHandler.openUri(starter) }) { Text("Create one from the starter") }
+                    }
+                }
                 OutlinedTextField(
                     value = drafts[role] ?: "",
                     onValueChange = { drafts[role] = it.trim() },
@@ -199,6 +206,23 @@ fun describeLinkedRole(role: String, linked: String?, fleetRunners: String?): St
     // (docs/linked-repos.md, "The starter").
     role == "templates" -> "Nothing linked. Start one from github.com/TheTechNetwork/Fleetwright-Templates."
     else -> "Nothing linked."
+}
+
+/** GitHub's new-repository page with the role's starter chosen as the
+ * template, and the visibility the role needs already picked: private for the
+ * archive and templates, public for runners. GitHub documents these query
+ * parameters (docs: "Creating a new repository"). Opened in the browser, not
+ * created from here: making a repository needs the GitHub App's
+ * Administration permission, which this app does not ask for
+ * (src/core/repo-tokens.js). */
+fun linkedRoleStarter(role: String): String? {
+    val (name, repo, visibility) = when (role) {
+        "archive" -> Triple("fleetwright-archive", "Fleetwright-Archive", "private")
+        "runners" -> Triple("fleetwright-runners", "Fleetwright-Runners-Template", "public")
+        "templates" -> Triple("fleetwright-templates", "Fleetwright-Templates", "private")
+        else -> return null
+    }
+    return "https://github.com/new?template_owner=TheTechNetwork&template_name=$repo&name=$name&visibility=$visibility"
 }
 
 /** What a check found, one answer per fact, "can't tell" kept apart from "no". */
