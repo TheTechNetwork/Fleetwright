@@ -1112,8 +1112,12 @@ export class Coordinator {
       return json(res, r.ok ? 200 : 400, { ...r, text, invites: this.core.invites.list() });
     }
 
-    if (p.startsWith('/api/invites/') && req.method === 'DELETE') {
-      const r = this.core.invites.remove(decodeURIComponent(p.slice('/api/invites/'.length)));
+    // The address in the body, as adding one sends it; the path form stays
+    // for a phone that still sends it. See the Worker's copy for why.
+    if ((p === '/api/invites' || p.startsWith('/api/invites/')) && req.method === 'DELETE') {
+      const inPath = p.startsWith('/api/invites/') ? decodeURIComponent(p.slice('/api/invites/'.length)) : '';
+      const body = inPath ? null : await readJson(req);
+      const r = this.core.invites.remove(inPath || String(body?.email || ''));
       if (r.ok) this.saveState();
       return json(res, r.ok ? 200 : 404, { ...r, invites: this.core.invites.list() });
     }

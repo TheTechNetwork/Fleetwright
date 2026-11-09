@@ -1798,6 +1798,45 @@
             "description": "this fleet has as many invitations outstanding as it can store"
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Withdraw an invitation",
+        "description": "Removes the address from the allow list. The address goes in the body, as `POST` sends it, so it is not in a URL anything logs. A credential they already hold is a separate row and is revoked from /api/clients/{id}.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "withdrawn \u2014 `invites` is the list after"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not an admin \u2014 inviting is the admin seat\u2019s"
+          },
+          "404": {
+            "description": "was not invited"
+          }
+        }
       }
     },
     "/api/invites/{email}": {
@@ -1806,7 +1845,7 @@
           "identity"
         ],
         "summary": "Withdraw an invitation",
-        "description": "Removes the address from the allow list. A credential they already hold is a separate row and is revoked from /api/clients/{id}.",
+        "description": "The same, with the address in the path: what phones sent before the body form, still answered. New callers use `DELETE /api/invites` with the address in the body.",
         "parameters": [
           {
             "name": "email",
@@ -1830,7 +1869,8 @@
           "404": {
             "description": "was not invited"
           }
-        }
+        },
+        "deprecated": true
       }
     },
     "/api/events": {

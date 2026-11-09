@@ -902,8 +902,14 @@ export class Fleet {
       return json({ ...r, text, invites: this.core.invites.list() }, r.ok ? 200 : 400);
     }
 
-    if (url.pathname.startsWith('/api/invites/') && request.method === 'DELETE') {
-      const r = this.core.invites.remove(decodeURIComponent(url.pathname.slice('/api/invites/'.length)));
+    // WITHDRAWING ONE: the address in the body, as adding one sends it. The
+    // address used to ride in the path, where it is logged by everything that
+    // logs a URL (and the phones' static analysis rightly called it personal
+    // data in a URL); the path form stays for a phone that still sends it.
+    if ((url.pathname === '/api/invites' || url.pathname.startsWith('/api/invites/')) && request.method === 'DELETE') {
+      const inPath = url.pathname.startsWith('/api/invites/') ? decodeURIComponent(url.pathname.slice('/api/invites/'.length)) : '';
+      const body = inPath ? null : await readJson(request);
+      const r = this.core.invites.remove(inPath || String(body?.email || ''));
       if (r.ok) await this.#saveInvites();
       return json({ ...r, invites: this.core.invites.list() }, r.ok ? 200 : 404);
     }
