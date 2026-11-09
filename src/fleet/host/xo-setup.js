@@ -2111,7 +2111,7 @@ export class XoSetups {
       // THE CLUSTER'S OWN MACHINE: its pin asked for as a policy job's is
       // (xo-holder.js), and a machine it removed to make it again told to the
       // fleet, which retires the host it was.
-      holderPin: this.holderPin && this.coordinatorUrl ? (ctx) => /** @type {(job: string, address: string) => Promise<any>} */ (this.holderPin)(ctx.rec.job, ctx.rec.address) : null,
+      holderPin: this.holderPin && this.coordinatorUrl ? (ctx, address) => /** @type {(job: string, address: string) => Promise<any>} */ (this.holderPin)(ctx.rec.job, address) : null,
       removed: (ctx, hostId) => this.emit({ event: 'xosetup.holder-removed', job: ctx.rec.job, hostId }),
     });
   }

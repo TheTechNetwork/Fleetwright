@@ -763,6 +763,7 @@ elif [ -n "$HOLDER_JOIN" ]; then
   join_said="$(ADDRESS="$ADDRESS" COORD="$COORDINATOR" perl -MJSON::PP -e '
     local $/; open my $f, "<", $ARGV[0] or die "unreadable\n"; my $j = eval { decode_json(<$f>) } or die "not JSON\n";
     my $id = $j->{hostId} // ""; my $pin = $j->{pin} // ""; my $sec = $j->{secret};
+    die "it was asked for at " . ($j->{address} // "no address") . ", and this node is set up as $ENV{ADDRESS}\n" unless ($j->{address} // "") eq $ENV{ADDRESS};
     die "no name the fleet gives a machine of its own\n" unless $id =~ /\Aholder-[0-9a-f]{6}\z/;
     die "no enrolment pin\n" unless $pin =~ /\A\d{6}\z/;
     die "a secret that is not one\n" if defined $sec && $sec !~ /\A[0-9a-f]{64}\z/;

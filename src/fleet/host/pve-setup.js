@@ -233,16 +233,37 @@ export function holdersIn(out, pool = 'fleetwright') {
 }
 
 /**
+ * THE ADDRESS THE LINE WILL CARRY, worked out on the node as the script works
+ * it out (its first address, port 8006), before a pin is asked for: the
+ * machine of its own is reserved for that address, proves its request with
+ * it and is let hold the vault item named by it, so the three must agree.
+ * The script refuses a join file for any other.
+ */
+export const ADDRESS_FIND = "hostname -I | awk '{print $1}'";
+
+/**
+ * The address the line will carry, from ADDRESS_FIND's answer; null when the
+ * node gave none.
+ *
+ * @param {string} out
+ */
+export function lineAddressOf(out) {
+  const ip = String(out || '').trim().split(/\s+/)[0] ?? '';
+  return /^[0-9A-Fa-f.:]{2,45}$/.test(ip) ? `${ip}:8006` : null;
+}
+
+/**
  * The file the script reads the pin from, written root-only in one command:
  * the JSON in base64, so nothing in it reaches the shell as words.
  *
- * @param {{ hostId: string, pin: string, secret?: string|null, grants?: { upgrades?: boolean, reboot?: boolean }|null }} join
+ * @param {{ hostId: string, pin: string, address: string, secret?: string|null, grants?: { upgrades?: boolean, reboot?: boolean }|null }} join
  */
-export function holderJoinCommand({ hostId, pin, secret = null, grants = null }) {
+export function holderJoinCommand({ hostId, pin, address, secret = null, grants = null }) {
   if (!HOLDER_ID_RE.test(hostId)) throw new Error(`${hostId} is not a name the fleet gives a machine of its own`);
   if (!/^\d{6}$/.test(pin)) throw new Error('that is not an enrolment pin');
+  if (!/^[A-Za-z0-9.:[\]-]{1,253}$/.test(String(address))) throw new Error('that is not the address of the cluster');
   if (secret !== null && !HOLDER_SECRET_RE.test(secret)) throw new Error('that is not a secret for a machine of its own');
-  const json = JSON.stringify({ hostId, pin, ...(secret ? { secret } : {}), ...(grants && Object.keys(grants).length ? { grants } : {}) });
+  const json = JSON.stringify({ hostId, pin, address, ...(secret ? { secret } : {}), ...(grants && Object.keys(grants).length ? { grants } : {}) });
   return `umask 077; printf %s ${Buffer.from(json).toString('base64')} | base64 -d >${HOLDER_JOIN_FILE}`;
 }
 
@@ -319,7 +340,7 @@ const SCRIPT_STEPS = PVESETUP_STEPS.slice(1);
  *   open: (ctx: any) => Promise<{ remote: (script: string, opts?: { timeoutMs?: number }) => Promise<{ code: number|null, stdout: string, stderr: string }> }>,
  *   coordinatorUrl: string|null,
  *   sealLine: (ctx: any, line: string) => Promise<void>,
- *   holderPin?: ((ctx: any) => Promise<{ ok: boolean, pin?: string, hostId?: string, text?: string }|null>)|null,
+ *   holderPin?: ((ctx: any, address: string) => Promise<{ ok: boolean, pin?: string, hostId?: string, text?: string }|null>)|null,
  *   removed?: (ctx: any, hostId: string) => void,
  *   say?: (ctx: any, part: { fill: number|null, text: string }) => void,
  *   sleep: (ms: number) => Promise<void>,
@@ -374,11 +395,14 @@ export function pveSteps({ open, coordinatorUrl, sealLine, holderPin = null, rem
         const found = await ctx.pool.remote(HOLDER_FIND, { timeoutMs: 60_000 });
         const there = found.code === 0 ? holdersIn(found.stdout) : [];
         if (!there.length || options.holderAgain) {
-          const given = await holderPin(ctx);
+          const said = await ctx.pool.remote(ADDRESS_FIND, { timeoutMs: 30_000 });
+          const address = said.code === 0 ? lineAddressOf(said.stdout) : null;
+          if (!address) throw new Error('the node did not say its address, which its own machine is reserved for. Nothing was started.');
+          const given = await holderPin(ctx, address);
           if (!given?.ok || typeof given.pin !== 'string' || typeof given.hostId !== 'string' || !HOLDER_ID_RE.test(given.hostId)) {
             throw new Error(`the fleet gave no pin for the cluster’s own machine: ${given?.text || 'it did not answer'}. Nothing was started.`);
           }
-          const wrote = await ctx.pool.remote(holderJoinCommand({ hostId: given.hostId, pin: given.pin, secret: options.holderSecret ?? null, grants: options.grants ?? null }), { timeoutMs: 30_000 });
+          const wrote = await ctx.pool.remote(holderJoinCommand({ hostId: given.hostId, pin: given.pin, address, secret: options.holderSecret ?? null, grants: options.grants ?? null }), { timeoutMs: 30_000 });
           if (wrote.code !== 0) throw new Error('the pin for the cluster’s own machine could not be written on the node. Nothing was started.');
           holderJoin = true;
         }

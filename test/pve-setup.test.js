@@ -67,6 +67,7 @@ function node(scenario) {
     journalctl: `cat '${journal}' 2>/dev/null\n`,
     // THE CLUSTER'S GUESTS, as the token-less root sees them, for the look
     // that comes before a pin is asked for.
+    hostname: `printf '%s\\n' '10.69.10.10 fd00::10'\n`,
     pvesh: `echo "pvesh $*" >> '${asked}'\nprintf '%s\\n' '${JSON.stringify(scenario.resources ?? [])}'\n`,
   };
   for (const [name, body] of Object.entries(tools)) {
@@ -318,8 +319,10 @@ test('the cluster’s own machine: a pin only when there is none, written root-o
   const p = await phone(begun, n.pin, { options: { holder: true, holderSecret: secret, grants: { upgrades: false } } });
   assert.equal((await m.setups.run({ job: begun.xosetup.job, sealed: p.sealed, actor: ACTOR })).ok, true);
   assert.equal((await settled(m.setups, begun.xosetup.job)).state, 'done');
-  assert.deepEqual(asked, [[begun.xosetup.job, NODE]]);
-  assert.deepEqual(n.holderJoin(), { hostId: 'holder-0a0b0c', pin: '482913', secret, grants: { upgrades: false } });
+  // RESERVED FOR THE ADDRESS THE LINE WILL CARRY, worked out on the node as
+  // the script works it out, so the proof and the vault item agree with it.
+  assert.deepEqual(asked, [[begun.xosetup.job, '10.69.10.10:8006']]);
+  assert.deepEqual(n.holderJoin(), { hostId: 'holder-0a0b0c', pin: '482913', address: '10.69.10.10:8006', secret, grants: { upgrades: false } });
   assert.ok(n.asked().some((l) => l.startsWith('systemd-run') && / --holder-join \S*\/\.fleetwright-holder-join --line-file /.test(l)), n.asked().join('\n'));
   assert.ok(!JSON.stringify(m.events).includes('482913'), 'the pin is never in the progress the coordinator relays');
 
@@ -365,7 +368,8 @@ test('asked for by a machine that cannot get a pin, or given none, nothing is st
 });
 
 test('the holder options are checked, and the script reads its flags and writes the same cloud-init as Xen Orchestra’s', async () => {
-  const { pveOptionsOf, startCommand, holdersIn, holderJoinCommand, HOLDER_JOIN_FILE } = await import('../src/fleet/host/pve-setup.js');
+  const pveSetupMod = await import('../src/fleet/host/pve-setup.js');
+  const { pveOptionsOf, startCommand, holdersIn, holderJoinCommand, HOLDER_JOIN_FILE } = pveSetupMod;
   const { UPGRADE_RUNCMD, JOIN_RUNCMD } = await import('../src/fleet/host/vm-image.js');
   const { holderCloudConfig } = await import('../src/fleet/host/xo-holder.js');
   assert.deepEqual(pveOptionsOf({ holder: true, holderAgain: true, holderSecret: 'f'.repeat(64), grants: { upgrades: true, reboot: false } }).options, { holder: true, holderAgain: true, holderSecret: 'f'.repeat(64), grants: { upgrades: true, reboot: false } });
@@ -388,9 +392,14 @@ test('the holder options are checked, and the script reads its flags and writes 
   ]);
   assert.deepEqual(holdersIn(res), [{ vmid: 130, name: 'holder-0a0b0c', running: true }]);
   assert.deepEqual(holdersIn('not json'), []);
-  assert.throws(() => holderJoinCommand({ hostId: 'build', pin: '482913' }), /not a name/);
-  assert.throws(() => holderJoinCommand({ hostId: 'holder-0a0b0c', pin: '48291; reboot' }), /not an enrolment pin/);
-  assert.match(holderJoinCommand({ hostId: 'holder-0a0b0c', pin: '482913' }), /^umask 077; printf %s [A-Za-z0-9+/=]+ \| base64 -d >\/root\/\.fleetwright-holder-join$/);
+ const { lineAddressOf } = await import('../src/fleet/host/pve-setup.js');
+  assert.equal(lineAddressOf('10.69.10.10 fd00::10\n'), '10.69.10.10:8006');
+  assert.equal(lineAddressOf(''), null);
+  assert.equal(lineAddressOf('$(reboot)'), null);
+  assert.throws(() => holderJoinCommand({ hostId: 'build', pin: '482913', address: 'a:8006' }), /not a name/);
+  assert.throws(() => holderJoinCommand({ hostId: 'holder-0a0b0c', pin: '48291; reboot', address: 'a:8006' }), /not an enrolment pin/);
+  assert.throws(() => holderJoinCommand({ hostId: 'holder-0a0b0c', pin: '482913', address: 'a b' }), /not the address/);
+  assert.match(holderJoinCommand({ hostId: 'holder-0a0b0c', pin: '482913', address: '10.69.10.10:8006' }), /^umask 077; printf %s [A-Za-z0-9+/=]+ \| base64 -d >\/root\/\.fleetwright-holder-join$/);
   // THE SCRIPT: its flags, its step, the line it says a removed machine with,
   // and the same first-boot lines as a Xen Orchestra pool's own machine.
   const script = readFileSync(new URL('../install/fleetwright-pve-setup', import.meta.url), 'utf8');
@@ -398,6 +407,9 @@ test('the holder options are checked, and the script reads its flags and writes 
   assert.match(script, /^step holder$/m);
   assert.match(script, /printf 'fleetwright-holder-removed: %s\\n'/);
   assert.match(script, /role FleetwrightHolder "VM\.Audit"/);
+  assert.match(script, /unless \(\$j->\{address\} \/\/ ""\) eq \$ENV\{ADDRESS\}/, 'the script takes a pin reserved for another address');
+  assert.equal(pveSetupMod.ADDRESS_FIND, "hostname -I | awk '{print $1}'");
+  assert.match(script, /ip="\$\(hostname -I \| awk '\{print \$1\}'\)"\n[^\n]*\n\s*ADDRESS="\$ip:8006"/, 'the script works the address out another way than the box asks it');
   const heredoc = (/** @type {string} */ tag) => new RegExp(`<<'${tag}'\\n([\\s\\S]*?)\\n${tag}\\n`).exec(script)?.[1];
   assert.equal(heredoc('UPGRADE'), UPGRADE_RUNCMD);
   assert.equal(heredoc('JOIN'), JOIN_RUNCMD);
