@@ -240,7 +240,8 @@ function publicArchive(out) {
     ...out,
     message:
       `${out.repo} is public. An archive holds what a session read and wrote — your work, and possibly a ` +
-      "client's — so it has to be private. Make it private on github.com, or link a private one.",
+      "client's — so it has to be private. Make it private on github.com, or link a private one: " +
+      'github.com/TheTechNetwork/Fleetwright-Archive is a starter to make one from, private from its first commit.',
   };
 }
 
@@ -302,7 +303,8 @@ async function decide(out, get) {
       `${out.repo} is ${out.public ? 'public, so anyone can read it' : 'private'} and readable. ` +
       (out.carries.length
         ? `It carries ${out.carries.join(', ')}.`
-        : 'It has none of .claude, .github or a Renovate default.json at its top level; a session can still read what it holds.') +
+        : 'It has none of .claude, .github or a Renovate default.json at its top level; a session can still read what it holds. ' +
+          'Make one from github.com/TheTechNetwork/Fleetwright-Templates, or copy what you want from it.') +
       ' Nothing in it is run or given to a session unless somebody asks for it.',
   };
 }
