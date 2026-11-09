@@ -369,6 +369,20 @@ machine of the fleet, through the coordinator.
 - **What a compromised machine can do with a relay:** what it could do with
   the sign-in sealed to it, which it already holds. The relay adds a TCP
   path to the one address, only while its probe or its job runs.
+- **A page through a machine** (`/api/browse`, [browse.md](./browse.md))
+  carries a phone's web view connections from a box. The box decides every
+  connection from its own env file and the hub's record, never from a frame.
+  **What a compromised coordinator can do with it:** open connections from
+  that box to the names and ranges its owner listed, and to public addresses
+  on 80 and 443 where the owner turned the web on, and to a person's own
+  running session's ports when the hub agrees the session is theirs. It
+  can read and change plain-HTTP pages on the way, and nothing inside an
+  https page. **What it cannot do:** reach the box's own addresses, a
+  private address the owner did not list (the box resolves a name once and
+  connects to that address), a session that is not the named person's, or
+  a box that turned none of it on. Its own rules apply only for people the
+  coordinator says administer the box, and on a box that pins its admins,
+  only for them.
 - **Progress on a Lock Screen is not sealed.** A Live Activity's content goes
   to the widget with no hook that could decrypt it first, so it carries step
   and part numbers and keys from fixed lists (the step, and what is being
@@ -1287,6 +1301,14 @@ into `${stateDir}/api-token` whenever none is configured and the check fails
 closed (§9-G6). The `/internal/session-start` hook endpoint is deliberately
 untokened and MUST stay loopback/socket-only; its authentication is the
 bind-mount, not a token (SEC-SESSION-1).
+
+`GET /api/session-port` is the one HTTP upgrade the API answers: a byte stream
+into one port of one session's container, for a phone's page through the box
+([browse.md](./browse.md)). It takes the operator's or the sidecar's token,
+refuses a box whose sessions are not contained (on such a box a session's
+`localhost` is the box's own), and opens only a running session the hub's own
+record says the named person started. The container is derived from the
+session name, never taken from the caller (`src/core/session-port.js`).
 
 ---
 

@@ -173,7 +173,7 @@ node bin/fleetwright-sidecar doctor       # check this box can drive its fleetwr
 node bin/fleetwright-sidecar              # run
 ```
 
-Every setting is in `src/fleet/host/config.js`. Five are worth calling out:
+Every setting is in `src/fleet/host/config.js`. Six are worth calling out:
 
 - **`FLEETWRIGHT_COORDINATOR_URL` is required.** §5: the agent pins the origin
   it will talk to. A transport that will talk to whoever answers is the same
@@ -221,6 +221,14 @@ Every setting is in `src/fleet/host/config.js`. Five are worth calling out:
   sidecar starting. Pins hold only where the sidecar's account is not the one
   sessions run as ([`signed-intents.md`](signed-intents.md#pinned-admins),
   "What it does not stop").
+- **`FLEETWRIGHT_BROWSE_HOSTS` and `FLEETWRIGHT_BROWSE_WEB` decide what a
+  phone's web view may open from this box** ([`browse.md`](browse.md)), for
+  people who administer it: names, addresses and ranges on this box's
+  network, each with `:port` or on 80 and 443, and the public web on 80 and
+  443 when the second is exactly `on`. Every page opened that way comes from
+  this box's address. Both are off unless set, an entry that is not one stops
+  the sidecar starting, and this box's own addresses are never opened
+  whatever is listed. A person's own session's ports need neither.
 - **`FLEETWRIGHT_IDLE_RESTART_MINUTES` defaults to 60, and 0 turns it off.** A
   session whose pane has not changed at all for that long is stopped and
   resumed. The useful case is one that wedged overnight, where the fix is
