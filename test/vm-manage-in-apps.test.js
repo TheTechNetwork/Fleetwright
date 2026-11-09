@@ -79,8 +79,10 @@ test('iOS: a machine’s page opens the console in the app where this phone hold
   // page too: offered only where this phone holds the pool's token, read with
   // the machine, and for a machine that is running (C-2). Asked for: "Why not
   // open in web view". Otherwise Xen Orchestra's own page, as before.
-  assert.match(I_PAGE, /holdsHere = found\.map \{ XOSetupHandoff\.held\(\)\.contains\(\$0\.address\) \} \?\? false/);
-  assert.match(I_PAGE, /if holdsHere, !m\.onProxmox, m\.state == "Running", let vm = m\.vm \{\s*NavigationLink \{\s*VMConsoleView\(address: m\.address, vm: vm, name: m\.name, settings: settings\)[\s\S]{0,200}\} else if let console = m\.consoleURL \{/);
+  assert.match(I_PAGE, /holdsHere = found\.map \{ \$0\.onProxmox \? ProxmoxKept\.held\(\)\.contains\(\$0\.address\) : XOSetupHandoff\.held\(\)\.contains\(\$0\.address\) \} \?\? false/);
+  assert.match(I_PAGE, /if holdsHere, !m\.onProxmox, m\.state == "Running", let vm = m\.vm \{\s*NavigationLink \{\s*VMConsoleView\(address: m\.address, vm: vm, name: m\.name, settings: settings\)[\s\S]{0,1200}\} else if let console = m\.consoleURL \{/);
+  // PROXMOX VE'S IN THE APP TOO, where this phone keeps the cluster's record.
+  assert.match(I_PAGE, /\} else if holdsHere, m\.onProxmox, m\.state == "Running", let node = m\.node, let vmid = m\.vmid \{\s*(\/\/[^\n]*\s*)*NavigationLink \{\s*VMConsoleView\(proxmox: m\.address, node: node, vmid: vmid, name: m\.name, settings: settings\)/);
   assert.match(I_PAGE, /Label\(Manage\.Words\.console, systemImage: "rectangle\.on\.rectangle"\)/);
   assert.match(I_FLEET, /return URL\(string: "https:\/\/\\\(address\)\/#\/vms\/\\\(vm\)\/console"\)/);
   assert.match(I_FLEET, /var sshCommand: String\? \{ ip\.map \{ "ssh fleetwright@\\\(\$0\)" \} \}/);
@@ -152,8 +154,9 @@ test('Android: the machines on your pools are read from the snapshot, and worked
 });
 
 test('Android: a machine’s page opens the console in the app where this phone holds the pool’s token, Xen Orchestra’s own page otherwise, and offers only what can be done', () => {
-  assert.match(A_PAGE, /val holdsHere = remember\(machine\?\.address\) \{ machine\?\.address\?\.let \{ a -> XoHandoff\.held\(settings\)\.any \{ it\.address == a \} \} \?: false \}/);
-  assert.match(A_PAGE, /if \(holdsHere && !m\.onProxmox && m\.state == "Running" && m\.vm != null\) \{\s*OpenRow\(Manage\.Words\.console\) \{ console = true \}\s*\} else \{\s*m\.consoleUrl\?\.let/);
+  assert.match(A_PAGE, /val holdsHere = remember\(machine\?\.address, machine\?\.onProxmox\) \{\s*machine\?\.let \{ m -> if \(m\.onProxmox\) m\.address in ProxmoxKept\.held\(settings\) else XoHandoff\.held\(settings\)\.any \{ it\.address == m\.address \} \} \?: false\s*\}/);
+  assert.match(A_PAGE, /if \(holdsHere && !m\.onProxmox && m\.state == "Running" && m\.vm != null\) \{\s*OpenRow\(Manage\.Words\.console\) \{ console = true \}\s*\} else if \(holdsHere && m\.onProxmox && m\.state == "Running" && m\.node != null && m\.vmid != null\) \{\s*(\/\/[^\n]*\s*)*OpenRow\(Manage\.Words\.console\) \{ console = true \}\s*\} else \{\s*m\.consoleUrl\?\.let/);
+  assert.match(A_PAGE, /ConsolePage\(settings, onScreen\.address, onScreen\.vm \?: onScreen\.name, onScreen\.name, proxmox = onScreen\.node to onScreen\.vmid\)/);
   assert.match(A_PAGE, /if \(console && onScreen\?\.vm != null\) \{\s*ConsolePage\(settings, onScreen\.address, onScreen\.vm, onScreen\.name\) \{ console = false \}/);
   assert.match(A_FLEET, /"https:\/\/\$address\/#\/vms\/\$vm\/console"/);
   assert.match(A_FLEET, /val sshCommand: String\? get\(\) = ip\?\.let \{ "ssh fleetwright@\$it" \}/);

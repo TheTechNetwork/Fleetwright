@@ -400,11 +400,28 @@ A machine made on a cluster has the same page as one on Xen Orchestra
 (`hypervisors.md`, "Working a machine"), with two differences that come from
 Proxmox VE itself:
 
-- **Its console is Proxmox VE's own**, `https://<node>:8006/?console=kvm&novnc=1&vmid=<n>&node=<node>`,
-  opened in the browser, where you sign in to Proxmox VE. The page said "Open
-  its console in Xen Orchestra" and opened Xen Orchestra's path on the
-  Proxmox VE address, which landed on its web interface at no machine at
-  all. The coordinator now passes each machine's `kind`, `node` and `vmid`.
+- **Its console opens in the app, from home and from away.** Asked for:
+  "if it's not on local network should be able to reach it somehow". The
+  phone that set the cluster up keeps its record (`ProxmoxKept`, this device
+  only, gone at sign-out), and opens the console itself: `vncproxy` with the
+  token hands back a port and a one-use ticket, `vncwebsocket` carries the
+  VNC, and the ticket is the VNC password noVNC is asked for. Both requests
+  go behind TLS held to the cluster's own CA, as the boxes hold it
+  (`pve-api.js`, `connectTrusted`), and the token travels only in Proxmox
+  VE's `Authorization` header. **From away**, or when the node does not answer
+  this phone, each request goes through one of your machines that holds the
+  cluster (`ConsoleTunnel`, `consoleAddress` in `pve-pools.js`): that machine
+  makes one plain TCP connection to the node and carries the TLS records, so
+  neither it nor the fleet can read the screen or the token. A tunnel carries
+  one connection, so the ticket takes one and the screen another, the first
+  closed before the second opens; the ticket outlasts that. The token needs
+  `VM.Console` on the pool, now in the fleet's role. **Run the setup again**
+  on a cluster set up before this, both for that and so this phone keeps the
+  record. A phone that did not set the cluster up offers Proxmox VE's own
+  console page, `https://<node>:8006/?console=kvm&novnc=1&vmid=<n>&node=<node>`,
+  where you sign in; the page said "Open its console in Xen Orchestra" and
+  opened Xen Orchestra's path, which landed on no machine at all. The
+  coordinator passes each machine's `kind`, `node` and `vmid`.
 - **Its address is its guest agent's**, read by the box from
   `agent/network-get-interfaces` on the interface the fleet put it on, which
   is what turns "No address yet" into the SSH command. The box never asked,
@@ -561,5 +578,5 @@ it answers `notHere`, and an `unreachable` from either is kept.
   Orchestra's).
 - Machines kept ready (`vmStandby`), which have not been tried against a
   cluster.
-- A machine's address on its page: Proxmox has it from the guest agent,
-  which needs `VM.GuestAgent.Audit`.
+- SSH to a machine from away. On its own network the page gives the command
+  once the guest agent has said the address.

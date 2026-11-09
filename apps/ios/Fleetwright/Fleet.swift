@@ -3327,6 +3327,7 @@ final class Settings {
         XOSaved.forgetAll()
         ProxmoxDirectHandoff.forgetAll()
         ProxmoxThroughHandoff.forgetAll()
+        ProxmoxKept.forgetAll()
         HolderJoin.forgetAll()
     }
 

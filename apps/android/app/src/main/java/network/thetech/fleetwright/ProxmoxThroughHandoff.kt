@@ -82,6 +82,8 @@ internal object ProxmoxThroughHandoff {
         }
         PhoneVault(settings).keepHypervisor(fleet, record.address, record.json).fold(
             onSuccess = {
+                // KEPT HERE TOO, for the console in the app (ProxmoxKept).
+                ProxmoxKept.keep(settings, record)
                 forget(settings, job)
                 Outcome.Kept(record.address)
             },

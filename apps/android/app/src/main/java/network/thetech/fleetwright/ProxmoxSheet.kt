@@ -106,6 +106,8 @@ internal fun ProxmoxSheet(
         busy = true
         PhoneVault(settings).keepHypervisor(Fleet(settings), record.address, record.json).fold(
             onSuccess = {
+                // KEPT HERE TOO, for the console in the app (ProxmoxKept).
+                ProxmoxKept.keep(settings, record)
                 kept = true
                 failed = false
                 line = ""

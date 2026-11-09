@@ -93,6 +93,9 @@ internal class XoConsole private constructor(private val socket: SSLSocket, priv
     }
 
     companion object {
+        /** A console socket already upgraded, as Proxmox VE's is (ProxmoxConsole). */
+        internal fun wrap(socket: SSLSocket, rest: ByteArray): XoConsole = XoConsole(socket, rest)
+
         /**
          * Open the console of [vm]. Throws an [XoLink.Failure] of kind
          * WRONG_CERTIFICATE for a server that answered with any other

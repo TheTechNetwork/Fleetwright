@@ -208,6 +208,17 @@ struct VMMachineView: View {
                     Label(Manage.Words.console, systemImage: "rectangle.on.rectangle")
                         .frame(minHeight: 44)
                 }
+            } else if holdsHere, m.onProxmox, m.state == "Running", let node = m.node, let vmid = m.vmid {
+                // PROXMOX VE'S, IN THE APP, from home and from away: this phone
+                // keeps the cluster's record (ProxmoxKept) and opens the
+                // console itself, through one of your machines when the node
+                // is not reachable from here.
+                NavigationLink {
+                    VMConsoleView(proxmox: m.address, node: node, vmid: vmid, name: m.name, settings: settings)
+                } label: {
+                    Label(Manage.Words.console, systemImage: "rectangle.on.rectangle")
+                        .frame(minHeight: 44)
+                }
             } else if let console = m.consoleURL {
                 Link(destination: console) {
                     Label("Open its console in \(m.hypervisorName)", systemImage: "rectangle.on.rectangle")
@@ -227,7 +238,7 @@ struct VMMachineView: View {
     /// the token and the certificate is this file's header, not the footer.
     /// The same words as Android (VmMachinePage).
     private func consoleFooter(_ m: Fleet.VMMachine) -> String {
-        holdsHere && !m.onProxmox ? "" : " The console opens \(m.hypervisorName), where you sign in."
+        holdsHere ? "" : " The console opens \(m.hypervisorName), where you sign in."
     }
 
     // MARK: What you can do
@@ -315,7 +326,9 @@ struct VMMachineView: View {
         // A FAILED REQUEST IS NOT A MISSING MACHINE: what was shown stays.
         if let got = try? await fleet.vmMachines() {
             let found = got.first { $0.name == name }
-            holdsHere = found.map { XOSetupHandoff.held().contains($0.address) } ?? false
+            // A POOL'S TOKEN OR A CLUSTER'S RECORD, kept on this phone: the
+            // console opens in the app only then (C-2).
+            holdsHere = found.map { $0.onProxmox ? ProxmoxKept.held().contains($0.address) : XOSetupHandoff.held().contains($0.address) } ?? false
             withAnimation(Design.Motion.settle(reduceMotion)) { machine = found }
             if let found, !busy {
                 cpus = found.cpus ?? cpus
