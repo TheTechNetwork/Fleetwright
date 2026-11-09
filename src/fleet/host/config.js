@@ -13,6 +13,7 @@ import { readApiToken, readSidecarToken } from '../../core/api-token.js';
 import { adoptLegacyEnv } from '../legacy-names.js';
 import { preferExisting } from '../legacy-paths.js';
 import { readAssignedName } from './identity.js';
+import { parseBrowseHosts } from './browse.js';
 
 /** @typedef {ReturnType<typeof loadSidecarConfig>} SidecarConfig */
 
@@ -177,6 +178,16 @@ export function loadSidecarConfig(env = process.env) {
     // on. Set by the runner workflow and by nothing else.
     runnerBroker: str(env, 'FLEETWRIGHT_RUNNER_BROKER'),
 
+    // WHAT THIS BOX OPENS FOR A PHONE'S WEB VIEW besides its people's own
+    // sessions (docs/browse.md, src/fleet/host/browse.js), for people who
+    // administer it. Names, addresses and ranges on this box's network, each
+    // with `:port` or on 80 and 443; and the public web, on 80 and 443, only
+    // when exactly `on`. Both off by default, and here rather than anything the
+    // coordinator sends, because what a box opens from its own address is its
+    // owner's to say.
+    browseHosts: list(env, 'FLEETWRIGHT_BROWSE_HOSTS'),
+    browseWeb: str(env, 'FLEETWRIGHT_BROWSE_WEB', 'off'),
+
     logLevel: str(env, 'FLEETWRIGHT_LOG_LEVEL', 'info'),
   });
 }
@@ -207,6 +218,15 @@ export function validateSidecarConfig(cfg) {
   const unpinnable = cfg.admins.filter((a) => !PIN_EMAIL_RE.test(a.toLowerCase()));
   if (unpinnable.length) {
     errors.push(`FLEETWRIGHT_ADMINS names ${unpinnable.join(', ')}, which is not a fleet address. It takes the addresses of the people to pin, separated by commas.`);
+  }
+  // Refused rather than skipped, for the reason FLEETWRIGHT_ADMINS is: an
+  // entry that is not one would open less than the owner wrote, quietly.
+  const { bad: unbrowsable } = parseBrowseHosts(cfg.browseHosts ?? []);
+  if (unbrowsable.length) {
+    errors.push(`FLEETWRIGHT_BROWSE_HOSTS names ${unbrowsable.join(', ')}, which is not a name, an address or a range. Each is one of those, with :port or without; see docs/browse.md.`);
+  }
+  if (!['on', 'off'].includes(String(cfg.browseWeb ?? 'off'))) {
+    errors.push(`FLEETWRIGHT_BROWSE_WEB is ${String(cfg.browseWeb).slice(0, 20)}. It is on or off, and off unless it says on.`);
   }
   if (cfg.maxSkewMs >= REPLAY_TTL_MS) {
     errors.push(

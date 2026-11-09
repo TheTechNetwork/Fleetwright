@@ -45,6 +45,7 @@ import { refreshVaultSessions } from '../core/vault-sessions.js';
 import { forgetPerson } from '../core/forget-person.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
 import { readMarker } from '../core/restart-watch.js';
+import { answerSessionPort, isSessionPortUpgrade } from '../core/session-port.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -143,6 +144,23 @@ export class HttpAdapter {
         this.#route(req, res).catch((e) => {
           log.error('http: unhandled', e);
           json(res, 500, { error: 'internal error' });
+        });
+      });
+      // ONE UPGRADE, AND ONLY ONE: a session's port for the sidecar, which a
+      // phone's page through a machine asks for (src/core/session-port.js,
+      // docs/browse.md). Anything else asking to upgrade is closed.
+      this.server.on('upgrade', (req, socket, head) => {
+        if (!isSessionPortUpgrade(req)) {
+          socket.destroy();
+          return;
+        }
+        const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+        answerSessionPort(req, socket, head, {
+          principal: this.#principal(req, url),
+          contained: this.cfg.sandbox === true && uncontained(this.cfg).length === 0,
+          record: (name) => this.sessions.registry.get(name) ?? undefined,
+          podmanBin: this.cfg.podmanBin,
+          log,
         });
       });
       this.server.on('error', reject);

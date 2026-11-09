@@ -481,6 +481,18 @@ class Fleet(
         val checksSignatures: Boolean get() = count != null && stranded != "unchecked"
     }
 
+    /**
+     * What a machine opens for a phone's web view (docs/browse.md): whether a
+     * session's own ports can be opened, which every person is told; and the
+     * web and the names its owner listed, which only people who administer
+     * it are told, and which are off and empty for everybody else.
+     */
+    data class Browse(
+        val sessions: Boolean,
+        val web: Boolean,
+        val hosts: List<String>,
+    )
+
     data class FleetHost(
         val hostId: String,
         val state: String?,
@@ -691,6 +703,12 @@ class Fleet(
          */
         val permissions: String? = null,
         /**
+         * What this machine opens for a phone's web view (docs/browse.md).
+         * Null is a machine older than protocol 18, which opens nothing, and
+         * then neither Open a port nor Browse is drawn (C-2).
+         */
+        val browse: Browse? = null,
+        /**
          * The host's own answer to "is there something to apply", and the only
          * one that is right for every kind of box. Null from a host too old to
          * send it, and null from a host that could not find out.
@@ -832,6 +850,23 @@ class Fleet(
             /** The card's verdict where [resumeKept] is not null: the list says who can, and the sheet says why. */
             const val RESUME_KEPT_ROW = "Only an admin can resume this"
         }
+
+        /**
+         * Whether a running session here can have its ports opened on this
+         * phone: the machine says it contains its sessions, and is new
+         * enough to say so at all.
+         */
+        val opensSessionPorts: Boolean
+            get() = browse?.sessions == true
+
+        /**
+         * Whether this person can open pages through this machine: they
+         * administer it, and its owner listed something or turned on the
+         * web. The coordinator refuses everybody else, so the button is not
+         * drawn for them (C-2).
+         */
+        val opensPages: Boolean
+            get() = administers == true && browse != null && (browse.web || browse.hosts.isNotEmpty())
 
         val appPending: Boolean
             get() = appPendingReported ?: ((behind ?: 0) > 0 || release?.available != null)
@@ -3494,6 +3529,16 @@ class Fleet(
                     // Only the two words the host uses; a missing field, and
                     // the "null" optString makes of a JSON null, stay null.
                     permissions = health?.optString("permissions")?.takeIf { it == "asks" || it == "bypassed" },
+                    // ABSENT STAYS NULL: a machine older than protocol 18.
+                    browse = health?.optJSONObject("browse")?.let { b ->
+                        Browse(
+                            sessions = b.optBoolean("sessions", false),
+                            web = b.optBoolean("web", false),
+                            hosts = b.optJSONArray("hosts")?.let { arr ->
+                                (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
+                            } ?: emptyList(),
+                        )
+                    },
                     // `has` first, for the same reason as appPending: a
                     // coordinator too old to say is not one that said no.
                     takesSessions = o.takeIf { it.has("takesSessions") && !it.isNull("takesSessions") }?.optBoolean("takesSessions"),

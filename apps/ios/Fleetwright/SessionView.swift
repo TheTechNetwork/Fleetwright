@@ -38,6 +38,9 @@ struct SessionView: View {
     /// Why Resume is not offered, as the list last read the session's machine
     /// (Fleet.FleetHost.resumeKept), or nil where it is.
     var resumeKept: String? = nil
+    /// Whether the session's machine opens its ports for this phone
+    /// (Fleet.FleetHost.opensSessionPorts): Open a port is drawn only there.
+    var opensPorts: Bool = false
     /// Called when this page changes something the list should know about.
     var onChange: () async -> Void = {}
 
@@ -68,10 +71,11 @@ struct SessionView: View {
     static let slowLooks = 9
     static let slowInterval: Duration = .seconds(10)
 
-    init(fleet: Fleet, initial: Fleet.Session, resumeKept: String? = nil, onChange: @escaping () async -> Void = {}) {
+    init(fleet: Fleet, initial: Fleet.Session, resumeKept: String? = nil, opensPorts: Bool = false, onChange: @escaping () async -> Void = {}) {
         self.fleet = fleet
         self.initial = initial
         self.resumeKept = resumeKept
+        self.opensPorts = opensPorts
         self.onChange = onChange
         _session = State(initialValue: initial)
     }
@@ -257,6 +261,17 @@ struct SessionView: View {
                     FilesView(session: session.name, host: session.hostId, fleet: fleet)
                 }
                 .disabled(busy)
+                // A PORT IN THE SESSION, on this phone: what the session is
+                // serving, a dev server usually, through its own machine
+                // (docs/browse.md). Only while it runs, because nothing
+                // listens in a stopped one, and only where the machine says
+                // it opens its sessions' ports.
+                if session.isRunning, opensPorts, let host = session.hostId {
+                    NavigationLink(BrowseWords.openPort) {
+                        BrowsePortView(settings: fleet.settings, host: host, session: session.name)
+                    }
+                    .disabled(busy)
+                }
                 // What it SAID, as against what it looks like: the container's
                 // output outlives the pane, and "why did it stop" is a question
                 // asked after it has.

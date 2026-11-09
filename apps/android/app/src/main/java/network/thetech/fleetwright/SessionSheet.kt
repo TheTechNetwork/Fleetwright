@@ -73,6 +73,12 @@ fun SessionSheet(
     onChanged: () -> Unit,
     /** Its workspace. Here and not on the card, where it sat beside the same row of actions twice. */
     onFiles: () -> Unit = {},
+    /**
+     * A port in the session, on this phone (docs/browse.md). Null where the
+     * session's machine does not open its sessions' ports, and then the
+     * button is not drawn (C-2).
+     */
+    onOpenPort: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
@@ -324,6 +330,12 @@ fun SessionSheet(
                     // THE WORKSPACE, on running and stopped sessions alike:
                     // "collect what it produced" is a thing to do after.
                     TextButton(onClick = onFiles, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text("Files") }
+                    // WHAT THE SESSION IS SERVING, a dev server usually, through
+                    // its own machine. Only while it runs: nothing listens in
+                    // a stopped one.
+                    if (session.isRunning && onOpenPort != null) {
+                        TextButton(onClick = onOpenPort, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) { Text(BrowseWords.OPEN_PORT) }
+                    }
                     // What it SAID, as against what it looks like: the
                     // container's output outlives the pane.
                     TextButton(

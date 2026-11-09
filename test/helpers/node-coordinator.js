@@ -345,7 +345,7 @@ export class Coordinator {
       // A host's socket, and a phone's relay (see the Worker's copy of the
       // relay route): two sockets of different parties, each authorised its
       // own way before the upgrade completes.
-      path: ['/host/connect', '/api/xosetup/relay', '/api/xoconsole/tunnel'],
+      path: ['/host/connect', '/api/xosetup/relay', '/api/xoconsole/tunnel', '/api/browse'],
       // The same handshake the Worker makes, for the same reason: a host proves
       // it holds the enrolled private key by signing a nonce issued moments
       // ago. There is no shared host token to fall back to, not even on
@@ -355,7 +355,7 @@ export class Coordinator {
         const url = new URL(req.url || '/', 'http://placeholder');
         // A PHONE'S RELAY: its own device credential, as a person. Kept on the
         // request for onConnection, which opens the relay as that phone.
-        if (url.pathname === '/api/xosetup/relay' || url.pathname === '/api/xoconsole/tunnel') {
+        if (url.pathname === '/api/xosetup/relay' || url.pathname === '/api/xoconsole/tunnel' || url.pathname === '/api/browse') {
           const presented = credentialFrom(req.headers.authorization, url);
           const client = isClientCredential(presented) ? await this.core.clients.verify(presented) : null;
           if (!client?.email) return 'A relay is carried by the phone of a signed-in person.';
@@ -374,6 +374,7 @@ export class Coordinator {
         const url = new URL(req.url || '/', 'http://placeholder');
         if (url.pathname === '/api/xosetup/relay') return this.#onRelay(conn, req, url);
         if (url.pathname === '/api/xoconsole/tunnel') return this.#onTunnel(conn, req, url);
+        if (url.pathname === '/api/browse') return this.#onBrowse(conn, req, url);
         return this.#onHost(conn, req);
       },
     });
@@ -515,6 +516,31 @@ export class Coordinator {
     conn.on('message', (text) => this.core.tunnelFromPhone(tunnel, text));
     conn.on('close', () => this.core.tunnelPhoneGone(tunnel));
     conn.on('error', () => this.core.tunnelPhoneGone(tunnel));
+  }
+
+  /**
+   * A phone's page through a machine (docs/browse.md), in the Worker's shape.
+   *
+   * @param {import('./ws-server.js').WsConnection} conn
+   * @param {import('node:http').IncomingMessage} req
+   * @param {URL} url
+   */
+  #onBrowse(conn, req, url) {
+    const client = /** @type {any} */ (req).fleetClient;
+    const opened = this.core.openBrowse(
+      requesterFor(client),
+      client?.id ?? null,
+      { host: url.searchParams.get('host'), session: url.searchParams.get('session') },
+      {
+        send: (msg) => conn.send(JSON.stringify(msg)),
+        close: (code, reason) => conn.close(code, reason),
+      },
+    );
+    if (!opened.ok) return;
+    const browse = opened.browse;
+    conn.on('message', (text) => this.core.browseFromPhone(browse, text));
+    conn.on('close', () => this.core.browsePhoneGone(browse));
+    conn.on('error', () => this.core.browsePhoneGone(browse));
   }
 
   /** @param {string} hostId */
@@ -1333,6 +1359,14 @@ export class Coordinator {
         return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'A console from away is opened by the phone of a signed-in person.' });
       }
       return json(res, 426, { ok: false, error: { code: 'upgrade_required' }, text: 'A console from away is a WebSocket: ask for an upgrade.' });
+    }
+
+    // A page through a machine is a WebSocket too, answered by the upgrade handler.
+    if (p === '/api/browse' && req.method === 'GET') {
+      if (!client?.email) {
+        return json(res, 403, { ok: false, error: { code: 'not_signed_in' }, text: 'A page through a machine is opened by the phone of a signed-in person.' });
+      }
+      return json(res, 426, { ok: false, error: { code: 'upgrade_required' }, text: 'A page through a machine is a WebSocket: ask for an upgrade.' });
     }
 
     // A Live Activity for a hypervisor setup — see the Worker's copy.

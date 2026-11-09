@@ -590,7 +590,17 @@ test('the app flow is one tap on both phones, and the paste flow is not', () => 
   for (const page of [consolePage, terminalPage]) {
     assert.match(code(page), /override fun shouldOverrideUrlLoading\(view: WebView, request: WebResourceRequest\) = true/);
   }
-  assert.ok(!/\bWebView\b/.test(code(android.replace(consolePage, '').replace(terminalPage, ''))), 'Android must not draw it either');
+  // AND THE PAGE THROUGH A MACHINE (BrowsePage.kt, docs/browse.md), which
+  // does go to addresses: it is a browser for pages on a person's own
+  // machines and sessions, opened from those pages and never by a sign-in.
+  // It holds the rule's purpose by never being reached from one: it names no
+  // authorization page and no sign-in flow, and no sign-in flow names it.
+  const browsePage = read('apps/android/app/src/main/java/network/thetech/fleetwright/BrowsePage.kt');
+  assert.ok(!/\bWebView\b/.test(code(android.replace(consolePage, '').replace(terminalPage, '').replace(browsePage, ''))), 'Android must not draw it either');
+  assert.ok(!/authorize|oauth|WebAuth|CustomTabs/i.test(code(browsePage)), 'the browse page is reached from a sign-in');
+  for (const f of ['WebAuth.kt', 'CredentialsSheet.kt']) {
+    assert.ok(!/BrowsePage|BrowseBridge/.test(code(read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`))), `${f} opens the browse page`);
+  }
   assert.match(code(consolePage), /shouldOverrideUrlLoading\(view: WebView, request: WebResourceRequest\) = true/);
   assert.ok(!/\bloadUrl\(/.test(code(consolePage)), 'the console web view goes to an address');
 

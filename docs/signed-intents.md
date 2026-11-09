@@ -177,6 +177,7 @@ with what a coordinator forging it could do:
 | `exchange`, `link`, `renew`, finishing a sign-in | write a credential into a person's row | delegated: the phone signs a delegation when it finishes the sign-in, for one provider, that box and ten minutes, and the coordinator carries it to the box (built) |
 | `vmctl stop` and `provision`, keeping machines ready | stop or make machines from a person's pool | delegated: the phone signs two when the person sets "keep N ready", making machines from that image and ending machines, for a month, signed again daily (built) |
 | a runner's held `start` | start a session on a runner | delegated: the phone signs, with the `provision`, a delegation for that start's title, brief, mode and task on any box, for an hour (built) |
+| a page through a machine (`browse` frames, [browse.md](./browse.md)), naming whose it is | open a running, contained session's ports as the person who started it, and on a box whose owner turned them on, its listed names and the web, for somebody it says administers the box | unsigned, not yet delegated: the frames are not intents, so the box checks the session is that person's and running, and pins for its own rules, but takes the person from the coordinator. A phone-signed delegation for the socket would close it (not built) |
 
 ## Who may do what
 

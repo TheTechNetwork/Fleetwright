@@ -2769,6 +2769,24 @@ struct Fleet {
         /// not name it still compiles.
         var permissions: String? = nil
 
+        /// What this machine opens for a phone's web view (docs/browse.md).
+        /// Nil is a machine older than protocol 18, which opens nothing, and
+        /// then neither Open a port nor Browse is drawn (C-2). A `var` with a
+        /// default for the reason `permissions` is one.
+        var browse: Browse? = nil
+
+        struct Browse: Codable, Hashable {
+            /// Whether a session's own ports can be opened: whether its
+            /// sessions run in containers. Every person is told this.
+            let sessions: Bool?
+            /// Whether its owner turned on the public web. False for anybody
+            /// who does not administer the machine, who is not told.
+            let web: Bool?
+            /// The names, addresses and ranges its owner listed, as written.
+            /// Empty for anybody who does not administer the machine.
+            let hosts: [String]?
+        }
+
         /// Mirrors `waiting` in the host's `/updates` reply.
         struct Waiting: Codable, Hashable {
             struct App: Codable, Hashable {
@@ -2833,7 +2851,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
-                permissions: permissions,
+                permissions: permissions, browse: browse,
             )
         }
 
@@ -2843,7 +2861,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
                 sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
-                permissions: permissions,
+                permissions: permissions, browse: browse,
             )
         }
 
@@ -2857,7 +2875,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
-                permissions: permissions,
+                permissions: permissions, browse: browse,
             )
         }
 
@@ -2873,7 +2891,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: all, setLabels: set, logs: logs, houseRules: houseRules, admins: admins,
-                permissions: permissions,
+                permissions: permissions, browse: browse,
             )
         }
     }
@@ -2952,6 +2970,20 @@ struct Fleet {
         /// The row's verdict where `resumeKept` is not nil: the list says who
         /// can, and the page says why.
         static let resumeKeptRow = "Only an admin can resume this"
+
+        /// Whether a running session here can have its ports opened on this
+        /// phone (docs/browse.md): the machine says it contains its sessions,
+        /// and is new enough to say so at all.
+        var opensSessionPorts: Bool { health?.browse?.sessions == true }
+
+        /// Whether this person can open pages through this machine: they
+        /// administer it, and its owner listed something or turned on the
+        /// web. The coordinator refuses everybody else, so the button is not
+        /// drawn for them (C-2).
+        var opensPages: Bool {
+            guard administers == true, let b = health?.browse else { return false }
+            return b.web == true || !(b.hosts ?? []).isEmpty
+        }
 
         /// Is there anything of ours to apply? Asked once, so the version line
         /// and the buttons cannot disagree about whether this box is current.

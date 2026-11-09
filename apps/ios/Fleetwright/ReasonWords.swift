@@ -85,6 +85,7 @@ enum ReasonWords {
     /// has never met is shown as the kind itself.
     static let activity: [String: String] = [
         "intent": "Asked for",
+        "browse.opened": "Page through a machine",
         "claude.ended": "Claude login ended",
         "claude.refused": "Claude login refused",
         "claude.deposited": "Claude token saved",

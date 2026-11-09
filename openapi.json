@@ -485,6 +485,44 @@
     }
   ],
   "paths": {
+    "/api/browse": {
+      "get": {
+        "summary": "Open a page through one of your machines",
+        "description": "A WebSocket for a phone's web view, whose connections leave from one machine. The phone runs an HTTP proxy on its own loopback and opens a stream here for each connection the web view makes; the machine makes that TCP connection and pumps bytes, so an https page's TLS is opened by the phone through it and the machine and the coordinator carry ciphertext. With `session`, `localhost` on any port is that session's container, for the person who started it, on a machine that contains its sessions. For somebody who administers the machine, the names its owner listed (`FLEETWRIGHT_BROWSE_HOSTS`) and, when turned on, public addresses on ports 80 and 443 (`FLEETWRIGHT_BROWSE_WEB`). The machine decides every connection itself and connects to the address it resolved, never to a private one it was not told to. The first message is `{op: \"ready\", browse, hostId, session, opens, maxBytes, maxStreams, ttlMs}`, then `{op: \"open\"}` once the machine agrees. The phone sends `{op: \"connect\", stream, host, port}`, then `data` (base64) and `end` for that stream; the coordinator answers `connected` or `failed` with a sentence, then `data` and `end`, and `closed` with a sentence when the whole socket ends. A signed-in person's device credential; 32 connections at once, thirty minutes and 512 MiB at most, two sockets a person. The machine must speak protocol 18. See docs/browse.md.",
+        "operationId": "openBrowse",
+        "parameters": [
+          {
+            "name": "host",
+            "in": "query",
+            "required": true,
+            "description": "The machine the page's connections leave from.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session",
+            "in": "query",
+            "required": false,
+            "description": "One of your running sessions on that machine, whose own ports `localhost` reaches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "The socket is open; the first message says which machine carries it and what it opens for you, or why it was closed."
+          },
+          "403": {
+            "description": "Not a signed-in person\u2019s device."
+          },
+          "426": {
+            "description": "Not a WebSocket upgrade."
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [

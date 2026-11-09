@@ -228,8 +228,33 @@ export function attributed(host, health) {
     ...('setLabels' in health ? { setLabels: labels(/** @type {any} */ (health).setLabels) } : {}),
     ...('sandboxedWhy' in health ? { sandboxedWhy: health.sandboxedWhy == null ? null : reason(health.sandboxedWhy) } : {}),
     ...('sandboxedAlso' in health ? { sandboxedAlso: reasons(health.sandboxedAlso) } : {}),
+    ...('browse' in health ? { browse: browseShape(/** @type {any} */ (health).browse) } : {}),
   };
 }
+
+/**
+ * What a box says it opens for a phone's web view (docs/browse.md), held to
+ * its shape: `sessions` and `web` as booleans, `hosts` as at most
+ * BROWSE_HOSTS_MAX short entries in the box's own grammar
+ * (src/fleet/host/browse.js parseBrowseHosts). Both phones decode it
+ * strictly, and a box that sent anything else there would blank its whole
+ * health report on every phone, so anything else becomes null, which reads
+ * as a box that opens nothing.
+ *
+ * @param {unknown} b
+ * @returns {{ sessions: boolean, web: boolean, hosts: string[] }|null}
+ */
+export function browseShape(b) {
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return null;
+  const o = /** @type {any} */ (b);
+  const hosts = Array.isArray(o.hosts) ? o.hosts.filter((/** @type {unknown} */ h) => typeof h === 'string' && BROWSE_ENTRY_RE.test(h)).slice(0, BROWSE_HOSTS_MAX) : [];
+  return { sessions: o.sessions === true, web: o.web === true, hosts };
+}
+
+/** One listed entry as a box writes it: a name, an address or a range, and a port. */
+const BROWSE_ENTRY_RE = /^[A-Za-z0-9.:\[\]/-]{1,120}$/;
+/** More entries than a box's env file holds. */
+const BROWSE_HOSTS_MAX = 32;
 
 /** What a reason a box gives looks like: a short code (sidecar.js factsFrom). */
 const REASON_RE = /^[a-z_]{1,32}$/;

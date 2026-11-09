@@ -61,6 +61,7 @@ import { signingInput, fingerprint } from '../crypto.js';
 import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
 import { ConsoleTunnels } from './console-tunnel.js';
+import { BrowseCarrier, parseBrowseHosts } from './browse.js';
 import { XoPools } from './xo-pools.js';
 import { PvePools } from './pve-pools.js';
 import { Pools } from './pools.js';
@@ -301,6 +302,7 @@ export class Sidecar {
    *   holderFor?: string,
    *   vmLogin?: { email: string, token: string|null }|null,
    *   onVmLoginHanded?: (() => void)|null,
+   *   browse?: { hosts?: string[], web?: boolean }|null,
    * }} opts
    */
   constructor({ hub, transport, hostId, labels = [], machine = null, maxSkewMs = 300_000, requireSigned = false, logger = SILENT, healthIntervalMs = 15_000, watch = true, updates = null,
@@ -352,6 +354,11 @@ export class Sidecar {
     // frame like a runner's. And what to do once the hub has it: forget it.
     vmLogin = null,
     onVmLoginHanded = null,
+    // WHAT THIS BOX OPENS FOR A PHONE'S WEB VIEW besides its people's own
+    // sessions (docs/browse.md): the names and ranges its owner listed, and
+    // whether it opens the public web. From this box's own env file and
+    // nothing the coordinator sends. Null opens neither.
+    browse = null,
   }) {
     // The acceptance window must be shorter than the replay cache's memory.
     // Otherwise there is a band — older than the cache, younger than the skew
@@ -553,6 +560,36 @@ export class Sidecar {
     this.tunnels = new ConsoleTunnels({
       send: (frame) => this.transport.send({ v: PROTOCOL_VERSION, kind: 'tunnel', hostId: this.hostId, ...frame }),
       where: (owner, address, machine) => this.pools?.consoleAddress?.(owner, address, machine) ?? null,
+      log: this.log,
+    });
+    // A PHONE'S WEB VIEW, ITS CONNECTIONS LEAVING FROM HERE (browse.js): this
+    // box decides each one by what its owner wrote and what the hub says of
+    // the session, and the hub dials a session's own port because the
+    // container is the hub's.
+    this.browsePolicy = (() => {
+      const { entries } = parseBrowseHosts(Array.isArray(browse?.hosts) ? browse.hosts : []);
+      return { web: browse?.web === true, entries };
+    })();
+    this.browses = new BrowseCarrier({
+      send: (frame) => this.transport.send({ v: PROTOCOL_VERSION, kind: 'browse', hostId: this.hostId, ...frame }),
+      policy: () => this.browsePolicy,
+      checkSession: async (owner, session) => {
+        const state = await this.hub.state();
+        if (state?.sandboxed !== true) {
+          return { ok: false, text: 'This machine does not run sessions in containers, so a session here shares the machine\u2019s own addresses and its ports are not opened from a phone.' };
+        }
+        const row = (Array.isArray(state?.sessions) ? state.sessions : []).find((/** @type {any} */ r) => r?.name === session);
+        if (!row || ownerOf(row.createdBy) !== owner) return { ok: false, text: `This machine has no session of yours called ${session}.` };
+        if (row.status !== 'running') return { ok: false, text: `${session} is not running, so nothing is listening in it. Resume it first.` };
+        return { ok: true };
+      },
+      dialSession: (owner, session, port) => this.hub.dialSessionPort(session, port, owner),
+      // WHO THIS BOX PINS, when it pins anybody; null when it cannot read its
+      // record, which opens its own rules to nobody.
+      pinned: () => {
+        const pins = readPins(this.xoStateDir);
+        return pins.unreadable ? null : pins.admins;
+      },
       log: this.log,
     });
     this.vaultIntervalMs = vaultIntervalMs;
@@ -822,6 +859,11 @@ export class Sidecar {
     // AND A CONSOLE'S, for the same reason: in order, and no reply.
     if (/** @type {any} */ (msg)?.kind === 'tunnel') {
       this.tunnels.onFrame(msg);
+      return { kind: 'none' };
+    }
+    // AND A PHONE'S PAGE'S, for the same reason.
+    if (/** @type {any} */ (msg)?.kind === 'browse') {
+      this.browses.onFrame(msg);
       return { kind: 'none' };
     }
     // CONFIG BEFORE INTENT, because it is not one. A config frame carries named
@@ -2491,6 +2533,18 @@ export class Sidecar {
         // an older coordinator stores it with the rest and an older phone
         // never reads it.
         permissions: this.facts?.permissions ?? null,
+        // WHAT THIS BOX OPENS FOR A PHONE'S WEB VIEW (docs/browse.md):
+        // `sessions`, whether a session's own ports can be opened, which is
+        // whether its sessions are contained; `web` and `hosts`, what its
+        // owner turned on. A phone draws Open a port and Browse from this,
+        // and a box older than protocol 18 sends none, so neither is drawn
+        // for it. The coordinator shows `web` and `hosts` only to people who
+        // administer the box.
+        browse: {
+          sessions: this.facts?.sandboxed === true,
+          web: this.browsePolicy.web,
+          hosts: this.browsePolicy.entries.map((e) => e.raw),
+        },
       };
     }
     const err = /** @type {Error & {code?: string}} */ (unreachable);

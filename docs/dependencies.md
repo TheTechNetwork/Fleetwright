@@ -152,6 +152,31 @@ iOS needs no equivalent because `ASWebAuthenticationSession` is in the SDK.
 what comes back over the custom scheme is trusted for nothing beyond "go and
 ask the host again".
 
+## androidx.webkit — Android app
+
+`androidx.webkit:webkit`, for `ProxyController`: the one way to point an
+Android WebView at a proxy, which a page through one of your machines needs
+([browse.md](./browse.md)). Pinned to an exact version like everything else
+here.
+
+**Why a dependency at all.** The platform WebView has no proxy setting.
+Without this the only way to send a web view's connections through a machine
+would be to intercept every request in `shouldInterceptRequest`, which sees no
+WebSocket, no request body and no TLS of the page's own, and would make the
+app the party reading every https page instead of the web view.
+
+**Why a WebView here, when the section above argues against one.** That one
+is a sign-in for this app's own credentials, where a page the app draws is the
+shape of phishing. This one shows pages on machines the person administers,
+or their own session's dev server, and spends no credential of the app's in
+the page: the fleet credential stays on the socket to the coordinator, and the
+proxy answers only a name and password made for that screen.
+
+**Blast radius.** The override is app-wide, so it is set when the screen opens
+and cleared when it closes, and nothing else in the app shows a WebView that
+reaches the network while it is set: the console's page loads from the
+app's own assets.
+
 ## androidx.credentials + googleid — Android app
 
 Used for signing in. Three artifacts, all Google-maintained:
