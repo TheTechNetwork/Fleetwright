@@ -105,6 +105,8 @@ export const PVE_LAB_ZONE = 'fwlab';
 export const PVE_EDGE_ZONE = 'fwedge';
 /** The tag the setup gives the edge router, outside the pool, and the one beside it on a router that drops what the threat rules match. */
 export const PVE_EDGE_TAG = 'fleetwright-edge';
+/** The names the setup gives one router and the second of a pair, which are the names their syslog says. */
+export const PVE_EDGE_NAMES = Object.freeze(['fleetwright-edge', 'fleetwright-edge-b']);
 export const PVE_EDGE_BLOCKS_TAG = 'fleetwright-edge-blocks';
 export const PVE_LAB_ALIAS = 'fleetwright-lab:';
 /** The per-machine ipset a closed lab's HTTPS may go to. */
@@ -686,8 +688,11 @@ export class PvePools {
    * its guest agent reports (the router's own os-qemu-guest-agent), on the
    * interface whose MAC is net0's, which the setup put on the bridge. The
    * setup gave the token VM.Audit and VM.GuestAgent.Audit on that machine
-   * alone. One router on Proxmox VE, under the name its syslog says. An
-   * empty map is asked and has none yet; null is could not ask.
+   * alone. One router, or two (`--edge-pair`), each under the name its syslog
+   * says, which is the name the setup gave it: `fleetwright-edge` and
+   * `fleetwright-edge-b`. A router whose agent has no address yet is there
+   * with an empty one, so it is shown as not read rather than not at all;
+   * null is could not ask.
    *
    * @param {string} key  `owner address`
    * @returns {Promise<Map<string, string>|null>}
@@ -698,16 +703,22 @@ export class PvePools {
     try {
       const api = this.#client(held.record);
       const all = await api.get('/cluster/resources', { type: 'vm' });
-      const edge = (Array.isArray(all) ? all : [])
-        .filter((m) => m?.type === 'qemu' && (m.pool ?? '') !== held.record.pool && Number(m.template) !== 1 && tagsOf(m).includes(PVE_EDGE_TAG))
-        .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || Number(a.vmid) - Number(b.vmid))[0];
+      const edges = (Array.isArray(all) ? all : [])
+        .filter((m) => m?.type === 'qemu' && (m.pool ?? '') !== held.record.pool && Number(m.template) !== 1 && tagsOf(m).includes(PVE_EDGE_TAG) && PVE_EDGE_NAMES.includes(String(m.name)))
+        .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || Number(a.vmid) - Number(b.vmid));
       /** @type {Map<string, string>} */
       const out = new Map();
-      if (!edge || edge.status !== 'running') return out;
-      const base = `/nodes/${encodeURIComponent(String(edge.node))}/qemu/${Number(edge.vmid)}`;
-      const cfg = await api.get(`${base}/config`);
-      const ip = agentAddress(await api.get(`${base}/agent/network-get-interfaces`).catch(() => null), cfg?.net0);
-      if (ip) out.set(PVE_EDGE_TAG, ip);
+      for (const edge of edges) {
+        const name = String(edge.name);
+        if (out.has(name)) continue;
+        if (edge.status !== 'running') {
+          out.set(name, '');
+          continue;
+        }
+        const base = `/nodes/${encodeURIComponent(String(edge.node))}/qemu/${Number(edge.vmid)}`;
+        const cfg = await api.get(`${base}/config`);
+        out.set(name, agentAddress(await api.get(`${base}/agent/network-get-interfaces`).catch(() => null), cfg?.net0) ?? '');
+      }
       return out;
     } catch {
       return null;

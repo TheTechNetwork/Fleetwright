@@ -14,6 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { EDGE_IMAGE, EDGE_FILTER, PVE_EDGE, PVE_WATCH_MARKS, edgeConfig, pveEdgeConfig } from '../src/fleet/host/edge-router.js';
+import { OUTPUTS } from '../scripts/build-pve-edge.mjs';
 import { newWatch } from '../src/fleet/host/edge-credentials.js';
 import { PvePools, edgeKeyOf, pveRecord } from '../src/fleet/host/pve-pools.js';
 import { Pools } from '../src/fleet/host/pools.js';
@@ -25,9 +26,13 @@ const pin = (/** @type {string} */ name) => new RegExp(`^${name}="?([^"\\n]*)"?$
 const sha = (/** @type {Buffer} */ b) => createHash('sha256').update(b).digest('hex');
 
 test('the configurations beside the script are the boxes’ own, for virtio, and pinned by the script', () => {
-  for (const [file, block, name] of /** @type {Array<[string, boolean, string]>} */ ([['fleetwright-pve-edge.xml', false, 'EDGE_CONFIG_SHA'], ['fleetwright-pve-edge-block.xml', true, 'EDGE_CONFIG_BLOCK_SHA']])) {
-    const kept = readFileSync(new URL(`../install/${file}`, import.meta.url));
-    assert.ok(kept.equals(pveEdgeConfig(block)), `${file} is not what scripts/build-pve-edge.mjs builds: run it`);
+  assert.equal(Object.keys(OUTPUTS).length, 6, 'one router and either of a pair, filtering and dropping');
+  for (const [name, { file: url, block, node }] of Object.entries(OUTPUTS)) {
+    const file = path.basename(url.pathname);
+    const kept = readFileSync(url);
+    assert.ok(kept.equals(pveEdgeConfig(block, node)), `${file} is not what scripts/build-pve-edge.mjs builds: run it`);
+    // The script asks for each by the name the build writes.
+    assert.ok(SCRIPT.includes('cfg=fleetwright-pve-edge;') && file.startsWith('fleetwright-pve-edge'));
     assert.equal(pin(name), sha(kept), `the script pins another ${file}`);
     assert.equal(kept.length, EDGE_IMAGE.grow.room);
     const xml = kept.toString('utf8');
@@ -35,6 +40,9 @@ test('the configurations beside the script are the boxes’ own, for virtio, and
     assert.match(xml, new RegExp(`<if>${PVE_EDGE.lanIf}</if>`));
     assert.match(xml, /<plugins>os-qemu-guest-agent<\/plugins>/);
     assert.equal(xml.includes(`<divert-to>${EDGE_FILTER.divertPort}</divert-to>`), block, 'drops only when asked to');
+    // EITHER OF A PAIR shares the gateway by CARP, with the password a mark.
+    assert.equal(xml.includes(PVE_WATCH_MARKS.carp), node !== null);
+    if (node !== null) assert.match(xml, new RegExp(`<ipaddr>10\\.254\\.0\\.${2 + node}</ipaddr>`));
   }
   // The same router a Xen Orchestra pool has, but for the interface names,
   // the guest agent, and the watch's parts as marks the node fills in.
@@ -53,7 +61,7 @@ test('the script pins the image the boxes do, and moves the configuration in wit
 });
 
 test('the script’s writer, run on a stand-in image, writes what the boxes write and refuses an image that is not the one', () => {
-  const perl = /EDGE_EDITS="\$EDGE_EDITS" ROOM="\$EDGE_ROOM" DATA="\$EDGE_DATA" perl -e '([\s\S]*?)' "\$work\/edge\.raw"/.exec(SCRIPT)?.[1];
+  const perl = /EDGE_EDITS="\$EDGE_EDITS" ROOM="\$EDGE_ROOM" DATA="\$EDGE_DATA" AGAIN="\$3" perl -e '([\s\S]*?)' "\$1" "\$2"/.exec(SCRIPT)?.[1];
   assert.ok(perl, 'the script has no writer');
   const dir = mkdtempSync(path.join(os.tmpdir(), 'pve-edge-'));
   const img = path.join(dir, 'edge.raw');
@@ -81,6 +89,18 @@ test('the script’s writer, run on a stand-in image, writes what the boxes writ
   closeSync(fd);
   // RUN AGAIN on what it wrote, it refuses: the bytes are no longer the image's.
   assert.notEqual(spawnSync('perl', ['-e', perl, img, cfg], { env, encoding: 'utf8' }).status, 0);
+  // THE SECOND OF A PAIR from the same image takes the block over, the edits
+  // already made; and a fresh image is refused that way, never half-written.
+  writeFileSync(cfg, pveEdgeConfig(true, 1));
+  const again = spawnSync('perl', ['-e', perl, img, cfg], { env: { ...env, AGAIN: '1' }, encoding: 'utf8' });
+  assert.equal(again.status, 0, again.stderr);
+  const fd2 = openSync(img, 'r');
+  const b2 = Buffer.alloc(EDGE_IMAGE.grow.room);
+  readSync(fd2, b2, 0, b2.length, EDGE_IMAGE.grow.data.offset);
+  closeSync(fd2);
+  assert.ok(b2.equals(pveEdgeConfig(true, 1)));
+  stage();
+  assert.notEqual(spawnSync('perl', ['-e', perl, img, cfg], { env: { ...env, AGAIN: '1' }, encoding: 'utf8' }).status, 0);
   // AND A CONFIGURATION OF ANOTHER LENGTH is refused before anything is written.
   stage();
   writeFileSync(cfg, 'short');
@@ -91,10 +111,13 @@ test('the script’s writer, run on a stand-in image, writes what the boxes writ
 
 test('the edge options become the script’s flags, and the script reads every one', () => {
   assert.deepEqual(pveSetup.pveOptionsOf({ edge: true, edgeBlock: true, edgeAgain: true }).options, { edge: true, edgeBlock: true, edgeAgain: true });
+  assert.deepEqual(pveSetup.pveOptionsOf({ edge: true, edgePair: true }).options, { edge: true, edgePair: true });
+  assert.match(pveSetup.pveOptionsOf({ edgePair: true }).problem ?? '', /only while it is asked for/);
+  assert.equal(pveSetup.optionArgs({ edge: true, edgePair: true }), ' --edge --edge-pair');
   assert.match(pveSetup.pveOptionsOf({ edgeBlock: true }).problem ?? '', /only while it is asked for/);
   assert.equal(pveSetup.optionArgs({ edge: true }), ' --edge');
   assert.equal(pveSetup.optionArgs({ edge: true, edgeBlock: true, edgeAgain: true }), ' --edge-block --edge-again');
-  for (const flag of ['--edge', '--edge-block', '--edge-again']) assert.ok(SCRIPT.includes(`    ${flag})`), `the script does not read ${flag}`);
+  for (const flag of ['--edge', '--edge-block', '--edge-again', '--edge-pair']) assert.ok(SCRIPT.includes(`    ${flag})`), `the script does not read ${flag}`);
   assert.match(SCRIPT, /^step edge$/m);
   // AN EDGE THAT CANNOT BE BUILT costs the cluster its edge, not its setup:
   // every failure in the build is said and returns, and the token's line
@@ -122,14 +145,15 @@ const fn = (name) => {
 test('the node fills in the watch where its marks are, as the boxes write it, byte for byte', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'pve-watch-'));
   const watch = newWatch();
+  const carp = 'c0ffee'.repeat(10) + 'abcd';
   const file = path.join(dir, 'watch.json');
-  writeFileSync(file, JSON.stringify(watch));
-  for (const [block, ip] of /** @type {Array<[boolean, string]>} */ ([[false, '192.168.1.40'], [true, '10.69.10.51'], [false, '']])) {
+  writeFileSync(file, JSON.stringify({ ...watch, carp }));
+  for (const [block, ip, node] of /** @type {Array<[boolean, string, 0|1|null]>} */ ([[false, '192.168.1.40', null], [true, '10.69.10.51', null], [false, '', null], [false, '10.69.10.51', 0], [true, '10.69.10.51', 1]])) {
     const cfg = path.join(dir, 'config.xml');
-    writeFileSync(cfg, pveEdgeConfig(block));
+    writeFileSync(cfg, pveEdgeConfig(block, node));
     const ran = spawnSync('bash', ['-c', `set -euo pipefail\nEDGE_ROOM=${EDGE_IMAGE.grow.room}\n${fn('edge_fill')}\nedge_fill "$1" "$2" "$3"`, 'fill', cfg, file, ip], { encoding: 'utf8' });
     assert.equal(ran.status, 0, ran.stderr);
-    const want = edgeConfig({ ...PVE_EDGE, block, watch, syslog: ip ? [ip] : [] });
+    const want = edgeConfig({ ...PVE_EDGE, block, watch, syslog: ip ? [ip] : [], ha: node === null ? null : { node, password: carp } });
     const got = readFileSync(cfg);
     assert.equal(got.length, EDGE_IMAGE.grow.room);
     assert.equal(got.toString('utf8'), want.toString('utf8'), `the node's ${block ? 'dropping' : 'filtering'} router ${ip ? `sending its logs to ${ip}` : 'with nowhere to log'} is not the boxes'`);
@@ -140,6 +164,13 @@ test('the node fills in the watch where its marks are, as the boxes write it, by
   const refused = spawnSync('bash', ['-c', `set -euo pipefail\nEDGE_ROOM=${EDGE_IMAGE.grow.room}\n${fn('edge_fill')}\nedge_fill "$1" "$2" ""`, 'fill', plain, file], { encoding: 'utf8' });
   assert.notEqual(refused.status, 0);
   assert.match(refused.stderr, /does not have its mark once/);
+  // Either of a pair with no password kept is refused, never sent out with a mark.
+  writeFileSync(file, JSON.stringify(watch));
+  const half = path.join(dir, 'half.xml');
+  writeFileSync(half, pveEdgeConfig(false, 0));
+  const nopass = spawnSync('bash', ['-c', `set -euo pipefail\nEDGE_ROOM=${EDGE_IMAGE.grow.room}\n${fn('edge_fill')}\nedge_fill "$1" "$2" ""`, 'fill', half, file], { encoding: 'utf8' });
+  assert.notEqual(nopass.status, 0);
+  assert.match(nopass.stderr, /no password is kept for the pair/);
 });
 
 test('the node makes the key once, in the shape the boxes take, and keeps it', () => {
@@ -164,10 +195,22 @@ test('the node makes the key once, in the shape the boxes take, and keeps it', (
   assert.equal(statSync(file).mode & 0o077, 0);
   assert.equal(keep().status, 0);
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), w);
+  // THE PAIR'S PASSWORD is made once beside it, kept, and only root reads it.
+  const carp = () => spawnSync('bash', ['-c', `set -euo pipefail\nEDGE_WATCH_FILE="$1"\n${fn('carp_keep')}\ncarp_keep`, 'carp', file], { encoding: 'utf8' });
+  assert.equal(carp().status, 0);
+  const withCarp = JSON.parse(readFileSync(file, 'utf8'));
+  assert.match(withCarp.carp, /^[0-9a-f]{64}$/);
+  assert.deepEqual({ ...withCarp, carp: undefined }, { ...w, carp: undefined });
+  assert.equal(carp().status, 0);
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).carp, withCarp.carp);
+  assert.equal(statSync(file).mode & 0o077, 0);
 });
 
 test('an edge without the key is made again once, and the line carries the key of one with it', () => {
-  assert.match(SCRIPT, /\[ "\$ewatched" = 1 \]; then/);
+  // Kept only as asked: one alone with its key, or either of a pair.
+  assert.match(SCRIPT, /if \[ "\$EDGE_PAIR" = 1 \]; then want="\$\{EDGE_BLOCK\}10 \$\{EDGE_BLOCK\}11 "; else want="\$\{EDGE_BLOCK\}1- "; fi/);
+  assert.ok(SCRIPT.includes('    --edge-pair) EDGE=1; EDGE_PAIR=1; shift ;;'));
+  assert.match(SCRIPT, /ename=fleetwright-edge; \[ "\$n" = 1 \] && ename=fleetwright-edge-b/);
   assert.match(SCRIPT, /etags="\$EDGE_TAG;\$EDGE_WATCH_TAG"/);
   assert.match(SCRIPT, /\$r\{edge\} = \{ key => \$j->\{key\}, secret => \$j->\{secret\}, pin => \$j->\{pin\} \};/);
   // The cluster's own machine first, so the router knows where to send its logs.
@@ -190,8 +233,8 @@ test('the record keeps the router’s key the line carried, and passes over one 
 test('a box finds the router where its guest agent says, on its WAN, through the cluster’s API', async () => {
   const asked = /** @type {string[]} */ ([]);
   let resources = [
-    { type: 'qemu', vmid: 120, node: 'pve1', status: 'running', pool: '', tags: 'fleetwright-edge;fleetwright-edge-watch' },
-    { type: 'qemu', vmid: 130, node: 'pve1', status: 'running', pool: 'fleetwright', tags: 'fleetwright-edge' },
+    { type: 'qemu', vmid: 120, node: 'pve1', status: 'running', pool: '', name: 'fleetwright-edge', tags: 'fleetwright-edge;fleetwright-edge-watch' },
+    { type: 'qemu', vmid: 130, node: 'pve1', status: 'running', pool: 'fleetwright', name: 'fleetwright-edge', tags: 'fleetwright-edge' },
   ];
   const api = {
     async get(/** @type {string} */ p) {
@@ -217,9 +260,13 @@ test('a box finds the router where its guest agent says, on its WAN, through the
   // The WAN's, not the LAN's, and never one inside the fleet's pool.
   assert.deepEqual([...(/** @type {Map<string, string>} */ (await pools.edgeAddresses(key)))], [['fleetwright-edge', '10.69.10.61']]);
   assert.ok(!asked.some((p) => p.includes('/130/')));
-  // Stopped is none yet; unasked is null, said apart.
+  // A PAIR: each by its own name, and one not running is there without an
+  // address, so it is shown as not read rather than left out.
+  resources = [resources[0], { type: 'qemu', vmid: 121, node: 'pve1', status: 'stopped', pool: '', name: 'fleetwright-edge-b', tags: 'fleetwright-edge;fleetwright-edge-watch;fleetwright-edge-node-1' }];
+  assert.deepEqual([...(/** @type {Map<string, string>} */ (await pools.edgeAddresses(key)))].sort(), [['fleetwright-edge', '10.69.10.61'], ['fleetwright-edge-b', '']]);
+  // Unasked is null, said apart from none.
   resources = [{ ...resources[0], status: 'stopped' }];
-  assert.equal((await pools.edgeAddresses(key))?.size, 0);
+  assert.deepEqual([...(/** @type {Map<string, string>} */ (await pools.edgeAddresses(key)))], [['fleetwright-edge', '']]);
   api.get = async () => {
     throw new Error('down');
   };
@@ -243,7 +290,7 @@ test('a router the box cannot read says so in Proxmox VE’s words, never Xen Or
   for (const [reachable, where, words] of /** @type {Array<[boolean|null, Map<string, string>|null, RegExp]>} */ ([
     [false, null, /cannot reach the cluster’s Proxmox VE/],
     [null, null, /has not reached the cluster’s Proxmox VE/],
-    [true, new Map(), /Proxmox VE has no address for it yet/],
+    [true, new Map([['fleetwright-edge', '']]), /Proxmox VE has no address for it yet/],
     [true, null, /Proxmox VE could not be asked where it is/],
   ])) {
     const w = said(reachable, where);
@@ -269,5 +316,27 @@ test('a router the box cannot read says so in Proxmox VE’s words, never Xen Or
   await w.poll();
   assert.deepEqual(pins, [`10.69.10.61 ${'a'.repeat(64)}`]);
   assert.equal(w.reportFor('me@example.com', RECORD.address)?.routers[0].reached, false);
+  w.stop();
+});
+
+test('a pair is read as two routers, each where its agent says, each by its own name', async () => {
+  const key = `me@example.com ${RECORD.address}`;
+  const record = { ...RECORD, edge: { key: 'k'.repeat(80), secret: 's'.repeat(80), pin: 'a'.repeat(64) } };
+  const tried = /** @type {string[]} */ ([]);
+  const w = new EdgeWatch({
+    pools: { held: new Map([[key, { owner: 'me@example.com', record }]]), seen: new Map([[key, { reachable: true }]]), kindOf: () => 'proxmox', edgeAddresses: async () => new Map([['fleetwright-edge', '10.69.10.61'], ['fleetwright-edge-b', '10.69.10.62']]) },
+    createSocket: () => /** @type {any} */ ({ on() {}, bind() {}, close() {} }),
+    connect: async (/** @type {any} */ o) => {
+      tried.push(o.host);
+      throw new Error('refused');
+    },
+  });
+  await w.poll();
+  const r = w.reportFor('me@example.com', RECORD.address)?.routers ?? [];
+  assert.deepEqual(r.map((x) => [x.name, x.address]), [['fleetwright-edge', '10.69.10.61'], ['fleetwright-edge-b', '10.69.10.62']]);
+  assert.deepEqual(tried, ['10.69.10.61', '10.69.10.62']);
+  // Each one's syslog is told apart by the name it sends.
+  w.hear('<30>Nov  9 03:00:00 fleetwright-edge-b.internal kernel: carp: 1@vtnet1: BACKUP -> MASTER (master timed out)', '10.69.10.62');
+  assert.deepEqual(w.reportFor('me@example.com', RECORD.address)?.events.map((e) => [e.router, e.kind]), [['fleetwright-edge-b', 'carp']]);
   w.stop();
 });

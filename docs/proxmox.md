@@ -481,7 +481,39 @@ refused most and the log lines lately, Suricata's among them. Before any
 machine has read it the page says so, and never that it is fine. The setup's
 own machine now comes before the edge router in its steps on both phones.
 
-**Not built yet**: two of them, and labs behind it. **Not yet run** on a
+#### Two of them
+
+Asked for: *"Keep going, build two edge routers next"*. With **Two of them**
+(`--edge-pair`) the setup makes **the same pair a Xen Orchestra pool can
+have** (`edge-router.js`, `ha` and EDGE_HA): `fleetwright-edge` at
+10.254.0.2 and `fleetwright-edge-b` at 10.254.0.3, sharing the gateway
+address 10.254.0.1 by CARP. The one that is master answers it; when it
+restarts or updates, the other takes it over and the machines behind them
+keep their way out. Each hands out its own half of the DHCP range, naming the
+shared address as gateway and resolver, so a lease outlives the router that
+gave it, and the second updates itself an hour after the first.
+
+- **Four more configurations**, either of a pair, filtering or dropping,
+  built by `scripts/build-pve-edge.mjs` and pinned like the other two. The
+  pair's CARP password is a mark in them, filled in on the node from
+  `/etc/pve/priv/fleetwright-edge-watch.json`, where it is made once
+  (`carp_keep`, 256 bits) beside the key: a pair made again shares it, and
+  it is never in a published file. A configuration with the mark and no
+  password kept is refused.
+- **One image, two disks.** The image is unpacked once; the first router's
+  configuration is written in and imported, then the second's takes the
+  same block (`edge_write` again, each edit checked as already made) and is
+  imported too.
+- **Tagged by which it is** (`fleetwright-edge-node-0`, `-node-1`), so a run
+  that finds one alone when two are asked, or two when one is, makes them
+  again as asked, and keeps them otherwise.
+- **Both watched** with the one key and certificate, both send their logs to
+  the cluster's own machine, and a box reads each where its guest agent
+  says. A CARP change of master is in the log as it happens.
+- **On one node.** Both are made on the node the setup runs on, so the pair
+  outlasts a router restarting or updating, not that node going down.
+
+**Not built yet**: labs behind it. **Not yet run** on a
 real node: the image under KVM's virtio, which it was checked under QEMU
 with, `import-from` with the storage the setup chose, and the router's
 guest agent reporting its WAN address to the token.
