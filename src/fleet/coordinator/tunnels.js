@@ -54,6 +54,7 @@ const MAX_CHUNK_TEXT = Math.ceil(TUNNEL_MAX_CHUNK / 3) * 4;
  * @property {string} device
  * @property {string} hostId
  * @property {string} address
+ * @property {string|null} machine
  * @property {'opening'|'open'} state
  * @property {number} bytes
  * @property {number} expiresAt
@@ -87,10 +88,10 @@ export class Tunnels {
    * The caller has chosen the box and checked who is asking; this checks how
    * many, and asks the box to dial.
    *
-   * @param {{ owner: string, device: string, hostId: string, address: string, toPhone: Tunnel['toPhone'], closePhone: Tunnel['closePhone'] }} spec
+   * @param {{ owner: string, device: string, hostId: string, address: string, machine?: string|null, toPhone: Tunnel['toPhone'], closePhone: Tunnel['closePhone'] }} spec
    * @returns {{ ok: true, tunnel: Tunnel } | { ok: false, error: { code: string }, text: string }}
    */
-  start({ owner, device, hostId, address, toPhone, closePhone }) {
+  start({ owner, device, hostId, address, machine = null, toPhone, closePhone }) {
     if (this.open.size >= MAX_TUNNELS) {
       return { ok: false, error: { code: 'too_many' }, text: `This fleet is already carrying ${MAX_TUNNELS} consoles from away. Try again in a few minutes.` };
     }
@@ -100,7 +101,7 @@ export class Tunnels {
     const bytes = globalThis.crypto.getRandomValues(new Uint8Array(12));
     const id = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
     /** @type {Tunnel} */
-    const tunnel = { id, owner, device, hostId, address, state: 'opening', bytes: 0, expiresAt: this.now() + TUNNEL_TTL_MS, toPhone, closePhone, timer: null };
+    const tunnel = { id, owner, device, hostId, address, machine, state: 'opening', bytes: 0, expiresAt: this.now() + TUNNEL_TTL_MS, toPhone, closePhone, timer: null };
     tunnel.timer = this.setTimer(() => this.close(id, 'This console was open from away for thirty minutes, which is as long as one may be. Open it again.'), TUNNEL_TTL_MS);
     this.open.set(id, tunnel);
     this.log.info(`tunnel: ${id} opened through ${hostId} to ${address}`);
@@ -119,7 +120,8 @@ export class Tunnels {
     if (!tunnel || tunnel.state !== 'opening') return;
     // THE OWNER GOES WITH THE DIAL, so the box can check it holds this
     // person's pool at this address before it connects anywhere.
-    this.toHost(tunnel.hostId, { tunnel: id, op: 'open', owner: tunnel.owner, address: tunnel.address });
+    // AND THE MACHINE, for SSH to one of theirs: the box checks it too.
+    this.toHost(tunnel.hostId, { tunnel: id, op: 'open', owner: tunnel.owner, address: tunnel.address, ...(tunnel.machine ? { machine: tunnel.machine } : {}) });
   }
 
   /**

@@ -94,8 +94,15 @@ export class Pools {
     return this.#either(ask.owner, () => this.xo.control(ask), () => this.pve.control(ask));
   }
 
-  /** @param {string} owner @param {string} address */
-  consoleAddress(owner, address) {
+  /**
+   * Where a tunnel from away dials: the pool or cluster at `address`, or,
+   * naming `machine`, that machine's SSH (sshAddress), and only for this
+   * person's.
+   *
+   * @param {string} owner @param {string} address @param {string|null} [machine]
+   */
+  consoleAddress(owner, address, machine = null) {
+    if (machine) return this.xo.sshAddress(owner, address, machine) ?? this.pve.sshAddress(owner, address, machine);
     return this.xo.consoleAddress(owner, address) ?? this.pve.consoleAddress(owner, address);
   }
 

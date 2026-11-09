@@ -552,7 +552,7 @@ export class Sidecar {
     // the TLS the phone opened through it.
     this.tunnels = new ConsoleTunnels({
       send: (frame) => this.transport.send({ v: PROTOCOL_VERSION, kind: 'tunnel', hostId: this.hostId, ...frame }),
-      where: (owner, address) => this.pools?.consoleAddress?.(owner, address) ?? null,
+      where: (owner, address, machine) => this.pools?.consoleAddress?.(owner, address, machine) ?? null,
       log: this.log,
     });
     this.vaultIntervalMs = vaultIntervalMs;
