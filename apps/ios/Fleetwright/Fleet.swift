@@ -366,6 +366,9 @@ struct Fleet {
         let text: String?
         let sessions: [Session]?
         var check: Check?
+        /// The machines a box made, from `logs` with `service: "boot"` and no
+        /// machine named (src/fleet/host/pve-console.js). Nil from anything else.
+        var boot: Boot?
         /// What could be connected and what is, when the reply is about
         /// credentials. Never a token — the host does not send one and there
         /// is no field here that could hold one.
@@ -1029,14 +1032,35 @@ struct Fleet {
         return try await intent("answer", params: params, host: host, numeric: ["option"])
     }
 
+    /// What a box kept of the Proxmox VE machines it made, as they booted.
+    struct Boot: Codable {
+        let machines: [BootMachine]?
+    }
+
+    struct BootMachine: Codable, Hashable {
+        let name: String
+        let address: String?
+        /// When it was made, in milliseconds.
+        let at: Double?
+        /// Still reading its console.
+        let reading: Bool?
+        /// It said it joined.
+        let joined: Bool?
+        let lines: Int?
+    }
+
     /// A service journal, or what a session printed.
     ///
     /// `name` and `service` are alternatives — naming a session is the more
     /// specific request and the host prefers it.
-    func logs(host: String? = nil, session: String? = nil, service: String? = nil, lines: Int? = nil) async throws -> Reply {
+    ///
+    /// `machine` goes with `service: "boot"`: what that Proxmox VE machine
+    /// printed as it booted, kept by the box that made it (BootLogsView).
+    func logs(host: String? = nil, session: String? = nil, service: String? = nil, machine: String? = nil, lines: Int? = nil) async throws -> Reply {
         var params: [String: String] = [:]
         if let session, !session.isEmpty { params["name"] = session }
         if let service, !service.isEmpty { params["service"] = service }
+        if let machine, !machine.isEmpty { params["machine"] = machine }
         if let lines { params["lines"] = String(lines) }
         return try await intent("logs", params: params, host: host, numeric: ["lines"])
     }
