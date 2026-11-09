@@ -398,6 +398,10 @@ fun FleetScreen(
     // The session whose sheet is open: the state sentence, the pane watched,
     // Files, Output and Forget.
     var inspecting by remember { mutableStateOf<Fleet.Session?>(null) }
+    // A RUNNING SESSION'S PORT, ON THIS PHONE (docs/browse.md): which port
+    // is asked first, then the page opens on http://localhost:<port>/.
+    var portFor by remember { mutableStateOf<Fleet.Session?>(null) }
+    var pageFor by remember { mutableStateOf<Pair<Fleet.Session, String>?>(null) }
     // Whether this person's Claude login is kept for their runners (ClaudeSetup.kt).
     var claude by remember { mutableStateOf<ClaudeKept?>(null) }
     var claudePutOff by remember { mutableStateOf(settings.claudeSetupPutOff) }
@@ -700,7 +704,29 @@ fun FleetScreen(
             onDismiss = { inspecting = null },
             onChanged = { refresh(keepStatus = true) },
             onFiles = { browsing = session },
+            // Only where the session's machine opens its sessions' ports (C-2).
+            onOpenPort = if (binHosts.firstOrNull { it.hostId == session.hostId }?.opensSessionPorts == true) {
+                { portFor = session }
+            } else {
+                null
+            },
         )
+    }
+    portFor?.let { session ->
+        BrowsePortDialog(
+            session = session.name,
+            host = session.hostId ?: "",
+            onOpen = { url ->
+                portFor = null
+                pageFor = session to url
+            },
+            onDismiss = { portFor = null },
+        )
+    }
+    pageFor?.let { (session, url) ->
+        session.hostId?.let { host ->
+            BrowsePage(settings, host, session.name, start = url) { pageFor = null }
+        }
     }
     if (showBin) {
         RecycleBinSheet(settings = settings, hosts = binHosts, onDismiss = { showBin = false }, onChanged = { refresh(keepStatus = true) })

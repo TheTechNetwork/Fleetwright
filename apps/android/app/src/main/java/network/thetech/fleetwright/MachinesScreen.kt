@@ -726,6 +726,22 @@ private fun MachinePage(
         // `administers`. Same rule as iOS's `mayActOnBox`.
         val actsOnBox = administers && h?.boxWideAllowed != false
 
+        // PAGES THROUGH THIS MACHINE (docs/browse.md): the names its owner
+        // listed and the web, where its owner turned either on. Only for
+        // somebody who administers it, because the coordinator opens it for
+        // nobody else, and only where it opens something (C-2). A session's
+        // own ports are opened from the session's sheet. The same as iOS.
+        var browsingPages by remember { mutableStateOf(false) }
+        val opens = h?.browse
+        if (administers && opens != null && (opens.web || opens.hosts.isNotEmpty())) {
+            SectionHead(BrowseWords.PAGES_HEAD)
+            OpenRow(BrowseWords.BROWSE) { browsingPages = true }
+            Hint(BrowseWords.opensLine(opens.web, opens.hosts))
+        }
+        if (browsingPages) {
+            BrowsePage(settings, hostId, null) { browsingPages = false }
+        }
+
         if (h != null) {
             SectionHead("Software")
             if (!administers) {

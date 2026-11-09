@@ -93,6 +93,7 @@ object ReasonWords {
      */
     val ACTIVITY: Map<String, String> = mapOf(
         "intent" to "Asked for",
+        "browse.opened" to "Page through a machine",
         "claude.ended" to "Claude login ended",
         "claude.refused" to "Claude login refused",
         "claude.deposited" to "Claude token saved",
