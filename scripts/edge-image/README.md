@@ -13,7 +13,7 @@ never reused, with three assets:
 
 | asset | what it is |
 |---|---|
-| `fleetwright-edge-<release>-<version>-amd64.img.zst` | OPNsense's nano image for `<release>`, booted once, updated to `<version>` (the current patch level of that release), with `os-xen` installed, cleaned, and compressed with `zstd -19`. `zstd -d` gives back the 3 GiB raw disk |
+| `fleetwright-edge-<release>-<version>-amd64.img.zst` | OPNsense's nano image for `<release>`, booted once, updated to `<version>` (the current patch level of that release), with `os-xen` and `os-qemu-guest-agent` installed (the guest agent for Xen Orchestra and for Proxmox VE; each runs only under its own hypervisor), cleaned, and compressed with `zstd -19`. `zstd -d` gives back the 3 GiB raw disk |
 | `manifest.json` | everything the host needs to know about it, below |
 | `SHA256SUMS` | the image's and the manifest's digests, `sha256sum -c` form |
 
@@ -31,7 +31,8 @@ when a run fails, that log is where the answer is.
 {
   "opnsense_release": "26.7",          // the upstream release built from
   "opnsense_version": "26.7.5",        // what `opnsense-version -v` said after the update
-  "os_xen": "…",                       // the agent's package version
+  "os_xen": "…",                       // the Xen agent's package version
+  "os_qemu_guest_agent": "…",          // QEMU's agent's package version
   "upstream_url": "…", "upstream_sha256": "…",   // the image it started from, as pinned
   "commit": "…", "workflow_run": "…", "built_at": "…", "accel": "kvm",
   "raw_size": 3221225472,

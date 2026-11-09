@@ -268,6 +268,20 @@ export const EDGE_UPDATES = Object.freeze({ plugin: 'os-xen', hours: '10' });
 export const PVE_EDGE = Object.freeze({ wanIf: 'vtnet0', lanIf: 'vtnet1', nics: 'vtnet', plugin: 'os-qemu-guest-agent' });
 
 /**
+ * What QEMU's guest agent on a Proxmox VE edge router refuses to do: run a
+ * command, touch a file, or set a password, the clock or the hardware. Its
+ * addresses (`guest-network-get-interfaces`, which the box reads the router
+ * by), `guest-ping`, `guest-info` and a clean `guest-shutdown` stay. The
+ * names are the plugin's own (OPNsense plugins, emulators/qemu-guest-agent,
+ * QemuGuestAgent.xml, DisabledRPCs).
+ */
+export const QEMU_AGENT_BLOCKED = Object.freeze([
+  'guest-exec', 'guest-exec-status',
+  'guest-file-close', 'guest-file-flush', 'guest-file-open', 'guest-file-read', 'guest-file-seek', 'guest-file-write',
+  'guest-set-memory-blocks', 'guest-set-time', 'guest-set-user-password', 'guest-set-vcpus',
+]);
+
+/**
  * WHERE A PROXMOX VE EDGE'S WATCH GOES, as marks the setup script fills in
  * (install/fleetwright-pve-setup, `edge_fill`). The key, the certificate and
  * where syslog goes are the cluster's own and made on its node, so they
@@ -735,6 +749,13 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', nics = 'xn', block = 
     '<monitor></monitor><force_down>0</force_down><nosync>0</nosync><priority>254</priority><weight>1</weight><latencylow></latencylow><latencyhigh></latencyhigh><losslow></losslow><losshigh></losshigh>' +
     '<interval></interval><time_period></time_period><loss_interval></loss_interval><data_length></data_length></gateway_item></Gateways>\n' +
     (watched ? watched.syslog : '') +
+    // QEMU'S GUEST AGENT, ON PROXMOX VE, ASKED ONLY WHAT IT IS: its addresses,
+    // whether it answers, and to shut down cleanly. Everything that runs a
+    // command, reads or writes a file, or sets a password or the clock is
+    // refused by the agent itself (`--block-rpcs`, the plugin's rc template),
+    // so the agent is no way in to a router nobody can log in to, whatever
+    // the token or the node's root asks of it. Unsaid, the plugin answers all.
+    (plugin === PVE_EDGE.plugin ? `<QemuGuestAgent><general><Enabled>1</Enabled><LogDebug>0</LogDebug><DisabledRPCs>${QEMU_AGENT_BLOCKED.join(',')}</DisabledRPCs></general></QemuGuestAgent>\n` : '') +
     '</OPNsense>\n</opnsense>\n';
   const body = Buffer.from(xml, 'utf8');
   if (length === 0) return body;

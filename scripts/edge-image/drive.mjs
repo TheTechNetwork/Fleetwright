@@ -137,8 +137,22 @@ export const INSIDE = Object.freeze({
    * which this build removes at the end; the package stays, and the host's
    * configuration names os-xen in system.firmware.plugins (EDGE_UPDATES), so
    * the router's first sync finds it installed and leaves it.
+   *
+   * BOTH AGENTS, ONE IMAGE: os-xen for a Xen Orchestra pool, and
+   * os-qemu-guest-agent for a Proxmox VE cluster, which names it in
+   * system.firmware.plugins the same way (PVE_EDGE). Without it in the image a
+   * cluster's router had no agent until its first daily update, and the box
+   * reading it had no address for it: the phone said Unknown, "Proxmox VE has
+   * no address for it yet", for a router that was up. Each agent loads only
+   * where its hypervisor is: the QEMU one's early hook loads virtio_console,
+   * which is absent under Xen, and the Xen one finds no XenStore under QEMU.
    */
-  agent: ['pkg install -y os-xen', '/usr/local/opnsense/scripts/firmware/register.php install os-xen', 'pkg autoremove -y'],
+  agent: [
+    'pkg install -y os-xen os-qemu-guest-agent',
+    '/usr/local/opnsense/scripts/firmware/register.php install os-xen',
+    '/usr/local/opnsense/scripts/firmware/register.php install os-qemu-guest-agent',
+    'pkg autoremove -y',
+  ],
   /**
    * What identifies this boot, gone. Each is a thing the image either
    * regenerates (SSH host keys, the host id, entropy) or should not carry
@@ -217,6 +231,7 @@ export const FACTS = Object.freeze({
   'freebsd-version': 'freebsd-version -kru | tr "\\n" " "',
   uname: 'uname -a',
   'os-xen': 'pkg query %v os-xen',
+  'os-qemu-guest-agent': 'pkg query %v os-qemu-guest-agent',
   'config-inode': 'stat -f %i /usr/local/etc/config.xml',
   'config-length': 'stat -f %z /usr/local/etc/config.xml',
   'config-sha256': 'sha256 -q /usr/local/etc/config.xml',
@@ -352,6 +367,7 @@ async function installAgent(c, facts) {
   // and the files the agent's package put down are recorded for the person
   // reading the manifest.
   await c.must('pkg info os-xen >/dev/null', { timeout: WAITS.prompt, label: 'os-xen in the package database' });
+  await c.must('pkg info os-qemu-guest-agent >/dev/null', { timeout: WAITS.prompt, label: 'os-qemu-guest-agent in the package database' });
   facts['agent-files'] = (await c.run('pkg info -ql xe-guest-utilities 2>/dev/null || pkg info -ql os-xen', { timeout: WAITS.prompt })).output;
 }
 
@@ -469,7 +485,7 @@ export async function main(argv, { out = process.stdout } = {}) {
     if (qemu.exitCode === null) qemu.kill('SIGKILL');
     logFile.end();
   }
-  say(`done: OPNsense ${facts['opnsense-version']}, os-xen ${facts['os-xen']}, configuration inode ${facts['config-inode']} (${facts['config-length']} bytes, sha256 ${facts['config-sha256']})`);
+  say(`done: OPNsense ${facts['opnsense-version']}, os-xen ${facts['os-xen']}, os-qemu-guest-agent ${facts['os-qemu-guest-agent']}, configuration inode ${facts['config-inode']} (${facts['config-length']} bytes, sha256 ${facts['config-sha256']})`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
