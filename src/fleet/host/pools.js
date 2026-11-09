@@ -40,9 +40,25 @@ export class Pools {
     return all;
   }
 
-  /** What each Xen Orchestra pool was last seen as, for edge-watch.js. */
+  /**
+   * What each pool and cluster was last seen as, for edge-watch.js, which
+   * reads whether this box reached it (`reachable`).
+   */
   get seen() {
-    return this.xo.seen;
+    /** @type {Map<string, any>} */
+    const all = new Map();
+    for (const [k, v] of this.xo.seen) all.set(k, v);
+    for (const [k, v] of this.pve.seen) all.set(k, v);
+    return all;
+  }
+
+  /**
+   * Which kind a held key is, for words that name it: `proxmox` for a
+   * Proxmox VE cluster's, `xo` for anything else.
+   * @param {string} key
+   */
+  kindOf(key) {
+    return this.pve.held.has(key) ? 'proxmox' : 'xo';
   }
 
   /** @param {any[]} accounts */
@@ -116,8 +132,8 @@ export class Pools {
     return this.xo.act(ask);
   }
 
-  /** @param {string} key */
+  /** Where a pool's or a cluster's edge routers are, by its own hypervisor. @param {string} key */
   edgeAddresses(key) {
-    return this.xo.edgeAddresses(key);
+    return this.pve.held.has(key) ? this.pve.edgeAddresses(key) : this.xo.edgeAddresses(key);
   }
 }

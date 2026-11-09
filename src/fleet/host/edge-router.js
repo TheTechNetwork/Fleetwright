@@ -267,8 +267,26 @@ export const EDGE_UPDATES = Object.freeze({ plugin: 'os-xen', hours: '10' });
  */
 export const PVE_EDGE = Object.freeze({ wanIf: 'vtnet0', lanIf: 'vtnet1', plugin: 'os-qemu-guest-agent' });
 
+/**
+ * WHERE A PROXMOX VE EDGE'S WATCH GOES, as marks the setup script fills in
+ * (install/fleetwright-pve-setup, `edge_fill`). The key, the certificate and
+ * where syslog goes are the cluster's own and made on its node, so they
+ * cannot be in a file published beside the script; everything else is, and
+ * stays pinned. Each mark stands where watchConfig's part goes, and the WAN
+ * rule that lets the box read the API is in the file itself, because the
+ * script always fills the marks: an edge on Proxmox is always watched.
+ * test/pve-edge.test.js runs the script's filler and holds what it writes to
+ * edgeConfig with the same watch, byte for byte.
+ */
+export const PVE_WATCH_MARKS = Object.freeze({
+  user: '<!--fleetwright-watch-user-->\n',
+  cert: '<!--fleetwright-watch-cert-->\n',
+  certref: '<!--fleetwright-watch-certref-->',
+  syslog: '<!--fleetwright-watch-syslog-->\n',
+});
+
 /** The two configurations, as the setup script is given them. @param {boolean} block */
-export const pveEdgeConfig = (block) => edgeConfig({ ...PVE_EDGE, block });
+export const pveEdgeConfig = (block) => edgeConfig({ ...PVE_EDGE, block, marks: PVE_WATCH_MARKS });
 
 /**
  * TWO EDGES (`ha` in edgeConfig): the CARP group of the uplink, each lab's
@@ -511,13 +529,14 @@ export function fleetHosts(coordinatorUrl) {
  *
  * ON PROXMOX VE (docs/proxmox.md, "The edge router"): the same, with the
  * interfaces virtio names (`vtnet0`, `vtnet1`) and QEMU's guest agent as the
- * plugin the daily update keeps (`plugin`), so Proxmox shows its addresses.
+ * plugin the daily update keeps (`plugin`), so Proxmox shows its addresses;
+ * and the watch's parts as marks the node fills in (`marks`, PVE_WATCH_MARKS).
  *
- * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null, watch?: import('./edge-credentials.js').Watch|null, syslog?: string[], plugin?: string }} [opts]
+ * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null, watch?: import('./edge-credentials.js').Watch|null, syslog?: string[], plugin?: string, marks?: { user: string, cert: string, certref: string, syslog: string }|null }} [opts]
  * @returns {Buffer}
  */
-export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], ha = null, watch = null, syslog = [], plugin = EDGE_UPDATES.plugin, length = EDGE_IMAGE.grow.room } = {}) {
-  const watched = watch ? watchConfig(watch, syslog) : null;
+export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], ha = null, watch = null, syslog = [], plugin = EDGE_UPDATES.plugin, marks = null, length = EDGE_IMAGE.grow.room } = {}) {
+  const watched = marks ?? (watch ? watchConfig(watch, syslog) : null);
   const { address, prefix } = EDGE.lan;
   if (ha && !((ha.node === 0 || ha.node === 1) && /^[0-9a-f]{16,64}$/.test(ha.password))) throw new Error('a pair of edges needs which one this is and their shared password');
   /** This router's own address on a network whose gateway is `gw` (x.y.z.1). @param {string} gw */
