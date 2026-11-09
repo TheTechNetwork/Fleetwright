@@ -100,6 +100,22 @@ let open = 0;
  */
 export function answerSessionPort(req, socket, head, deps) {
   const url = new URL(req.url || '/', 'http://localhost');
+  // FROM THE FIRST LINE: Node takes its own error listener off a socket it
+  // hands to an upgrade handler, so a caller that resets before anything is
+  // answered was an uncaught exception, and one that left before the
+  // connection inside was made left that connection, and its process,
+  // running with nobody at the other end.
+  let gone = false;
+  /** @type {() => void} */
+  let onGone = () => {};
+  socket.on('error', () => {
+    gone = true;
+    onGone();
+  });
+  socket.on('close', () => {
+    gone = true;
+    onGone();
+  });
   /** @param {number} status @param {string} text */
   const refuse = (status, text) => {
     const body = JSON.stringify({ ok: false, text });
@@ -126,6 +142,7 @@ export function answerSessionPort(req, socket, head, deps) {
     const [bin, args] = dialArgv(deps.podmanBin || 'podman', s, p);
     return spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
   });
+  if (gone) return;
   /** @type {import('node:child_process').ChildProcessWithoutNullStreams} */
   let child;
   try {
@@ -133,16 +150,45 @@ export function answerSessionPort(req, socket, head, deps) {
   } catch {
     return refuse(502, `This machine could not reach inside ${name}.`);
   }
+  let settled = false;
+  /** @type {any} */
+  let timer = null;
   open += 1;
+  // THE CALLER WENT: stdin ends first, so the script inside sees its end and
+  // closes the connection it made, and the process is signalled only if it
+  // has not gone in a few seconds, because not every podman passes a signal
+  // from `exec` on to what runs inside.
+  let stopping = false;
+  const stopChild = () => {
+    if (stopping) return;
+    stopping = true;
+    try {
+      child.stdin.end();
+    } catch { /* already closed */ }
+    const term = setTimeout(() => child.kill('SIGTERM'), 2_000);
+    const kill = setTimeout(() => child.kill('SIGKILL'), 5_000);
+    term.unref?.();
+    kill.unref?.();
+    child.once('close', () => {
+      clearTimeout(term);
+      clearTimeout(kill);
+    });
+  };
+  onGone = () => {
+    if (!settled) {
+      settled = true;
+      clearTimeout(timer);
+    }
+    stopChild();
+  };
   let counted = true;
   const release = () => {
     if (!counted) return;
     counted = false;
     open -= 1;
   };
-  let settled = false;
   let first = Buffer.alloc(0);
-  const timer = setTimeout(() => {
+  timer = setTimeout(() => {
     if (settled) return;
     settled = true;
     child.kill('SIGKILL');
@@ -178,6 +224,7 @@ export function answerSessionPort(req, socket, head, deps) {
     first = Buffer.concat([first, chunk]);
     if (first[0] !== 1) return; // a 0 and its code, read on close
     settled = true;
+    if (gone) return stopChild();
     clearTimeout(timer);
     child.stdout.off('data', onFirst);
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nupgrade: ${SESSION_PORT_UPGRADE}\r\nconnection: Upgrade\r\n\r\n`);
@@ -185,8 +232,6 @@ export function answerSessionPort(req, socket, head, deps) {
     if (head?.length) child.stdin.write(head);
     child.stdout.pipe(/** @type {any} */ (socket));
     socket.pipe(child.stdin);
-    socket.on('close', () => child.kill('SIGTERM'));
-    socket.on('error', () => child.kill('SIGTERM'));
     child.stdin.on('error', () => socket.destroy());
     deps.log?.info?.(`session-port: ${name}:${port} opened for ${owner}`);
   };

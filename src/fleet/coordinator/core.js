@@ -744,6 +744,11 @@ export class CoordinatorCore {
       // poolMachineReason).
       madeOnPool: String(enrolled?.enrolledBy || '').startsWith('vm:'),
     });
+    // A PAGE THROUGH A BOX THAT DIALLED AGAIN is a page with a hole in it:
+    // whatever was in flight on the old socket is gone, and a box that
+    // restarted has forgotten it. Closed, with a sentence, so the phone offers
+    // Open again rather than waiting on connections nobody will answer.
+    this.browses.closeForHost(hostId, `${hostId} reconnected to the fleet, so the page it was carrying closed. Open it again.`);
     // A box that refused a forgetting as a verb it did not know is asked
     // again from its first report on this connection (#askForget).
     this.#forgetNotBefore.delete(hostId);

@@ -42,6 +42,16 @@ export const BROWSE_CHUNK = 48 * 1024;
 export const MAX_BOX_STREAMS = 64;
 /** A connection that has carried nothing for this long is closed here. */
 const IDLE_MS = 30 * 60_000;
+/** How long a name may take to resolve here. */
+const LOOKUP_MS = 10_000;
+/**
+ * How many bytes of one connection may be on their way to the phone before
+ * the phone has said it has them. Past it the box stops reading that
+ * connection until the phone acknowledges: without it a page served at LAN
+ * speed to a phone on a slow link piled up in the sockets between, the
+ * coordinator's among them. 128 KiB a connection is 4 MiB a page at most.
+ */
+export const BROWSE_WINDOW = 128 * 1024;
 /** The ports the public web is opened on. */
 export const WEB_PORTS = Object.freeze([80, 443]);
 const ID_RE = /^[0-9a-f]{24}$/;
@@ -104,20 +114,47 @@ const NOT_PUBLIC_V6 = (() => {
 })();
 
 /**
+ * The eight hextets of an IPv6 address, or null. Any spelling: compressed,
+ * zero-padded, written out, or with an IPv4 address in its last 32 bits.
+ *
+ * @param {string} a
+ * @returns {number[]|null}
+ */
+function hextets(a) {
+  if (net.isIPv6(a) === false) return null;
+  let text = a.toLowerCase();
+  const dotted = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(text);
+  if (dotted) {
+    const o = dotted[1].split('.').map(Number);
+    text = `${text.slice(0, -dotted[1].length)}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+  }
+  const [head, tail] = text.includes('::') ? text.split('::') : [text, null];
+  const left = head ? head.split(':') : [];
+  const right = tail === null ? [] : tail ? tail.split(':') : [];
+  const fill = tail === null ? 0 : 8 - left.length - right.length;
+  const all = [...left, ...Array(Math.max(0, fill)).fill('0'), ...right];
+  if (all.length !== 8) return null;
+  return all.map((h) => parseInt(h, 16));
+}
+
+/**
  * An address as the family it really is: an IPv4 address written inside IPv6
- * (`::ffff:10.0.0.1`) is that IPv4 address, or a range check on its IPv6
- * form would call a private address public.
+ * (`::ffff:10.0.0.1`, or `::ffff:a00:1`, which is the same address in hex) is
+ * that IPv4 address, or a range check on its IPv6 form would call a private
+ * address public, and a check of the box's own addresses would miss it.
  *
  * @param {string} address
  * @returns {{ address: string, family: 4|6 }|null}
  */
 export function plainAddress(address) {
   const a = address.replace(/^\[(.*)\]$/, '$1');
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(a);
-  if (mapped && net.isIPv4(mapped[1])) return { address: mapped[1], family: 4 };
-  const family = net.isIP(a);
-  if (family === 4 || family === 6) return { address: a, family };
-  return null;
+  if (net.isIPv4(a)) return { address: a, family: 4 };
+  if (!net.isIPv6(a)) return null;
+  const h = hextets(a);
+  if (h && h.slice(0, 5).every((x) => x === 0) && h[5] === 0xffff) {
+    return { address: [h[6] >> 8, h[6] & 255, h[7] >> 8, h[7] & 255].join('.'), family: 4 };
+  }
+  return { address: a, family: 6 };
 }
 
 /**
@@ -132,11 +169,51 @@ export function isPublicAddress(address) {
   return GLOBAL_V6.check(plain.address, 'ipv6') && !NOT_PUBLIC_V6.check(plain.address, 'ipv6');
 }
 
-/** @param {string} address */
-function isLoopback(address) {
-  const plain = plainAddress(address);
-  if (!plain) return false;
-  return plain.family === 4 ? plain.address.startsWith('127.') : plain.address === '::1';
+/**
+ * What this box is, and the networks it sits on, as ranges checked by
+ * number rather than by spelling: `2a02:1234:0:0:0:0:0:5` is the box at
+ * `2a02:1234::5`, and comparing the two as text called it somewhere else.
+ *
+ * `self` is never opened, whatever is listed: every address of this box's
+ * own, loopback, and the unspecified addresses, which a connect sends to
+ * this box. `onLink` is the networks those addresses are on, which the web
+ * rule leaves out: on an IPv6 network the neighbours of a box have global
+ * addresses too, and are its owner's network, not the web.
+ *
+ * @param {{ addresses?: string[], networks?: string[] }} [own]
+ */
+export function ownRanges(own = {}) {
+  const self = new net.BlockList();
+  self.addSubnet('127.0.0.0', 8, 'ipv4');
+  self.addSubnet('0.0.0.0', 8, 'ipv4');
+  self.addAddress('::1', 'ipv6');
+  self.addAddress('::', 'ipv6');
+  const onLink = new net.BlockList();
+  for (const a of own.addresses ?? []) {
+    const plain = plainAddress(a);
+    if (plain) self.addAddress(plain.address, plain.family === 4 ? 'ipv4' : 'ipv6');
+  }
+  for (const cidr of own.networks ?? []) {
+    const [addr, bits] = String(cidr).split('/');
+    const plain = plainAddress(addr || '');
+    const prefix = Number(bits);
+    if (!plain || !Number.isInteger(prefix)) continue;
+    const max = plain.family === 4 ? 32 : 128;
+    // A host route (/32, /128) says nothing about who else is on the link.
+    if (prefix < 1 || prefix >= max) continue;
+    try {
+      onLink.addSubnet(plain.address, prefix, plain.family === 4 ? 'ipv4' : 'ipv6');
+    } catch { /* not a range BlockList takes */ }
+  }
+  /** @param {net.BlockList} list @param {string} address */
+  const has = (list, address) => {
+    const plain = plainAddress(address);
+    return Boolean(plain) && list.check(/** @type {any} */ (plain).address, /** @type {any} */ (plain).family === 4 ? 'ipv4' : 'ipv6');
+  };
+  return {
+    /** @param {string} address */ self: (address) => has(self, address),
+    /** @param {string} address */ onLink: (address) => has(onLink, address),
+  };
 }
 
 // --- what the owner listed ----------------------------------------------------
@@ -226,21 +303,24 @@ function inRange(entry, address) {
 }
 
 /**
- * This box's own addresses, every interface, which a connection is never
- * made to: a listed range or the web that happens to hold one would reach
- * whatever listens on this box.
+ * This box's own addresses on every interface, and the networks they are on
+ * (ownRanges says what each is used for).
  *
- * @returns {Set<string>}
+ * @returns {{ addresses: string[], networks: string[] }}
  */
 export function ownAddresses() {
-  const out = new Set();
+  /** @type {string[]} */
+  const addresses = [];
+  /** @type {string[]} */
+  const networks = [];
   for (const list of Object.values(os.networkInterfaces())) {
     for (const i of list || []) {
-      const plain = plainAddress(String(i.address).split('%')[0]);
-      if (plain) out.add(plain.address);
+      const address = String(i.address).split('%')[0];
+      if (plainAddress(address)) addresses.push(address);
+      if (!i.internal && i.cidr) networks.push(String(i.cidr).split('%')[0]);
     }
   }
-  return out;
+  return { addresses, networks };
 }
 
 /**
@@ -256,11 +336,12 @@ export function ownAddresses() {
  *   box: boolean,
  *   policy: { web: boolean, entries: BrowseEntry[] },
  *   lookup: (name: string) => Promise<string[]>,
- *   own?: Set<string>,
+ *   own?: { addresses?: string[], networks?: string[] },
+ *   lookupMs?: number,
  * }} ask
  * @returns {Promise<BrowseDecision>}
  */
-export async function decideBrowse({ host, port, session, box, policy, lookup, own = new Set() }) {
+export async function decideBrowse({ host, port, session, box, policy, lookup, own = {}, lookupMs = LOOKUP_MS }) {
   const name = String(host).toLowerCase().replace(/^\[(.*)\]$/, '$1').replace(/\.$/, '');
   if (isLocalName(name)) {
     if (session) return { to: 'session', port };
@@ -273,8 +354,9 @@ export async function decideBrowse({ host, port, session, box, policy, lookup, o
         : 'Only people who administer this machine open addresses through it.',
     };
   }
+  const ranges = ownRanges(own);
   /** @param {string} address */
-  const ours = (address) => isLoopback(address) || own.has(/** @type {any} */ (plainAddress(address))?.address);
+  const ours = (address) => ranges.self(address);
 
   // A NAME THE OWNER LISTED is theirs to mean what their resolver says.
   const named = policy.entries.filter((e) => e.kind === 'name' && e.name === name);
@@ -283,13 +365,13 @@ export async function decideBrowse({ host, port, session, box, policy, lookup, o
       const ports = [...new Set(named.flatMap((e) => (e.port === null ? WEB_PORTS : [e.port])))].sort((a, b) => a - b);
       return { refused: `This machine opens ${name} only on ${ports.length > 1 ? `${ports.slice(0, -1).join(', ')} and ${ports.at(-1)}` : ports[0]}.` };
     }
-    const addresses = await resolve(name, lookup);
+    const addresses = await resolve(name, lookup, lookupMs);
     const usable = addresses.find((a) => !ours(a));
     if (!usable) return { refused: addresses.length ? `${name} is this machine itself, which it does not open.` : `${name} has no address this machine can find.` };
     return { to: 'tcp', host: /** @type {any} */ (plainAddress(usable)).address, port };
   }
 
-  const addresses = await resolve(name, lookup);
+  const addresses = await resolve(name, lookup, lookupMs);
   if (!addresses.length) return { refused: `${name} has no address this machine can find.` };
   let anyPrivate = false;
   let anyOwn = false;
@@ -300,7 +382,9 @@ export async function decideBrowse({ host, port, session, box, policy, lookup, o
     }
     const plain = /** @type {{ address: string }} */ (plainAddress(address));
     if (policy.entries.some((e) => e.kind === 'range' && inRange(e, address) && portFits(e, port))) return { to: 'tcp', host: plain.address, port };
-    if (isPublicAddress(address)) {
+    // THE WEB IS PUBLIC AND NOT THIS BOX'S OWN NETWORK: a neighbour with a
+    // global IPv6 address is on the owner's network, opened only if listed.
+    if (isPublicAddress(address) && !ranges.onLink(address)) {
       if (policy.web && WEB_PORTS.includes(port)) return { to: 'tcp', host: plain.address, port };
     } else {
       anyPrivate = true;
@@ -315,15 +399,26 @@ export async function decideBrowse({ host, port, session, box, policy, lookup, o
 /**
  * Every address for a name, or the name itself when it is an address.
  *
- * @param {string} name @param {(name: string) => Promise<string[]>} lookup
+ * @param {string} name @param {(name: string) => Promise<string[]>} lookup @param {number} [limitMs]
  */
-async function resolve(name, lookup) {
+async function resolve(name, lookup, limitMs = LOOKUP_MS) {
   const plain = plainAddress(name);
   if (plain) return [plain.address];
+  /** @type {any} */
+  let timer = null;
   try {
-    return (await lookup(name)).filter((a) => plainAddress(a));
+    // NOT FOR EVER: a resolver that does not answer is a page that does not
+    // load, said, and not a connection slot held until the page is closed.
+    const late = new Promise((resolve) => {
+      timer = setTimeout(() => resolve([]), limitMs);
+      timer.unref?.();
+    });
+    const found = /** @type {string[]} */ (await Promise.race([lookup(name), late]));
+    return found.filter((a) => plainAddress(a));
   } catch {
     return [];
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -336,7 +431,7 @@ export async function systemLookup(name) {
 // --- the switchboard ---------------------------------------------------------
 
 /**
- * @typedef {{ write: (b: Buffer) => unknown, end: () => unknown, destroy: () => unknown, on: Function, once: Function, setTimeout?: Function }} Wire
+ * @typedef {{ write: (b: Buffer) => unknown, end: () => unknown, destroy: () => unknown, on: Function, once: Function, pause?: Function, resume?: Function, setTimeout?: Function }} Wire
  */
 
 /**
@@ -344,7 +439,7 @@ export async function systemLookup(name) {
  * @property {string} owner
  * @property {string|null} session
  * @property {boolean} box
- * @property {Map<number, { wire: Wire|null, ended: boolean }>} streams
+ * @property {Map<number, { wire: Wire|null, ended: boolean, credit: number }>} streams
  */
 
 export class BrowseCarrier {
@@ -357,13 +452,22 @@ export class BrowseCarrier {
    *   pinned?: () => string[]|null,
    *   lookup?: (name: string) => Promise<string[]>,
    *   connect?: (opts: { host: string, port: number }) => net.Socket,
-   *   own?: () => Set<string>,
+   *   own?: () => { addresses?: string[], networks?: string[] },
    *   connectTimeoutMs?: number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
    * }} opts
    */
   constructor({ send, policy, checkSession, dialSession, pinned = () => [], lookup = systemLookup, connect = (o) => net.connect(o), own = ownAddresses, connectTimeoutMs = 15_000, log }) {
-    this.send = send;
+    // A FRAME THAT COULD NOT BE SENT is a page with a hole in it: the
+    // socket to the coordinator dropped, and the bytes in between are gone.
+    // That page is closed here, so its connections and their processes do
+    // not wait out the idle timer, and the coordinator is told it is gone
+    // the next time it names it.
+    this.send = (/** @type {Record<string, unknown>} */ frame) => {
+      const sent = send(frame);
+      if (sent === false && typeof frame.browse === 'string' && this.sockets.has(frame.browse)) this.#closeSocket(frame.browse);
+      return sent;
+    };
     this.policy = policy;
     this.checkSession = checkSession;
     this.dialSession = dialSession;
@@ -396,7 +500,10 @@ export class BrowseCarrier {
     if (msg.op === 'open') return void this.#open(id, String(msg.owner || '').toLowerCase(), typeof msg.session === 'string' && msg.session ? msg.session : null, msg.box === true);
     if (msg.op === 'close') return this.#closeSocket(id);
     const socket = this.sockets.get(id);
-    if (!socket) return;
+    // A PAGE THIS BOX DOES NOT HAVE: it restarted, or closed it when a frame
+    // could not be sent. Said, so the phone shows Open again instead of a
+    // page whose connections are never answered.
+    if (!socket) return void this.send({ browse: id, op: 'closed', text: 'This machine no longer has that page open. Open it again.' });
     const streamText = typeof msg.stream === 'number' ? String(msg.stream) : '';
     if (!STREAM_RE.test(streamText)) return;
     const stream = Number(streamText);
@@ -407,6 +514,11 @@ export class BrowseCarrier {
       const data = typeof msg.data === 'string' && msg.data.length % 4 === 0 && BASE64_RE.test(msg.data) ? Buffer.from(msg.data, 'base64') : null;
       if (!data || !data.length || data.length > BROWSE_CHUNK || !s.wire) return this.#endStream(id, stream, true);
       s.wire.write(data);
+    } else if (msg.op === 'ack') {
+      // THE PHONE HAS THESE BYTES: read on, up to the window again.
+      const bytes = typeof msg.bytes === 'number' && Number.isInteger(msg.bytes) && msg.bytes > 0 ? Math.min(msg.bytes, BROWSE_WINDOW) : 0;
+      s.credit = Math.min(BROWSE_WINDOW, s.credit + bytes);
+      if (s.credit > 0) s.wire?.resume?.();
     } else if (msg.op === 'end') {
       this.#endStream(id, stream, false);
     }
@@ -444,8 +556,8 @@ export class BrowseCarrier {
     };
     if (!Number.isInteger(port) || port < 1 || port > 65535 || !host || host.length > 253) return void this.send({ browse: id, op: 'failed', stream, text: 'That is not an address a page can be on.' });
     if (this.carried >= MAX_BOX_STREAMS) return void this.send({ browse: id, op: 'failed', stream, text: `This machine is already carrying ${MAX_BOX_STREAMS} connections for phones. Close a page and try again.` });
-    /** @type {{ wire: Wire|null, ended: boolean }} */
-    const slot = { wire: null, ended: false };
+    /** @type {{ wire: Wire|null, ended: boolean, credit: number }} */
+    const slot = { wire: null, ended: false, credit: BROWSE_WINDOW };
     socket.streams.set(stream, slot);
     let decided;
     try {
@@ -489,7 +601,7 @@ export class BrowseCarrier {
    * A connection made: say so, and pump it.
    *
    * @param {string} id @param {Socket} socket @param {number} stream
-   * @param {{ wire: Wire|null, ended: boolean }} slot @param {Wire} wire
+   * @param {{ wire: Wire|null, ended: boolean, credit: number }} slot @param {Wire} wire
    */
   #join(id, socket, stream, slot, wire) {
     slot.wire = wire;
@@ -500,6 +612,9 @@ export class BrowseCarrier {
       for (let at = 0; at < chunk.length; at += BROWSE_CHUNK) {
         this.send({ browse: id, op: 'data', stream, data: chunk.subarray(at, at + BROWSE_CHUNK).toString('base64') });
       }
+      // NO FURTHER THAN THE PHONE HAS CAUGHT UP WITH (BROWSE_WINDOW).
+      slot.credit -= chunk.length;
+      if (slot.credit <= 0) wire.pause?.();
     });
     const gone = () => {
       if (socket.streams.get(stream) !== slot) return;
@@ -541,7 +656,7 @@ export class BrowseCarrier {
     }
   }
 
-  /** Every page this box carries, ended: the socket to the coordinator went. */
+  /** Every page this box carries, ended. */
   closeAll() {
     for (const id of [...this.sockets.keys()]) this.#closeSocket(id);
   }

@@ -374,13 +374,18 @@ machine of the fleet, through the coordinator.
   connection from its own env file and the hub's record, never from a frame.
   **What a compromised coordinator can do with it:** open connections from
   that box to the names and ranges its owner listed, and to public addresses
-  on 80 and 443 where the owner turned the web on, and to a person's own
-  running session's ports when the hub agrees the session is theirs. It
+  on 80 and 443 where the owner turned the web on, and to the ports of
+  every running, contained session on the box: it names whose a socket is,
+  unsigned, and it sees who started each session, so the hub's check that
+  the session is that person's holds against a mistake and not against it.
+  On a box that takes only signed work that is a way into sessions the
+  signature does not cover ([signed-intents.md](./signed-intents.md)). It
   can read and change plain-HTTP pages on the way, and nothing inside an
-  https page. **What it cannot do:** reach the box's own addresses, a
-  private address the owner did not list (the box resolves a name once and
-  connects to that address), a session that is not the named person's, or
-  a box that turned none of it on. Its own rules apply only for people the
+  https page. **What it cannot do:** reach the box itself (its loopback,
+  its own addresses in any spelling, the unspecified addresses), a private
+  address or a neighbour on the box's own network the owner did not list
+  (the box resolves a name once and connects to that address), a stopped
+  or uncontained session, or a box that turned none of it on. Its own rules apply only for people the
   coordinator says administer the box, and on a box that pins its admins,
   only for them.
 - **Progress on a Lock Screen is not sealed.** A Live Activity's content goes

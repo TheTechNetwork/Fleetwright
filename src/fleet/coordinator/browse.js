@@ -13,9 +13,14 @@
 // WHAT IS DECIDED HERE AND WHAT IS NOT. Who may open a socket on which box is
 // the caller's (core.js openBrowse). Where each connection may go is THE
 // BOX'S, every time (src/fleet/host/browse.js), because this is the party the
-// project treats as compromised. What this adds to every frame it sends the
-// box is the person and the session from its own record, never the phone's
-// word.
+// project treats as compromised. What this tells the box, once, when the
+// socket opens, is the person and the session from its own record, never the
+// phone's word; the box keeps them for every connection after.
+//
+// AND HOW FAST. A connection's bytes toward the phone are acknowledged by the
+// phone (`ack`), and the box reads no more than a window ahead of it
+// (host/browse.js BROWSE_WINDOW), so a page served at LAN speed to a phone on
+// a slow link does not pile up here.
 //
 // WHAT BOUNDS A SOCKET, each for a reason:
 //
@@ -36,6 +41,8 @@ export const BROWSE_TTL_MS = 30 * 60_000;
 export const BROWSE_MAX_BYTES = 512 * 1024 * 1024;
 /** The largest piece of one frame, in bytes before base64: the tunnel's. */
 export const BROWSE_MAX_CHUNK = 48 * 1024;
+/** The most one acknowledgement may say the phone has: more than any window. */
+const BROWSE_MAX_ACK = 16 * 1024 * 1024;
 /** Connections one socket may have open at once. */
 export const BROWSE_MAX_STREAMS = 32;
 /** Sockets open at once across the fleet, and for one person. */
@@ -231,6 +238,11 @@ export class Browses {
     if (msg.op === 'end') {
       b.streams.delete(stream);
       this.toHost(b.hostId, { browse: id, op: 'end', stream });
+      return;
+    }
+    if (msg.op === 'ack') {
+      if (state !== 'open' || typeof msg.bytes !== 'number' || !Number.isInteger(msg.bytes) || msg.bytes < 1 || msg.bytes > BROWSE_MAX_ACK) return;
+      this.toHost(b.hostId, { browse: id, op: 'ack', stream, bytes: msg.bytes });
       return;
     }
     if (msg.op !== 'data' || state !== 'open') return;

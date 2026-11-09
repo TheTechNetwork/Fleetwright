@@ -23,7 +23,7 @@ import path from 'node:path';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { Browses, BROWSE_MAX_STREAMS, MAX_BROWSES_EACH, browseTarget } from '../src/fleet/coordinator/browse.js';
 import { browseShape } from '../src/fleet/coordinator/registry.js';
-import { BrowseCarrier, decideBrowse, isPublicAddress, parseBrowseHosts, plainAddress } from '../src/fleet/host/browse.js';
+import { BrowseCarrier, BROWSE_WINDOW, decideBrowse, isPublicAddress, parseBrowseHosts, plainAddress } from '../src/fleet/host/browse.js';
 import { answerSessionPort, DIAL_SCRIPT, isSessionPortUpgrade } from '../src/core/session-port.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
@@ -104,7 +104,7 @@ function fleet({
     },
     pinned: () => pinned,
     lookup,
-    own: () => new Set(['198.51.100.7']),
+    own: () => ({ addresses: ['198.51.100.7'], networks: [] }),
     connect: (o) => {
       dialed.push(`${o.host}:${o.port}`);
       const local = route[`${o.host}:${o.port}`];
@@ -199,6 +199,10 @@ test('public is the web and nothing else, IPv4 and IPv6, a mapped address judged
     '::1', '::', 'fd00::1', 'fe80::1', 'ff02::1', '2001:db8::1', '64:ff9b::808:808', '2002:c0a8:101::1', '::ffff:10.0.0.1', '::8.8.8.8',
   ]) assert.equal(isPublicAddress(a), false, a);
   assert.deepEqual(plainAddress('::ffff:192.168.1.1'), { address: '192.168.1.1', family: 4 });
+  // The same address in hex is the same address.
+  assert.deepEqual(plainAddress('::ffff:c0a8:101'), { address: '192.168.1.1', family: 4 });
+  assert.deepEqual(plainAddress('0:0:0:0:0:ffff:c0a8:0101'), { address: '192.168.1.1', family: 4 });
+  assert.equal(isPublicAddress('::ffff:a00:1'), false);
 });
 
 test('the owner’s list: names, addresses and ranges, with a port or on 80 and 443, and nothing that is not one', () => {
@@ -212,7 +216,7 @@ test('the owner’s list: names, addresses and ranges, with a port or on 80 and 
 
 test('the box decides: a session’s localhost, the listed, the public web on 80 and 443, and never itself', async () => {
   const policy = { web: true, entries: parseBrowseHosts(['nas.lan', 'nas.lan:5000', '192.168.1.0/24:8080']).entries };
-  const own = new Set(['198.51.100.7']);
+  const own = { addresses: ['198.51.100.7'], networks: [] };
   /** @param {string} host @param {number} port @param {{ session?: string|null, box?: boolean, web?: boolean }} [o] */
   const at = (host, port, o = {}) => decideBrowse({ host, port, session: o.session ?? null, box: o.box ?? true, policy: { ...policy, web: o.web ?? true }, lookup: async (n) => (n === 'self.example' ? ['198.51.100.7'] : lookup(n)), own });
   assert.deepEqual(await at('localhost', 5173, { session: 'web', box: false }), { to: 'session', port: 5173 });
@@ -501,5 +505,170 @@ test('the hub opens a session’s port for the sidecar, and says why when it wil
     assert.equal(loose.execs.length, 0);
   } finally {
     await loose.close();
+  }
+});
+
+// --- what the review found ---------------------------------------------------
+
+test('the box is never itself, however its address is written, and its own network is not the web', async () => {
+  const policy = { web: true, entries: parseBrowseHosts(['192.168.1.0/24']).entries };
+  const own = { addresses: ['192.168.1.5', '2a02:1234::5'], networks: ['192.168.1.5/24', '2a02:1234::5/64'] };
+  /** @param {string} host @param {number} [port] */
+  const at = (host, port = 443) => decideBrowse({ host, port, session: null, box: true, policy, lookup: async () => [], own });
+  for (const self of ['2a02:1234::5', '2a02:1234:0:0:0:0:0:5', '2a02:1234:0000::0005', '[2A02:1234::5]', '192.168.1.5', '::ffff:192.168.1.5', '::ffff:c0a8:105', '0.0.0.0', '0.1.2.3', '::']) {
+    const d = /** @type {any} */ (await at(self));
+    assert.ok('refused' in d, `${self} was opened: ${JSON.stringify(d)}`);
+  }
+  // A neighbour with a global IPv6 address is the owner's network, not the web.
+  assert.ok('refused' in /** @type {any} */ (await at('2a02:1234::20')));
+  // A listed range still opens its neighbours, the box excepted.
+  assert.deepEqual(await at('192.168.1.20'), { to: 'tcp', host: '192.168.1.20', port: 443 });
+  assert.deepEqual(await at('::ffff:c0a8:114'), { to: 'tcp', host: '192.168.1.20', port: 443 });
+  // The web beyond it is still the web.
+  assert.deepEqual(await at('2606:4700::1111'), { to: 'tcp', host: '2606:4700::1111', port: 443 });
+});
+
+test('a resolver that does not answer is a refusal in seconds, not a slot held for the page', async () => {
+  const started = Date.now();
+  const d = await decideBrowse({
+    host: 'slow.example', port: 443, session: null, box: true, policy: { web: true, entries: [] },
+    // Answers too late. The box's own limit is ten seconds; this one is
+    // shortened, and the lookup rejects only after the answer was given.
+    lookup: () => new Promise((_r, j) => setTimeout(() => j(new Error('late')), 2_000).unref()),
+    lookupMs: 100,
+  });
+  assert.match(/** @type {any} */ (d).refused, /no address/);
+  assert.ok(Date.now() - started < 1_000);
+});
+
+test('the box reads no further than the phone has acknowledged', async () => {
+  const big = Buffer.alloc(BROWSE_WINDOW * 3, 120);
+  const server = net.createServer((s) => s.end(big));
+  await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
+  const port = /** @type {any} */ (server.address()).port;
+  try {
+    /** @type {any[]} */
+    const sent = [];
+    const box = new BrowseCarrier({
+      send: (f) => sent.push(f),
+      policy: () => ({ web: true, entries: [] }),
+      checkSession: async () => ({ ok: true }),
+      dialSession: async () => ({ ok: false, text: 'no' }),
+      lookup: async () => [PUBLIC_IP],
+      own: () => ({ addresses: [], networks: [] }),
+      connect: () => net.connect({ host: '127.0.0.1', port }),
+    });
+    const id = 'a'.repeat(24);
+    box.onFrame({ browse: id, op: 'open', owner: OWNER, session: null, box: true });
+    await new Promise((r) => setImmediate(r));
+    box.onFrame({ browse: id, op: 'connect', stream: 1, host: 'example.com', port: 443 });
+    const carried = () => sent.filter((f) => f.op === 'data').reduce((n, f) => n + Buffer.from(f.data, 'base64').length, 0);
+    const settle = async () => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+    };
+    await settle();
+    // About one window, then it stops: a socket read can overshoot by what
+    // one read returns, never by the rest of the file.
+    const first = carried();
+    assert.ok(first >= BROWSE_WINDOW && first < BROWSE_WINDOW * 2, `carried ${first} before any ack`);
+    box.onFrame({ browse: id, op: 'ack', stream: 1, bytes: first });
+    await settle();
+    assert.ok(carried() > first, 'an ack did not let it read on');
+    box.onFrame({ browse: id, op: 'ack', stream: 1, bytes: BROWSE_WINDOW });
+    box.onFrame({ browse: id, op: 'ack', stream: 1, bytes: BROWSE_WINDOW });
+    await settle();
+    assert.equal(carried(), big.length);
+    box.closeAll();
+  } finally {
+    await new Promise((r) => server.close(() => r(null)));
+  }
+});
+
+test('a page with a hole in it is closed: the box drops it when a frame cannot be sent, says so when asked, and the coordinator closes it when the box dials again', async () => {
+  // The box: a send that fails closes the page, and a page it does not have
+  // is answered `closed`.
+  /** @type {any[]} */
+  const sent = [];
+  let up = true;
+  const box = new BrowseCarrier({
+    send: (f) => {
+      sent.push(f);
+      return up;
+    },
+    policy: () => ({ web: true, entries: [] }),
+    checkSession: async () => ({ ok: true }),
+    dialSession: async () => ({ ok: false, text: 'no' }),
+  });
+  const id = 'b'.repeat(24);
+  box.onFrame({ browse: id, op: 'open', owner: OWNER, session: null, box: true });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(box.sockets.size, 1);
+  up = false;
+  box.onFrame({ browse: id, op: 'connect', stream: 1, host: 'example.com', port: 22 });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(box.sockets.size, 0, 'a page whose frame could not be sent stayed open');
+  up = true;
+  box.onFrame({ browse: id, op: 'connect', stream: 2, host: 'example.com', port: 443 });
+  assert.equal(sent.at(-1).op, 'closed');
+
+  // The coordinator: a box that dials again takes its pages with it.
+  const f = fleet();
+  const p = phone(f.core);
+  await p.open;
+  f.core.hostConnected(BOX, () => {});
+  assert.equal(p.got.at(-1).op, 'closed');
+  assert.match(p.got.at(-1).text, /reconnected/);
+});
+
+test('the coordinator carries an acknowledgement only for an open stream, and only a sane one', async () => {
+  /** @type {any[]} */
+  const toHost = [];
+  const b = new Browses({ toHost: (_h, fr) => toHost.push(fr) });
+  const s = /** @type {any} */ (b.start({ owner: OWNER, device: PHONE, hostId: BOX, session: null, box: true, toPhone() {}, closePhone() {} }));
+  const id = s.browse.id;
+  b.fromHost(BOX, { browse: id, op: 'opened' });
+  b.fromPhone(id, JSON.stringify({ op: 'connect', stream: 1, host: 'example.com', port: 443 }));
+  b.fromPhone(id, JSON.stringify({ op: 'ack', stream: 1, bytes: 100 }));
+  assert.equal(toHost.filter((f) => f.op === 'ack').length, 0, 'an ack for a stream still connecting was carried');
+  b.fromHost(BOX, { browse: id, op: 'connected', stream: 1 });
+  b.fromPhone(id, JSON.stringify({ op: 'ack', stream: 1, bytes: 100 }));
+  b.fromPhone(id, JSON.stringify({ op: 'ack', stream: 1, bytes: -5 }));
+  b.fromPhone(id, JSON.stringify({ op: 'ack', stream: 1, bytes: 1.5 }));
+  assert.deepEqual(toHost.filter((f) => f.op === 'ack'), [{ browse: id, op: 'ack', stream: 1, bytes: 100 }]);
+  b.close(id, 'done');
+});
+
+test('a caller that leaves before the connection inside is made leaves nothing running', async () => {
+  // Nothing listens, and the dial is made to wait: the caller goes first.
+  /** @type {import('node:child_process').ChildProcess|null} */
+  let child = null;
+  const server = http.createServer((_req, res) => res.end());
+  server.on('upgrade', (req, socket, head) => {
+    answerSessionPort(req, socket, head, {
+      principal: 'sidecar',
+      contained: true,
+      record: () => ({ status: 'running', createdBy: `fleet:${OWNER}` }),
+      // A dial that would never answer on its own: it waits on stdin.
+      exec: () => {
+        child = spawn(process.execPath, ['-e', 'process.stdin.resume(); process.stdin.on("end", () => process.exit(0));'], { stdio: ['pipe', 'pipe', 'pipe'] });
+        return /** @type {any} */ (child);
+      },
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
+  try {
+    const port = /** @type {any} */ (server.address()).port;
+    const raw = net.connect({ host: '127.0.0.1', port });
+    raw.on('error', () => {});
+    raw.write(`GET /api/session-port?name=web&port=3000&owner=${OWNER} HTTP/1.1\r\nhost: x\r\nconnection: Upgrade\r\nupgrade: fleetwright-port\r\n\r\n`);
+    for (let i = 0; i < 50 && !child; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(child, 'the dial never started');
+    const exited = new Promise((r) => /** @type {any} */ (child).once('exit', r));
+    raw.resetAndDestroy();
+    // Its stdin is ended at once, so it goes well inside the grace period.
+    const how = await Promise.race([exited.then(() => 'exited'), new Promise((r) => setTimeout(() => r('still running'), 1500))]);
+    assert.equal(how, 'exited');
+  } finally {
+    await new Promise((r) => server.close(() => r(null)));
   }
 });

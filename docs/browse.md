@@ -67,9 +67,13 @@ The coordinator is the party this project treats as compromised
 1. **`localhost` is the session's**, and only when the socket was opened on
    one. `localhost`, `127.0.0.1` and `::1`, on any port, go to that session's
    container, through the hub, which owns the container
-   (`src/core/session-port.js`). Without a session they are refused. The box
-   never opens its own loopback, which is the hub, the sidecar and every
-   service on it.
+   (`src/core/session-port.js`). Without a session they are refused.
+   **The box never opens itself**: its loopback, which is the hub, the
+   sidecar and every service on it, every address of its own interfaces, and
+   the unspecified addresses, which a connect sends to the box. Addresses are
+   compared by number, not by how they are written, so
+   `2a02:1234:0:0:0:0:0:5` is the box at `2a02:1234::5` and `::ffff:c0a8:105`
+   is `192.168.1.5`.
 2. **A name the box lists** is opened as the box's own resolver answers it, on
    the port the entry names, or on 80 and 443.
 3. **Every other name is resolved on the box**, once, and the box connects to
@@ -78,9 +82,14 @@ The coordinator is the party this project treats as compromised
 4. **A public address**, on port 80 or 443, when the box has the public web
    turned on. Public means not loopback, private, link-local, shared,
    multicast, documentation, benchmarking or reserved, in IPv4 or IPv6, with
-   an IPv4 address written inside IPv6 judged as the IPv4 address. A name that
-   resolves to a private address is refused, which is the check DNS
-   rebinding goes round when a proxy resolves twice.
+   an IPv4 address written inside IPv6, in either spelling, judged as the IPv4
+   address, and **not on a network the box itself is on**: on an IPv6 network a
+   box's neighbours have global addresses too, and they are its owner's
+   network, opened only if listed. A name is opened only on an address that
+   passes, and the box connects to that address: a name that resolves only
+   to private addresses is refused, and one that resolves to both is opened
+   on the public one. There is no second resolution for DNS rebinding to
+   change.
 5. **Anything else is refused**, with a sentence the phone shows as the page.
 
 Box rules 2 to 4 apply only on a socket the coordinator opened for somebody
@@ -103,14 +112,36 @@ person's own.
 
 **Sizes.** On the coordinator: one socket per screen, thirty minutes and 512
 MiB at most, 32 connections open at once on it, two sockets per person and 16
-in the fleet. On the box: 64 connections at once across every socket, fifteen
-seconds to connect, and a connection quiet for thirty minutes is closed.
+in the fleet. On the box: 64 connections at once across every socket, ten
+seconds to resolve a name and fifteen to connect, and a connection quiet for
+thirty minutes is closed.
+
+**How fast.** A connection's bytes toward the phone are acknowledged by the
+phone as it hands them to the web view (`ack`), and the box reads no more
+than 128 KiB of one connection ahead of that. Without it a file served at LAN
+speed to a phone on a slow link piled up in every socket between, the
+coordinator's among them. Bytes from the phone to the box have no window:
+they are what the web view uploads, at the phone's own speed.
+
+**A socket with a hole in it is closed.** When the box's socket to the fleet
+drops, whatever was in flight is gone, so the box closes the pages it was
+carrying the moment a frame cannot be sent, the coordinator closes them when
+the box dials again, and a box asked about a page it no longer has says so.
+The phone shows the sentence and Open again.
 
 **What a compromised coordinator gets** is what the box's owner turned on:
 pages on the names they listed and the public web, from that box's address,
-and plain-HTTP pages readable on the way. It cannot reach an address the box
-does not list, the box's own loopback, or a session the box does not say is
-that person's. That is the cost of the feature, written down here because it
+and plain-HTTP pages readable on the way. **And every contained session's
+ports on the box, as that session's person:** the person a socket is for is
+the coordinator's word, unsigned, and it sees who started each session, so
+it can name the right one. That reaches dev servers and anything else a
+session listens on, which on a box that takes only signed work
+(`FLEETWRIGHT_REQUIRE_SIGNED=all`) is a way into sessions the signature does
+not cover. It is listed with the other things the coordinator says alone
+([signed-intents.md](./signed-intents.md)); a phone-signed delegation for the
+socket is what would close it, and is not built. It cannot reach an address
+the box does not list, the box itself, or a session that is not running or
+not contained. That is the cost of the feature, written down here because it
 is the one thing the console's tunnel did not have: a tunnel there could
 reach only a pool the box held a token for.
 
@@ -135,10 +166,12 @@ The phone's socket is `GET /api/browse?host=<hostId>[&session=<name>]`.
 | | `closed` | the whole socket ended, and why |
 | the phone | `connect` | a stream: `stream`, `host`, `port` |
 | | `data` / `end` | the same, for one stream |
+| | `ack` | `bytes` of a stream it has handed to the web view |
 | coordinator, to the box | `open` | the person, the session, and whether box rules apply |
-| | `connect` / `data` / `end` | as the phone's, the person added from the coordinator's own record |
+| | `connect` / `data` / `end` / `ack` | as the phone's; the person and the session went with `open`, from the coordinator's own record |
 | | `close` | the phone's socket went |
 | the box | `opened` / `refused` | the socket, or why not |
+| | `closed` | it no longer has that socket, and why |
 | | `connected` / `failed` / `data` / `end` | as above |
 
 The box reports what it opens on its health frame, as `browse`:
