@@ -265,7 +265,7 @@ export const EDGE_UPDATES = Object.freeze({ plugin: 'os-xen', hours: '10' });
  * WAN and the LAN, and QEMU's guest agent for the plugin the daily update
  * keeps.
  */
-export const PVE_EDGE = Object.freeze({ wanIf: 'vtnet0', lanIf: 'vtnet1', plugin: 'os-qemu-guest-agent' });
+export const PVE_EDGE = Object.freeze({ wanIf: 'vtnet0', lanIf: 'vtnet1', nics: 'vtnet', plugin: 'os-qemu-guest-agent' });
 
 /**
  * WHERE A PROXMOX VE EDGE'S WATCH GOES, as marks the setup script fills in
@@ -289,7 +289,24 @@ export const PVE_WATCH_MARKS = Object.freeze({
    * (`carp_keep`), so it is the cluster's and never in a published file.
    */
   carp: '<!--fleetwright-carp-->',
+  /**
+   * THE FLEET'S HOSTS, which a closed lab may reach and ask names of
+   * (fleetHosts): the coordinator the setup was given and Claude's, filled in
+   * on the node (`edge_fill`), so one file serves every fleet.
+   */
+  fleetHosts: '<!--fleetwright-fleet-hosts-->',
+  fleetNames: '<!--fleetwright-fleet-names-->',
 });
+
+/**
+ * EVERY LAB LAYOUT A PROXMOX VE EDGE CAN HAVE: open labs first, then closed,
+ * at most LAB.max together (pve-setup.js, labsOpen and labsClosed), each by
+ * the name its file has under install/pve-edge/. None is the six files
+ * beside the script, which stay as they are for the setups apps carry.
+ */
+export const PVE_LAB_LAYOUTS = Object.freeze(
+  [0, 1, 2, 3, 4].flatMap((open) => [0, 1, 2, 3, 4].filter((closed) => open + closed > 0 && open + closed <= 4).map((closed) => ({ open, closed, key: `o${open}c${closed}` }))),
+);
 
 /**
  * The configurations, as the setup script is given them: one router, or
@@ -297,8 +314,18 @@ export const PVE_WATCH_MARKS = Object.freeze({
  *
  * @param {boolean} block @param {0|1|null} [node]
  */
-export const pveEdgeConfig = (block, node = null) =>
-  edgeConfig({ ...PVE_EDGE, block, marks: PVE_WATCH_MARKS, ha: node === null ? null : { node, password: PVE_WATCH_MARKS.carp } });
+export const pveEdgeConfig = (block, node = null, labs = { open: 0, closed: 0 }) =>
+  edgeConfig({
+    ...PVE_EDGE,
+    block,
+    marks: PVE_WATCH_MARKS,
+    ha: node === null ? null : { node, password: PVE_WATCH_MARKS.carp },
+    labs: [...Array(labs.open).fill(true), ...Array(labs.closed).fill(false)],
+    // Labs alone are padded: the node fills the fleet in and pads it to the
+    // image's block (`edge_fill`), so a file under install/pve-edge/ is only
+    // its bytes. The six beside the script keep the padding they were pinned with.
+    ...(labs.open + labs.closed ? { length: 0 } : {}),
+  });
 
 /**
  * TWO EDGES (`ha` in edgeConfig): the CARP group of the uplink, each lab's
@@ -544,10 +571,10 @@ export function fleetHosts(coordinatorUrl) {
  * plugin the daily update keeps (`plugin`), so Proxmox shows its addresses;
  * and the watch's parts as marks the node fills in (`marks`, PVE_WATCH_MARKS).
  *
- * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null, watch?: import('./edge-credentials.js').Watch|null, syslog?: string[], plugin?: string, marks?: { user: string, cert: string, certref: string, syslog: string, carp?: string }|null }} [opts]
+ * @param {{ length?: number, wanIf?: string, lanIf?: string, nics?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null, watch?: import('./edge-credentials.js').Watch|null, syslog?: string[], plugin?: string, marks?: { user: string, cert: string, certref: string, syslog: string, carp?: string, fleetHosts?: string, fleetNames?: string }|null }} [opts]
  * @returns {Buffer}
  */
-export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], ha = null, watch = null, syslog = [], plugin = EDGE_UPDATES.plugin, marks = null, length = EDGE_IMAGE.grow.room } = {}) {
+export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', nics = 'xn', block = false, labs = [], fleet = [], ha = null, watch = null, syslog = [], plugin = EDGE_UPDATES.plugin, marks = null, length = EDGE_IMAGE.grow.room } = {}) {
   const watched = marks ?? (watch ? watchConfig(watch, syslog) : null);
   const { address, prefix } = EDGE.lan;
   // A PASSWORD, or the mark the node fills one in at (PVE_WATCH_MARKS.carp).
@@ -561,7 +588,7 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
   };
   const [from, to] = range(address);
   if (labs.length > LAB.max) throw new Error(`an edge has room for ${LAB.max} labs, not ${labs.length}`);
-  if (labs.includes(false) && !fleet.length) throw new Error('a closed lab needs the fleet’s hosts to let through');
+  if (labs.includes(false) && !fleet.length && !marks?.fleetHosts) throw new Error('a closed lab needs the fleet’s hosts to let through');
   const labIf = labs.map((_, i) => `opt${i + 1}`);
   const openIf = labIf.filter((_, i) => labs[i]);
   const closedIf = labIf.filter((_, i) => !labs[i]);
@@ -591,13 +618,15 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
   // asking Unbound, and refuses the rest.
   // A name under another one on the list is already answered with it.
   const names = fleet.filter((h) => /^[a-z0-9.-]+$/i.test(h) && /[a-z]/i.test(h));
-  const closedNames = closedIf.length
-    ? names
+  const closedNames = !closedIf.length
+    ? ''
+    : marks?.fleetNames
+      ? marks.fleetNames
+      : names
         .filter((h) => !names.some((o) => h.endsWith(`.${o}`)))
         // Each with its place: dnsmasq's template sorts them by it.
         .map((h, i) => `<domainoverrides><sequence>${i + 1}</sequence><domain>${h}</domain><ip>127.0.0.1</ip></domainoverrides>`)
-        .join('')
-    : '';
+        .join('');
   const closedDns = closedIf.length
     ? `<rule><interface>${closed}</interface><ipprotocol>inet</ipprotocol><protocol>TCP/UDP</protocol>` +
       `<destination><network>any</network><port>53</port></destination><target>127.0.0.1</target><local-port>${DNSMASQ_PORT}</local-port><pass>pass</pass></rule>`
@@ -621,7 +650,7 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     '<interfaces>\n' +
     `<wan><enable>1</enable><if>${wanIf}</if><descr>WAN</descr><ipaddr>dhcp</ipaddr><blockpriv>0</blockpriv><blockbogons>0</blockbogons></wan>\n` +
     `<lan><enable>1</enable><if>${lanIf}</if><descr>LAN</descr><ipaddr>${own(address)}</ipaddr><subnet>${prefix}</subnet></lan>\n` +
-    labs.map((_, i) => `<opt${i + 1}><enable>1</enable><if>xn${i + 2}</if><descr>LAB${i + 1}</descr><ipaddr>${own(LAB.address(i + 1))}</ipaddr><subnet>${LAB.cidr}</subnet></opt${i + 1}>\n`).join('') +
+    labs.map((_, i) => `<opt${i + 1}><enable>1</enable><if>${nics}${i + 2}</if><descr>LAB${i + 1}</descr><ipaddr>${own(LAB.address(i + 1))}</ipaddr><subnet>${LAB.cidr}</subnet></opt${i + 1}>\n`).join('') +
     '</interfaces>\n' +
     (ha
       ? '<virtualip>' +
@@ -645,7 +674,7 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     '<Alias><aliases><alias><enabled>1</enabled><name>fleetwright_private</name><type>network</type>' +
     `<content>${NOT_FROM_LABS.join('\n')}</content></alias>` +
     '<alias><enabled>1</enabled><name>fleetwright_dns</name><type>port</type><content>53\n853</content></alias>' +
-    (closedIf.length ? `<alias><enabled>1</enabled><name>fleetwright_fleet</name><type>host</type><content>${fleet.join('\n')}</content></alias>` : '') +
+    (closedIf.length ? `<alias><enabled>1</enabled><name>fleetwright_fleet</name><type>host</type><content>${marks?.fleetHosts ?? fleet.join('\n')}</content></alias>` : '') +
     '</aliases></Alias>\n' +
     '<Filter><rules>\n' +
     rule(1, 'pass', `<protocol>TCP/UDP</protocol><source_net>${src}</source_net><destination_net>${self}</destination_net><destination_port>53</destination_port>`, 'Labs ask the edge for names', inside) +
@@ -708,6 +737,7 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     (watched ? watched.syslog : '') +
     '</OPNsense>\n</opnsense>\n';
   const body = Buffer.from(xml, 'utf8');
+  if (length === 0) return body;
   if (body.length > length) {
     throw new Error(`the edge configuration is ${body.length} bytes and the file it replaces is ${length}`);
   }

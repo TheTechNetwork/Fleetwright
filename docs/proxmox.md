@@ -518,7 +518,33 @@ options. The cluster's page says "Two running" and lists each by name with
 its own word (Primary, Standby, or what is wrong), opening the routers' page;
 **Make it again** makes two again.
 
-**Not built yet**: labs behind it. **Not yet run** on a
+#### Labs behind it
+
+With the edge router on, **the cluster's labs are behind it**, as a Xen
+Orchestra pool's are (`edge-router.js`, `labs`). Each lab network is one more
+interface on the router (`vtnet2` up, and on both of a pair), which is the
+lab's gateway at 10.250.<n>.1, hands out its addresses, and filters it the
+way it filters the uplink: Unbound refusing names on the threat lists, and
+Suricata watching (or dropping) what its machines do. A closed lab reaches
+the fleet and Claude over HTTPS and nothing else, and asks names only of
+them.
+
+- **The node steps back.** Its subnet on each lab (the gateway and NAT it
+  had there) is removed, its own lab dnsmasq turned off, and its firewall
+  rules for labs taken away. Without the router they are as before.
+- **Every layout, pinned through one list.** Open and closed labs, four at
+  most together, alone or as either of a pair, filtering or dropping: 84
+  configurations under `install/pve-edge/`, each listed by SHA-256 in
+  `SHA256SUMS`, which the script pins (`EDGE_LABS_SUMS_SHA`). The six beside
+  the script are unchanged, for the setups the apps carry.
+- **The fleet's hosts are filled in on the node** (`edge_fill`), from the
+  coordinator the setup was given and Claude's hosts, the same list the
+  boxes make (`fleetHosts`); a closed lab with no fleet known is refused.
+- **Tagged** `fleetwright-edge-labs-o<open>c<closed>`, so a run asking for
+  other labs makes the router again with them, and a box sees that the labs'
+  gateway is the router's.
+
+**Not yet run** on a real node: labs behind the router, as above. **Not yet run** on a
 real node: the image under KVM's virtio, which it was checked under QEMU
 with, `import-from` with the storage the setup chose, and the router's
 guest agent reporting its WAN address to the token.

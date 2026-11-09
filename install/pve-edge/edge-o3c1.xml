@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<opnsense>
+<system>
+<use_mfs_tmp/><use_mfs_var/><serialspeed>115200</serialspeed><primaryconsole>serial</primaryconsole><secondaryconsole>video</secondaryconsole>
+<hostname>fleetwright-edge</hostname><domain>internal</domain>
+<group><name>admins</name><description>System Administrators</description><scope>system</scope><gid>1999</gid><member>0</member><priv>page-all</priv></group>
+<user><name>root</name><descr>System Administrator</descr><scope>system</scope><groupname>admins</groupname><password>*</password><uid>0</uid></user>
+<!--fleetwright-watch-user-->
+<timezone>Etc/UTC</timezone><timeservers>0.opnsense.pool.ntp.org 1.opnsense.pool.ntp.org</timeservers>
+<webgui><protocol>https</protocol><!--fleetwright-watch-certref--><noantilockout>1</noantilockout></webgui>
+<disablenatreflection>yes</disablenatreflection><usevirtualterminal>1</usevirtualterminal><disableconsolemenu/>
+<disablechecksumoffloading>1</disablechecksumoffloading><disablesegmentationoffloading>1</disablesegmentationoffloading><disablelargereceiveoffloading>1</disablelargereceiveoffloading>
+<pf_share_forward>1</pf_share_forward><firmware><plugins>os-qemu-guest-agent</plugins></firmware>
+</system>
+<!--fleetwright-watch-cert-->
+<interfaces>
+<wan><enable>1</enable><if>vtnet0</if><descr>WAN</descr><ipaddr>dhcp</ipaddr><blockpriv>0</blockpriv><blockbogons>0</blockbogons></wan>
+<lan><enable>1</enable><if>vtnet1</if><descr>LAN</descr><ipaddr>10.254.0.1</ipaddr><subnet>24</subnet></lan>
+<opt1><enable>1</enable><if>vtnet2</if><descr>LAB1</descr><ipaddr>10.250.1.1</ipaddr><subnet>24</subnet></opt1>
+<opt2><enable>1</enable><if>vtnet3</if><descr>LAB2</descr><ipaddr>10.250.2.1</ipaddr><subnet>24</subnet></opt2>
+<opt3><enable>1</enable><if>vtnet4</if><descr>LAB3</descr><ipaddr>10.250.3.1</ipaddr><subnet>24</subnet></opt3>
+<opt4><enable>1</enable><if>vtnet5</if><descr>LAB4</descr><ipaddr>10.250.4.1</ipaddr><subnet>24</subnet></opt4>
+</interfaces>
+<dnsmasq><enable>1</enable><port>53053</port><interface>lan,opt1,opt2,opt3,opt4</interface><no_resolv>1</no_resolv><dhcp_ranges><interface>lan</interface><start_addr>10.254.0.100</start_addr><end_addr>10.254.0.250</end_addr></dhcp_ranges><dhcp_ranges><interface>opt1</interface><start_addr>10.250.1.100</start_addr><end_addr>10.250.1.250</end_addr></dhcp_ranges><dhcp_ranges><interface>opt2</interface><start_addr>10.250.2.100</start_addr><end_addr>10.250.2.250</end_addr></dhcp_ranges><dhcp_ranges><interface>opt3</interface><start_addr>10.250.3.100</start_addr><end_addr>10.250.3.250</end_addr></dhcp_ranges><dhcp_ranges><interface>opt4</interface><start_addr>10.250.4.100</start_addr><end_addr>10.250.4.250</end_addr></dhcp_ranges><!--fleetwright-fleet-names--></dnsmasq>
+<nat><outbound><mode>automatic</mode></outbound><rule><interface>opt4</interface><ipprotocol>inet</ipprotocol><protocol>TCP/UDP</protocol><destination><network>any</network><port>53</port></destination><target>127.0.0.1</target><local-port>53053</local-port><pass>pass</pass></rule></nat>
+<filter/>
+<OPNsense><Firewall>
+<Alias><aliases><alias><enabled>1</enabled><name>fleetwright_private</name><type>network</type><content>10.0.0.0/8
+172.16.0.0/12
+192.168.0.0/16
+100.64.0.0/10
+169.254.0.0/16
+224.0.0.0/4</content></alias><alias><enabled>1</enabled><name>fleetwright_dns</name><type>port</type><content>53
+853</content></alias><alias><enabled>1</enabled><name>fleetwright_fleet</name><type>host</type><content><!--fleetwright-fleet-hosts--></content></alias></aliases></Alias>
+<Filter><rules>
+<rule><enabled>1</enabled><sequence>1</sequence><action>pass</action><quick>1</quick><interface>lan,opt1,opt2,opt3,opt4</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>TCP/UDP</protocol><source_net>any</source_net><destination_net>(self)</destination_net><destination_port>53</destination_port><description>Labs ask the edge for names</description></rule>
+<rule><enabled>1</enabled><sequence>2</sequence><action>block</action><quick>1</quick><interface>lan,opt1,opt2,opt3,opt4</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>TCP/UDP</protocol><source_net>any</source_net><destination_net>any</destination_net><destination_port>fleetwright_dns</destination_port><description>No other resolver</description></rule>
+<rule><enabled>1</enabled><sequence>3</sequence><action>block</action><quick>1</quick><interface>lan,opt1,opt2,opt3,opt4</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>any</protocol><source_net>any</source_net><destination_net>fleetwright_private</destination_net><description>Nothing private</description></rule>
+<rule><enabled>1</enabled><sequence>4</sequence><action>pass</action><quick>1</quick><interface>lan,opt1,opt2,opt3</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>any</protocol><source_net>any</source_net><destination_net>any</destination_net><description>Labs reach the internet</description></rule>
+<rule><enabled>1</enabled><sequence>9</sequence><action>pass</action><quick>1</quick><interface>opt4</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>TCP</protocol><source_net>any</source_net><destination_net>fleetwright_fleet</destination_net><destination_port>443</destination_port><description>Closed labs reach the fleet and Claude</description></rule>
+<rule><enabled>1</enabled><sequence>10</sequence><action>block</action><quick>1</quick><interface>opt4</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>any</protocol><source_net>any</source_net><destination_net>any</destination_net><log>1</log><description>Nothing else leaves a closed lab</description></rule>
+<rule><enabled>1</enabled><sequence>20</sequence><action>pass</action><quick>1</quick><interface>wan</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>TCP</protocol><source_net>fleetwright_private</source_net><destination_net>wanip</destination_net><destination_port>443</destination_port><description>Fleetwright reads how it is</description></rule>
+</rules><snatrules/><npt/><onetoone/></Filter>
+</Firewall>
+<unboundplus version="1.0.14"><general><enabled>1</enabled><stats>1</stats></general><dnsbl><blocklist uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e01"><enabled>1</enabled><type>atf,hgz011</type><description>Threats</description></blocklist></dnsbl></unboundplus>
+<IDS version="1.1.1"><general><enabled>1</enabled><syslog>1</syslog><interfaces>lan,opt1,opt2,opt3,opt4</interfaces><homenet>10.254.0.0/24,10.250.1.0/24,10.250.2.0/24,10.250.3.0/24,10.250.4.0/24</homenet><UpdateCron>5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e03</UpdateCron></general><files><file uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e10"><filename>emerging-malware.rules</filename><enabled>1</enabled></file><file uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e11"><filename>botcc.rules</filename><enabled>1</enabled></file><file uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e12"><filename>compromised.rules</filename><enabled>1</enabled></file><file uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e13"><filename>threatview_CS_c2.rules</filename><enabled>1</enabled></file></files></IDS>
+<cron version="1.0.3"><jobs><job uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e02"><enabled>1</enabled><command>unbound dnsbl</command><minutes>*/30</minutes><hours>*</hours><description>Blocklists</description></job><job uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e03"><origin>IDS</origin><enabled>1</enabled><command>ids update</command><minutes>*/30</minutes><hours>*</hours><description>Rules</description></job><job><enabled>1</enabled><command>firmware auto-update</command><hours>10</hours><description>Updates</description></job></jobs></cron>
+<Gateways version="1.0.0"><gateway_item uuid="5c0e8a3e-6f1d-4b8a-9d2e-1a7b3c4d5e30"><disabled>0</disabled><name>WAN_DHCP</name><descr>The way out</descr><interface>wan</interface><ipprotocol>inet</ipprotocol><gateway></gateway><defaultgw>1</defaultgw><fargw>0</fargw><monitor_disable>0</monitor_disable><monitor_noroute>0</monitor_noroute><monitor_killstates>0</monitor_killstates><monitor_killstates_priority>0</monitor_killstates_priority><monitor></monitor><force_down>0</force_down><nosync>0</nosync><priority>254</priority><weight>1</weight><latencylow></latencylow><latencyhigh></latencyhigh><losslow></losslow><losshigh></losshigh><interval></interval><time_period></time_period><loss_interval></loss_interval><data_length></data_length></gateway_item></Gateways>
+<!--fleetwright-watch-syslog-->
+</OPNsense>
+</opnsense>

@@ -105,6 +105,8 @@ export const PVE_LAB_ZONE = 'fwlab';
 export const PVE_EDGE_ZONE = 'fwedge';
 /** The tag the setup gives the edge router, outside the pool, and the one beside it on a router that drops what the threat rules match. */
 export const PVE_EDGE_TAG = 'fleetwright-edge';
+/** The tag on an edge router that is its labs' gateway: `fleetwright-edge-labs-o<open>c<closed>`. */
+export const PVE_EDGE_LABS_TAG = 'fleetwright-edge-labs-';
 /** The names the setup gives one router and the second of a pair, which are the names their syslog says. */
 export const PVE_EDGE_NAMES = Object.freeze(['fleetwright-edge', 'fleetwright-edge-b']);
 export const PVE_EDGE_BLOCKS_TAG = 'fleetwright-edge-blocks';
@@ -781,6 +783,19 @@ export class PvePools {
       const subs = await api.get(`/cluster/sdn/vnets/${encodeURIComponent(v.vnet)}/subnets`).catch(() => []);
       const gw = (Array.isArray(subs) ? subs : []).map((x) => String(x?.gateway || '')).find((g) => /^\d{1,3}(\.\d{1,3}){3}$/.test(g));
       if (gw) gateways.set(v.vnet, gw);
+    }
+    // BEHIND THE EDGE ROUTER (docs/proxmox.md, "Labs behind it"): a lab has no
+    // subnet on the node, and its gateway is the router's 10.250.<n>.1, when
+    // a router the setup made says it serves labs.
+    const vms = await api.get('/cluster/resources', { type: 'vm' }).catch(() => []);
+    const labsEdge = (Array.isArray(vms) ? vms : []).some(
+      (m) => m?.type === 'qemu' && (m.pool ?? '') !== record.pool && tagsOf(m).includes(PVE_EDGE_TAG) && tagsOf(m).some((t) => t.startsWith(PVE_EDGE_LABS_TAG)),
+    );
+    if (labsEdge) {
+      for (const v of Array.isArray(vnets) ? vnets : []) {
+        const n = v?.zone === PVE_LAB_ZONE ? /^fwlab([1-4])$/.exec(String(v.vnet))?.[1] : null;
+        if (n && !gateways.has(v.vnet)) gateways.set(v.vnet, `10.250.${n}.1`);
+      }
     }
     const nets = networksOf(perms, record.address, vnets, gateways);
     // THE MACHINES: in the pool, tagged, named as the fleet names them, and

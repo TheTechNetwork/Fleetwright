@@ -97,6 +97,7 @@ EDGE_CONFIG_A_SHA=00b66290c6c1475b1908d2c75f80d27533f7c28f2ff0dfc0ad3715fca2fdb8
 EDGE_CONFIG_B_SHA=51353c0995c9314ca9c130addb08cf3ffc171356a78f9350328c1a0e4db940d1
 EDGE_CONFIG_BLOCK_A_SHA=4d1a3c80fd1fc3588e48b076df3bb2a2f1d431f99e5152776560877799a1f3d1
 EDGE_CONFIG_BLOCK_B_SHA=c742aba5d67264cf9de9a245de9003df4f171ac5e3cbb21317ba88bae9673ea8
+EDGE_LABS_SUMS_SHA=961397b7b33df483fe5e86a8b084e608fd36e5cfb1a128cfdd7e0b63805d0e0b
 pinned() {
   case "$1" in
     debian-13) OS="Debian 13" URL=https://cloud.debian.org/images/cloud/trixie/20261103-2651/debian-13-genericcloud-amd64-20261103-2651.qcow2 SUM=sha512:d25999de0770d4cde1be72c299ba3ad94eac7ea8fd4d18f8cc86c69df69337e2e8a91d64465a9bfd8f2a78c566fcbcb0842eacc91c09efdef72d719d9f13b535 ;;
@@ -393,14 +394,35 @@ if [ $((LABS_OPEN + LABS_CLOSED)) -gt 0 ]; then
   for i in $(seq 1 $((LABS_OPEN + LABS_CLOSED))); do
     if [ "$i" -le "$LABS_OPEN" ]; then kind=open; OPEN_IF="$OPEN_IF fwlab$i"; else kind=closed; CLOSED_IF="$CLOSED_IF fwlab$i"; fi
     vnet fwlab "fwlab$i" "fleetwright-lab:$kind"
-    if ! pvesh get "/cluster/sdn/vnets/fwlab$i/subnets" --output-format json | json 'scalar @$d' | grep -qv '^0$'; then
+    has_subnet=0
+    pvesh get "/cluster/sdn/vnets/fwlab$i/subnets" --output-format json | json 'scalar @$d' | grep -qv '^0$' && has_subnet=1
+    if [ "$EDGE" = 1 ]; then
+      # BEHIND THE EDGE ROUTER (docs/proxmox.md, "Labs behind it"): the router
+      # is each lab's gateway at 10.250.<n>.1, so the node holds no address
+      # there, and its names, addresses and threat filtering are the router's.
+      if [ "$has_subnet" = 1 ]; then
+        pvesh get "/cluster/sdn/vnets/fwlab$i/subnets" --output-format json | json 'join "\n", map { $_->{subnet} } @$d' |
+          while read -r sn; do [ -n "$sn" ] && pvesh delete "/cluster/sdn/vnets/fwlab$i/subnets/$sn" >/dev/null; done
+      fi
+    elif [ "$has_subnet" = 0 ]; then
       pvesh create "/cluster/sdn/vnets/fwlab$i/subnets" --type subnet --subnet "10.250.$i.0/24" --gateway "10.250.$i.1" --snat 1 >/dev/null
     fi
   done
   NETS_MADE=1
 fi
 [ "$NETS_MADE" = 0 ] || { pvesh set /cluster/sdn >/dev/null; sleep 5; }
-if [ -n "$OPEN_IF$CLOSED_IF" ]; then
+# THE NODE'S OWN LAB SERVICE goes when the edge router serves them: its names
+# and addresses (dnsmasq here) and the rules that let labs ask the node.
+lab_rules_off() {
+  while pvesh get /cluster/firewall/rules --output-format json | json 'join "\n", map { $_->{pos} } grep { ($_->{comment} // "") eq "fleetwright-labs" } @$d' | head -1 | grep -q .; do
+    pvesh delete "/cluster/firewall/rules/$(pvesh get /cluster/firewall/rules --output-format json | json 'join "\n", map { $_->{pos} } grep { ($_->{comment} // "") eq "fleetwright-labs" } @$d' | head -1)"
+  done
+}
+if [ "$EDGE" = 1 ] && [ -n "$OPEN_IF$CLOSED_IF" ]; then
+  for kind in open closed; do systemctl disable --now "fleetwright-lab-dns@$kind" >/dev/null 2>&1 || true; done
+  lab_rules_off
+  say "the labs are behind the edge router: it is their gateway, and filters their names and traffic as the uplink's"
+elif [ -n "$OPEN_IF$CLOSED_IF" ]; then
   # NAMES AND ADDRESSES FOR THE LABS, from dnsmasq here: one for the open labs,
   # which asks the node's own resolver, and one for the closed, which has none
   # (no-resolv) and asks it only for the fleet's names and the names under them.
@@ -447,9 +469,7 @@ UNIT
   done
   # AND LET THEM ASK: with the datacenter's firewall on, the node drops what a
   # lab's machine sends to it unless a rule says otherwise.
-  while pvesh get /cluster/firewall/rules --output-format json | json 'join "\n", map { $_->{pos} } grep { ($_->{comment} // "") eq "fleetwright-labs" } @$d' | head -1 | grep -q .; do
-    pvesh delete "/cluster/firewall/rules/$(pvesh get /cluster/firewall/rules --output-format json | json 'join "\n", map { $_->{pos} } grep { ($_->{comment} // "") eq "fleetwright-labs" } @$d' | head -1)"
-  done
+  lab_rules_off
   for r in "udp 53" "tcp 53" "udp 67"; do
     set -- $r
     pvesh create /cluster/firewall/rules --type in --action ACCEPT --proto "$1" --dport "$2" --source 10.250.0.0/16 --enable 1 --comment fleetwright-labs >/dev/null
@@ -905,16 +925,21 @@ EDGE_BLOCKS_TAG=fleetwright-edge-blocks
 EDGE_WATCH_TAG=fleetwright-edge-watch
 EDGE_WATCH_FILE=/etc/pve/priv/fleetwright-edge-watch.json
 EDGE_NODE_TAG=fleetwright-edge-node-
+EDGE_LABS_TAG=fleetwright-edge-labs-
+# The labs it is the gateway of: `o<open>c<closed>`, the setup's own counts,
+# or - for none.
+LAB_KEY="o${LABS_OPEN}c${LABS_CLOSED}"; [ $((LABS_OPEN + LABS_CLOSED)) -gt 0 ] || LAB_KEY=-
 # The cluster's edge routers: outside the pool, not templates, tagged. One to
-# a line, `vmid node status blocks watched which`, lowest number first, where
-# `which` is 0 or 1 for either of a pair and - for one alone.
+# a line, `vmid node status blocks watched which labs`, lowest number first,
+# where `which` is 0 or 1 for either of a pair and - for one alone.
 edges() {
   pvesh get /cluster/resources --type vm --output-format json |
-    TAG="$EDGE_TAG" BTAG="$EDGE_BLOCKS_TAG" WTAG="$EDGE_WATCH_TAG" NTAG="$EDGE_NODE_TAG" IN_POOL="$POOL" perl -MJSON::PP -e '
+    TAG="$EDGE_TAG" BTAG="$EDGE_BLOCKS_TAG" WTAG="$EDGE_WATCH_TAG" NTAG="$EDGE_NODE_TAG" LTAG="$EDGE_LABS_TAG" IN_POOL="$POOL" perl -MJSON::PP -e '
       my $d = decode_json(join("", <STDIN>));
       my $has = sub { my ($t, $w) = @_; $t =~ /(^|[;, ])\Q$w\E($|[;, ])/ ? 1 : 0 };
       my $which = sub { my ($t) = @_; $has->($t, "$ENV{NTAG}0") ? 0 : $has->($t, "$ENV{NTAG}1") ? 1 : "-" };
-      print map { my $t = $_->{tags} // ""; "$_->{vmid} $_->{node} " . ($_->{status} // "unknown") . " " . $has->($t, $ENV{BTAG}) . " " . $has->($t, $ENV{WTAG}) . " " . $which->($t) . "\n" }
+      my $labs = sub { my ($t) = @_; $t =~ /(?:^|[;, ])\Q$ENV{LTAG}\E(o\dc\d)(?:$|[;, ])/ ? $1 : "-" };
+      print map { my $t = $_->{tags} // ""; "$_->{vmid} $_->{node} " . ($_->{status} // "unknown") . " " . $has->($t, $ENV{BTAG}) . " " . $has->($t, $ENV{WTAG}) . " " . $which->($t) . " " . $labs->($t) . "\n" }
         sort { $a->{vmid} <=> $b->{vmid} } grep {
         ($_->{type} // "") eq "qemu" && ($_->{pool} // "") ne $ENV{IN_POOL} && ($_->{template} // 0) != 1
           && ($_->{tags} // "") =~ /(^|[;, ])\Q$ENV{TAG}\E($|[;, ])/
@@ -980,7 +1005,7 @@ holder_address() {
 edge_fill() { # config watch-file syslog-ip
   HASH="$(perl -MJSON::PP -e 'local $/; open my $f, "<", $ARGV[0] or die; my $w = decode_json(<$f>); print $w->{secret}' "$2" |
     openssl passwd -6 -salt "$(perl -MJSON::PP -e 'local $/; open my $f, "<", $ARGV[0] or die; print decode_json(<$f>)->{salt}' "$2")" -stdin)" || return 1
-  HASH="$HASH" SYSLOG="$3" ROOM="$EDGE_ROOM" perl -MJSON::PP -MMIME::Base64 -e '
+  HASH="$HASH" SYSLOG="$3" ROOM="$EDGE_ROOM" FLEET="$(printf '%s' "${COORD_HOST:-}" | tr 'A-Z' 'a-z') ${REQUIRED:-}" perl -MJSON::PP -MMIME::Base64 -e '
       local $/; open my $c, "<", $ARGV[0] or die "no configuration\n"; my $x = <$c>; close $c;
       open my $f, "<", $ARGV[1] or die "no watch\n"; my $w = decode_json(<$f>); close $f;
       $x =~ s/ +\z//;
@@ -995,12 +1020,28 @@ edge_fill() { # config watch-file syslog-ip
       my %m = ("<!--fleetwright-watch-user-->\n" => $user, "<!--fleetwright-watch-cert-->\n" => $cert,
         "<!--fleetwright-watch-certref-->" => "<ssl-certref>$w->{refid}</ssl-certref>", "<!--fleetwright-watch-syslog-->\n" => $syslog);
       for my $k (keys %m) { my $n = () = $x =~ /\Q$k\E/g; die "the configuration does not have its mark once\n" unless $n == 1; $x =~ s/\Q$k\E/$m{$k}/; }
+      # A CLOSED LAB’S HOSTS, the fleet’s and Claude’s (edge-router.js,
+      # fleetHosts): the coordinator first, each once; and the names dnsmasq
+      # answers, a name under another on the list left to it.
+      my @hosts; my %seen;
+      for my $h (split " ", $ENV{FLEET} // "") { next if $seen{$h}++; push @hosts, $h }
+      my @names = grep { /\A[a-z0-9.-]+\z/i && /[a-z]/i } @hosts;
+      my $i = 0;
+      my $overrides = join "", map { $i++; "<domainoverrides><sequence>$i</sequence><domain>$_</domain><ip>127.0.0.1</ip></domainoverrides>" }
+        grep { my $h = $_; !grep { $h =~ /\.\Q$_\E\z/ } @names } @names;
+      for my $k (["<!--fleetwright-fleet-hosts-->", join("\n", @hosts)], ["<!--fleetwright-fleet-names-->", $overrides]) {
+        my $n = () = $x =~ /\Q$k->[0]\E/g;
+        die "the configuration has a closed lab’s mark more than once\n" if $n > 1;
+        next unless $n;
+        die "no fleet is known for the closed labs to reach\n" unless @hosts;
+        $x =~ s/\Q$k->[0]\E/$k->[1]/;
+      }
       # EITHER OF A PAIR carries the mark of the password the two share.
       my $carp = "<!--fleetwright-carp-->"; my $c = () = $x =~ /\Q$carp\E/g;
+      # One for the uplink’s shared gateway, and one for each lab’s.
       if ($c) {
-        die "the configuration has the pair’s password mark more than once\n" unless $c == 1;
         die "no password is kept for the pair\n" unless ($w->{carp} // "") =~ /\A[0-9a-f]{64}\z/;
-        $x =~ s/\Q$carp\E/$w->{carp}/;
+        $x =~ s/\Q$carp\E/$w->{carp}/g;
       }
       die "the configuration is too long with its watch\n" if length($x) > $ENV{ROOM};
       open my $o, ">", $ARGV[0] or die; print $o $x . (" " x ($ENV{ROOM} - length $x)); close $o or die;' "$1" "$2"
@@ -1047,13 +1088,25 @@ build_edge() {
     if [ "$EDGE_PAIR" = 1 ]; then carp_keep || { edge_no "could not make the password the pair shares"; return 1; }; fi
     part - "finding where the machine of its own is, for the router's logs"
     logs_to="$(holder_address)"
+    # WITH LABS, one of every layout under pve-edge/, each listed by its
+    # SHA-256 in SHA256SUMS there, which is what is pinned here.
+    if [ "$LAB_KEY" != - ]; then
+      curl -fsSL --retry 3 -o "$work/SHA256SUMS" "$EDGE_CONFIG_URL/pve-edge/SHA256SUMS" || { edge_no "could not download the list of the edge router's configurations"; return 1; }
+      [ "$(sha256sum "$work/SHA256SUMS" | awk '{print $1}')" = "$EDGE_LABS_SUMS_SHA" ] || { edge_no "the list of the edge router's configurations did not match its pinned SHA-256, so it was not used"; return 1; }
+    fi
     for n in $nodes; do
-      cfg=fleetwright-pve-edge; pin=EDGE_CONFIG
-      [ "$EDGE_BLOCK" = 0 ] || { cfg="$cfg-block"; pin="${pin}_BLOCK"; }
-      case "$n" in 0) cfg="$cfg-a"; pin="${pin}_A" ;; 1) cfg="$cfg-b"; pin="${pin}_B" ;; esac
-      pin="${pin}_SHA"
+      if [ "$LAB_KEY" != - ]; then
+        cfg="pve-edge/edge-$LAB_KEY"; [ "$EDGE_BLOCK" = 0 ] || cfg="$cfg-block"
+        case "$n" in 0) cfg="$cfg-a" ;; 1) cfg="$cfg-b" ;; esac
+        sum="$(awk -v f="${cfg#pve-edge/}.xml" '$2 == f {print $1}' "$work/SHA256SUMS")"
+      else
+        cfg=fleetwright-pve-edge; pin=EDGE_CONFIG
+        [ "$EDGE_BLOCK" = 0 ] || { cfg="$cfg-block"; pin="${pin}_BLOCK"; }
+        case "$n" in 0) cfg="$cfg-a"; pin="${pin}_A" ;; 1) cfg="$cfg-b"; pin="${pin}_B" ;; esac
+        pin="${pin}_SHA"; sum="${!pin}"
+      fi
       curl -fsSL --retry 3 -o "$work/config-$n.xml" "$EDGE_CONFIG_URL/$cfg.xml" || { edge_no "could not download the edge router's configuration"; return 1; }
-      [ "$(sha256sum "$work/config-$n.xml" | awk '{print $1}')" = "${!pin}" ] || { edge_no "the edge router's configuration did not match its pinned SHA-256, so it was not used"; return 1; }
+      [ -n "$sum" ] && [ "$(sha256sum "$work/config-$n.xml" | awk '{print $1}')" = "$sum" ] || { edge_no "the edge router's configuration did not match its pinned SHA-256, so it was not used"; return 1; }
       edge_fill "$work/config-$n.xml" "$EDGE_WATCH_FILE" "$logs_to" || { edge_no "could not give the edge router's configuration its key"; return 1; }
     done
     part - "unpacking the edge router's image"
@@ -1080,9 +1133,13 @@ build_edge() {
       ename=fleetwright-edge; [ "$n" = 1 ] && ename=fleetwright-edge-b
       etags="$EDGE_TAG;$EDGE_WATCH_TAG"; [ "$EDGE_BLOCK" = 0 ] || etags="$etags;$EDGE_BLOCKS_TAG"
       [ "$n" = - ] || etags="$etags;$EDGE_NODE_TAG$n"
+      [ "$LAB_KEY" = - ] || etags="$etags;$EDGE_LABS_TAG$LAB_KEY"
+      # EACH LAB ON ITS OWN INTERFACE, after the WAN and the uplink: vtnet2 up.
+      labnics=""
+      for l in $(seq 1 $((LABS_OPEN + LABS_CLOSED))); do labnics="$labnics --net$((l + 1)) virtio,bridge=fwlab$l"; done
       part - "making $ename, VM $eid"
       qm create "$eid" --name "$ename" --ostype other --cores 2 --memory 2048 --agent 1 --onboot 1 \
-        --scsihw virtio-scsi-pci --net0 "virtio,bridge=$BRIDGE" --net1 "virtio,bridge=fwedge" --serial0 socket --tags "$etags" \
+        --scsihw virtio-scsi-pci --net0 "virtio,bridge=$BRIDGE" --net1 "virtio,bridge=fwedge" $labnics --serial0 socket --tags "$etags" \
         --description "The fleet's edge router: the way out of every Fleetwright machine on this cluster, filtering what they do for threats. Made by fleetwright-pve-setup; it has no login." >/dev/null
       qm set "$eid" --scsi0 "$STORAGE:0,import-from=$work/edge.raw" --boot order=scsi0 >/dev/null ||
         { qm destroy "$eid" --purge 1 >/dev/null 2>&1 || true; { edge_no "could not import $ename's disk onto $STORAGE"; return 1; }; }
@@ -1114,8 +1171,8 @@ if [ "$EDGE" = 1 ]; then
   # key is made again once to get it, as a Xen Orchestra pool's is: without
   # it nothing can say how it is. One alone asked to be a pair, or a pair
   # asked to be one, is made again as asked.
-  shape="$(awk '{print $4 $5 $6}' <<<"$there" | sort | tr '\n' ' ')"
-  if [ "$EDGE_PAIR" = 1 ]; then want="${EDGE_BLOCK}10 ${EDGE_BLOCK}11 "; else want="${EDGE_BLOCK}1- "; fi
+  shape="$(awk '{print $4 $5 $6 $7}' <<<"$there" | sort | tr '\n' ' ')"
+  if [ "$EDGE_PAIR" = 1 ]; then want="${EDGE_BLOCK}10${LAB_KEY} ${EDGE_BLOCK}11${LAB_KEY} "; else want="${EDGE_BLOCK}1-${LAB_KEY} "; fi
   if [ -n "$there" ] && [ "$EDGE_AGAIN" = 0 ] && [ "$shape" = "$want" ]; then
     while read -r eid enode estatus _ _ _; do
       if [ "$estatus" = stopped ]; then
