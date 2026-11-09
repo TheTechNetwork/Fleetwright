@@ -986,7 +986,8 @@ test('an MCP sign-in begun before a person was removed buys no credential after'
   const sam = await f.core.clients.issue('sam phone', { email: 'sam@example.test' });
   const [first, second] = [signIn('sam@example.test'), signIn('sam@example.test')];
 
-  assert.equal((await call(f, '/api/invites/sam%40example.test', 'DELETE', null, as)).status, 200);
+  // The address in the body (what the phones send), not in the URL.
+  assert.equal((await call(f, '/api/invites', 'DELETE', { email: 'sam@example.test' }, as)).status, 200);
   const refused = await exchange(first);
   assert.equal(refused.status, 400);
   assert.equal((await refused.json()).error, 'invalid_grant');
@@ -1002,6 +1003,12 @@ test('an MCP sign-in begun before a person was removed buys no credential after'
   // Somebody still in the fleet signs in as before.
   assert.equal((await exchange(signIn('carol@example.test'))).status, 200);
   assert.equal(held('carol@example.test'), 1);
+
+  // A phone from before the body form still withdraws by the address in the
+  // path, and an empty body withdraws nobody.
+  assert.equal((await call(f, '/api/invites', 'DELETE', {}, as)).status, 404);
+  assert.equal((await call(f, '/api/invites/carol%40example.test', 'DELETE', null, as)).status, 200);
+  assert.ok(!f.core.invites.list().some((i) => i.email === 'carol@example.test'));
 });
 
 test('the MCP sign-in page cannot be framed, and a box’s session text is kept to one line', async () => {

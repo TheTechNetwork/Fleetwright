@@ -2981,7 +2981,9 @@ class Fleet(
 
     suspend fun uninvite(email: String): Reply = withContext(Dispatchers.IO) {
         runCatching {
-            val json = send("DELETE", "/api/invites/" + java.net.URLEncoder.encode(email, "UTF-8"), null)
+            // The address in the body, as invite sends it, never in the URL:
+            // a path is what proxies, servers and crash reports log.
+            val json = send("DELETE", "/api/invites", JSONObject().put("email", email))
             Reply(json.optBoolean("ok", false), json.optString("text"), emptyList())
         }.getOrElse { Reply(false, it.message ?: "could not reach your fleet", emptyList()) }
     }

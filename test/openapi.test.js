@@ -47,6 +47,9 @@ function declared() {
  */
 function bodyFor(path) {
   if (path === '/api/devices') return JSON.stringify({ platform: 'ios', token: 'a'.repeat(64) });
+  // An address `seed` invited, so a DELETE of it is routed and answers 200
+  // whichever of POST and DELETE the walk reaches first.
+  if (path === '/api/invites') return JSON.stringify({ email: 'withdrawn@example.com' });
   return '{}';
 }
 
@@ -73,6 +76,7 @@ async function seed(core) {
   const { client } = await core.clients.issue('a phone (someone@example.com)');
   await core.registerDevice({ platform: 'ios', token: 'a'.repeat(64) });
   core.invites.add('invited@example.com', { invitedBy: 'admin', note: null });
+  core.invites.add('withdrawn@example.com', { invitedBy: 'admin', note: null });
   const { client: runner } = await core.runnerTokens.issue('a repository', {});
   core.enrollment.mint({ purpose: 'host' });
   const [pin] = core.enrollment.outstanding();

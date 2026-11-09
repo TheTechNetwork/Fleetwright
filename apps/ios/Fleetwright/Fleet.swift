@@ -1764,8 +1764,9 @@ struct Fleet {
     }
 
     func uninvite(_ email: String) async throws -> Reply {
-        let path = "/api/invites/\(email.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? email)"
-        return try JSONDecoder().decode(Reply.self, from: try await send("DELETE", path, body: nil))
+        // THE ADDRESS IN THE BODY, as `invite` sends it, never in the URL:
+        // a path is what proxies, servers and crash reports log.
+        return try JSONDecoder().decode(Reply.self, from: try await send("DELETE", "/api/invites", body: ["email": email]))
     }
 
     func revokeHost(_ hostId: String) async throws -> Reply {
