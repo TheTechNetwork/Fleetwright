@@ -160,6 +160,11 @@ enum HolderJoin {
         !accounts(for: address, in: service).isEmpty || !accounts(for: address, in: faceService).isEmpty
     }
 
+    /// Where a secret for a Proxmox VE cluster's own machine is kept: under
+    /// no address, because the setup has not said yet which address the
+    /// cluster's line carries. No address has a space in it.
+    static let proxmoxSetup = "proxmox setup"
+
     /// A new secret for a machine about to be made for `address`, kept here
     /// before it is sent, or nil when the Keychain would not keep it, in
     /// which case nothing is sent and the machine joins with its pin.
@@ -291,14 +296,19 @@ enum HolderJoin {
     /// itself are looked at, so nothing puts a face up from a background.
     static func admit(_ w: Waiting, fleet: Fleet, settings: Settings, quietly: Bool) async -> Outcome {
         guard !w.requests.isEmpty else { return .nothing }
+        // A PROXMOX VE CLUSTER'S OWN MACHINE is made before this phone knows
+        // the address its line will carry (docs/proxmox.md), so its secret is
+        // kept under `proxmoxSetup` and tried for any request: the proof says
+        // which, if any, it made.
+        let pending = await secrets(for: proxmoxSetup)
         let found: [Secret]?
         if quietly {
             let quiet = await secrets(for: w.address)
             // Only secrets from before: a tap reads them, this does not.
             if quiet.isEmpty && made(w.address) { return .nothing }
-            found = quiet
+            found = quiet + pending
         } else {
-            found = await unlock(w.address, reason: reason(w.hostId, w.address))
+            found = await unlock(w.address, reason: reason(w.hostId, w.address)).map { $0 + pending }
         }
         guard let secrets = found else { return .nothing }
         if secrets.isEmpty { return .refused(notThisPhone(w.hostId)) }

@@ -2235,9 +2235,14 @@ class Fleet(
         val fenced: Boolean?,
         val images: Int?,
         val machines: Int?,
+        /** ITS OWN MACHINE (docs/proxmox.md): null is no box said, never none. */
+        val holder: OwnMachine? = null,
     ) {
         val onProxmox: Boolean get() = kind == "proxmox"
     }
+
+    /** A box looked and saw none ([name] null), or the machine and whether it is up. */
+    data class OwnMachine(val name: String?, val running: Boolean)
 
     /** What one box holding a hypervisor last saw: null is it has not looked yet, never no. */
     data class HypervisorBox(val hostId: String, val reachable: Boolean?, val problem: String?)
@@ -2267,6 +2272,13 @@ class Fleet(
                     fenced = flag(o, "fenced"),
                     images = count(o, "images"),
                     machines = count(o, "machines"),
+                    holder = o.opt("holder").let { h ->
+                        when {
+                            h == false -> OwnMachine(null, false)
+                            h is JSONObject && h.optString("name").isNotBlank() -> OwnMachine(h.optString("name"), h.optBoolean("running", false))
+                            else -> null
+                        }
+                    },
                 )
             }
         }
@@ -2560,6 +2572,23 @@ class Fleet(
             // A FAILED REQUEST IS NOT NOBODY WAITING: it fails, and Machines keeps what it had.
             val list = get("/api/holders").optJSONArray("holders") ?: JSONArray()
             (0 until list.length()).mapNotNull { i -> list.optJSONObject(i)?.let(HolderJoin::waitingFrom) }
+        }
+    }
+
+    /**
+     * A PIN AND A NAME for a Proxmox VE cluster's own machine this phone's own
+     * setup of the node is about to make, reserved for [address], the one its
+     * line will carry (docs/proxmox.md, "A machine of its own").
+     */
+    suspend fun holderPin(address: String): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = post("/api/holders", JSONObject().put("address", address))
+            val pin = json.optString("pin", "")
+            val hostId = json.optString("hostId", "")
+            if (!json.optBoolean("ok", false) || pin.isEmpty() || hostId.isEmpty()) {
+                throw IllegalStateException(json.optString("text", "").ifBlank { "Your fleet gave no pin for the cluster’s own machine. Update it, or set the cluster up without one." })
+            }
+            pin to hostId
         }
     }
 

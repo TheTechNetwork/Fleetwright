@@ -49,8 +49,12 @@ test('both phones begin `pve`, check the key under `pvesetup-key`, and seal unde
   assert.equal(kotlin('aad'), pvesetupAad(job, at));
   assert.equal(kotlin('handoffAad'), pvesetupHandoffAad(job, at));
   // What is inside: what xo-setup.js `run` reads for this job, and the line it seals back.
-  assert.match(IOS, /payload: \["v": 1, "purpose": "pve", "root": \["password": rootPassword\], "reply": back\.publicKey, "vmids": vmids, "options": options\.payload\]/);
-  assert.match(ANDROID, /\.put\("purpose", PURPOSE\)\s*\.put\("root", JSONObject\(\)\.put\("password", rootPassword\)\)\s*\.put\("reply", reply\)\s*\.put\("vmids", if \(ProxmoxLine\.isVmids\(vmids\)\) vmids else ""\)\s*\.put\("options", options\.payload\(\)\)/);
+  assert.match(IOS, /payload: \["v": 1, "purpose": "pve", "root": \["password": rootPassword\], "reply": back\.publicKey, "vmids": vmids, "options": sent\]/);
+  // THE OPTIONS ARE options.payload, with the cluster's own machine's secret
+  // added where the machine can make one (test/pve-holder-in-apps.test.js).
+  assert.match(IOS, /var sent = options\.payload\n/);
+  assert.match(ANDROID, /\.put\("purpose", PURPOSE\)\s*\.put\("root", JSONObject\(\)\.put\("password", rootPassword\)\)\s*\.put\("reply", reply\)\s*\.put\("vmids", if \(ProxmoxLine\.isVmids\(vmids\)\) vmids else ""\)\s*\.put\("options", opts\)/);
+  assert.match(ANDROID, /val opts = options\.payload\(\)\n/);
   assert.match(ANDROID, /const val PURPOSE = "pve"/);
   assert.match(IOS, /inside\["line"\] as\? String/);
   assert.match(ANDROID, /inside\.optString\("line"\)/);
@@ -162,8 +166,8 @@ test('both phones take a range of machine numbers and pass it to the node on eve
   assert.equal(setupCommand('https://f.example', '9000-9099'), `${setupCommand('https://f.example')} --vmids 9000-9099`);
   assert.match(iosSsh, /ProxmoxLine\.setupCommand\(coordinator: coordinator, vmids: vmids, options: options\)/);
   assert.match(androidSsh, /ProxmoxLine\.setupCommand\(coordinator, vmids, options\)/);
-  assert.match(iosAdd, /ProxmoxSSH\.startCommand\(coordinator: settings\.coordinatorURL, vmids: trimmedVmids, options: options\)/);
-  assert.match(androidAdd, /ProxmoxSsh\.startCommand\(settings\.coordinatorUrl, trimmedVmids, options\)/);
+  assert.match(iosAdd, /ProxmoxSSH\.startCommand\(coordinator: settings\.coordinatorURL, vmids: trimmedVmids, options: options, holderJoin: holderJoin\)/);
+  assert.match(androidAdd, /ProxmoxSsh\.startCommand\(settings\.coordinatorUrl, trimmedVmids, options, holderJoin\)/);
   assert.match(iosAdd, /vmids: trimmedVmids, options: options, auto: true/);
   assert.match(androidAdd, /vmids = trimmedVmids,\s*options = options,\s*auto = true/);
 });

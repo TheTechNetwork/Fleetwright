@@ -74,6 +74,7 @@ internal object ProxmoxThrough {
         "fence" to "Making the firewall group",
         "networks" to "Making lab and group networks",
         "image" to "Building the machine image",
+        "holder" to "Making its own machine",
         "line" to "Sending the token to this phone",
     )
 
@@ -121,14 +122,20 @@ internal object ProxmoxThrough {
     fun handoffAad(job: String, address: String): String = "fleetwright-pvesetup-handoff/v1:$job:$address"
 
     /** The root password and the key the line comes back to, sealed to the job's key, as the one string `run` carries. */
-    fun sealRoot(key: String, job: String, address: String, rootPassword: String, reply: String, vmids: String = "", options: ProxmoxOptions = ProxmoxOptions()): String {
+    fun sealRoot(key: String, job: String, address: String, rootPassword: String, reply: String, vmids: String = "", options: ProxmoxOptions = ProxmoxOptions(), holderSecret: String? = null): String {
+        // ITS OWN MACHINE only where the machine running the setup can ask for
+        // its pin, with the secret it asks to join with (HolderJoin).
+        val opts = options.payload()
+        if (opts.has("holder")) {
+            if (holderSecret != null) opts.put("holderSecret", holderSecret) else { opts.remove("holder"); opts.remove("holderAgain") }
+        }
         val payload = JSONObject()
             .put("v", 1)
             .put("purpose", PURPOSE)
             .put("root", JSONObject().put("password", rootPassword))
             .put("reply", reply)
             .put("vmids", if (ProxmoxLine.isVmids(vmids)) vmids else "")
-            .put("options", options.payload())
+            .put("options", opts)
         val sealed = Seal.seal(key, aad(job, address), payload)
         return "${sealed.getString("epk")}.${sealed.getString("iv")}.${sealed.getString("ct")}"
     }
@@ -226,7 +233,8 @@ internal fun ProxmoxThroughSheet(
         // THE KEY THE LINE COMES BACK TO OUTLIVES THIS SCREEN: kept under the
         // job until the line is in the vault (ProxmoxThroughHandoff).
         val back = ProxmoxThroughHandoff.newKey(settings, b.setup.job, b.where)
-        val sealed = ProxmoxThrough.sealRoot(key, b.setup.job, b.where, rootPassword, back.publicKey, vmids, options)
+        val secret = if (options.holder && "pve-holder" in b.setup.can) HolderJoin.newSecret(settings, HolderJoin.PROXMOX_SETUP) else null
+        val sealed = ProxmoxThrough.sealRoot(key, b.setup.job, b.where, rootPassword, back.publicKey, vmids, options, secret)
         rootPassword = ""
         val r = fleet.xosetup("run", job = b.setup.job, sealed = sealed)
         if (!r.ok) {

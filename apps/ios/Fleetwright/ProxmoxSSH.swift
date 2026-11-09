@@ -29,8 +29,11 @@ enum ProxmoxSSH {
     /// Start the setup as a unit of its own, with the command the phone shows
     /// for running it by hand, and the line to a file. A run already going is
     /// stopped first: the person asked again.
-    static func startCommand(coordinator: String, vmids: String = "", options: ProxmoxOptions = ProxmoxOptions()) -> String {
-        let run = ProxmoxLine.setupCommand(coordinator: coordinator, vmids: vmids, options: options) + " --line-file \(lineFile)"
+    static func startCommand(coordinator: String, vmids: String = "", options: ProxmoxOptions = ProxmoxOptions(), holderJoin: Bool = false) -> String {
+        // ITS OWN MACHINE only with the file its pin was written to, and made
+        // again only then: the script refuses one without the other.
+        let holder = holderJoin ? " " + holderJoinFlag + " " + holderJoinFile + (options.holderAgain == true ? " " + holderAgainFlag : "") : ""
+        let run = ProxmoxLine.setupCommand(coordinator: coordinator, vmids: vmids, options: options) + holder + " --line-file \(lineFile)"
         return "systemctl stop \(unit) 2>/dev/null; systemctl reset-failed \(unit) 2>/dev/null; rm -f \(lineFile); "
             + "systemd-run --unit=\(unit) --collect /bin/bash -c '\(run)'"
     }
@@ -46,6 +49,46 @@ enum ProxmoxSSH {
 
     /// The line, read once and removed.
     static let takeLine = "cat \(lineFile) && rm -f \(lineFile)"
+
+    // A MACHINE OF ITS OWN (docs/proxmox.md): pve-setup.js's commands, which
+    // test/pvesetup-in-apps.test.js holds equal.
+
+    /// Where the pin and name it joins with are written; the script removes it.
+    static let holderJoinFile = "/root/.fleetwright-holder-join"
+    /// The script's flags for it, by themselves.
+    static let holderJoinFlag = "--holder-join"
+    static let holderAgainFlag = "--holder-again"
+    /// The cluster's guests, to see whether it has one already.
+    static let holderFind = "pvesh get /cluster/resources --type vm --output-format json"
+    /// The node's first address, which the line will carry with port 8006.
+    static let addressFind = "hostname -I | awk '{print $1}'"
+
+    /// Its own machines in holderFind's answer: outside the pool, not
+    /// templates, tagged `fleetwright-holder`.
+    static func holders(in out: String) -> [String] {
+        guard let all = try? JSONSerialization.jsonObject(with: Data(out.utf8)) as? [[String: Any]] else { return [] }
+        return all.filter { v in
+            v["type"] as? String == "qemu" && (v["pool"] as? String ?? "") != "fleetwright"
+                && (v["template"] as? Int ?? 0) != 1
+                && (v["tags"] as? String ?? "").split(whereSeparator: { ";, ".contains($0) }).contains("fleetwright-holder")
+        }.compactMap { $0["name"] as? String }
+    }
+
+    /// The address the line will carry, from addressFind's answer, or nil.
+    static func lineAddress(of out: String) -> String? {
+        let ip = out.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ").first.map(String.init) ?? ""
+        guard (2...45).contains(ip.count), ip.allSatisfy({ $0.isHexDigit || $0 == "." || $0 == ":" }) else { return nil }
+        return "\(ip):8006"
+    }
+
+    /// The file written root-only in one command: the JSON in base64, so
+    /// nothing in it reaches the shell as words.
+    static func holderJoinCommand(hostId: String, pin: String, address: String, secret: String?) -> String {
+        var join: [String: Any] = ["hostId": hostId, "pin": pin, "address": address]
+        if let secret { join["secret"] = secret }
+        let data = (try? JSONSerialization.data(withJSONObject: join, options: [.sortedKeys])) ?? Data()
+        return "umask 077; printf %s \(data.base64EncodedString()) | base64 -d >\(holderJoinFile)"
+    }
 
     struct Progress: Equatable {
         let steps: [String]
@@ -97,6 +140,7 @@ enum ProxmoxSSH {
         case "fence": return "The firewall group"
         case "networks": return "Lab and group networks"
         case "image": return "The machine image, which takes a few minutes"
+        case "holder": return "Its own machine"
         case "line": return "Saving the token"
         case "done": return "Done"
         default: return step

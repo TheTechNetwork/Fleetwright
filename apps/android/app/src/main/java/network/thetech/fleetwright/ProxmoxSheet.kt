@@ -208,9 +208,42 @@ internal fun ProxmoxSheet(
         val key = trusted ?: run { sshBusy = false; return }
         ProxmoxSsh.run(at, key, password, ProxmoxSsh.NOW).mapCatching { (_, out) -> out.trim().toLong() }.fold(
             onSuccess = { now ->
-                ProxmoxSsh.run(at, key, password, ProxmoxSsh.startCommand(settings.coordinatorUrl, trimmedVmids, options)).fold(
+                // ITS OWN MACHINE, when wanted and there is none to keep: a
+                // pin for the address the line will carry, and a secret it
+                // asks to join with, written where the script reads them.
+                var holderJoin = false
+                var replaced = emptyList<String>()
+                if (options.holder) {
+                    val there = ProxmoxSsh.run(at, key, password, ProxmoxSsh.HOLDER_FIND).getOrNull()?.second?.let(ProxmoxSsh::holdersIn).orEmpty()
+                    if (there.isEmpty() || options.holderAgain == true) {
+                        if (options.holderAgain == true) replaced = there
+                        val address = ProxmoxSsh.run(at, key, password, ProxmoxSsh.ADDRESS_FIND).getOrNull()?.second?.let(ProxmoxSsh::lineAddressOf)
+                        if (address == null) {
+                            sshText = "The node didn’t say its address, which its own machine is made for. Nothing was started."
+                            sshBusy = false
+                            return
+                        }
+                        val (pin, hostId) = Fleet(settings).holderPin(address).getOrElse {
+                            sshText = it.message ?: "Your fleet gave no pin for the cluster’s own machine."
+                            sshBusy = false
+                            return
+                        }
+                        val secret = HolderJoin.newSecret(settings, HolderJoin.PROXMOX_SETUP)
+                        val wrote = ProxmoxSsh.run(at, key, password, ProxmoxSsh.holderJoinCommand(hostId, pin, address, secret)).getOrNull()?.first
+                        if (wrote != 0) {
+                            sshText = "The pin for its own machine couldn’t be written on the node. Nothing was started."
+                            sshBusy = false
+                            return
+                        }
+                        holderJoin = true
+                    }
+                }
+                ProxmoxSsh.run(at, key, password, ProxmoxSsh.startCommand(settings.coordinatorUrl, trimmedVmids, options, holderJoin)).fold(
                     onSuccess = { (status, out) ->
                         if (status == 0) {
+                            // THE ONE MADE AGAIN goes from the fleet too, by the
+                            // name the fleet gave it, so it does not stay listed.
+                            replaced.filter { Regex("^holder-[0-9a-f]{6}$").matches(it) }.forEach { Fleet(settings).revokeHost(it) }
                             ProxmoxDirectHandoff.started(settings, at, key, now, password)
                             since = now
                         } else {
@@ -436,6 +469,8 @@ internal object ProxmoxLine {
 internal object ProxmoxWords {
     const val SYSTEMS_HINT = "Each system chosen becomes an image a session's machine can be made from. One already on the cluster is kept, and built again only when asked."
     const val FIREWALL_HINT = "Blocks traffic into the nodes except the web interface, SSH and cluster traffic."
+    const val HOLDER_HINT = "A machine on the cluster that stays up and manages it for your fleet, so it doesn’t depend on this phone or a laptop being awake. You approve it once it joins."
+    const val HOLDER_NEEDS_IMAGE = "It’s made from the cluster’s Debian image, so one has to be there already."
 }
 
 /**
@@ -462,6 +497,10 @@ internal data class ProxmoxOptions(
      * alone is every run before there was a choice, and options saved then.
      */
     val systems: List<String> = listOf("debian-13"),
+    /** A MACHINE OF ITS OWN on the cluster (docs/proxmox.md); options saved before there was a choice read as yes. */
+    val holder: Boolean = true,
+    /** The one there removed and made again, asked for from the cluster's page; never kept for the next run. */
+    val holderAgain: Boolean? = null,
 ) {
     private val trimmedStorage get() = storage.trim()
 
@@ -519,6 +558,12 @@ internal data class ProxmoxOptions(
         if (groups != 2) p.put("groups", groups)
         if (labsOpen != 1) p.put("labsOpen", labsOpen)
         if (labsClosed != 1) p.put("labsClosed", labsClosed)
+        // ITS OWN MACHINE'S PIN is asked for by the machine running the
+        // setup, and its secret added by the screen that sends this.
+        if (holder) {
+            p.put("holder", true)
+            if (holderAgain == true) p.put("holderAgain", true)
+        }
         return p
     }
 
@@ -526,7 +571,7 @@ internal data class ProxmoxOptions(
     fun saved(): String = JSONObject()
         .put("firewall", firewall).put("image", image).put("channel", channel).put("storage", storage).put("bridge", bridge)
         .put("expireDays", expireDays).put("groups", groups).put("labsOpen", labsOpen).put("labsClosed", labsClosed)
-        .put("systems", JSONArray(systems))
+        .put("systems", JSONArray(systems)).put("holder", holder)
         .toString()
 
     companion object {
@@ -557,6 +602,7 @@ internal data class ProxmoxOptions(
                     val kept = (0 until a.length()).map { a.optString(it) }.toSet()
                     SYSTEMS.map { it.first }.filter { it in kept }
                 } ?: listOf("debian-13"),
+                holder = o.optBoolean("holder", true),
             )
         }.getOrDefault(ProxmoxOptions())
     }
@@ -614,6 +660,21 @@ internal fun ProxmoxOptionsBlock(options: ProxmoxOptions, enabled: Boolean, open
     CountRow("Group networks", options.groups, enabled) { onChange(options.copy(groups = it)) }
     CountRow("Open labs", options.labsOpen, enabled) { onChange(options.copy(labsOpen = it)) }
     CountRow("Closed labs", options.labsClosed, enabled) { onChange(options.copy(labsClosed = it)) }
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("A machine of its own", style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+        Switch(checked = options.holder, onCheckedChange = { onChange(options.copy(holder = it, holderAgain = if (it) options.holderAgain else null)) }, enabled = enabled)
+    }
+    Hint(ProxmoxWords.HOLDER_HINT)
+    if (options.holder && options.image == "none") Hint(ProxmoxWords.HOLDER_NEEDS_IMAGE)
+    // MADE AGAIN only when the cluster's page asked; on here so it can still
+    // be turned off before Set it up.
+    if (options.holder && options.holderAgain != null) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(HypervisorWords.MAKE_OWN_AGAIN, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+            Switch(checked = options.holderAgain == true, onCheckedChange = { onChange(options.copy(holderAgain = it)) }, enabled = enabled)
+        }
+        Hint(HypervisorWords.MAKE_OWN_AGAIN_FOOTER)
+    }
     options.problem?.let { Hint(it, Design.Palette.bad.now) }
 }
 

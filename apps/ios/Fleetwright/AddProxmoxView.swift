@@ -132,6 +132,17 @@ struct AddProxmoxView: View {
                     Stepper("Group networks: \(options.groups)", value: $options.groups, in: 0...4)
                     Stepper("Open labs: \(options.labsOpen)", value: $options.labsOpen, in: 0...4)
                     Stepper("Closed labs: \(options.labsClosed)", value: $options.labsClosed, in: 0...4)
+                    Toggle("A machine of its own", isOn: Binding(get: { options.wantsHolder }, set: { options.holder = $0 }))
+                    Text(ProxmoxWords.holderHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                    // MADE AGAIN only when the cluster's page asked; on here
+                    // so it can still be turned off before Set it up.
+                    if options.holderAgain == true || startOptions?.holderAgain == true {
+                        Toggle(HypervisorWords.makeOwnAgain, isOn: Binding(get: { options.holderAgain == true }, set: { options.holderAgain = $0 ? true : nil }))
+                        Text(HypervisorWords.makeOwnAgainFooter).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                    }
+                    if options.wantsHolder && options.image == "none" {
+                        Text(ProxmoxWords.holderNeedsImage).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                    }
                     if let problem = options.problem {
                         Text(problem).fleetType(.label).foregroundStyle(Design.Palette.bad)
                     }
@@ -326,8 +337,38 @@ struct AddProxmoxView: View {
                 sshText = "The node did not say what time it is, so its setup could not be followed."
                 return
             }
-            let (status, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.startCommand(coordinator: settings.coordinatorURL, vmids: trimmedVmids, options: options))
+            // ITS OWN MACHINE, when wanted and there is none to keep: a pin
+            // for the address the line will carry, and a secret it asks to
+            // join with, written where the script reads them.
+            var holderJoin = false
+            var replaced: [String] = []
+            if options.wantsHolder {
+                let (_, found) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.holderFind)
+                if ProxmoxSSH.holders(in: found).isEmpty || options.holderAgain == true {
+                    if options.holderAgain == true { replaced = ProxmoxSSH.holders(in: found) }
+                    let (_, said) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.addressFind)
+                    guard let address = ProxmoxSSH.lineAddress(of: said) else {
+                        sshText = "The node didn’t say its address, which its own machine is made for. Nothing was started."
+                        return
+                    }
+                    let given = try await Fleet(settings: settings).holderPin(address: address)
+                    let secret = HolderJoin.newSecret(for: HolderJoin.proxmoxSetup)
+                    let (wrote, _) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password,
+                                                              command: ProxmoxSSH.holderJoinCommand(hostId: given.hostId, pin: given.pin, address: address, secret: secret))
+                    guard wrote == 0 else {
+                        sshText = "The pin for its own machine couldn’t be written on the node. Nothing was started."
+                        return
+                    }
+                    holderJoin = true
+                }
+            }
+            let (status, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.startCommand(coordinator: settings.coordinatorURL, vmids: trimmedVmids, options: options, holderJoin: holderJoin))
             if status == 0 {
+                // THE ONE MADE AGAIN goes from the fleet too, by the name the
+                // fleet gave it, so it does not stay listed as not reporting.
+                for name in replaced where name.range(of: "^holder-[0-9a-f]{6}$", options: .regularExpression) != nil {
+                    _ = try? await Fleet(settings: settings).revokeHost(name)
+                }
                 ProxmoxDirectHandoff.started(address: nodeKey, fingerprint: key, since: now, password: password)
                 since = now
             } else {
@@ -422,6 +463,8 @@ struct AddProxmoxView: View {
 enum ProxmoxWords {
     static let systemsHint = "Each system chosen becomes an image a session's machine can be made from. One already on the cluster is kept, and built again only when asked."
     static let firewallHint = "Blocks traffic into the nodes except the web interface, SSH and cluster traffic."
+    static let holderHint = "A machine on the cluster that stays up and manages it for your fleet, so it doesn’t depend on this phone or a laptop being awake. You approve it once it joins."
+    static let holderNeedsImage = "It’s made from the cluster’s Debian image, so one has to be there already."
 }
 
 struct ProxmoxOptions: Codable, Equatable {
@@ -439,6 +482,14 @@ struct ProxmoxOptions: Codable, Equatable {
     /// (`--images`, its `pinned` table). Nil is Debian 13 alone, as every
     /// run was before there was a choice, and as options saved then read.
     var systems: [String]? = nil
+    /// A MACHINE OF ITS OWN on the cluster (docs/proxmox.md): nil is yes,
+    /// which options saved before there was a choice read as.
+    var holder: Bool? = nil
+    /// The one there removed and made again, asked for from the cluster's
+    /// page; never kept for the next run.
+    var holderAgain: Bool? = nil
+
+    var wantsHolder: Bool { holder ?? true }
 
     /// Every system the setup can build, in its own order: the catalogue
     /// Xen Orchestra pools build from too (src/fleet/host/vm-image.js, IMAGES).
@@ -516,6 +567,12 @@ struct ProxmoxOptions: Codable, Equatable {
         if groups != 2 { p["groups"] = groups }
         if labsOpen != 1 { p["labsOpen"] = labsOpen }
         if labsClosed != 1 { p["labsClosed"] = labsClosed }
+        // ITS OWN MACHINE'S PIN is asked for by the machine running the
+        // setup, and its secret added by the screen that sends this.
+        if wantsHolder {
+            p["holder"] = true
+            if holderAgain == true { p["holderAgain"] = true }
+        }
         return p
     }
 
@@ -525,7 +582,9 @@ struct ProxmoxOptions: Codable, Equatable {
     }
 
     var saved: String {
-        (try? JSONEncoder().encode(self)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        var kept = self
+        kept.holderAgain = nil
+        return (try? JSONEncoder().encode(kept)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
 }
 

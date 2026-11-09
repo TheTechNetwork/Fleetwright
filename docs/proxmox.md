@@ -424,6 +424,14 @@ Running the setup again keeps the one there and starts it if it is off, and
 asks for no pin. **Make it again** removes it, disk and all, tells the fleet
 the name it had so the host is retired, and makes a new one.
 
+**On the phones** it is an option of the setup, **A machine of its own**, on
+unless turned off, and a section of the cluster's page: its name and whether
+it is running, with **Make it again**, or **Make its own machine** where a box
+looked and saw none. Through a machine it is offered only by a box that says
+it can (`pve-holder`). The secret the phone makes for it is kept under no
+address, because the line's address is not known until the setup says it,
+and approving tries it beside the address's own: the proof says which.
+
 ### Where a cluster shows
 
 Machines › **Hypervisors** lists it beside any Xen Orchestra pools, with what
