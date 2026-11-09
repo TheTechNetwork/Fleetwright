@@ -22,9 +22,10 @@ const script = new URL('../install/fleetwright-pve-setup', import.meta.url);
 if (import.meta.url === `file://${process.argv[1]}`) {
   let text = readFileSync(script, 'utf8');
   for (const [kind, file] of Object.entries(OUTPUTS)) {
-    const body = pveEdgeConfig(kind === 'block');
-    writeFileSync(file, body);
-    const sum = createHash('sha256').update(body).digest('hex');
+    writeFileSync(file, pveEdgeConfig(kind === 'block'));
+    // THE FILE'S DIGEST, as the node will check it: the bytes on disk, a
+    // pin of a published file. It holds no secret (root's password is `*`).
+    const sum = createHash('sha256').update(readFileSync(file)).digest('hex');
     const name = kind === 'block' ? 'EDGE_CONFIG_BLOCK_SHA' : 'EDGE_CONFIG_SHA';
     text = text.replace(new RegExp(`^${name}=[0-9a-f]*$`, 'm'), `${name}=${sum}`);
     console.log(`build-pve-edge: ${file.pathname} ${sum}`);
