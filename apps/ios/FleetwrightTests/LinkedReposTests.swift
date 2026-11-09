@@ -27,8 +27,9 @@ final class LinkedReposTests: XCTestCase {
     }
 
     func testNothingLinkedIsSaidPerRole() {
-        XCTAssertEqual(describeLinkedRole("archive", linked: nil, fleetRunners: nil), "Nothing linked. Session work is not saved.")
+        XCTAssertEqual(describeLinkedRole("archive", linked: nil, fleetRunners: nil), "Nothing linked. Session work is not saved. Start a private one from github.com/TheTechNetwork/Fleetwright-Archive.")
         XCTAssertEqual(describeLinkedRole("templates", linked: "eli/presets", fleetRunners: nil), "Linked: eli/presets.")
+        XCTAssertEqual(describeLinkedRole("templates", linked: nil, fleetRunners: nil), "Nothing linked. Start one from github.com/TheTechNetwork/Fleetwright-Templates.")
         XCTAssertEqual(describeLinkedRole("runners", linked: nil, fleetRunners: "fleet/runners"),
                        "Using the fleet's: fleet/runners")
         XCTAssertEqual(describeLinkedRepos(0), "none linked")
