@@ -52,14 +52,13 @@ test('a row says one status from the fixed set, and the page one sentence', () =
   // THE RING keeps its logic: nothing of the fleet's can use it, or too old.
   assert.match(swift, /guard let h else \{ return !onPhone \}\s*if h\.boxes\.isEmpty \{ return true \}/);
   assert.match(kotlin, /if \(h == null\) return !onPhone\s*if \(h\.boxes\.isEmpty\(\)\) return true/);
-  // THE PAGE: one sentence first, then Machines, then Details.
+  // THE PAGE, a pool's in shape: the sentence on its card first, then the
+  // edge routers, then the machines under their heading. The facts are on
+  // the sentence's card, as a pool's are, not a Details section of their own.
   for (const [name, src] of [['iOS', swift], ['Android', kotlin]]) {
     const page = src.slice(src.indexOf('HypervisorWords.answer(row.fleet)'));
-    // The Details SECTION, by the call that makes a section of it: each
-    // machine's row has a Details disclosure of its own for its problem
-    // (test/reasons-in-apps.test.js), which is not the page's Details.
-    const details = name === 'iOS' ? 'Section("Details")' : 'SectionHead("Details")';
-    assert.ok(page.indexOf('"Machines"') > 0 && page.indexOf(details) > page.indexOf('"Machines"'), `${name}: the page is not sentence, Machines, Details`);
+    assert.ok(page.indexOf('HypervisorWords.facts') > 0 && page.indexOf('HypervisorWords.facts') < page.indexOf(name === 'iOS' ? 'machinesHeader' : 'MACHINES_HEADER'), `${name}: the page is not sentence and facts, then Machines`);
+    assert.equal(page.indexOf(name === 'iOS' ? 'Section("Details")' : 'SectionHead("Details")'), -1, `${name}: Details is a section of its own again`);
   }
 });
 
@@ -71,7 +70,7 @@ test('both phones word a hypervisor\'s status, reach and facts the same', () => 
     'Needs Proxmox VE 9. No machine is made on it.', "Can't reach it. No machine got through.", 'Checking. No machine has checked it yet.',
     'Datacenter firewall on', 'Datacenter firewall off: machines only on networks you chose',
     '1 image', '1 machine made on it',
-    'Proxmox VE', 'Xen Orchestra', 'Hypervisors', 'Add a hypervisor', 'Which hypervisor is it', 'Machines', 'Details', 'Set it up again',
+    'Proxmox VE', 'Xen Orchestra', 'Hypervisors', 'Add a hypervisor', 'Which hypervisor is it', 'Machines', 'Set it up again',
     'Host name or address', 'Find it', 'Checking…',
   ]) {
     assert.ok(strings(swift).has(said), `iOS does not say ${JSON.stringify(said)}`);

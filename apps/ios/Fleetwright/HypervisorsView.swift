@@ -164,154 +164,116 @@ struct HypervisorsView: View {
     }
 }
 
-/// One hypervisor: the answer in a sentence, then the machines that checked
-/// it, its details, and what can be done. The sentence is the page; the rest
-/// is the evidence under it.
+/// One hypervisor the fleet reports: a Proxmox VE cluster, or a Xen
+/// Orchestra pool this phone does not hold.
+///
+/// THE SAME PAGE AS A POOL'S (PoolManageView), card for card, because the
+/// two side by side were "Two completely dif UIs": how current it is first,
+/// the edge routers second on the very card a pool's page has
+/// (EdgeRoutersCard), then what it is made of under a heading, then what can
+/// be done, each its own card at the foot. What differs is only what the
+/// hypervisor has: a cluster has machines that reach it and its own machine
+/// where a pool has hosts and VMs.
+///
+/// MOTION: the router words crossfade on the card, which is all that moves.
 struct HypervisorPageView: View {
     let settings: Settings
     let row: HypervisorsView.Row
-    /// HOW ITS EDGE ROUTER IS, as the machine reading it last did
+    /// HOW ITS EDGE ROUTERS ARE, as the machine reading them last did
     /// (src/fleet/host/edge-watch.js, docs/proxmox.md "Watching it"): the
-    /// same report a Xen Orchestra pool's card shows, found by the
-    /// cluster's address. Nil before asking and when no machine reads it,
-    /// said apart by `edgesAsked`.
+    /// same report a Xen Orchestra pool's card shows, found by the address.
+    /// Nil before asking and when no machine reads them, said apart by
+    /// `edgesAsked`.
     @State private var edges: Fleet.VMEdges?
     @State private var edgesAsked = false
     @State private var edgesFailed = false
 
     var body: some View {
         List {
-            Section {
-                Text(HypervisorWords.answer(row.fleet))
-                    .fleetType(.body)
-                    .foregroundStyle(Design.Palette.ink)
-                    .frame(minHeight: 44, alignment: .leading)
+            statusCard
+                .fleetRow()
+            if let card = edgeCard {
+                card
+                    .fleetRow()
             }
-            Section {
-                ForEach(row.fleet?.boxes ?? [], id: \.hostId) { box in
-                    VStack(alignment: .leading, spacing: Design.Space.hair) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(box.hostId).fleetType(.bodyStrong).foregroundStyle(Design.Palette.ink)
-                            Spacer(minLength: 0)
-                            Text(HypervisorWords.reach(box.reachable))
-                                .fleetType(.label)
-                                .foregroundStyle(box.reachable == true ? Design.Palette.ok : box.reachable == false ? Design.Palette.attention : Design.Palette.inkDim)
-                        }
-                        // THE MACHINE'S OWN WORDS on why, under Details: the
-                        // row's verdict is the word beside the name, and the
-                        // sentence is the mechanism (docs/design-system.md,
-                        // Words), selectable because it names a path and a
-                        // status, which is what gets searched for.
-                        if let why = box.problem, !why.isEmpty {
-                            DisclosureGroup("Details") {
-                                Text(why).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
-                            }
-                            .fleetType(.label)
-                            .frame(minHeight: 44)
-                        }
-                    }
-                    .frame(minHeight: 44, alignment: .leading)
-                }
-                if (row.fleet?.boxes ?? []).isEmpty {
-                    Text(HypervisorWords.noBox).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
-                }
-            } header: {
-                Text("Machines")
-            }
-            if let f = row.fleet, !HypervisorWords.facts(f).isEmpty {
-                Section("Details") {
-                    ForEach(HypervisorWords.facts(f), id: \.self) { line in
-                        Text(line).fleetType(.body).foregroundStyle(Design.Palette.ink)
-                    }
-                }
-            }
-            if row.proxmox, let own = row.fleet?.holder {
-                // ITS OWN MACHINE (docs/proxmox.md): there, or the setup that
-                // makes one. Unsaid by an older box, so nothing is drawn.
-                Section {
-                    switch own {
-                    case let .there(name, running):
-                        Text(HypervisorWords.ownThere(name, running: running)).fleetType(.body).foregroundStyle(running ? Design.Palette.ink : Design.Palette.attention)
-                            .frame(minHeight: 44, alignment: .leading)
-                        NavigationLink(HypervisorWords.makeOwnAgain) {
-                            AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(holder: true, holderAgain: true))
-                        }
-                        .frame(minHeight: 44)
-                    case .none:
-                        Text(HypervisorWords.ownNone).fleetType(.body).foregroundStyle(Design.Palette.inkDim)
-                        NavigationLink(HypervisorWords.makeOwn) {
-                            AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(holder: true))
-                        }
-                        .frame(minHeight: 44)
-                    }
-                } header: {
-                    Text(HypervisorWords.ownHeader)
-                } footer: {
-                    if case .there = own { Text(HypervisorWords.makeOwnAgainFooter) }
-                }
-            }
-            if row.proxmox, let edge = row.fleet?.edge {
-                // ITS EDGE ROUTER (docs/proxmox.md): there, or the setup that
-                // makes one. Unsaid by an older box, so nothing is drawn.
-                Section {
-                    switch edge {
-                    case let .there(running, blocks, pair):
-                        Text(HypervisorWords.edgeThere(running: running, blocks: blocks, pair: pair)).fleetType(.body).foregroundStyle(running ? Design.Palette.ink : Design.Palette.attention)
-                            .frame(minHeight: 44, alignment: .leading)
-                        edgeReading
-                        NavigationLink(HypervisorWords.makeEdgeAgain) {
-                            AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(edge: true, edgeBlock: blocks ? true : nil, edgeAgain: true, edgePair: pair ? true : nil))
-                        }
-                        .frame(minHeight: 44)
-                    case .none:
-                        Text(HypervisorWords.edgeNone).fleetType(.body).foregroundStyle(Design.Palette.inkDim)
-                        NavigationLink(HypervisorWords.makeEdge) {
-                            AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(edge: true))
-                        }
-                        .frame(minHeight: 44)
-                    }
-                } header: {
-                    Text(HypervisorWords.edgeHeader)
-                } footer: {
-                    if case .there = edge { Text(HypervisorWords.makeEdgeAgainFooter) }
-                }
-            }
-            if row.proxmox {
-                Section {
-                    // THE SAME SETUP, again: it finds what it made, keeps the
-                    // image, and issues new access.
-                    // THE FIREWALL, where it is off: the same setup, with the
-                    // address filled in and the option already on.
-                    if row.fleet?.fenced == false {
-                        NavigationLink(HypervisorWords.turnOnFirewall) {
-                            AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(firewall: true))
-                        }
-                        .frame(minHeight: 44)
-                    }
-                    NavigationLink("Set it up again") { AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address)) }
-                        .frame(minHeight: 44)
-                } footer: {
-                    Text(HypervisorWords.againFooter)
-                }
-            } else if !row.onPhone {
-                Section {
-                    Text(HypervisorWords.xoElsewhere).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
-                }
+            machines
+            ownMachine
+            actions
+        }
+        .listStyle(.plain)
+        .listRowSpacing(Design.Space.groupTight)
+        .scrollContentBackground(.hidden)
+        .background(Design.Palette.bg)
+        .navigationTitle(row.address)
+        .refreshable { await loadEdges() }
+        // THE ROUTERS, every half minute while the page is open, as on a
+        // pool's page: the machine reading them does so on the same beat.
+        .task {
+            while !Task.isCancelled {
+                await loadEdges()
+                try? await Task.sleep(for: .seconds(30))
             }
         }
-        .navigationTitle(row.address)
-        .navigationBarTitleDisplayMode(.inline)
-        .task { await loadEdges() }
-        .refreshable { await loadEdges() }
     }
 
-    private var watchesEdge: Bool {
-        if row.proxmox, case .there = row.fleet?.edge { return true }
-        return false
+    // MARK: How it is
+
+    /// The verdict in a sentence, and the facts the machines could tell
+    /// under it, the way a pool's card has who it signed in as and where its
+    /// master answers.
+    private var statusCard: some View {
+        VStack(alignment: .leading, spacing: Design.Space.insideTight) {
+            Text(HypervisorWords.answer(row.fleet))
+                .fleetType(.body)
+                .foregroundStyle(HypervisorWords.wantsSomething(row.fleet, onPhone: row.onPhone) ? Design.Palette.attention : Design.Palette.ink)
+                .contentTransition(.opacity)
+                .animation(Design.Motion.change, value: HypervisorWords.answer(row.fleet))
+            ForEach(row.fleet.map(HypervisorWords.facts) ?? [], id: \.self) { line in
+                Text(line)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+            if !row.proxmox && !row.onPhone {
+                Text(HypervisorWords.xoElsewhere)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: 44, alignment: .leading)
+        .fleetCard(radius: Design.Radius.cardSmall)
+    }
+
+    // MARK: The edge routers
+
+    /// A cluster says whether it has routers and how they run, so its card is
+    /// drawn from that, reading or not; a pool here says nothing of them, so
+    /// its card is drawn only once a machine has read some. Unsaid by an
+    /// older box, so nothing is drawn.
+    private var edgeCard: EdgeRoutersCard? {
+        if row.proxmox, let edge = row.fleet?.edge {
+            switch edge {
+            case let .there(running, blocks, pair):
+                return EdgeRoutersCard(
+                    edges: edges,
+                    note: (HypervisorWords.edgeThere(running: running, blocks: blocks, pair: pair), !running),
+                    empty: edgesAsked ? (edgesFailed ? HypervisorWords.edgeUnchecked : HypervisorWords.edgeNoReading) : HypervisorWords.checking
+                )
+            case .none:
+                return EdgeRoutersCard(edges: nil, empty: HypervisorWords.edgeNone)
+            }
+        }
+        if let e = edges, !e.routers.isEmpty { return EdgeRoutersCard(edges: e, empty: "") }
+        return nil
+    }
+
+    private var asksEdges: Bool {
+        if row.proxmox, case .none? = row.fleet?.edge { return false }
+        return true
     }
 
     private func loadEdges() async {
-        guard watchesEdge else { return }
+        guard asksEdges else { return }
         do {
             edges = try await Fleet(settings: settings).vmEdges()?.first { $0.address == row.address }
             edgesFailed = false
@@ -321,42 +283,151 @@ struct HypervisorPageView: View {
         edgesAsked = true
     }
 
-    /// THE VERDICT IN ONE WORD, AND THE PAGE BEHIND IT: the same words and the
-    /// same page a Xen Orchestra pool's routers have (Manage.Words.edgeStatus,
-    /// EdgeRoutersView), its numbers, its log and what it refused. Before any
-    /// machine has read it, that is what is said, never that it is fine (C-5).
+    // MARK: What it is made of
+
+    /// The machines that checked it, one card each, under their heading as a
+    /// pool's hosts are: the name, the one word beside it, and the machine's
+    /// own words on why under Details.
     @ViewBuilder
-    private var edgeReading: some View {
-        if let e = edges, !e.routers.isEmpty {
-            // ONE ROUTER IS "HOW IT IS"; A PAIR IS EACH BY NAME, each with its
-            // own word (Primary, Standby, or what is wrong), the same as a
-            // pool's card says them.
-            NavigationLink {
-                EdgeRoutersView(edges: e)
-            } label: {
-                VStack(alignment: .leading, spacing: Design.Space.hair) {
-                    ForEach(e.routers, id: \.name) { r in
-                        let status = Manage.Words.edgeStatus(reached: r.reached, problem: r.problem, gateway: r.gateway, role: r.role)
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(e.routers.count > 1 ? r.name : HypervisorWords.edgeHowItIs).fleetType(.body).foregroundStyle(Design.Palette.ink)
-                            Spacer(minLength: 0)
-                            Text(status.word)
-                                .fleetType(.label)
-                                .foregroundStyle(status.trouble ? Design.Palette.attention : Design.Palette.ink)
-                                .contentTransition(.opacity)
-                                .animation(Design.Motion.change, value: status.word)
-                        }
+    private var machines: some View {
+        heading(HypervisorWords.machinesHeader)
+        let boxes = row.fleet?.boxes ?? []
+        if boxes.isEmpty {
+            Text(HypervisorWords.noBox)
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+                .fleetRow()
+        }
+        ForEach(boxes, id: \.hostId) { box in
+            VStack(alignment: .leading, spacing: Design.Space.hair) {
+                HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
+                    Text(box.hostId)
+                        .fleetType(.bodyStrong)
+                        .foregroundStyle(Design.Palette.ink)
+                    Spacer(minLength: 0)
+                    Text(HypervisorWords.reach(box.reachable))
+                        .fleetType(.label)
+                        .foregroundStyle(box.reachable == true ? Design.Palette.ok : box.reachable == false ? Design.Palette.attention : Design.Palette.inkDim)
+                        .contentTransition(.opacity)
+                        .animation(Design.Motion.change, value: box.reachable)
+                }
+                // THE MACHINE'S OWN WORDS on why, under Details: the row's
+                // verdict is the word beside the name, and the sentence is the
+                // mechanism (docs/design-system.md, Words), selectable because
+                // it names a path and a status, which is what gets searched for.
+                if let why = box.problem, !why.isEmpty {
+                    DisclosureGroup("Details") {
+                        Text(why).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
+                    }
+                    .fleetType(.label)
+                    .frame(minHeight: 44)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .fleetCard(radius: Design.Radius.cardSmall)
+            .fleetRow()
+        }
+    }
+
+    /// ITS OWN MACHINE (docs/proxmox.md), a card under its heading: its name
+    /// and whether it runs, or that there is none. Unsaid by an older box,
+    /// so nothing is drawn.
+    @ViewBuilder
+    private var ownMachine: some View {
+        if row.proxmox, let own = row.fleet?.holder {
+            heading(HypervisorWords.ownHeader)
+            Group {
+                switch own {
+                case let .there(name, running):
+                    Text(HypervisorWords.ownThere(name, running: running))
+                        .fleetType(.body)
+                        .foregroundStyle(running ? Design.Palette.ink : Design.Palette.attention)
+                case .none:
+                    Text(HypervisorWords.ownNone)
+                        .fleetType(.body)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .fleetCard(radius: Design.Radius.cardSmall)
+            .fleetRow()
+        }
+    }
+
+    // MARK: What can be done
+
+    /// Each its own card at the foot, as a pool's are, with what it costs
+    /// under it where it costs something. All of them are the same setup
+    /// with the address filled in and an option already on.
+    @ViewBuilder
+    private var actions: some View {
+        if row.proxmox {
+            let node = HypervisorAddress.node(row.address)
+            if let edge = row.fleet?.edge {
+                switch edge {
+                case let .there(_, blocks, pair):
+                    action(HypervisorWords.makeEdgeAgain, HypervisorWords.makeEdgeAgainFooter, "shield.lefthalf.filled") {
+                        AddProxmoxView(settings: settings, startNode: node, startOptions: ProxmoxOptions(edge: true, edgeBlock: blocks ? true : nil, edgeAgain: true, edgePair: pair ? true : nil))
+                    }
+                case .none:
+                    action(HypervisorWords.makeEdge, nil, "shield.lefthalf.filled") {
+                        AddProxmoxView(settings: settings, startNode: node, startOptions: ProxmoxOptions(edge: true))
                     }
                 }
             }
-            .frame(minHeight: 44)
-            .accessibilityHint(e.routers.count > 1 ? "Opens the routers’ page" : "Opens the router’s page")
-        } else if edgesAsked {
-            Text(edgesFailed ? HypervisorWords.edgeUnchecked : HypervisorWords.edgeNoReading)
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.inkDim)
-                .frame(minHeight: 44, alignment: .leading)
+            if let own = row.fleet?.holder {
+                switch own {
+                case .there:
+                    action(HypervisorWords.makeOwnAgain, HypervisorWords.makeOwnAgainFooter, "desktopcomputer") {
+                        AddProxmoxView(settings: settings, startNode: node, startOptions: ProxmoxOptions(holder: true, holderAgain: true))
+                    }
+                case .none:
+                    action(HypervisorWords.makeOwn, nil, "desktopcomputer") {
+                        AddProxmoxView(settings: settings, startNode: node, startOptions: ProxmoxOptions(holder: true))
+                    }
+                }
+            }
+            // THE FIREWALL, where it is off: the same setup, with the address
+            // filled in and the option already on.
+            if row.fleet?.fenced == false {
+                action(HypervisorWords.turnOnFirewall, nil, "lock.shield") {
+                    AddProxmoxView(settings: settings, startNode: node, startOptions: ProxmoxOptions(firewall: true))
+                }
+            }
+            // THE SAME SETUP, again: it finds what it made, keeps the image,
+            // and issues new access.
+            action(HypervisorWords.setUpAgain, HypervisorWords.againFooter, "arrow.triangle.2.circlepath") {
+                AddProxmoxView(settings: settings, startNode: node)
+            }
         }
+    }
+
+    private func action<Destination: View>(_ title: String, _ cost: String?, _ symbol: String, @ViewBuilder to destination: @escaping () -> Destination) -> some View {
+        NavigationLink {
+            destination()
+        } label: {
+            VStack(alignment: .leading, spacing: Design.Space.hair) {
+                Label(title, systemImage: symbol)
+                    .fleetType(.body)
+                if let cost {
+                    Text(cost)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                }
+            }
+            .frame(minHeight: 44, alignment: .leading)
+        }
+        .fleetCard(radius: Design.Radius.cardSmall)
+        .fleetRow()
+    }
+
+    private func heading(_ text: String) -> some View {
+        Text(text)
+            .fleetType(.section)
+            .foregroundStyle(Design.Palette.ink)
+            .accessibilityAddTraits(.isHeader)
+            .padding(.top, Design.Space.insideTight)
+            .fleetRow()
     }
 }
 
@@ -548,21 +619,21 @@ enum HypervisorWords {
     static let fleetSilent = "Your fleet didn't answer. Only pools on this phone are shown."
     static let fleetSilentEmpty = "Your fleet didn't answer, and this phone has no pool of its own."
     static let noBox = "None yet"
+    static let machinesHeader = "Machines"
+    static let setUpAgain = "Set it up again"
     static let turnOnFirewall = "Turn on the datacenter firewall"
     static let againFooter = "Keeps what it made; the old access stops working."
     // ITS OWN MACHINE, the same words on Android (HypervisorsScreen.kt).
     static let ownHeader = "Its own machine"
     static let ownNone = "None. Your machines with its access manage it while they’re on."
     static let makeOwn = "Make its own machine"
-    static let makeOwnAgain = "Make it again"
+    static let makeOwnAgain = "Make its own machine again"
     static let makeOwnAgainFooter = "Replaces it with a fresh one. Its disk is erased."
-    static let edgeHeader = "Its edge router"
     static let edgeNone = "None. Its machines are behind the cluster’s firewall alone."
     static let makeEdge = "Make the edge router"
-    static let makeEdgeAgain = "Make it again"
+    static let makeEdgeAgain = "Make the edge router again"
     static let makeEdgeAgainFooter = "Builds a fresh one. Machines have no internet access while it starts."
     // HOW IT IS, read by the cluster's own machine (docs/proxmox.md, "Watching it").
-    static let edgeHowItIs = "How it is"
     static let edgeNoReading = "No reading yet. The cluster’s own machine reads it once it’s up and approved."
     static let edgeUnchecked = "Couldn’t check the edge router."
     static func edgeThere(running: Bool, blocks: Bool, pair: Bool = false) -> String {

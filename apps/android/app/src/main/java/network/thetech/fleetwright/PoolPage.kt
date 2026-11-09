@@ -145,7 +145,7 @@ internal fun PoolPage(
 
     FullScreen(pool.address, onDismiss) {
         StatusCard(watch, masters, onSetUpAgain = if (admin == true) ({ settingUp = true }) else null)
-        if (edgesAsked && edgesKnown) EdgeCard(edges, edgesFailed) { showingEdges = true }
+        if (edgesAsked && edgesKnown) EdgeCard(edges, empty = if (edgesFailed) Manage.Words.edgeUnasked else Manage.Words.edgeNobody) { showingEdges = true }
         if (watch.phase == PoolWatch.Phase.Live && watch.snapshot.isEmpty) Hint(Manage.Words.seesNothing)
         for (kind in Manage.Kind.values()) {
             val rows = watch.snapshot.list(kind)
@@ -240,20 +240,34 @@ private fun StatusCard(watch: PoolWatch, masters: List<String>, onSetUpAgain: ((
 }
 
 /**
+ * THE EDGE ROUTERS CARD, ONE FOR BOTH KINDS OF HYPERVISOR: a Xen Orchestra
+ * pool's page and a Proxmox VE cluster's page show this same card in the same
+ * place, second, under the card that says how current the page is. Asked for,
+ * on seeing the two side by side: "Two completely dif UIs". Same as iOS
+ * (EdgeRoutersCard).
+ *
  * THE CARD IS THE VERDICT, AND THE PAGE IS THE REST (docs/reviews/copy-2026-11-06.md,
  * "The rule to adopt"): one word per router, its DNS beneath, and the whole
  * card the way in to EdgePage for the numbers, the log and what was refused.
- * Before any machine has read them, what is known is said.
+ * Before any machine has read them, [empty] says what is known, never that
+ * they are fine (C-5). [note] is what the hypervisor itself says of them,
+ * which only Proxmox VE does; trouble is set in the attention tone.
  */
 @Composable
-private fun EdgeCard(e: Fleet.VmEdges?, failed: Boolean, onOpen: () -> Unit) {
-    if (e == null) {
+internal fun EdgeCard(e: Fleet.VmEdges?, empty: String, note: Pair<String, Boolean>? = null, onOpen: () -> Unit) {
+    val noteLine: @Composable () -> Unit = {
+        note?.let { (text, trouble) ->
+            Text(text, style = Design.Style.label, color = if (trouble) Design.Palette.attention.now else Design.Palette.inkDim.now)
+        }
+    }
+    if (e == null || e.routers.isEmpty()) {
         Column(
             Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(Design.Space.groupTight),
             verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
         ) {
             Text(Manage.Words.edgeHeading, style = Design.Style.section, color = Design.Palette.ink.now, modifier = Modifier.semantics { heading() })
-            Text(if (failed) Manage.Words.edgeUnasked else Manage.Words.edgeNobody, style = Design.Style.label, color = Design.Palette.inkDim.now)
+            noteLine()
+            Text(empty, style = Design.Style.label, color = Design.Palette.inkDim.now)
         }
         return
     }
@@ -268,6 +282,7 @@ private fun EdgeCard(e: Fleet.VmEdges?, failed: Boolean, onOpen: () -> Unit) {
     ) {
         Text(Manage.Words.edgeHeading, style = Design.Style.section, color = Design.Palette.ink.now, modifier = Modifier.semantics { heading() })
         Text(Manage.Words.edgeRead(e.hostId, relative(e.at).toString()), style = Design.Style.label, color = Design.Palette.inkDim.now)
+        noteLine()
         e.routers.forEach { r -> RouterSummary(r) }
     }
 }

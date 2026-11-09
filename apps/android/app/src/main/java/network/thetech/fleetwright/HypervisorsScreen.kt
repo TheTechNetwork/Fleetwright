@@ -8,6 +8,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -250,23 +254,33 @@ private fun ChoiceRow(title: String, line: String, onClick: () -> Unit) {
 }
 
 /**
- * One hypervisor: the answer in a sentence, then the machines that checked it,
- * its details, and what can be done. The sentence is the page; the rest is the
- * evidence under it.
+ * One hypervisor the fleet reports: a Proxmox VE cluster, or a Xen Orchestra
+ * pool this phone does not hold.
+ *
+ * THE SAME PAGE AS A POOL'S (PoolPage), card for card, because the two side by
+ * side were "Two completely dif UIs": how current it is first, the edge
+ * routers second on the very card a pool's page has (EdgeCard), then what it
+ * is made of under a heading, then what can be done in one card at the foot.
+ * What differs is only what the hypervisor has: a cluster has machines that
+ * reach it and its own machine where a pool has hosts and VMs. Same as iOS.
+ *
+ * MOTION: the router words crossfade on the card, which is all that moves.
  */
 @Composable
 private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnOnFirewall: () -> Unit, onMakeOwn: (Boolean) -> Unit, onMakeEdge: (Boolean, Boolean, Boolean) -> Unit, onDismiss: () -> Unit) {
-    // HOW ITS EDGE ROUTER IS, as the machine reading it last did
+    // HOW ITS EDGE ROUTERS ARE, as the machine reading them last did
     // (src/fleet/host/edge-watch.js, docs/proxmox.md "Watching it"), every
     // half minute while the page is open: the same report a Xen Orchestra
-    // pool's card shows, found by the cluster's address. Same as iOS.
-    val watched = row.proxmox && row.fleet?.edge?.there == true
+    // pool's card shows, found by the address. A cluster that says it has
+    // none is not asked. Same as iOS.
+    val edge = row.fleet?.edge
+    val asks = !(row.proxmox && edge != null && !edge.there)
     var edges by remember { mutableStateOf<Fleet.VmEdges?>(null) }
     var edgesAsked by remember { mutableStateOf(false) }
     var edgesFailed by remember { mutableStateOf(false) }
     var showingEdge by remember { mutableStateOf(false) }
-    LaunchedEffect(row.address, watched) {
-        if (!watched) return@LaunchedEffect
+    LaunchedEffect(row.address, asks) {
+        if (!asks) return@LaunchedEffect
         while (true) {
             Fleet(settings).vmEdges()
                 .onSuccess { all -> edges = all?.firstOrNull { it.address == row.address }; edgesFailed = false }
@@ -280,12 +294,52 @@ private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain:
         return
     }
     FullScreen(title = row.address, onDismiss = onDismiss) {
-        Text(HypervisorWords.answer(row.fleet), style = Design.Style.body, color = Design.Palette.ink.now)
-        SectionHead("Machines")
+        // HOW IT IS: the verdict in a sentence, and the facts the machines
+        // could tell under it, the way a pool's card has who it signed in as
+        // and where its master answers.
+        Column(
+            Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).heightIn(min = 48.dp).padding(Design.Space.groupTight),
+            verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+        ) {
+            val answer = HypervisorWords.answer(row.fleet)
+            AnimatedContent(
+                targetState = answer,
+                transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
+                label = "hypervisor status",
+            ) { words ->
+                Text(words, style = Design.Style.body, color = if (HypervisorWords.wantsSomething(row.fleet, row.onPhone)) Design.Palette.attention.now else Design.Palette.ink.now)
+            }
+            row.fleet?.let { f -> HypervisorWords.facts(f).forEach { Text(it, style = Design.Style.label, color = Design.Palette.inkDim.now) } }
+            if (!row.proxmox && !row.onPhone) Text(HypervisorWords.XO_ELSEWHERE, style = Design.Style.label, color = Design.Palette.inkDim.now)
+        }
+        // THE EDGE ROUTERS, on a pool's card. A cluster says whether it has
+        // routers and how they run, so its card is drawn from that, reading
+        // or not; a pool here says nothing of them, so its card is drawn only
+        // once a machine has read some. Unsaid by an older box: no card.
+        if (row.proxmox && edge != null) {
+            if (edge.there) {
+                EdgeCard(
+                    edges,
+                    empty = if (!edgesAsked) HypervisorWords.CHECKING else if (edgesFailed) HypervisorWords.EDGE_UNCHECKED else HypervisorWords.EDGE_NO_READING,
+                    note = HypervisorWords.edgeThere(edge.running, edge.blocks, edge.pair) to !edge.running,
+                ) { showingEdge = true }
+            } else {
+                EdgeCard(null, empty = HypervisorWords.EDGE_NONE) {}
+            }
+        } else if (edges?.routers?.isNotEmpty() == true) {
+            EdgeCard(edges, empty = "") { showingEdge = true }
+        }
+        // THE MACHINES THAT CHECKED IT, one card each, under their heading as
+        // a pool's hosts are: the name, the one word beside it, and the
+        // machine's own words on why under Details.
+        SectionHead(HypervisorWords.MACHINES_HEADER)
         val boxes = row.fleet?.boxes ?: emptyList()
         if (boxes.isEmpty()) Hint(HypervisorWords.NO_BOX)
         boxes.forEach { box ->
-            Column(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+            Column(
+                Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).heightIn(min = 48.dp).padding(Design.Space.groupTight),
+                verticalArrangement = Arrangement.spacedBy(Design.Space.hair),
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(box.hostId, style = Design.Style.bodyStrong, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
                     Text(
@@ -304,83 +358,62 @@ private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain:
                 box.problem?.takeIf { it.isNotBlank() }?.let { Details(it) }
             }
         }
-        row.fleet?.let { f ->
-            val facts = HypervisorWords.facts(f)
-            if (facts.isNotEmpty()) {
-                SectionHead("Details")
-                facts.forEach { Text(it, style = Design.Style.body, color = Design.Palette.ink.now) }
-            }
-        }
-        // ITS EDGE ROUTER (docs/proxmox.md): there, or the setup that makes
-        // one. Unsaid by an older box, so nothing is drawn. Same as iOS.
-        val edge = row.fleet?.edge
-        if (row.proxmox && edge != null) {
-            SectionHead(HypervisorWords.EDGE_HEADER)
-            if (edge.there) {
-                Text(
-                    HypervisorWords.edgeThere(edge.running, edge.blocks, edge.pair),
-                    style = Design.Style.body,
-                    color = if (edge.running) Design.Palette.ink.now else Design.Palette.attention.now,
-                )
-                // THE VERDICT IN ONE WORD, AND THE PAGE BEHIND IT, in the
-                // words a pool's routers have (Manage.Words.edgeStatus). Before
-                // any machine has read it, that is what is said (C-5).
-                // ONE ROUTER IS "HOW IT IS"; A PAIR IS EACH BY NAME, each
-                // with its own word. Same as iOS.
-                val e = edges
-                if (e != null && e.routers.isNotEmpty()) {
-                    e.routers.forEach { r ->
-                        val (word, trouble) = Manage.Words.edgeStatus(r.reached, r.problem, r.gateway, r.role)
-                        Row(
-                            Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { showingEdge = true },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(if (e.routers.size > 1) r.name else HypervisorWords.EDGE_HOW_IT_IS, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
-                            Text(word, style = Design.Style.label, color = if (trouble) Design.Palette.attention.now else Design.Palette.ink.now)
-                            Text("  ›", style = Design.Style.body, color = Design.Palette.inkDim.now)
-                        }
-                    }
-                } else if (edgesAsked) {
-                    Hint(if (edgesFailed) HypervisorWords.EDGE_UNCHECKED else HypervisorWords.EDGE_NO_READING)
-                }
-            } else {
-                Text(HypervisorWords.EDGE_NONE, style = Design.Style.body, color = Design.Palette.inkDim.now)
-            }
-            Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
-                OpenRow(if (edge.there) HypervisorWords.MAKE_EDGE_AGAIN else HypervisorWords.MAKE_EDGE, onClick = { onMakeEdge(edge.there, edge.blocks, edge.pair) })
-            }
-            if (edge.there) Hint(HypervisorWords.MAKE_EDGE_AGAIN_FOOTER)
-        }
-        // ITS OWN MACHINE (docs/proxmox.md): there, or the setup that makes
-        // one. Unsaid by an older box, so nothing is drawn. Same as iOS.
+        // ITS OWN MACHINE (docs/proxmox.md), a card under its heading.
+        // Unsaid by an older box, so nothing is drawn. Same as iOS.
         val own = row.fleet?.holder
         if (row.proxmox && own != null) {
             SectionHead(HypervisorWords.OWN_HEADER)
-            if (own.name != null) {
-                Text(
-                    HypervisorWords.ownThere(own.name, own.running),
-                    style = Design.Style.body,
-                    color = if (own.running) Design.Palette.ink.now else Design.Palette.attention.now,
-                )
-            } else {
-                Text(HypervisorWords.OWN_NONE, style = Design.Style.body, color = Design.Palette.inkDim.now)
+            Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).heightIn(min = 48.dp).padding(Design.Space.groupTight)) {
+                if (own.name != null) {
+                    Text(HypervisorWords.ownThere(own.name, own.running), style = Design.Style.body, color = if (own.running) Design.Palette.ink.now else Design.Palette.attention.now)
+                } else {
+                    Text(HypervisorWords.OWN_NONE, style = Design.Style.body, color = Design.Palette.inkDim.now)
+                }
             }
-            Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
-                OpenRow(if (own.name != null) HypervisorWords.MAKE_OWN_AGAIN else HypervisorWords.MAKE_OWN, onClick = { onMakeOwn(own.name != null) })
-            }
-            if (own.name != null) Hint(HypervisorWords.MAKE_OWN_AGAIN_FOOTER)
         }
+        // WHAT CAN BE DONE, in one card at the foot as on a pool's page, with
+        // what each costs under it where it costs something. All of them are
+        // the same setup with the address filled in and an option already on.
         if (row.proxmox) {
             Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
-                // THE FIREWALL, where it is off: the same setup, with the
-                // address filled in and the option already on.
-                if (row.fleet?.fenced == false) OpenRow(HypervisorWords.TURN_ON_FIREWALL, onClick = onTurnOnFirewall)
-                OpenRow("Set it up again", onClick = onSetUpAgain)
+                if (edge != null) {
+                    ActionRow(
+                        if (edge.there) HypervisorWords.MAKE_EDGE_AGAIN else HypervisorWords.MAKE_EDGE,
+                        if (edge.there) HypervisorWords.MAKE_EDGE_AGAIN_FOOTER else null,
+                    ) { onMakeEdge(edge.there, edge.blocks, edge.pair) }
+                }
+                if (own != null) {
+                    ActionRow(
+                        if (own.name != null) HypervisorWords.MAKE_OWN_AGAIN else HypervisorWords.MAKE_OWN,
+                        if (own.name != null) HypervisorWords.MAKE_OWN_AGAIN_FOOTER else null,
+                    ) { onMakeOwn(own.name != null) }
+                }
+                // THE FIREWALL, where it is off.
+                if (row.fleet?.fenced == false) ActionRow(HypervisorWords.TURN_ON_FIREWALL, null, onTurnOnFirewall)
+                // THE SAME SETUP, again: it finds what it made, keeps the
+                // image, and issues new access.
+                ActionRow(HypervisorWords.SET_UP_AGAIN, HypervisorWords.AGAIN_FOOTER, onSetUpAgain)
             }
-            Hint(HypervisorWords.AGAIN_FOOTER)
-        } else if (!row.onPhone) {
-            Hint(HypervisorWords.XO_ELSEWHERE)
         }
+    }
+}
+
+/** One thing the page can do: the label and a chevron, and what it costs under them when it costs something, all one 48dp target. */
+@Composable
+private fun ActionRow(label: String, cost: String?, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(vertical = Design.Space.insideTight),
+        verticalArrangement = Arrangement.spacedBy(Design.Space.hair),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+            Text("  ›", style = Design.Style.body, color = Design.Palette.inkDim.now)
+        }
+        cost?.let { Text(it, style = Design.Style.label, color = Design.Palette.inkDim.now) }
     }
 }
 
@@ -398,21 +431,21 @@ object HypervisorWords {
     const val FLEET_SILENT = "Your fleet didn't answer. Only pools on this phone are shown."
     const val FLEET_SILENT_EMPTY = "Your fleet didn't answer, and this phone has no pool of its own."
     const val NO_BOX = "None yet"
+    const val MACHINES_HEADER = "Machines"
+    const val SET_UP_AGAIN = "Set it up again"
     const val TURN_ON_FIREWALL = "Turn on the datacenter firewall"
     const val AGAIN_FOOTER = "Keeps what it made; the old access stops working."
     // ITS OWN MACHINE, the same words on iOS (HypervisorsView.swift).
     const val OWN_HEADER = "Its own machine"
     const val OWN_NONE = "None. Your machines with its access manage it while they’re on."
     const val MAKE_OWN = "Make its own machine"
-    const val MAKE_OWN_AGAIN = "Make it again"
+    const val MAKE_OWN_AGAIN = "Make its own machine again"
     const val MAKE_OWN_AGAIN_FOOTER = "Replaces it with a fresh one. Its disk is erased."
-    const val EDGE_HEADER = "Its edge router"
     const val EDGE_NONE = "None. Its machines are behind the cluster’s firewall alone."
     const val MAKE_EDGE = "Make the edge router"
-    const val MAKE_EDGE_AGAIN = "Make it again"
+    const val MAKE_EDGE_AGAIN = "Make the edge router again"
     const val MAKE_EDGE_AGAIN_FOOTER = "Builds a fresh one. Machines have no internet access while it starts."
     // HOW IT IS, read by the cluster's own machine (docs/proxmox.md, "Watching it").
-    const val EDGE_HOW_IT_IS = "How it is"
     const val EDGE_NO_READING = "No reading yet. The cluster’s own machine reads it once it’s up and approved."
     const val EDGE_UNCHECKED = "Couldn’t check the edge router."
     fun edgeThere(running: Boolean, blocks: Boolean, pair: Boolean = false): String =

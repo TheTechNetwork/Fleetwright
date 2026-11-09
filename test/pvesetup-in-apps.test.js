@@ -223,6 +223,6 @@ test('both phones set every setup option as the script and the machines take it'
   assert.ok(hint && kotlin.includes(`const val FIREWALL_HINT = "${hint}"`));
   assert.match(script, /its own rules keep this node's web interface and SSH open to the local network/);
   // THE CLUSTER'S PAGE opens the setup with the firewall on where it is off.
-  assert.match(rd('apps/ios/Fleetwright/HypervisorsView.swift'), /if row\.fleet\?\.fenced == false \{\s*NavigationLink\(HypervisorWords\.turnOnFirewall\) \{\s*AddProxmoxView\(settings: settings, startNode: HypervisorAddress\.node\(row\.address\), startOptions: ProxmoxOptions\(firewall: true\)\)/);
-  assert.match(rd('apps/android/app/src/main/java/network/thetech/fleetwright/HypervisorsScreen.kt'), /if \(row\.fleet\?\.fenced == false\) OpenRow\(HypervisorWords\.TURN_ON_FIREWALL, onClick = onTurnOnFirewall\)/);
+  assert.match(rd('apps/ios/Fleetwright/HypervisorsView.swift'), /if row\.fleet\?\.fenced == false \{\s*action\(HypervisorWords\.turnOnFirewall, nil, "lock\.shield"\) \{\s*AddProxmoxView\(settings: settings, startNode: node, startOptions: ProxmoxOptions\(firewall: true\)\)/);
+  assert.match(rd('apps/android/app/src/main/java/network/thetech/fleetwright/HypervisorsScreen.kt'), /if \(row\.fleet\?\.fenced == false\) ActionRow\(HypervisorWords\.TURN_ON_FIREWALL, null, onTurnOnFirewall\)/);
 });

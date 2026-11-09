@@ -24,6 +24,8 @@ const IOS_THROUGH = read('apps/ios/Fleetwright/ProxmoxThroughMachine.swift');
 const ANDROID_THROUGH = read(`${A}/ProxmoxThrough.kt`);
 const IOS_PAGE = read('apps/ios/Fleetwright/HypervisorsView.swift');
 const ANDROID_PAGE = read(`${A}/HypervisorsScreen.kt`);
+const IOS_MANAGE_VIEW = read('apps/ios/Fleetwright/ManageView.swift');
+const ANDROID_POOL_PAGE = read(`${A}/PoolPage.kt`);
 
 test('both phones look, ask the node its address, and write the pin file with the box’s commands', () => {
   const swift = (/** @type {string} */ name) => new RegExp(`static let ${name} = "((?:[^"\\\\]|\\\\.)*)"`).exec(IOS_SSH)?.[1].replace(/\\"/g, '"');
@@ -125,7 +127,7 @@ test('both phones offer the edge router with the box’s flags and keys, and say
   assert.ok(ANDROID_SHEET.includes('if (edge && edgeAgain == true) a.append(" --edge-again")'));
   for (const key of ['"edge"', '"edgeBlock"', '"edgeAgain"']) assert.ok(IOS_ADD.includes(key) && ANDROID_SHEET.includes(key), key);
   assert.match(IOS_ADD, /kept\.edgeAgain = nil/);
-  for (const [ios, android] of [['edgeHeader', 'EDGE_HEADER'], ['edgeNone', 'EDGE_NONE'], ['makeEdge', 'MAKE_EDGE'], ['makeEdgeAgain', 'MAKE_EDGE_AGAIN'], ['makeEdgeAgainFooter', 'MAKE_EDGE_AGAIN_FOOTER']]) {
+  for (const [ios, android] of [['edgeNone', 'EDGE_NONE'], ['makeEdge', 'MAKE_EDGE'], ['makeEdgeAgain', 'MAKE_EDGE_AGAIN'], ['makeEdgeAgainFooter', 'MAKE_EDGE_AGAIN_FOOTER']]) {
     const a = new RegExp(`static let ${ios} = "([^"]+)"`).exec(IOS_PAGE)?.[1];
     assert.ok(a, `iOS has no ${ios}`);
     assert.equal(new RegExp(`const val ${android} = "([^"]+)"`).exec(ANDROID_PAGE)?.[1], a, `${android} differs`);
@@ -140,20 +142,33 @@ test('both phones offer the edge router with the box’s flags and keys, and say
   }
 });
 
-test('both phones show how the edge router is, in a pool’s words, and open the routers’ page', () => {
-  // The same words on both, and the same one-word verdict a pool's card gives.
-  for (const [s, k] of [['edgeHowItIs', 'EDGE_HOW_IT_IS'], ['edgeNoReading', 'EDGE_NO_READING'], ['edgeUnchecked', 'EDGE_UNCHECKED']]) {
+test('both phones show a cluster’s edge routers on the very card a pool’s page has, in the same place', () => {
+  // Asked for on seeing the two pages side by side: "Two completely dif UIs".
+  // One card, shared, and both pages draw it second, under how current it is.
+  for (const [s, k] of [['edgeNoReading', 'EDGE_NO_READING'], ['edgeUnchecked', 'EDGE_UNCHECKED'], ['machinesHeader', 'MACHINES_HEADER'], ['setUpAgain', 'SET_UP_AGAIN']]) {
     const ios = new RegExp(`static let ${s} = "([^"]*)"`).exec(IOS_PAGE)?.[1];
     assert.ok(ios, `iOS has no ${s}`);
     assert.equal(new RegExp(`const val ${k} = "([^"]*)"`).exec(ANDROID_PAGE)?.[1], ios, `${s} differs`);
     assert.ok(ios.length <= 100);
   }
-  assert.match(IOS_PAGE, /Manage\.Words\.edgeStatus\(reached: r\.reached, problem: r\.problem, gateway: r\.gateway, role: r\.role\)/);
-  assert.match(ANDROID_PAGE, /Manage\.Words\.edgeStatus\(r\.reached, r\.problem, r\.gateway, r\.role\)/);
-  // The report found by the cluster's address, and the pool's page behind it.
+  assert.match(IOS_MANAGE_VIEW, /struct EdgeRoutersCard: View/);
+  assert.match(IOS_MANAGE_VIEW, /Manage\.Words\.edgeStatus\(reached: r\.reached, problem: r\.problem, gateway: r\.gateway, role: r\.role\)/);
+  assert.match(IOS_MANAGE_VIEW, /EdgeRoutersView\(edges: e\)/);
+  assert.match(ANDROID_POOL_PAGE, /internal fun EdgeCard\(e: Fleet\.VmEdges\?, empty: String, note: Pair<String, Boolean>\? = null/);
+  // The pool's page and the cluster's page both use it, and neither draws its own.
+  assert.match(IOS_MANAGE_VIEW, /EdgeRoutersCard\(edges: edges, empty:/);
+  assert.match(IOS_PAGE, /return EdgeRoutersCard\(\n?\s*edges: edges,/);
+  assert.doesNotMatch(IOS_PAGE, /EdgeRoutersView\(edges:/);
+  assert.match(ANDROID_PAGE, /EdgeCard\(\s*edges,/);
+  assert.doesNotMatch(ANDROID_PAGE, /Manage\.Words\.edgeStatus/);
+  // Second on both pages: the status card, then the routers.
+  const iosBody = IOS_PAGE.slice(IOS_PAGE.indexOf('struct HypervisorPageView'));
+  assert.ok(iosBody.indexOf('statusCard') < iosBody.indexOf('edgeCard') && iosBody.indexOf('edgeCard') < iosBody.indexOf('machines'));
+  const androidBody = ANDROID_PAGE.slice(ANDROID_PAGE.indexOf('private fun HypervisorPage('));
+  assert.ok(androidBody.indexOf('HypervisorWords.answer(') < androidBody.indexOf('EdgeCard(') && androidBody.indexOf('EdgeCard(') < androidBody.indexOf('MACHINES_HEADER'));
+  // The report found by the cluster's address.
   assert.match(IOS_PAGE, /vmEdges\(\)\?\.first \{ \$0\.address == row\.address \}/);
   assert.match(ANDROID_PAGE, /all\?\.firstOrNull \{ it\.address == row\.address \}/);
-  assert.match(IOS_PAGE, /EdgeRoutersView\(edges: e\)/);
   assert.match(ANDROID_PAGE, /EdgePage\(it\) \{ showingEdge = false \}/);
   // Its own machine is made first, so the router knows where to send its logs.
   assert.ok(PVESETUP_STEPS.indexOf('holder') < PVESETUP_STEPS.indexOf('edge'));
