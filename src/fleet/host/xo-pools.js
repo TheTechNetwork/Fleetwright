@@ -126,6 +126,13 @@ const NET_UNIT = [
 ].join('\n');
 /** The vault item a person's SSH public keys are kept in, one per line. */
 export const SSH_KEYS_ITEM = 'secret:SSH_AUTHORIZED_KEYS';
+/**
+ * A PHONE'S OWN KEY, one item a phone, beside the person's pasted keys: the
+ * app's terminal signs in with it (docs/hypervisors.md, "SSH in the app"). Its
+ * own item because the vault gives nothing back to a phone, so adding to the
+ * pasted list would mean replacing it; a machine made after takes both.
+ */
+export const SSH_PHONE_KEY_PREFIX = 'secret:SSH_KEY_PHONE.';
 const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/=]{16,8192}(?: [^\n]{0,200})?$/;
 
 /**
@@ -146,6 +153,36 @@ const SSH_KEY_RE = /^(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-s
  * before it was set up again does not report a pool for ever.
  */
 export const MISSING_FORGET_MS = 24 * 60 * 60_000;
+
+/**
+ * Whether a vault item holds SSH public keys: the person's pasted list, or a
+ * phone's own key (SSH_PHONE_KEY_PREFIX). A machine takes all of them.
+ *
+ * @param {unknown} name @returns {boolean}
+ */
+export function isSshKeysItem(name) {
+  return name === SSH_KEYS_ITEM || (typeof name === 'string' && name.startsWith(SSH_PHONE_KEY_PREFIX) && /^[A-Za-z0-9_.-]{1,40}$/.test(name.slice(SSH_PHONE_KEY_PREFIX.length)));
+}
+
+/**
+ * A running machine of this person's that a look saw, at its address: where
+ * SSH from away dials. Shared by both drivers (pve-pools.js). Null for a
+ * machine of anybody else's, one not running, or one with no address yet.
+ *
+ * @param {Map<string, any>|null} seen @param {Map<string, string>} owners
+ * @param {string} owner @param {string} address @param {string} name
+ * @returns {{ host: string, port: number }|null}
+ */
+export function sshTarget(seen, owners, owner, address, name) {
+  const who = String(owner || '').toLowerCase();
+  if (!seen || !who || !/^vm-[0-9a-f]{12}$/.test(String(name)) || owners.get(`${address} ${name}`) !== who) return null;
+  for (const entry of seen.values()) {
+    if (entry?.address !== address || entry?.owner !== who) continue;
+    const m = (entry.machines || []).find((/** @type {any} */ x) => x?.name === name);
+    if (m && m.state === 'Running' && typeof m.ip === 'string' && /^\d{1,3}(\.\d{1,3}){3}$/.test(m.ip)) return { host: m.ip, port: 22 };
+  }
+  return null;
+}
 
 /**
  * A person's SSH public keys, from the item they keep them in, each one
@@ -503,6 +540,8 @@ export class XoPools {
     this.handing = new Set();
     /** @type {Map<string, Seen>} what the last look found, keyed as `held` */
     this.seen = new Map();
+    /** Whose each machine is, `<address> <name>` to the person it was made for. @type {Map<string, string>} */
+    this.machineOwners = new Map();
     /**
      * THE POOLS EACH TOKEN HAS SEEN, keyed as `held`, then by pool id: its
      * name, when it was last seen, and since when a look that reached Xen
@@ -537,7 +576,7 @@ export class XoPools {
       const items = Array.isArray(a?.items) ? a.items : [];
       for (const i of items) {
         if (i?.name === 'claude' && typeof i.value === 'string' && CLAUDE_RE.test(i.value) && owner) claude.set(owner, i.value);
-        if (i?.name === SSH_KEYS_ITEM && owner) ssh.set(owner, sshKeys(i.value));
+        if (isSshKeysItem(i?.name) && owner) ssh.set(owner, [...(ssh.get(owner) ?? []), ...sshKeys(i.value)].slice(0, 20));
         const record = owner ? poolRecord(String(i?.name || ''), i?.value) : null;
         if (record) held.set(`${owner} ${record.address}${record.box ? ` ${record.box}` : ''}`, { owner, record });
       }
@@ -656,8 +695,11 @@ export class XoPools {
         // AND THE MACHINES MADE THERE, what each is and where it is, for the
         // phone's page of it. Read after the sweep, so a removed one is gone.
         const imageNames = new Map(templates.map((t) => [t.id, String(t.name_label || '').slice(0, 80)]));
-        const machines = vms
-          .filter((v) => Array.isArray(v?.tags) && v.tags.includes(VM_IMAGE.sessionTag) && /^vm-[0-9a-f]{12}$/.test(String(v.name_label)) && inFleetSet(v, set))
+        const fleetVms = vms.filter((v) => Array.isArray(v?.tags) && v.tags.includes(VM_IMAGE.sessionTag) && /^vm-[0-9a-f]{12}$/.test(String(v.name_label)) && inFleetSet(v, set));
+        // WHOSE EACH IS, by its tag, kept here alone: SSH from away reaches
+        // only a machine made for the person asking (sshAddress).
+        for (const v of fleetVms) this.machineOwners.set(`${record.address} ${v.name_label}`, String(tagValue(v, FOR_PREFIX) || '').toLowerCase());
+        const machines = fleetVms
           .map((v) => {
             const until = Number(tagValue(v, VM_IMAGE.untilPrefix));
             const made = Number(tagValue(v, MADE_PREFIX));
@@ -1273,6 +1315,21 @@ export class XoPools {
    * @param {string} owner @param {string} address
    * @returns {{ host: string, port: number }|null}
    */
+  /**
+   * WHERE SSH FROM AWAY DIALS (console-tunnel.js): a running machine made
+   * for THIS person on a pool this box holds for them, at the address it
+   * reported, port 22, and nothing for anybody else's machine or any other
+   * address. The phone speaks SSH itself through the bytes; this box carries
+   * ciphertext. docs/hypervisors.md, "SSH in the app".
+   *
+   * @param {string} owner @param {string} address @param {string} name
+   * @returns {{ host: string, port: number }|null}
+   */
+  sshAddress(owner, address, name) {
+    return sshTarget(this.#heldAt(owner, address) ? this.seen : null, this.machineOwners, owner, address, name);
+  }
+
+  /** @param {string} owner @param {string} address */
   consoleAddress(owner, address) {
     const held = this.#heldAt(owner, address);
     if (!held || held.record.plain || !held.record.pin) return null;

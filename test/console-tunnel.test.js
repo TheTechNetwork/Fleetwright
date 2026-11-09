@@ -188,3 +188,45 @@ test('bytes before the box has connected, or that are not ours, are not carried'
   assert.equal(p.got.at(-1).op, 'closed');
   assert.match(p.got.at(-1).text, /bytes it does not carry/);
 });
+
+// SSH FROM AWAY, to a machine of the person's: the machine named goes with
+// the dial, and the box dials that machine's address, port 22, only where it
+// says the machine is theirs and running; an ill-formed name is refused at
+// the coordinator before any box is asked.
+test('SSH from away dials only a running machine of the person’s, named in the dial', async () => {
+  const core = new CoordinatorCore({});
+  /** @type {any[]} */
+  const asked = [];
+  /** @type {string[]} */
+  const dialed = [];
+  const box = new ConsoleTunnels({
+    send: (frame) => void core.onHostMessage('deb14', { kind: 'tunnel', ...frame }),
+    where: (who, address, machine) => {
+      asked.push([who, address, machine]);
+      return machine === 'vm-aaaaaaaaaaaa' ? { host: '127.0.0.1', port: 1 } : null;
+    },
+    connect: (o) => {
+      dialed.push(`${o.host}:${o.port}`);
+      return net.connect(o);
+    },
+  });
+  core.registry.connect('deb14', (/** @type {any} */ msg) => { if (msg.kind === 'tunnel') box.onFrame(msg); });
+  core.registry.recordHealth('deb14', { hub: { reachable: true }, protocol: 17, maxSessions: 5, running: 0, free: 5, labels: [], xo: [{ owner: OWNER, address: XO, reachable: true }] });
+  const sent = (/** @type {string} */ machine) => {
+    /** @type {any[]} */
+    const got = [];
+    const answer = core.openTunnel({ email: OWNER }, PHONE, { address: XO, machine }, { send: (m) => got.push(m), close: () => {} });
+    return { answer, got };
+  };
+  const bad = sent('vm-zz; rm -rf /');
+  assert.equal(/** @type {any} */ (bad.answer).error.code, 'bad_params');
+  const other = sent('vm-bbbbbbbbbbbb');
+  await new Promise((r) => setImmediate(r));
+  assert.match(other.got.at(-1).text, /no running machine of yours called vm-bbbbbbbbbbbb/);
+  const mine = sent('vm-aaaaaaaaaaaa');
+  assert.equal(mine.answer.ok, true);
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(asked.map((a) => a[2]), ['vm-bbbbbbbbbbbb', 'vm-aaaaaaaaaaaa']);
+  assert.deepEqual(dialed, ['127.0.0.1:1']);
+  core.tunnelPhoneGone(/** @type {any} */ (mine.answer).tunnel);
+});

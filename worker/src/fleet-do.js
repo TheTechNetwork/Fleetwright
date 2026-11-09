@@ -1186,7 +1186,7 @@ export class Fleet {
       const opened = this.core.openTunnel(
         requesterFor(client),
         client.id ?? null,
-        { address: url.searchParams.get('address') },
+        { address: url.searchParams.get('address'), machine: url.searchParams.get('machine') },
         {
           send: (msg) => server.send(JSON.stringify(msg)),
           close: (code, reason) => server.close(code, reason),

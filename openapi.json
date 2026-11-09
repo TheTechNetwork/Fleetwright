@@ -3372,6 +3372,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "machine",
+            "in": "query",
+            "required": false,
+            "description": "SSH to this machine of yours on the pool (`vm-` and twelve hex digits) instead of the pool's console: the machine carrying it connects to the machine's address, port 22, only for a running machine made for you. See docs/hypervisors.md, \"SSH in the app\".",
+            "schema": {
+              "type": "string",
+              "pattern": "^vm-[0-9a-f]{12}$"
+            }
           }
         ],
         "responses": {
