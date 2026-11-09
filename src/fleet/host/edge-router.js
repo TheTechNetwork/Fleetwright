@@ -256,6 +256,21 @@ export const EDGE_FILTER = Object.freeze({
 export const EDGE_UPDATES = Object.freeze({ plugin: 'os-xen', hours: '10' });
 
 /**
+ * THE EDGE ROUTER ON PROXMOX VE (docs/proxmox.md, "The edge router"): the
+ * same image and the same configuration, made by the cluster's setup script
+ * as root, which has no Fleetwright to build one with. So the two
+ * configurations it can be given are built here (scripts/build-pve-edge.mjs)
+ * and kept beside the script, which pins their SHA-256: filtering, and
+ * filtering that drops what the threat rules match. virtio's names for the
+ * WAN and the LAN, and QEMU's guest agent for the plugin the daily update
+ * keeps.
+ */
+export const PVE_EDGE = Object.freeze({ wanIf: 'vtnet0', lanIf: 'vtnet1', plugin: 'os-qemu-guest-agent' });
+
+/** The two configurations, as the setup script is given them. @param {boolean} block */
+export const pveEdgeConfig = (block) => edgeConfig({ ...PVE_EDGE, block });
+
+/**
  * TWO EDGES (`ha` in edgeConfig): the CARP group of the uplink, each lab's
  * the next, and the second router's name in Xen Orchestra.
  */
@@ -494,10 +509,14 @@ export function fleetHosts(coordinatorUrl) {
  * cannot tell for good, and two of the five programs syslog forwards had
  * nothing to say. Marked EDGE.measuredTag; an edge without it is rebuilt.
  *
- * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null, watch?: import('./edge-credentials.js').Watch|null, syslog?: string[] }} [opts]
+ * ON PROXMOX VE (docs/proxmox.md, "The edge router"): the same, with the
+ * interfaces virtio names (`vtnet0`, `vtnet1`) and QEMU's guest agent as the
+ * plugin the daily update keeps (`plugin`), so Proxmox shows its addresses.
+ *
+ * @param {{ length?: number, wanIf?: string, lanIf?: string, block?: boolean, labs?: boolean[], fleet?: string[], ha?: { node: 0|1, password: string }|null, watch?: import('./edge-credentials.js').Watch|null, syslog?: string[], plugin?: string }} [opts]
  * @returns {Buffer}
  */
-export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], ha = null, watch = null, syslog = [], length = EDGE_IMAGE.grow.room } = {}) {
+export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs = [], fleet = [], ha = null, watch = null, syslog = [], plugin = EDGE_UPDATES.plugin, length = EDGE_IMAGE.grow.room } = {}) {
   const watched = watch ? watchConfig(watch, syslog) : null;
   const { address, prefix } = EDGE.lan;
   if (ha && !((ha.node === 0 || ha.node === 1) && /^[0-9a-f]{16,64}$/.test(ha.password))) throw new Error('a pair of edges needs which one this is and their shared password');
@@ -564,7 +583,7 @@ export function edgeConfig({ wanIf = 'xn0', lanIf = 'xn1', block = false, labs =
     `<webgui><protocol>https</protocol>${watched ? watched.certref : ''}<noantilockout>1</noantilockout></webgui>\n` +
     '<disablenatreflection>yes</disablenatreflection><usevirtualterminal>1</usevirtualterminal><disableconsolemenu/>\n' +
     '<disablechecksumoffloading>1</disablechecksumoffloading><disablesegmentationoffloading>1</disablesegmentationoffloading><disablelargereceiveoffloading>1</disablelargereceiveoffloading>\n' +
-    `<pf_share_forward>1</pf_share_forward><firmware><plugins>${EDGE_UPDATES.plugin}</plugins></firmware>\n` +
+    `<pf_share_forward>1</pf_share_forward><firmware><plugins>${plugin}</plugins></firmware>\n` +
     '</system>\n' +
     (watched ? watched.cert : '') +
     '<interfaces>\n' +

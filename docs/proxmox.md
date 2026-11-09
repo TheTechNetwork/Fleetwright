@@ -53,12 +53,11 @@ sealed once it has joined; the clock on the machine, swept by any box.
   on a network the person chose for it (`make`). The script turns it on only
   when asked (`--enable-firewall`), because it is the person's datacenter.
 - **The firewall isolates; it does not show anything.** A machine behind
-  `fleetwright-fence` cannot reach your network, and nothing records what
-  it did reach. Inspecting traffic needs it to pass through something that
-  looks: a router VM in front of it, which is what XCP-ng's edge router is,
-  or a mirror of its interface on the node (Open vSwitch's port mirroring,
-  or `tc mirred` on a Linux bridge) into a capture. Neither is built here,
-  and Xen Orchestra's "Seeing what crossed a lab" is not built either.
+  `fleetwright-fence` alone cannot reach your network, and nothing records
+  what it did reach. **The edge router** (below) is what looks: the same
+  OPNsense router a Xen Orchestra pool has, filtering names and watching or
+  dropping threat traffic. A lab on Proxmox is still behind the firewall
+  alone, and Xen Orchestra's "Seeing what crossed a lab" is not built either.
 - **The ticket is readable** by anybody holding the token, in the machine's
   `smbios1`, for the machine's life; Xen Orchestra's cloud-init drive was
   destroyed five minutes after boot. The ticket is single use, lives fifteen
@@ -385,6 +384,48 @@ and no box ever offered it.
 The snippets the images boot with, the privileges and the image pins are
 written in the script, which has no Fleetwright to import them from, and in
 `pve-pools.js`; `test/pve-pools.test.js` holds the two equal.
+
+### The edge router
+
+Asked for: *"no firewall logs blocking or DPI that's all things we worked
+hard on in xen"*. The setup's step `edge` (`--edge`, or `--edge-block` to
+drop what the threat rules match) makes **the same router a Xen Orchestra
+pool has** (`hypervisors.md`, "The edge router" and "What the edge
+filters"): OPNsense with no login, Unbound refusing names on abuse.ch
+ThreatFox and Hagezi's threat feeds, no other resolver reachable, nothing
+private reachable, and Suricata with the four Emerging Threats Open rule
+files, logging, or dropping inline.
+
+- **The same image and the same configuration.** The fleet's own OPNsense
+  build (`EDGE_IMAGE`), downloaded by the node and checked against its
+  pinned SHA-256, and a configuration the boxes' own `edgeConfig` builds:
+  the setup has no Fleetwright to build one with, so the two it can be given
+  (filtering, and dropping) are built by `scripts/build-pve-edge.mjs`, kept
+  beside the script and pinned in it. The script writes the configuration
+  into the image with the same edits the boxes make on Xen Orchestra, each
+  byte checked against what must be there before it is replaced.
+- **For virtio**: its WAN `vtnet0` on the setup's bridge, its LAN `vtnet1` on
+  `fwedge`, a network of its own with no address of the node's on it, and
+  QEMU's guest agent as the plugin its daily update keeps, so Proxmox shows
+  its addresses.
+- **Outside the pool**, as the cluster's own machine is, so the token can
+  neither change nor remove it, and seen by it with `VM.Audit` on it alone.
+- **Machines go behind it.** While it is up, a machine made on the default
+  network goes on `fwedge`, still behind the cluster's firewall too, so it is
+  made even where the datacenter's firewall is off: the router's own rules
+  hold it to the internet. A router that is off is no way out, and nothing
+  is put behind it.
+- **Running the setup again keeps it**, and starts it if it is off. Changing
+  whether it drops, or **Make it again**, builds a new one and removes the old
+  once the new image is ready, so machines lose their way out only while
+  the new one starts.
+- It needs about 4 GB free in `/var/tmp` on the node while it is built.
+
+**Not built yet**: watching it from the phone (its CARP, Unbound and
+gateway status and its syslog, which Xen Orchestra's routers send to the
+boxes that watch them), two of them, and labs behind it. **Not yet run** on a
+real node: the image under KVM's virtio, which it was checked under QEMU
+with, and `import-from` with the storage the setup chose.
 
 ### A machine of its own
 

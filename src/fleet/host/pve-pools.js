@@ -97,6 +97,15 @@ export const PVE_FENCE_GROUP = 'fleetwright-fence';
  */
 export const PVE_GROUP_ZONE = 'fwgrp';
 export const PVE_LAB_ZONE = 'fwlab';
+/**
+ * THE EDGE ROUTER'S LAN, a network of its own the setup makes when asked for
+ * one (install/fleetwright-pve-setup, step `edge`): a machine put on it
+ * reaches the world only through the router, which filters what it does.
+ */
+export const PVE_EDGE_ZONE = 'fwedge';
+/** The tag the setup gives the edge router, outside the pool, and the one beside it on a router that drops what the threat rules match. */
+export const PVE_EDGE_TAG = 'fleetwright-edge';
+export const PVE_EDGE_BLOCKS_TAG = 'fleetwright-edge-blocks';
 export const PVE_LAB_ALIAS = 'fleetwright-lab:';
 /** The per-machine ipset a closed lab's HTTPS may go to. */
 export const PVE_ALLOW_SET = 'fwallow';
@@ -153,7 +162,7 @@ const MAX_MACHINES = 200;
 /**
  * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', name?: string, grants?: any, vmids?: { from: number, to: number } }} PveRecord
  * @typedef {{ id: string, name: string, key: string|null, os: string|null, node: string, vmid: number, pool: string|null, poolName: string|null, bridge: string|null }} PveImage
- * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string, lab?: 'open'|'closed', gateway?: string|null, taken?: boolean|null }} PveNetwork
+ * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string, lab?: 'open'|'closed', gateway?: string|null, taken?: boolean|null, edge?: boolean }} PveNetwork
  */
 
 const TOKEN_RE = /^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,64}![A-Za-z0-9._-]{1,64}=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -392,6 +401,22 @@ async function poolVms(api, pool) {
 }
 
 /**
+ * THE EDGE ROUTER, as the setup made it (install/fleetwright-pve-setup, step
+ * `edge`), found as the cluster's own machine is: outside the pool, tagged,
+ * and seen only by the VM.Audit the setup gave on it.
+ *
+ * @param {any} api @param {string} pool
+ * @returns {Promise<Array<{ name: string, running: boolean, blocks: boolean }>>}
+ */
+async function edgeVms(api, pool) {
+  const all = await api.get('/cluster/resources', { type: 'vm' }).catch(() => []);
+  return (Array.isArray(all) ? all : [])
+    .filter((m) => m?.type === 'qemu' && (m.pool ?? '') !== pool && Number(m.template) !== 1 && tagsOf(m).includes(PVE_EDGE_TAG))
+    .map((m) => ({ name: String(m.name || '').slice(0, 80), running: m.status === 'running', blocks: tagsOf(m).includes(PVE_EDGE_BLOCKS_TAG) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
  * THE CLUSTER'S OWN MACHINE, as the setup made it (install/fleetwright-pve-setup,
  * step `holder`): outside the pool, so the token can do nothing to it, and
  * tagged. The token sees it only because the setup gave it VM.Audit on that
@@ -460,7 +485,7 @@ export function networksOf(perms, address, vnets = [], gateways = new Map()) {
     const m = /^\/sdn\/zones\/([A-Za-z0-9_-]{1,40})\/([A-Za-z0-9_.-]{1,40})$/.exec(path);
     if (!m || !privs?.['SDN.Use']) continue;
     const [, zone, name] = m;
-    const base = { id: pveIdOf(address, 'net', `${zone}/${name}`), name, pool: null, group: zone === PVE_GROUP_ZONE, zone };
+    const base = { id: pveIdOf(address, 'net', `${zone}/${name}`), name, pool: null, group: zone === PVE_GROUP_ZONE, zone, ...(zone === PVE_EDGE_ZONE ? { edge: true } : {}) };
     if (zone === PVE_LAB_ZONE) {
       const kind = alias.get(`${zone}/${name}`)?.startsWith(PVE_LAB_ALIAS) ? alias.get(`${zone}/${name}`)?.slice(PVE_LAB_ALIAS.length) : null;
       if (kind !== 'open' && kind !== 'closed') continue;
@@ -774,6 +799,9 @@ export class PvePools {
       // THE CLUSTER'S OWN MACHINE, by name and whether it is up, for the
       // phone to say it is there; and whether this box is it.
       holders: (await holderVms(api, record.pool)).map(({ name, running }) => ({ pool: poolEntry.id, name, running })),
+      // THE EDGE ROUTER (docs/proxmox.md, "The edge router"): whether it is
+      // up, and whether it drops what the threat rules match.
+      edges: (await edgeVms(api, record.pool)).map((e) => ({ pool: poolEntry.id, ...e })),
       ...(this.holderFor && this.holderFor === record.address ? { holder: true } : {}),
       fenced,
       supported,
@@ -813,6 +841,10 @@ export class PvePools {
     if (labNet && !labNet.gateway) return { ok: false, text: `${labNet.name} has no gateway this box could read, so a machine there would have no names. It was not made; run the setup again.` };
     const chosen = network && !lab ? seen.networks.find((/** @type {any} */ n) => n.id === network && !n.group && !n.lab) : null;
     if (network && !lab && !chosen) return { ok: false, text: 'That network is not one this box saw on your cluster, so the machine was not made.' };
+    // BEHIND THE EDGE ROUTER by default, while one is up: its LAN is the way
+    // out, so what the machine does is filtered for threats. Still behind
+    // the cluster's firewall too, which holds it to the internet.
+    const uplink = !chosen && !labNet && (seen.edges ?? []).some((/** @type {any} */ e) => e.running) ? seen.networks.find((/** @type {any} */ n) => n.edge) ?? null : null;
     // A GROUP NETWORK, as well as its own: only one of the cluster's.
     const groupNet = group ? seen.networks.find((/** @type {any} */ n) => n.id === group && n.group) : null;
     if (group && !groupNet) return { ok: false, text: 'That is not a group network this box saw on your cluster, so the machine was not made.' };
@@ -820,7 +852,9 @@ export class PvePools {
     // datacenter's firewall off reaches everything that bridge does. Made on a
     // network the person chose, it reaches what they chose; made by default,
     // it would reach their network without their having said so.
-    if (!chosen && seen.fenced !== true) {
+    // Behind the edge router it reaches nothing private either way: the
+    // router's own rules hold it to the internet (docs/hypervisors.md).
+    if (!chosen && !uplink && seen.fenced !== true) {
       return {
         ok: false,
         text: seen.fenced === false
@@ -871,7 +905,7 @@ export class PvePools {
           return { ok: false, unreachable: true, text: `${record.address} could not be reached from here: ${/** @type {Error} */ (e).message}` };
         }
         try {
-          await api.waitTask(await api.post(`${src}/clone`, { newid: next, name, pool: record.pool, description: markText({ for: who, until, made, from: image.id, on: labNet?.name ?? chosen?.name ?? image.bridge, grp: groupNet?.name ?? null, gip: joined?.address ?? null, lab: labNet?.name ?? null }) }), { sleep: this.sleep });
+          await api.waitTask(await api.post(`${src}/clone`, { newid: next, name, pool: record.pool, description: markText({ for: who, until, made, from: image.id, on: labNet?.name ?? chosen?.name ?? uplink?.name ?? image.bridge, grp: groupNet?.name ?? null, gip: joined?.address ?? null, lab: labNet?.name ?? null }) }), { sleep: this.sleep });
           vmid = next;
         } catch (e) {
           lastError = e;
@@ -894,7 +928,7 @@ export class PvePools {
         smbios1,
         ciuser: 'fleetwright',
         ...(keys.length ? { sshkeys: encodeURIComponent(keys.join('\n')) } : {}),
-        net0: net0On(cfg.net0, labNet?.name ?? chosen?.name ?? null),
+        net0: net0On(cfg.net0, labNet?.name ?? chosen?.name ?? uplink?.name ?? null),
         // ON THE GROUP NETWORK TOO, at its own address: Proxmox's cloud-init
         // writes it, so it is set before anything inside listens.
         ...(joined && groupNet ? { net1: `virtio=${joined.mac},bridge=${groupNet.name},firewall=1`, ipconfig1: `ip=${joined.address}/16` } : {}),
@@ -921,7 +955,7 @@ export class PvePools {
           `Making ${name} from ${image.name} on ${record.address}` +
           (labNet
             ? `, in ${labNet.name}: ${closed ? 'it reaches the fleet and Claude and nothing else' : 'it reaches the internet and nothing private'}`
-            : chosen ? `, on ${chosen.name}` : ', behind the cluster’s firewall: it reaches the internet and nothing private') +
+            : chosen ? `, on ${chosen.name}` : uplink ? ', behind the edge router: it reaches the internet and nothing private, and what it does is filtered for threats' : ', behind the cluster’s firewall: it reaches the internet and nothing private') +
           `${joined && groupNet ? `, with the others on ${groupNet.name} at ${joined.address}` : ''}. ` +
           `It joins the fleet as your temporary machine in a minute or two, for ${life} minutes${claude ? '' : ', and has no Claude login of yours to run on: keep one in your vault'}.`,
       };
