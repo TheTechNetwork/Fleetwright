@@ -1912,22 +1912,23 @@ struct Fleet {
         /// `false` from a box that looked and saw none, or the router.
         enum Edge: Codable, Hashable {
             case none
-            case there(running: Bool, blocks: Bool)
+            /// `pair`: two of them, sharing the gateway (docs/proxmox.md, "Two of them").
+            case there(running: Bool, blocks: Bool, pair: Bool)
 
-            private struct Seen: Codable { let running: Bool?; let blocks: Bool? }
+            private struct Seen: Codable { let running: Bool?; let blocks: Bool?; let pair: Bool? }
 
             init(from decoder: Decoder) throws {
                 let c = try decoder.singleValueContainer()
                 if let seen = try? c.decode(Bool.self), seen == false { self = .none; return }
                 let r = try c.decode(Seen.self)
-                self = .there(running: r.running == true, blocks: r.blocks == true)
+                self = .there(running: r.running == true, blocks: r.blocks == true, pair: r.pair == true)
             }
 
             func encode(to encoder: Encoder) throws {
                 var c = encoder.singleValueContainer()
                 switch self {
                 case .none: try c.encode(false)
-                case let .there(running, blocks): try c.encode(Seen(running: running, blocks: blocks))
+                case let .there(running, blocks, pair): try c.encode(Seen(running: running, blocks: blocks, pair: pair))
                 }
             }
         }

@@ -229,7 +229,7 @@ fun MachinesScreen(
             onAddProxmox = { listingHypervisors = false; proxmoxAt = it; proxmoxFirewall = false; proxmoxOwn = ""; addingProxmox = true },
             onTurnOnFirewall = { listingHypervisors = false; proxmoxAt = it; proxmoxFirewall = true; proxmoxOwn = ""; addingProxmox = true },
             onMakeOwn = { node, again -> listingHypervisors = false; proxmoxAt = node; proxmoxFirewall = false; proxmoxEdge = ""; proxmoxOwn = if (again) "again" else "make"; addingProxmox = true },
-            onMakeEdge = { node, again, blocks -> listingHypervisors = false; proxmoxAt = node; proxmoxFirewall = false; proxmoxOwn = ""; proxmoxEdge = if (!again) "make" else if (blocks) "again-block" else "again"; addingProxmox = true },
+            onMakeEdge = { node, again, blocks, pair -> listingHypervisors = false; proxmoxAt = node; proxmoxFirewall = false; proxmoxOwn = ""; proxmoxEdge = if (!again) "make" else listOfNotNull("again", if (blocks) "block" else null, if (pair) "pair" else null).joinToString("-"); addingProxmox = true },
             onDismiss = { listingHypervisors = false },
         )
     }
@@ -242,8 +242,8 @@ fun MachinesScreen(
                 proxmoxOwn == "again" -> ProxmoxOptions(holder = true, holderAgain = true)
                 proxmoxOwn == "make" -> ProxmoxOptions(holder = true)
                 proxmoxEdge == "make" -> ProxmoxOptions(edge = true)
-                proxmoxEdge == "again" -> ProxmoxOptions(edge = true, edgeAgain = true)
-                proxmoxEdge == "again-block" -> ProxmoxOptions(edge = true, edgeBlock = true, edgeAgain = true)
+                // MADE AGAIN AS IT IS: dropping or not, one or two of them.
+                proxmoxEdge.startsWith("again") -> proxmoxEdge.split("-").let { p -> ProxmoxOptions(edge = true, edgeBlock = "block" in p, edgePair = "pair" in p, edgeAgain = true) }
                 else -> null
             },
             onDismiss = { addingProxmox = false; proxmoxAt = ""; proxmoxFirewall = false; proxmoxOwn = ""; proxmoxEdge = "" },

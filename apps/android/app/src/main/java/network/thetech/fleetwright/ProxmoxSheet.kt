@@ -473,6 +473,8 @@ internal object ProxmoxWords {
     const val EDGE_HINT = "Filters what the cluster’s machines do for threats: the names they look up, and what its threat rules match. Needs about 4 GB free on the node while it’s built."
     const val EDGE_BLOCK = "Drop what the threat rules match"
     const val EDGE_BLOCK_HINT = "Otherwise it logs it and lets it through."
+    const val EDGE_PAIR = "Two edge routers"
+    const val EDGE_PAIR_HINT = "One carries the machines while the other restarts or updates."
     const val HOLDER_NEEDS_IMAGE = "It’s made from the cluster’s Debian image, so one has to be there already."
 }
 
@@ -510,6 +512,8 @@ internal data class ProxmoxOptions(
     val edgeBlock: Boolean = false,
     /** The one there made again, asked for from the cluster's page; never kept for the next run. */
     val edgeAgain: Boolean? = null,
+    /** TWO OF THEM, sharing the gateway (docs/proxmox.md, "Two of them"). */
+    val edgePair: Boolean = false,
 ) {
     private val trimmedStorage get() = storage.trim()
 
@@ -551,6 +555,7 @@ internal data class ProxmoxOptions(
             if (labsClosed != 1) a.append(" --labs-closed $labsClosed")
             if (edge) a.append(if (edgeBlock) " --edge-block" else " --edge")
             if (edge && edgeAgain == true) a.append(" --edge-again")
+            if (edge && edgePair) a.append(" --edge-pair")
             return a.toString()
         }
 
@@ -575,6 +580,7 @@ internal data class ProxmoxOptions(
             p.put("edge", true)
             if (edgeBlock) p.put("edgeBlock", true)
             if (edgeAgain == true) p.put("edgeAgain", true)
+            if (edgePair) p.put("edgePair", true)
         }
         if (holder) {
             p.put("holder", true)
@@ -587,7 +593,7 @@ internal data class ProxmoxOptions(
     fun saved(): String = JSONObject()
         .put("firewall", firewall).put("image", image).put("channel", channel).put("storage", storage).put("bridge", bridge)
         .put("expireDays", expireDays).put("groups", groups).put("labsOpen", labsOpen).put("labsClosed", labsClosed)
-        .put("systems", JSONArray(systems)).put("holder", holder).put("edge", edge).put("edgeBlock", edgeBlock)
+        .put("systems", JSONArray(systems)).put("holder", holder).put("edge", edge).put("edgeBlock", edgeBlock).put("edgePair", edgePair)
         .toString()
 
     companion object {
@@ -621,6 +627,7 @@ internal data class ProxmoxOptions(
                 holder = o.optBoolean("holder", true),
                 edge = o.optBoolean("edge", true),
                 edgeBlock = o.optBoolean("edgeBlock", false),
+                edgePair = o.optBoolean("edgePair", false),
             )
         }.getOrDefault(ProxmoxOptions())
     }
@@ -689,6 +696,11 @@ internal fun ProxmoxOptionsBlock(options: ProxmoxOptions, enabled: Boolean, open
             Switch(checked = options.edgeBlock, onCheckedChange = { onChange(options.copy(edgeBlock = it)) }, enabled = enabled)
         }
         Hint(ProxmoxWords.EDGE_BLOCK_HINT)
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(ProxmoxWords.EDGE_PAIR, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+            Switch(checked = options.edgePair, onCheckedChange = { onChange(options.copy(edgePair = it)) }, enabled = enabled)
+        }
+        Hint(ProxmoxWords.EDGE_PAIR_HINT)
         if (options.edgeAgain != null) {
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(HypervisorWords.MAKE_EDGE_AGAIN, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))

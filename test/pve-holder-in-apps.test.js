@@ -158,3 +158,26 @@ test('both phones show how the edge router is, in a pool’s words, and open the
   // Its own machine is made first, so the router knows where to send its logs.
   assert.ok(PVESETUP_STEPS.indexOf('holder') < PVESETUP_STEPS.indexOf('edge'));
 });
+
+test('both phones offer two edge routers with the box’s flag and key, and keep a pair a pair', () => {
+  const swift = (/** @type {string} */ name) => new RegExp(`static let ${name} = "([^"]*)"`).exec(IOS_ADD)?.[1];
+  const kotlin = (/** @type {string} */ name) => new RegExp(`const val ${name} = "([^"]*)"`).exec(ANDROID_SHEET)?.[1];
+  for (const [s, k] of [['edgePair', 'EDGE_PAIR'], ['edgePairHint', 'EDGE_PAIR_HINT']]) {
+    assert.ok(swift(s), `iOS has no ${s}`);
+    assert.equal(kotlin(k), swift(s));
+  }
+  // The flag the box passes, and the key the box takes.
+  assert.equal(pveSetup.optionArgs({ edge: true, edgePair: true }), ' --edge --edge-pair');
+  assert.ok(IOS_ADD.includes('if wantsEdge && edgePair == true { a += " --edge-pair" }'));
+  assert.ok(ANDROID_SHEET.includes('if (edge && edgePair) a.append(" --edge-pair")'));
+  assert.ok(IOS_ADD.includes('if edgePair == true { p["edgePair"] = true }'));
+  assert.ok(ANDROID_SHEET.includes('if (edgePair) p.put("edgePair", true)'));
+  assert.deepEqual(pveSetup.pveOptionsOf({ edge: true, edgePair: true }).options, { edge: true, edgePair: true });
+  // MAKE IT AGAIN keeps two as two, on both.
+  assert.ok(IOS_PAGE.includes('edgePair: pair ? true : nil'));
+  assert.ok(read(`${A}/MachinesScreen.kt`).includes('edgePair = "pair" in p'));
+  // The cluster's page says a pair in the same words.
+  for (const words of ['Two running, dropping what their threat rules match', 'Two running, logging what their threat rules match', 'Both off. Setting it up again starts them.']) {
+    assert.ok(IOS_PAGE.includes(`"${words}"`) && ANDROID_PAGE.includes(`"${words}"`), words);
+  }
+});

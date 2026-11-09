@@ -60,7 +60,7 @@ internal fun HypervisorsScreen(
     /** The same setup making the cluster its own machine, or making it again ([again]). */
     onMakeOwn: (String, Boolean) -> Unit = { node, _ -> onAddProxmox(node) },
     /** The same setup making the cluster an edge router, or making it again ([again]) the way it is ([blocks]). */
-    onMakeEdge: (String, Boolean, Boolean) -> Unit = { node, _, _ -> onAddProxmox(node) },
+    onMakeEdge: (String, Boolean, Boolean, Boolean) -> Unit = { node, _, _, _ -> onAddProxmox(node) },
     onDismiss: () -> Unit,
 ) {
     var fleet by remember { mutableStateOf<List<Fleet.Hypervisor>?>(null) }
@@ -135,7 +135,7 @@ internal fun HypervisorsScreen(
             onSetUpAgain = { open = null; onAddProxmox(HypervisorAddress.node(row.address)) },
             onTurnOnFirewall = { open = null; onTurnOnFirewall(HypervisorAddress.node(row.address)) },
             onMakeOwn = { again -> open = null; onMakeOwn(HypervisorAddress.node(row.address), again) },
-            onMakeEdge = { again, blocks -> open = null; onMakeEdge(HypervisorAddress.node(row.address), again, blocks) },
+            onMakeEdge = { again, blocks, pair -> open = null; onMakeEdge(HypervisorAddress.node(row.address), again, blocks, pair) },
             onDismiss = { open = null },
         )
         return
@@ -255,7 +255,7 @@ private fun ChoiceRow(title: String, line: String, onClick: () -> Unit) {
  * evidence under it.
  */
 @Composable
-private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnOnFirewall: () -> Unit, onMakeOwn: (Boolean) -> Unit, onMakeEdge: (Boolean, Boolean) -> Unit, onDismiss: () -> Unit) {
+private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnOnFirewall: () -> Unit, onMakeOwn: (Boolean) -> Unit, onMakeEdge: (Boolean, Boolean, Boolean) -> Unit, onDismiss: () -> Unit) {
     // HOW ITS EDGE ROUTER IS, as the machine reading it last did
     // (src/fleet/host/edge-watch.js, docs/proxmox.md "Watching it"), every
     // half minute while the page is open: the same report a Xen Orchestra
@@ -318,24 +318,27 @@ private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain:
             SectionHead(HypervisorWords.EDGE_HEADER)
             if (edge.there) {
                 Text(
-                    HypervisorWords.edgeThere(edge.running, edge.blocks),
+                    HypervisorWords.edgeThere(edge.running, edge.blocks, edge.pair),
                     style = Design.Style.body,
                     color = if (edge.running) Design.Palette.ink.now else Design.Palette.attention.now,
                 )
                 // THE VERDICT IN ONE WORD, AND THE PAGE BEHIND IT, in the
                 // words a pool's routers have (Manage.Words.edgeStatus). Before
                 // any machine has read it, that is what is said (C-5).
+                // ONE ROUTER IS "HOW IT IS"; A PAIR IS EACH BY NAME, each
+                // with its own word. Same as iOS.
                 val e = edges
-                val r = e?.routers?.firstOrNull()
-                if (e != null && r != null) {
-                    val (word, trouble) = Manage.Words.edgeStatus(r.reached, r.problem, r.gateway, r.role)
-                    Row(
-                        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { showingEdge = true },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(HypervisorWords.EDGE_HOW_IT_IS, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
-                        Text(word, style = Design.Style.label, color = if (trouble) Design.Palette.attention.now else Design.Palette.ink.now)
-                        Text("  ›", style = Design.Style.body, color = Design.Palette.inkDim.now)
+                if (e != null && e.routers.isNotEmpty()) {
+                    e.routers.forEach { r ->
+                        val (word, trouble) = Manage.Words.edgeStatus(r.reached, r.problem, r.gateway, r.role)
+                        Row(
+                            Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { showingEdge = true },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(if (e.routers.size > 1) r.name else HypervisorWords.EDGE_HOW_IT_IS, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                            Text(word, style = Design.Style.label, color = if (trouble) Design.Palette.attention.now else Design.Palette.ink.now)
+                            Text("  ›", style = Design.Style.body, color = Design.Palette.inkDim.now)
+                        }
                     }
                 } else if (edgesAsked) {
                     Hint(if (edgesFailed) HypervisorWords.EDGE_UNCHECKED else HypervisorWords.EDGE_NO_READING)
@@ -344,7 +347,7 @@ private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain:
                 Text(HypervisorWords.EDGE_NONE, style = Design.Style.body, color = Design.Palette.inkDim.now)
             }
             Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
-                OpenRow(if (edge.there) HypervisorWords.MAKE_EDGE_AGAIN else HypervisorWords.MAKE_EDGE, onClick = { onMakeEdge(edge.there, edge.blocks) })
+                OpenRow(if (edge.there) HypervisorWords.MAKE_EDGE_AGAIN else HypervisorWords.MAKE_EDGE, onClick = { onMakeEdge(edge.there, edge.blocks, edge.pair) })
             }
             if (edge.there) Hint(HypervisorWords.MAKE_EDGE_AGAIN_FOOTER)
         }
@@ -412,8 +415,9 @@ object HypervisorWords {
     const val EDGE_HOW_IT_IS = "How it is"
     const val EDGE_NO_READING = "No reading yet. The cluster’s own machine reads it once it’s up and approved."
     const val EDGE_UNCHECKED = "Couldn’t check the edge router."
-    fun edgeThere(running: Boolean, blocks: Boolean): String =
-        if (running) (if (blocks) "Running, dropping what its threat rules match" else "Running, logging what its threat rules match") else "Off. Setting it up again starts it."
+    fun edgeThere(running: Boolean, blocks: Boolean, pair: Boolean = false): String =
+        if (pair) (if (running) (if (blocks) "Two running, dropping what their threat rules match" else "Two running, logging what their threat rules match") else "Both off. Setting it up again starts them.")
+        else if (running) (if (blocks) "Running, dropping what its threat rules match" else "Running, logging what its threat rules match") else "Off. Setting it up again starts it."
     fun ownThere(name: String, running: Boolean): String = if (running) "$name, running" else "$name, off. Setting it up again starts it."
     const val XO_ELSEWHERE = "Its page opens on the phone that set it up."
     const val XO_CHOICE = "A pool of XCP-ng hosts, through Xen Orchestra."
