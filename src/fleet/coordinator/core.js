@@ -295,6 +295,7 @@ export const EDGE_REPORT = Object.freeze({
  *   boxes: Array<{ hostId: string, reachable: boolean|null, problem: string|null }>,
  *   pools: string[], version: string|null, supported: boolean|null, fenced: boolean|null,
  *   images: number, machines: number,
+ *   holder: { name: string, running: boolean }|false|null,
  * }} HypervisorRow
  */
 
@@ -7549,7 +7550,7 @@ export class CoordinatorCore {
         const key = `${kind} ${address}`;
         let row = found.get(key);
         if (!row) {
-          row = { address, kind, boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, imageIds: new Set(), machineNames: new Set() };
+          row = { address, kind, boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, holder: null, imageIds: new Set(), machineNames: new Set() };
           found.set(key, row);
         }
         row.boxes.push({ hostId: host.hostId, reachable: typeof e.reachable === 'boolean' ? e.reachable : null, problem: e.reachable === false ? text(e.problem, 200) : null });
@@ -7564,6 +7565,16 @@ export class CoordinatorCore {
         if (typeof e.fenced === 'boolean') row.fenced = row.fenced === true || e.fenced;
         for (const i of Array.isArray(e.images) ? e.images : []) if (typeof i?.id === 'string') row.imageIds.add(i.id);
         for (const m of Array.isArray(e.machines) ? e.machines : []) if (typeof m?.name === 'string') row.machineNames.add(m.name);
+        // ITS OWN MACHINE (docs/proxmox.md, "A machine of its own"): false
+        // only from a box that looked and saw none, null when none said, and
+        // running when any box saw it up.
+        if (Array.isArray(e.holders)) {
+          const h = e.holders.find((/** @type {any} */ x) => typeof x?.name === 'string' && x.name);
+          if (h) {
+            const was = row.holder || null;
+            row.holder = { name: text(h.name, 80) ?? '', running: Boolean(was?.running) || h.running === true };
+          } else row.holder ??= false;
+        }
       }
     }
     return [...found.values()]

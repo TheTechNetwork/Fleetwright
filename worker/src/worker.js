@@ -2176,6 +2176,14 @@ const OPENAPI = JSON.stringify({
                           },
                           "machines": {
                             "type": "integer"
+                          },
+                          "holder": {
+                            "description": "Its own machine, `{ name, running }` (docs/proxmox.md, \u201cA machine of its own\u201d): false when a box looked and saw none, null when no box said, as a Xen Orchestra entry\u2019s boxes do not.",
+                            "type": [
+                              "object",
+                              "boolean",
+                              "null"
+                            ]
                           }
                         }
                       }

@@ -196,3 +196,25 @@ test('a phone setting up Proxmox itself is given a pin and a reserved name for t
   for (let i = 1; i < MAX_HOLDER_PINS; i++) assert.equal(core.holderPinFor(me, { address: '10.69.10.10:8006' }).status, 200);
   assert.equal(core.holderPinFor(me, { address: '10.69.10.10:8006' }).body.error.code, 'too_many', 'the reservations are the fleet’s, so one person holds only a few');
 });
+
+test('the hypervisors list says each cluster’s own machine, and none only from a box that looked', () => {
+  // The phone's cluster row says the machine is there and running, or offers
+  // to make one: so "none" is a box having looked (C-5), never no answer.
+  const core = new CoordinatorCore({});
+  /** @param {any} holders */
+  const pve = (holders) => [{ address: '10.69.10.10:8006', owner: ELI, kind: 'proxmox', reachable: true, pools: [{ id: 'p', name: 'fleetwright' }], images: [], networks: [], machines: [], ...(holders === undefined ? {} : { holders }) }];
+  /** @param {string} hostId @param {any} holders */
+  const box = (hostId, holders) => {
+    core.registry.connect(hostId, () => {});
+    core.registry.recordHealth(hostId, { hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [], xo: pve(holders) });
+  };
+  const row = () => core.hypervisorsFor({ email: ELI })[0];
+  box('old', undefined);
+  assert.equal(row().holder, null, 'a box from before says nothing, which is not "none"');
+  box('looked', []);
+  assert.equal(row().holder, false);
+  box('saw', [{ pool: 'p', name: 'holder-0a0b0c', running: false }]);
+  assert.deepEqual(row().holder, { name: 'holder-0a0b0c', running: false });
+  box('saw-up', [{ pool: 'p', name: 'holder-0a0b0c', running: true }]);
+  assert.deepEqual(row().holder, { name: 'holder-0a0b0c', running: true }, 'up when any box saw it up');
+});
