@@ -54,7 +54,8 @@
 // twice (docs/hypervisors.md, "How a clone joins").
 
 import { createHash } from 'node:crypto';
-import { PveApi } from './pve-api.js';
+import { PveApi, PVE_PORT } from './pve-api.js';
+import { splitAddress } from './xo-ws.js';
 import { seal, claudeBindingFor } from '../seal.js';
 import { machineGrantsOf } from '../../core/grants.js';
 import { lookup } from 'node:dns/promises';
@@ -117,6 +118,9 @@ export const PVE_ROLE_PRIVS = Object.freeze([
   // SSH to be offered: `agent/network-get-interfaces`, which Proxmox VE 9
   // allows with this and nothing wider (it replaced VM.Monitor). Read only.
   'VM.GuestAgent.Audit',
+  // A MACHINE'S SCREEN IN THE APP: `vncproxy` and `vncwebsocket`, which the
+  // phone calls with the token it keeps, on a machine in the pool alone.
+  'VM.Console',
 ]);
 export const PVE_STORAGE_PRIVS = Object.freeze(['Datastore.AllocateSpace', 'Datastore.Audit']);
 export const PVE_NET_PRIVS = Object.freeze(['SDN.Use', 'SDN.Audit']);
@@ -573,6 +577,24 @@ export class PvePools {
   hasImage(owner, template) {
     const who = String(owner || '').toLowerCase();
     return [...this.held.entries()].some(([k, h]) => h.owner === who && this.seen.get(k)?.images?.some((/** @type {any} */ i) => i.id === template));
+  }
+
+  /**
+   * WHERE A CONSOLE FROM AWAY DIALS, for a cluster this box holds for THIS
+   * person (console-tunnel.js): the node's address and port, and nothing for
+   * any other address or person, so a tunnel is never a way into this box's
+   * network to anywhere else. The phone opens TLS itself through the bytes,
+   * held to the cluster's CA, and signs in with the token it keeps; this box
+   * carries ciphertext. docs/proxmox.md, "A machine's page".
+   *
+   * @param {string} owner @param {string} address
+   * @returns {{ host: string, port: number }|null}
+   */
+  consoleAddress(owner, address) {
+    const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
+    if (!held) return null;
+    const { host, port } = splitAddress(String(held.record.address), PVE_PORT);
+    return Number.isInteger(port) && port > 0 && port < 65536 ? { host, port } : null;
   }
 
   /** Whether this box holds a cluster of this person's at all. @param {string} owner */

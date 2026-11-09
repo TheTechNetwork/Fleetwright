@@ -96,7 +96,7 @@ export class Pools {
 
   /** @param {string} owner @param {string} address */
   consoleAddress(owner, address) {
-    return this.xo.consoleAddress(owner, address);
+    return this.xo.consoleAddress(owner, address) ?? this.pve.consoleAddress(owner, address);
   }
 
   /** @param {Parameters<XoPools['look']>[0]} ask */
