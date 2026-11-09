@@ -38,6 +38,12 @@ function int(name, fallback) {
   return Number.isFinite(v) ? v : fallback;
 }
 
+/** @param {string} name @param {number} fallback */
+function num(name, fallback) {
+  const v = Number.parseFloat(process.env[name] || '');
+  return Number.isFinite(v) ? v : fallback;
+}
+
 /** @param {string} name @param {boolean} fallback */
 function bool(name, fallback) {
   const v = str(name).toLowerCase();
@@ -205,12 +211,19 @@ export function loadConfig(env = process.env) {
     // shell happens to build PATH — see core/which.js for the specific trap
     // this avoids on a stock Debian box.
     claudeBin: resolveBin(str('FLEETWRIGHT_CLAUDE_BIN', 'claude')),
-    // Concurrency cap. The box this pattern came from hard-froze under agent
-    // load (load ~14 with 4 claude + 6 headless-chrome), which is what the cap
-    // exists to prevent. It counts EVERY live tmux session the hub can see, not
-    // just ones it launched — a cap that only counts its own launches is not a
-    // cap.
-    maxSessions: Math.max(1, int('FLEETWRIGHT_MAX_SESSIONS', 5)),
+    // How many sessions, decided by what the box has rather than a fixed
+    // count: see core/capacity.js. The box this pattern came from hard-froze
+    // under agent load (load ~14 with 4 claude + 6 headless-chrome), which is
+    // what all of this exists to prevent. It counts EVERY live tmux session
+    // the hub can see, not just ones it launched — a cap that only counts its
+    // own launches is not a cap.
+    //
+    // FLEETWRIGHT_MAX_SESSIONS is now a ceiling the owner may set, and null
+    // when they have not: a box that set 5 keeps 5.
+    maxSessions: process.env.FLEETWRIGHT_MAX_SESSIONS ? Math.max(1, int('FLEETWRIGHT_MAX_SESSIONS', 5)) : null,
+    sessionMemoryMb: Math.max(1, int('FLEETWRIGHT_SESSION_MEMORY_MB', 1024)),
+    memoryFloorMb: Math.max(0, int('FLEETWRIGHT_MEMORY_FLOOR_MB', 768)),
+    maxLoadPerCore: Math.max(0.1, num('FLEETWRIGHT_MAX_LOAD_PER_CORE', 1.5)),
     // --dangerously-skip-permissions. On by default because an unattended
     // session that stops for a permission prompt is a hung session, which is
     // the entire failure mode this tool exists to avoid. Turn it off and you

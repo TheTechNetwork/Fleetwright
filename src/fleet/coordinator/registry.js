@@ -107,6 +107,9 @@ export function poolMachineReason(host) {
  * @property {number|null} maxSessions
  * @property {number|null} running
  * @property {number|null} free
+ * @property {string|null} [capacityBound]  what stops the box taking another session, when
+ *   free is 0: 'memory', 'load' or 'ceiling' (core/capacity.js). A code, never the
+ *   box's sentence: the coordinator says it from the numbers in this frame
  * @property {string[]|null} resumable
  * @property {Array<{name: string, status: string, createdBy?: string|null, cwd?: string|null, startedAt?: number|null, account?: string|null}>|null} [sessions]
  * @property {{ email: string|null, plan: string|null, org: string|null }|null} [account]
@@ -227,6 +230,7 @@ export function attributed(host, health) {
     ...('labels' in health ? { labels: labels(health.labels) } : {}),
     ...('setLabels' in health ? { setLabels: labels(/** @type {any} */ (health).setLabels) } : {}),
     ...('sandboxedWhy' in health ? { sandboxedWhy: health.sandboxedWhy == null ? null : reason(health.sandboxedWhy) } : {}),
+    ...('capacityBound' in health ? { capacityBound: health.capacityBound == null ? null : reason(health.capacityBound) } : {}),
     ...('sandboxedAlso' in health ? { sandboxedAlso: reasons(health.sandboxedAlso) } : {}),
     ...('browse' in health ? { browse: browseShape(/** @type {any} */ (health).browse) } : {}),
   };

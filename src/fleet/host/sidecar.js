@@ -2348,7 +2348,14 @@ export class Sidecar {
         hub: { reachable: true, host: state.host ?? null },
         maxSessions: state.maxSessions ?? null,
         running,
-        free: typeof state.maxSessions === 'number' ? Math.max(0, state.maxSessions - running) : null,
+        // The hub's own answer when it gives one (it measures memory and load,
+        // core/capacity.js); a hub from before that has only a fixed count.
+        free: typeof state.free === 'number' ? state.free
+          : typeof state.maxSessions === 'number' ? Math.max(0, state.maxSessions - running) : null,
+        // What stops it, when free is 0, as a code: the coordinator says why
+        // from the numbers in this frame, rather than "5/5" for a box out of
+        // memory at 3.
+        capacityBound: typeof state.capacity?.bound === 'string' ? state.capacity.bound : null,
         // Resume is pinned: claude-<name> is a host-local volume, so a /resume
         // must land on the box holding it. This is how the coordinator knows
         // which box that is instead of round-robining onto one that does not.

@@ -100,7 +100,7 @@ test('a stopped session’s name is taken too, for a new session started over it
   // let through, and only for the person whose start it was.
   r.upsert('flaky', { status: 'error', createdBy: 'fleet:a@example.com' });
   assert.match((await sm.start({ name: 'flaky', actor: 'fleet:b@example.com' })).message, /already exists/);
-  assert.match((await sm.start({ name: 'flaky', actor: 'fleet:a@example.com' })).message, /concurrency cap/);
+  assert.match((await sm.start({ name: 'flaky', actor: 'fleet:a@example.com' })).message, /At the session limit this box sets \(0\/0\)/);
 });
 
 test('what expires is what has outstayed the window, and nothing else', () => {

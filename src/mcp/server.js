@@ -194,6 +194,12 @@ function describeHealth(h) {
   if (typeof h.running === 'number' && typeof h.maxSessions === 'number') {
     lines.push(`${h.running}/${h.maxSessions} sessions running, ${h.free ?? '?'} free`);
   }
+  // WHAT THE ROOM IS MEASURED IN (core/capacity.js): a box takes sessions
+  // while it has memory and is not too busy, so both are said.
+  if (typeof h.freeMemBytes === 'number' && typeof h.totalMemBytes === 'number') {
+    const gb = (/** @type {number} */ b) => (b / 1024 ** 3).toFixed(1);
+    lines.push(`memory ${gb(h.freeMemBytes)}GB available of ${gb(h.totalMemBytes)}GB`);
+  }
   // ON HOW MANY CORES, when the box says: 20 is quiet on eight and the start
   // of a simulator boot on three.
   if (Array.isArray(h.loadavg) && h.loadavg.length) {

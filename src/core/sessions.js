@@ -35,8 +35,10 @@ import { SOCKET_FILE } from './hook-socket.js';
 import { ContextReader, cleanTranscriptPath } from './context-usage.js';
 import { SpentReader } from './spent.js';
 import { emailFromActor, normaliseEmail } from './accounts.js';
+import { capacity, WARMUP_MS } from './capacity.js';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { log } from '../log.js';
 
 /**
@@ -60,6 +62,18 @@ export class SessionManager {
    */
   constructor(cfg, registry, hooks = null) {
     this.cfg = cfg;
+    // What capacity() measures. A field so a test can say what the box has;
+    // os.freemem() is the kernel's MemAvailable on Linux.
+    /** @type {{ freeMemBytes: () => number, load1: () => number, cpus: () => number }} */
+    this.machine = {
+      freeMemBytes: () => os.freemem(),
+      load1: () => os.loadavg()[0],
+      cpus: () => os.availableParallelism?.() ?? os.cpus().length,
+    };
+    // When each recent launch happened, so starts still warming up are
+    // counted against memory they have not taken yet (core/capacity.js).
+    /** @type {number[]} */
+    this.launchedAt = [];
     this.registry = registry;
     // Serves the per-session hook sockets a sandboxed session reports through.
     // Optional: an unsandboxed deployment does not need one, and the fleet
@@ -190,6 +204,29 @@ export class SessionManager {
     }
 
     return changed;
+  }
+
+  /**
+   * How many more sessions this box can take now, and why not when it can
+   * take none. Measured: see core/capacity.js.
+   *
+   * @param {number} [running] when the caller has already counted
+   * @returns {import('./capacity.js').Capacity}
+   */
+  capacity(running = this.running().length) {
+    const now = Date.now();
+    this.launchedAt = this.launchedAt.filter((t) => now - t < WARMUP_MS);
+    return capacity({
+      running,
+      warming: Math.min(this.launchedAt.length, running),
+      cfg: {
+        maxSessions: typeof this.cfg.maxSessions === 'number' ? this.cfg.maxSessions : null,
+        sessionMemoryMb: this.cfg.sessionMemoryMb ?? 1024,
+        memoryFloorMb: this.cfg.memoryFloorMb ?? 768,
+        maxLoadPerCore: this.cfg.maxLoadPerCore ?? 1.5,
+      },
+      machine: { freeMemBytes: this.machine.freeMemBytes(), load1: this.machine.load1(), cpus: this.machine.cpus() },
+    });
   }
 
   /** Records that tmux says are alive right now. */
@@ -409,15 +446,8 @@ export class SessionManager {
       }
     }
 
-    const active = this.running().length;
-    if (active >= this.cfg.maxSessions) {
-      return {
-        ok: false,
-        message:
-          `At the concurrency cap (${active}/${this.cfg.maxSessions}). Stop a session first, ` +
-          'or raise FLEETWRIGHT_MAX_SESSIONS if this box can take the load.',
-      };
-    }
+    const room = this.capacity();
+    if (room.free <= 0) return { ok: false, message: /** @type {string} */ (room.why) };
 
     // Validate a supplied path rather than handing it to tmux, which silently
     // falls back to its own cwd for a directory that does not exist.
@@ -507,13 +537,8 @@ export class SessionManager {
     // Never silently fall back to --continue. See claude.js for why.
     if (!rec.uuid) return { ok: false, message: `${name}: ${RESUME_REQUIRES_UUID}` };
 
-    const active = this.running().length;
-    if (active >= this.cfg.maxSessions) {
-      return {
-        ok: false,
-        message: `At the concurrency cap (${active}/${this.cfg.maxSessions}). Stop a session first.`,
-      };
-    }
+    const room = this.capacity();
+    if (room.free <= 0) return { ok: false, message: /** @type {string} */ (room.why) };
 
     return this.#launch({
       name,
@@ -667,6 +692,10 @@ export class SessionManager {
       this.#newLife(name);
       this.#clearLastLife(name);
       const spawned = newSession({ name, cwd, command, nice: this.cfg.sessionNice });
+      // Counted as warming from here, whether or not it lives: a start that
+      // died is cheap to over-count for ninety seconds, and one that lived
+      // and was missed is the burst this exists to stop.
+      this.launchedAt.push(Date.now());
       if (spawned.status !== 0) {
         const detail = (spawned.stderr || 'tmux new-session failed').trim().slice(0, 300);
         this.registry.upsert(name, { status: 'error', detail, cwd, ...creator });
@@ -1415,12 +1444,13 @@ export class SessionManager {
         skipped.push({ name: rec.name, why: 'no recorded conversation uuid' });
         continue;
       }
-      if (restored.length + alreadyCounted >= this.cfg.maxSessions) {
+      const room = this.capacity(restored.length + alreadyCounted);
+      if (room.free <= 0) {
         // Leave resumeOnBoot set: it did not come back because the box was
         // full, not because anyone decided it should stay down, so the next
         // start is still entitled to bring it back.
-        this.registry.upsert(rec.name, { status: 'stopped', detail: `not restored: at cap ${this.cfg.maxSessions}` });
-        skipped.push({ name: rec.name, why: `at cap (${this.cfg.maxSessions})` });
+        this.registry.upsert(rec.name, { status: 'stopped', detail: `not restored: ${room.why}` });
+        skipped.push({ name: rec.name, why: `no room (${room.bound})` });
         continue;
       }
 

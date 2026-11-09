@@ -27,6 +27,7 @@ import { sessionSecret } from './core/secret-store.js';
 import { HttpAdapter } from './adapters/http.js';
 import { archiveRunning, ARCHIVE_EVERY_MS } from './core/archive.js';
 import { onRunner } from './core/runner-login.js';
+import { DEFAULT_CEILING } from './core/capacity.js';
 
 /** The longest a runner's hub spends pushing sessions to their archives when
  * it is told to stop. GitHub gives a cancelled job's steps a few seconds and a
@@ -169,7 +170,7 @@ export async function main() {
   const sessions = new SessionManager(cfg, registry, hooks);
   const login = new LoginFlow(cfg);
 
-  log.info(`fleetwright starting on ${cfg.hostname} · workdir ${cfg.workdir} · cap ${cfg.maxSessions}`);
+  log.info(`fleetwright starting on ${cfg.hostname} · workdir ${cfg.workdir} · sessions by memory and load, at most ${cfg.maxSessions ?? DEFAULT_CEILING}`);
 
   // THE BOX'S OWN ACCOUNT BECOMES SOMEBODY'S, once, on the way up. See
   // docs/one-account-per-person.md — sessions no longer run as the machine, so

@@ -147,6 +147,14 @@ sessions only*.
 wildly in weight. Filter by constraints (labels, memory, cached repo) → rank by free capacity →
 tie-break round robin. Hosts report `maxSessions`, current count, load average, free memory, labels.
 
+**Free capacity is measured, not configured** (`src/core/capacity.js`). A fixed count was right
+for one box and wrong for the rest: a 12GB VM refused work at 5/5 with 9GB available and a load of
+0.14. A host takes a new session while its available memory, after a share for each session still
+starting, stays above a floor by one session's worth, and its one-minute load per core is under a
+limit. `FLEETWRIGHT_MAX_SESSIONS` stays as a ceiling the owner may set. `free` is that answer,
+`maxSessions` is `running + free`, and a full host sends what bound it (`memory`, `load`,
+`ceiling`) as a code the coordinator turns into the refusal.
+
 **`unknown` is a state, not a default.** A host that hasn't reported in is `unknown` with a reason,
 never `healthy`. A session whose host is offline is `unreachable`, not `stopped`. This is recon's
 principle — make "we don't know" unrepresentable as a benign value — and it applies directly.
