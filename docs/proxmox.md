@@ -314,6 +314,30 @@ for card, because the two side by side were *"Two completely dif UIs"*:
 `test/pve-holder-in-apps.test.js` holds both pages to the one card, in the
 same place.
 
+### What its machines may do from chat
+
+Asked for: *"no way to allow updates and reboots for proxmox vms those exist
+in xen"*. The setup's options end with **Machines made here**, a Xen Orchestra
+pool's two answers in its words: **Update their system from the app** and
+**Reboot from the app** (`src/core/grants.js`). The script takes them as
+`--grants upgrades,reboot`, `upgrades`, `reboot` or `none`, and puts them:
+
+- **in the line**, so every box that makes a machine on the cluster puts them
+  in the machine's join (`pve-pools.js`, `machineGrantsOf`), and the machine
+  runs `fleetwright grant` before anything starts;
+- **in its own machine's join**, where the app's file did not say.
+
+They apply to machines made after the line is kept. A machine already running
+keeps what it had; its own machine takes them when it is made again. Unsaid,
+as every run before this was, each machine keeps its image's answer.
+
+**Make it again from its own machine's page.** A Proxmox VE cluster's own
+machine has **Make it again** on its page, as a Xen Orchestra pool's has. It
+opens the cluster's setup with the machine of its own made again, which needs
+the node's sign-in and no token on the phone, so it is offered on any phone,
+to the fleet's admin, where the fleet's list says the address it holds is a
+Proxmox VE cluster.
+
 ### What it makes
 
 Finding each first, so it is safe to run again:

@@ -303,3 +303,27 @@ test('the image build becomes a template only once its console said off; a halt 
     }
   }
 });
+
+// WHAT A CLUSTER'S MACHINES MAY DO FROM CHAT, as a Xen Orchestra pool's
+// policy says it. Asked for: "no way to allow updates and reboots for proxmox
+// vms those exist in xen". `--grants` is read by the script's own lines and
+// put in the line every box reads, and left out when it was not given.
+test('the script puts what --grants said in the line, and nothing when it was not given', { skip }, () => {
+  const text = readFileSync(SCRIPT, 'utf8');
+  const parse = text.slice(text.indexOf('GRANT_UPGRADES=""\nGRANT_REBOOT=""'), text.indexOf('esac\n', text.indexOf('GRANT_UPGRADES=""\nGRANT_REBOOT=""')) + 5);
+  const lineStart = text.indexOf('LINE="$(KIND=proxmox');
+  const line = text.slice(lineStart, text.indexOf(`print "fleetwright-pve:1:$b";')"`, lineStart) + `print "fleetwright-pve:1:$b";')"`.length);
+  assert.ok(parse.includes('--grants is upgrades') && line.includes('$r{grants}'));
+  const run = (/** @type {string} */ grants) => {
+    const r = spawnSync('bash', ['-c', `set -Eeuo pipefail; die() { echo "DIED: $*"; exit 1; }; GRANTS='${grants}'\n${parse}\nADDRESS=10.0.0.1:8006 NAME= USER_ID=fleetwright@pve TOKEN_NAME=fleet SECRET=s POOL=fleetwright TRUST=public CA= VMID_FROM= VMID_TO= WATCH_FILE=\n${line}\necho "$LINE"`], { encoding: 'utf8' });
+    const out = `${r.stdout}${r.stderr}`.trim();
+    if (out.startsWith('DIED')) return out;
+    const b64 = out.slice('fleetwright-pve:1:'.length).replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(Buffer.from(b64, 'base64').toString('utf8')).grants ?? null;
+  };
+  assert.deepEqual(run('upgrades,reboot'), { upgrades: true, reboot: true });
+  assert.deepEqual(run('reboot'), { upgrades: false, reboot: true });
+  assert.deepEqual(run('none'), { upgrades: false, reboot: false });
+  assert.equal(run(''), null, 'a run that did not say put an answer in the line');
+  assert.match(String(run('everything')), /^DIED: --grants is upgrades/);
+});

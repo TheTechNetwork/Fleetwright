@@ -1255,9 +1255,15 @@ export class PvePools {
         return { ok: true, text: `Restarting ${name}.` };
       }
       if (action === 'stop') {
+        // ENDED NOW, as a Xen Orchestra pool's machine is (xo-pools.js): off
+        // cleanly, so the sidecar inside says goodbye, then removed with its
+        // disk. It waited for the next look before, which a person read as
+        // "End" not having worked.
         await wait(api.post(`${base}/status/shutdown`, { forceStop: 1, timeout: 60 }));
+        await wait(api.del(base, { purge: 1, 'destroy-unreferenced-disks': 1 }));
+        this.log.info(`sidecar: ended ${name} when asked`);
         void this.refresh().catch(() => {});
-        return { ok: true, text: `${name} is off, and is removed with its disk on the next look.` };
+        return { ok: true, text: `${name} is stopped and removed with its disk.` };
       }
       if (action === 'extend') {
         const most = mark.made + MAX_MINUTES * 60;
@@ -1270,15 +1276,67 @@ export class PvePools {
         return { ok: true, until: to * 1000, text: to === most ? `${name} runs until ${MAX_MINUTES} minutes from when it was made, which is as long as a machine is given.` : `${name} runs ${Math.round((to - mark.until) / 60)} minutes longer.` };
       }
       if (action === 'resize') {
-        const c = Number(cpus);
-        const g = Number(memory);
-        if (!(Number.isInteger(c) && c >= 1 && c <= 64) || !(Number.isFinite(g) && g >= 1 && g <= 512)) return { ok: false, text: 'A size is 1 to 64 vCPUs and 1 to 512 GiB.' };
-        // MARKED BUSY while it is off on purpose, so no box's sweep takes it.
-        await api.put(`${base}/config`, { description: markText({ ...mark, busy: Math.floor(this.now() / 1000) }) });
+        // EITHER OR BOTH, as on Xen Orchestra (xo-pools.js): vCPUs, memory in
+        // GiB, each in its range, and the other left as it is.
+        /** @type {{ cores?: number, memory?: number }} */
+        const size = {};
+        if (cpus != null) size.cores = Math.max(1, Math.min(64, Math.floor(Number(cpus))));
+        if (memory != null) size.memory = Math.round(Math.max(1, Math.min(512, Number(memory))) * 1024);
+        if (!Object.keys(size).length || Object.values(size).some((v) => !Number.isFinite(v))) return { ok: false, text: 'Say how many vCPUs, or how much memory.' };
+        const said = [size.cores ? `${size.cores} vCPU${size.cores === 1 ? '' : 's'}` : null, size.memory ? `${size.memory / 1024} GiB` : null].filter(Boolean).join(' and ');
+        const cfg = (await api.get(`${base}/config`)) || {};
+        // WHAT IT HAD, of what is being changed, for a machine that will not
+        // start with the new size.
+        /** @type {{ cores?: number, sockets?: number, memory?: number }} */
+        const old = {
+          ...(size.cores && Number.isInteger(Number(cfg.cores)) ? { cores: Number(cfg.cores), sockets: Number(cfg.sockets) || 1 } : {}),
+          ...(size.memory && Number.isFinite(Number(cfg.memory)) && Number(cfg.memory) > 0 ? { memory: Number(cfg.memory) } : {}),
+        };
+        // MARKED BUSY while it is off on purpose, and until it is running
+        // again, so no box's sweep takes the stop for done. It was cleared
+        // with the new size, before the start: a machine that then would not
+        // start was stopped, not busy, and the next look removed it with its
+        // disk.
+        const busy = markText({ ...mark, busy: Math.floor(this.now() / 1000) });
+        const idle = markText({ ...mark, busy: null });
+        await api.put(`${base}/config`, { description: busy });
         await wait(api.post(`${base}/status/shutdown`, { forceStop: 1, timeout: 120 }));
-        await api.put(`${base}/config`, { cores: c, sockets: 1, memory: Math.round(g * 1024), description: markText({ ...mark, busy: null }) });
-        await wait(api.post(`${base}/status/start`, {}));
-        return { ok: true, text: `${name} restarted with ${c} vCPUs and ${g} GiB.` };
+        /** @type {Error|null} */
+        let refused = null;
+        try {
+          await api.put(`${base}/config`, { ...(size.cores ? { cores: size.cores, sockets: 1 } : {}), ...(size.memory ? { memory: size.memory } : {}) });
+        } catch (e) {
+          refused = /** @type {Error} */ (e);
+        }
+        try {
+          await wait(api.post(`${base}/status/start`, {}));
+        } catch (e) {
+          // WOULD NOT START WITH THE NEW SIZE (not that much memory free on
+          // its node): the old size back, and started again. If it will not
+          // start at that either, it is left stopped and busy, so the sweep
+          // leaves it for BUSY_MS and then applies its rules, and the person
+          // is told what state it is in.
+          const first = /** @type {Error} */ (e);
+          const back = !refused && Object.keys(old).length > 0;
+          if (back) await api.put(`${base}/config`, old).catch(() => {});
+          try {
+            await wait(api.post(`${base}/status/start`, {}));
+          } catch (again) {
+            const why = refused
+              ? `the cluster would not give it ${said} (${refused.message}), and it would not start (${first.message}; then ${/** @type {Error} */ (again).message})`
+              : `it would not start with ${said} (${first.message}), nor ${back ? 'at its old size' : 'on a second try'} (${/** @type {Error} */ (again).message})`;
+            this.log.warn(`sidecar: ${name} is stopped after a resize: ${why}`);
+            return {
+              ok: false,
+              text: `${name} is stopped: ${why}. It was not removed. It is left as it is for ${BUSY_MS / 60_000} minutes; after that the sweep removes it if it is still off. Resize it again to try now, or end it.`,
+            };
+          }
+          if (back) refused ??= first;
+        }
+        await api.put(`${base}/config`, { description: idle }).catch(() => {});
+        if (refused) return { ok: false, text: `${name} was restarted at its old size: the cluster would not give it ${said} (${refused.message}).` };
+        this.log.info(`sidecar: ${name} resized to ${said}`);
+        return { ok: true, text: `${name} restarted with ${said}. A session that was running on it ended with the restart.` };
       }
       return { ok: false, text: `${action} is not something a machine can be asked to do.` };
     } catch (e) {
