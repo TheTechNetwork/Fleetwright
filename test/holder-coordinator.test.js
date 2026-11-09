@@ -232,5 +232,9 @@ test('the hypervisors list says each cluster’s edge router, and none only from
   box('looked', []);
   assert.equal(row().edge, false);
   box('saw', [{ pool: 'p', name: 'fleetwright-edge', running: true, blocks: true }]);
-  assert.deepEqual(row().edge, { running: true, blocks: true });
+  assert.deepEqual(row().edge, { running: true, blocks: true, pair: false });
+  // TWO OF THEM, by name: a pair, running when either is.
+  box('pair', [{ pool: 'p', name: 'fleetwright-edge', running: false, blocks: false }, { pool: 'p', name: 'fleetwright-edge-b', running: true, blocks: false }]);
+  assert.equal(row().edge.pair, true);
+  assert.equal(row().edge.running, true);
 });
