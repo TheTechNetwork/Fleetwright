@@ -296,7 +296,7 @@ export const EDGE_REPORT = Object.freeze({
  *   pools: string[], version: string|null, supported: boolean|null, fenced: boolean|null,
  *   images: number, machines: number,
  *   holder: { name: string, running: boolean }|false|null,
- *   edge: { running: boolean, blocks: boolean }|false|null,
+ *   edge: { running: boolean, blocks: boolean, pair: boolean }|false|null,
  * }} HypervisorRow
  */
 
@@ -7577,12 +7577,16 @@ export class CoordinatorCore {
           } else row.holder ??= false;
         }
         // ITS EDGE ROUTER (docs/proxmox.md, "The edge router"), said the same
-        // way: false only from a box that looked, running when any saw it up.
+        // way: false only from a box that looked, running when any saw it up,
+        // and a pair when a box saw two of them by name (docs/proxmox.md,
+        // "Two of them"), which is what the setup's Make it again keeps.
         if (Array.isArray(e.edges)) {
-          const r = e.edges.find((/** @type {any} */ x) => typeof x?.name === 'string');
+          const named = e.edges.filter((/** @type {any} */ x) => typeof x?.name === 'string' && x.name);
+          const r = named[0];
           if (r) {
             const was = row.edge || null;
-            row.edge = { running: Boolean(was?.running) || r.running === true, blocks: Boolean(was?.blocks) || r.blocks === true };
+            const pair = new Set(named.map((/** @type {any} */ x) => x.name)).size >= 2;
+            row.edge = { running: Boolean(was?.running) || named.some((/** @type {any} */ x) => x.running === true), blocks: Boolean(was?.blocks) || r.blocks === true, pair: Boolean(was?.pair) || pair };
           } else row.edge ??= false;
         }
       }
