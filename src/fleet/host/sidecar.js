@@ -530,7 +530,7 @@ export class Sidecar {
     // (xo-holder.js): its health says so, and the coordinator asks it first.
     // AND PROXMOX'S CLUSTERS beside Xen Orchestra's pools, behind one face
     // (pools.js, docs/proxmox.md).
-    this.pools = xoPools ?? (vaultKey ? new Pools({ xo: new XoPools({ log: this.log, holderFor, boxId: this.hostId }), pve: new PvePools({ log: this.log }) }) : null);
+    this.pools = xoPools ?? (vaultKey ? new Pools({ xo: new XoPools({ log: this.log, holderFor, boxId: this.hostId }), pve: new PvePools({ log: this.log, holderFor }) }) : null);
     /**
      * THE POOLS' EDGE ROUTERS, read with the key the person's vault keeps
      * beside a pool's token (edge-watch.js), for the pools that have one.

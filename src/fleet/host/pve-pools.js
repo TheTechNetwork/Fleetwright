@@ -368,6 +368,9 @@ export function markText(m) {
   return `A temporary machine for ${m.for}, made by Fleetwright. It powers off by itself at its end and is then removed.\n${MARK}${line}`;
 }
 
+/** The tag the setup gives the cluster's own machine, outside the pool (install/fleetwright-pve-setup). */
+export const PVE_HOLDER_TAG = 'fleetwright-holder';
+
 /** Proxmox's tags, which it keeps as one string split on `;` (and `,` and spaces on older versions). */
 const tagsOf = (/** @type {any} */ v) => String(v?.tags || '').split(/[;,\s]+/).filter(Boolean);
 
@@ -386,6 +389,24 @@ const tagsOf = (/** @type {any} */ v) => String(v?.tags || '').split(/[;,\s]+/).
 async function poolVms(api, pool) {
   const all = await api.get('/cluster/resources', { type: 'vm' });
   return (Array.isArray(all) ? all : []).filter((m) => m?.type === 'qemu' && m.pool === pool);
+}
+
+/**
+ * THE CLUSTER'S OWN MACHINE, as the setup made it (install/fleetwright-pve-setup,
+ * step `holder`): outside the pool, so the token can do nothing to it, and
+ * tagged. The token sees it only because the setup gave it VM.Audit on that
+ * machine alone; a VM in the pool with the tag is anybody's who may tag the
+ * pool's, so it is never taken for one.
+ *
+ * @param {any} api @param {string} pool
+ * @returns {Promise<Array<{ name: string, running: boolean, vmid: number, node: string }>>}
+ */
+async function holderVms(api, pool) {
+  const all = await api.get('/cluster/resources', { type: 'vm' }).catch(() => []);
+  return (Array.isArray(all) ? all : [])
+    .filter((m) => m?.type === 'qemu' && (m.pool ?? '') !== pool && Number(m.template) !== 1 && tagsOf(m).includes(PVE_HOLDER_TAG))
+    .map((m) => ({ name: String(m.name || '').slice(0, 80), running: m.status === 'running', vmid: Number(m.vmid), node: String(m.node || '') }))
+    .sort((a, b) => a.vmid - b.vmid);
 }
 
 /**
@@ -493,11 +514,18 @@ export class PvePools {
    *   now?: () => number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
    *   sleep?: (ms: number) => Promise<void>,
+   *   holderFor?: string,
    *   resolve?: (host: string) => Promise<string[]>,
    * }} [opts]
    */
-  constructor({ api = (o) => new PveApi(o), now = () => Date.now(), log, sleep, resolve = async (h) => (await lookup(h, { all: true, family: 4 })).map((a) => a.address) } = {}) {
+  constructor({ api = (o) => new PveApi(o), now = () => Date.now(), log, sleep, holderFor = '', resolve = async (h) => (await lookup(h, { all: true, family: 4 })).map((a) => a.address) } = {}) {
     this.api = api;
+    /**
+     * The cluster this box holds as its own machine (the setup's `holder`
+     * step), from FLEETWRIGHT_HOLDER_FOR, as Xen Orchestra's (xo-pools.js):
+     * its entry says `holder`, and the coordinator asks it first.
+     */
+    this.holderFor = String(holderFor || '');
     /** IPv4 addresses for a name, for a closed lab's allow list. */
     this.resolve = resolve;
     /** The coordinator a machine was last made for, which a closed lab's list is kept to. */
@@ -743,6 +771,10 @@ export class PvePools {
       // saw: a lab holds one machine at a time.
       networks: nets.map((n) => ({ ...n, pool: poolEntry.id, ...(n.lab ? { taken: machines.some((x) => x.lab?.name === n.name) } : {}) })),
       machines,
+      // THE CLUSTER'S OWN MACHINE, by name and whether it is up, for the
+      // phone to say it is there; and whether this box is it.
+      holders: (await holderVms(api, record.pool)).map(({ name, running }) => ({ pool: poolEntry.id, name, running })),
+      ...(this.holderFor && this.holderFor === record.address ? { holder: true } : {}),
       fenced,
       supported,
       wide: wideOf(perms, record.pool),

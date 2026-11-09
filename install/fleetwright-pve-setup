@@ -25,7 +25,11 @@
 #      others (Ubuntu 24.04 and 26.04 too), each checked against its
 #      published checksum, with Fleetwright installed and not joined, as a
 #      template in the pool, one for each.
-#   6. The line: `fleetwright-pve:1:` and the address, the token, the pool,
+#   6. A machine of its own, when --holder-join names the file the app wrote
+#      for it: a fleet host cloned from the Debian image outside the pool,
+#      so the fleet's token can see it and do nothing to it, which joins
+#      the fleet by itself and holds this cluster once you approve it.
+#   7. The line: `fleetwright-pve:1:` and the address, the token, the pool,
 #      the numbers its machines take when --vmids gave them, and how to trust
 #      this cluster: its own CA, read from
 #      /etc/pve/pve-root-ca.pem, which signs every node's certificate.
@@ -37,9 +41,11 @@
 #                         [--no-image] [--rebuild-image] [--expire-days N]
 #                         [--line-file PATH] [--coordinator URL] [--vmids FROM-TO]
 #                         [--groups 0-4] [--labs-open 0-4] [--labs-closed 0-4]
+#                         [--holder-join PATH] [--holder-again]
 #
 # Lines for the phone, beside the ones for a person:
-#   fleetwright-step: NAME     pool, user, token, fence, networks, image, line, done
+#   fleetwright-step: NAME     pool, user, token, fence, networks, image, holder, line, done
+#   fleetwright-holder-removed: NAME  a machine of its own this run removed, to be made again
 #   fleetwright-part: FILL TEXT  how far into the step it is: thousandths, or
 #                              `-` when it cannot tell, and what it is doing
 #   fleetwright-error: TEXT    the reason it stopped
@@ -90,6 +96,10 @@ REBUILD=0
 IMAGES=debian-13
 EXPIRE_DAYS=365
 LINE_FILE=""
+# A MACHINE OF ITS OWN (step 6): the file the app wrote with the pin and the
+# name the fleet gave it, and whether the one there is made again.
+HOLDER_JOIN=""
+HOLDER_AGAIN=0
 # THE NUMBERS THE FLEET'S MACHINES TAKE: empty for whatever is next free,
 # FROM-TO to keep them apart from the cluster's own. The image is built in
 # it, and the line carries it, so every machine a box clones takes one too.
@@ -157,8 +167,10 @@ while [ $# -gt 0 ]; do
     --expire-days) EXPIRE_DAYS="${2:?--expire-days needs a number}"; shift 2 ;;
     --line-file) LINE_FILE="${2:?--line-file needs a path}"; shift 2 ;;
     --vmids) VMIDS="${2:?--vmids needs FROM-TO}"; shift 2 ;;
+    --holder-join) HOLDER_JOIN="${2:?--holder-join needs the path the app wrote}"; shift 2 ;;
+    --holder-again) HOLDER_AGAIN=1; shift ;;
     # Read from stdin there is no file to print the head of.
-    -h | --help) if [ -f "$0" ]; then sed -n '2,46p' "$0"; else echo "see docs/proxmox.md, \"Setting it up\""; fi; exit 0 ;;
+    -h | --help) if [ -f "$0" ]; then sed -n '2,53p' "$0"; else echo "see docs/proxmox.md, \"Setting it up\""; fi; exit 0 ;;
     *) die "unknown option $1 (--help says what there is)" ;;
   esac
 done
@@ -182,6 +194,12 @@ if [ "$LABS_CLOSED" -gt 0 ] && [ -z "$COORD_HOST" ]; then
   # The app's command carries it; by hand, say it or make no closed lab.
   die "a closed lab needs --coordinator https://<your fleet's address>, or --labs-closed 0"
 fi
+if [ -n "$HOLDER_JOIN" ]; then
+  [ -f "$HOLDER_JOIN" ] || die "--holder-join $HOLDER_JOIN is not a file"
+  # IT JOINS THE FLEET AT THE ADDRESS THE APP NAMED, so it needs the address.
+  [ -n "$COORD_HOST" ] || die "a machine of its own joins your fleet, so it needs --coordinator https://<your fleet's address>"
+fi
+[ "$HOLDER_AGAIN" = 0 ] || [ -n "$HOLDER_JOIN" ] || die "--holder-again makes the machine again, which needs --holder-join with the pin it joins with"
 [ "$(id -u)" = 0 ] || die "run this as root on a Proxmox VE node"
 for c in pveum pvesh pvesm qm perl openssl curl sha512sum sha256sum; do
   command -v "$c" >/dev/null || die "$c is missing: this is not a Proxmox VE node"
@@ -688,7 +706,135 @@ else
   done
 fi
 
-# --- 6. the line ---------------------------------------------------------------
+# --- 6. a machine of its own -----------------------------------------------------
+# A PERMANENT FLEET HOST ON THIS CLUSTER, so the fleet reaches it while the
+# phone and the laptop that set it up are asleep: the same as Xen Orchestra's
+# pool's own machine (src/fleet/host/xo-holder.js), made here by root because
+# here root runs the setup. docs/proxmox.md, "A machine of its own".
+#
+# OUTSIDE THE POOL, so the fleet's token can neither change it nor remove it:
+# the token may do things only in the pool. It may see it, by VM.Audit on this
+# machine alone, so the app can show it is there and running.
+#
+# ON THE BRIDGE WITH NO FENCE, because it must reach this node's API and the
+# fleet, and the fence holds a machine to the internet.
+#
+# IT HOLDS NOTHING UNTIL ITS OWNER SAYS SO: it joins with the pin and name
+# the fleet gave the app, and the phone asks you to approve it to hold this
+# cluster. The file the app wrote holds that pin, and this removes it.
+step holder
+HOLDER_TAG=fleetwright-holder
+# Its machines: outside the pool, not templates, with the tag. One to a line,
+# `vmid node status name`, lowest number first.
+holders() {
+  pvesh get /cluster/resources --type vm --output-format json |
+    TAG="$HOLDER_TAG" IN_POOL="$POOL" perl -MJSON::PP -e '
+      my $d = decode_json(join("", <STDIN>));
+      print map { "$_->{vmid} $_->{node} " . ($_->{status} // "unknown") . " " . ($_->{name} // "") . "\n" }
+        sort { $a->{vmid} <=> $b->{vmid} } grep {
+        ($_->{type} // "") eq "qemu" && ($_->{pool} // "") ne $ENV{IN_POOL} && ($_->{template} // 0) != 1
+          && ($_->{tags} // "") =~ /(^|[;, ])\Q$ENV{TAG}\E($|[;, ])/
+      } @$d;'
+}
+there="$(holders)"
+if [ "$HOLDER_AGAIN" = 1 ] && [ -n "$there" ]; then
+  while read -r hid hnode _ hname; do
+    [ -n "$hid" ] || continue
+    say "removing $hname (VM $hid) to make the machine of its own again"
+    pvesh create "/nodes/$hnode/qemu/$hid/status/stop" --skiplock 1 >/dev/null 2>&1 || true
+    pvesh delete "/nodes/$hnode/qemu/$hid" --purge 1 --destroy-unreferenced-disks 1 >/dev/null ||
+      die "could not remove $hname (VM $hid), the machine of its own being made again"
+    # SAID BY NAME, so the fleet retires the host it was (core.js, #onHolderRemoved).
+    case "$hname" in holder-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) printf 'fleetwright-holder-removed: %s\n' "$hname" ;; esac
+  done <<<"$there"
+  there=""
+fi
+if [ -n "$there" ]; then
+  read -r hid hnode hstatus hname <<<"$(head -n 1 <<<"$there")"
+  if [ "$hstatus" = stopped ]; then
+    pvesh create "/nodes/$hnode/qemu/$hid/status/start" >/dev/null
+    say "the machine of its own, $hname (VM $hid), was off and has been started"
+  else
+    say "the machine of its own, $hname (VM $hid), is already there"
+  fi
+  [ -z "$HOLDER_JOIN" ] || rm -f "$HOLDER_JOIN"
+elif [ -n "$HOLDER_JOIN" ]; then
+  # THE PIN AND THE NAME, read and checked, and the file gone either way.
+  join_said="$(ADDRESS="$ADDRESS" COORD="$COORDINATOR" perl -MJSON::PP -e '
+    local $/; open my $f, "<", $ARGV[0] or die "unreadable\n"; my $j = eval { decode_json(<$f>) } or die "not JSON\n";
+    my $id = $j->{hostId} // ""; my $pin = $j->{pin} // ""; my $sec = $j->{secret};
+    die "it was asked for at " . ($j->{address} // "no address") . ", and this node is set up as $ENV{ADDRESS}\n" unless ($j->{address} // "") eq $ENV{ADDRESS};
+    die "no name the fleet gives a machine of its own\n" unless $id =~ /\Aholder-[0-9a-f]{6}\z/;
+    die "no enrolment pin\n" unless $pin =~ /\A\d{6}\z/;
+    die "a secret that is not one\n" if defined $sec && $sec !~ /\A[0-9a-f]{64}\z/;
+    my ($origin) = $ENV{COORD} =~ m{\A(https://[A-Za-z0-9.-]+(?::\d+)?)}; die "no fleet address\n" unless $origin;
+    my %g; my $g = $j->{grants};
+    if (ref $g eq "HASH") { for my $k (qw(upgrades reboot)) { $g{$k} = $g->{$k} ? JSON::PP::true : JSON::PP::false if exists $g->{$k} } }
+    my %out = (v => 1, coordinator => $origin, pin => $pin, hostId => $id, holder => $ENV{ADDRESS});
+    $out{secret} = $sec if defined $sec;
+    $out{grants} = \%g if %g;
+    my $up = (exists $g{upgrades} && !$g{upgrades}) ? 0 : 1;
+    print "$id $up ", JSON::PP->new->canonical->encode(\%out);' "$HOLDER_JOIN" 2>&1)" ||
+    { rm -f "$HOLDER_JOIN"; die "the file the app wrote for the machine of its own is not one: ${join_said}"; }
+  rm -f "$HOLDER_JOIN"
+  read -r hname hup hjson <<<"$join_said"
+  # FROM THE DEBIAN IMAGE, or any of the pool's when there is none.
+  tpl="$(templates_of debian-13 | head -n 1)"
+  [ -n "$tpl" ] || tpl="$(tagged 1 fleetwright-image | head -n 1)"
+  [ -n "$tpl" ] || die "the pool has no machine image to make its own machine from. Run this again without --no-image."
+  hid="$(free_vmid)"
+  part - "making $hname from template $tpl"
+  # ITS CLOUD-INIT, which writes the join where the fleet's join script reads
+  # it and runs that script: the same lines Xen Orchestra's holder boots
+  # with (xo-holder.js, holderCloudConfig), which the test holds equal.
+  # Before it joins it takes the newest build of its suite, unless its owner
+  # said it may not update itself.
+  hfile="$SNIPPET_DIR/fleetwright-holder-$hid.yaml"
+  (
+    umask 077
+    {
+      printf '#cloud-config\nhostname: %s\nwrite_files:\n  - path: /run/fleetwright/join.json\n' "$hname"
+      printf "    permissions: '0600'\n    owner: root:root\n    content: |\n      %s\nruncmd:\n" "$hjson"
+      if [ "$hup" = 1 ]; then cat <<'UPGRADE'
+  - |
+    if [ -f /etc/apt/sources.list.d/fleetwright.list ]; then
+      if timeout 300 sh -c 'apt-get -qq update && DEBIAN_FRONTEND=noninteractive apt-get -qq -y --only-upgrade install fleetwright' >/var/log/fleetwright-first-boot.log 2>&1; then
+        echo "fleetwright: took the newest build of its suite before joining: $(dpkg-query -W -f='${Version}' fleetwright)"
+      else
+        echo "fleetwright: could not take the newest build before joining; joining on the image's $(dpkg-query -W -f='${Version}' fleetwright). /var/log/fleetwright-first-boot.log says why" >&2
+      fi
+    fi
+UPGRADE
+      fi
+      cat <<'JOIN'
+  - [sh, -c, 'j=/usr/local/sbin/fleetwright-vm-join; [ -x "$j" ] || j=/opt/fleetwright/current/install/fleetwright-vm-join; exec "$j" "$0"', /run/fleetwright/join.json]
+JOIN
+    } >"$hfile"
+  )
+  qm clone "$tpl" "$hid" --name "$hname" --full 1 --storage "$STORAGE" >/dev/null ||
+    { rm -f "$hfile"; die "could not clone template $tpl into VM $hid for the machine of its own"; }
+  qm set "$hid" --delete cicustom >/dev/null 2>&1 || true
+  qm set "$hid" --cicustom "user=$SNIPPETS:snippets/fleetwright-holder-$hid.yaml" --tags "$HOLDER_TAG" \
+    --net0 "virtio,bridge=$BRIDGE" --onboot 1 --ciupgrade 0 \
+    --description "This cluster's own Fleetwright machine, for the fleet at $COORD_HOST. It holds $ADDRESS for the fleet once its owner approves it, and stays up. Made by fleetwright-pve-setup." >/dev/null
+  # SEEN BY THE FLEET, AND NOTHING MORE: VM.Audit on this machine alone.
+  role FleetwrightHolder "VM.Audit"
+  pveum acl modify "/vms/$hid" --users "$USER_ID" --roles FleetwrightHolder
+  qm start "$hid" >/dev/null
+  # THE PIN GOES once it has had time to boot: the snippet removed and the
+  # cloud-init drive taken off at its next restart, so nothing on the node
+  # keeps it, as Xen Orchestra's drive was destroyed after boot. It lasts ten
+  # minutes and is spent once; this is the rest.
+  ci="$(qm config "$hid" | awk -F: '/cloudinit/ {print $1; exit}')"
+  systemd-run --unit "fleetwright-holder-forget-$hid" --collect --on-active=2h /bin/sh -c \
+    "rm -f '$hfile'; qm set $hid --delete cicustom >/dev/null 2>&1; ${ci:+qm set $hid --delete $ci >/dev/null 2>&1;} true" >/dev/null 2>&1 ||
+    say "could not schedule removing $hfile; remove it once $hname has joined"
+  say "the machine of its own, $hname (VM $hid), is starting on $BRIDGE. Once it is up it joins, and the app asks you to approve it to manage this cluster."
+else
+  say "no machine of its own was asked for"
+fi
+
+# --- 7. the line ---------------------------------------------------------------
 step line
 # HOW TO TRUST THIS CLUSTER. Its own CA, unless the web interface was given a
 # certificate of somebody else's (pveproxy-ssl.pem): then publicly trusted if it

@@ -23,11 +23,14 @@
 // stopped in: it finds what it made first when run again.
 
 import { PVESETUP_STEPS } from '../protocol/intents.js';
-import { connectionOf } from './pve-pools.js';
+import { HOLDER_ID_RE, HOLDER_SECRET_RE } from '../protocol/holder-join.js';
+import { connectionOf, PVE_HOLDER_TAG } from './pve-pools.js';
 import { IMAGES } from './vm-image.js';
 
 export const UNIT = 'fleetwright-pve-setup';
 export const LINE_FILE = '/root/.fleetwright-pve-line';
+/** Where the pin and name the cluster's own machine joins with are written, root only; the script removes it. */
+export const HOLDER_JOIN_FILE = '/root/.fleetwright-holder-join';
 export const SCRIPT_URL = 'https://raw.githubusercontent.com/TheTechNetwork/Fleetwright/main/install/fleetwright-pve-setup';
 
 /** The node's clock at the start, so the journal is read from this run alone. */
@@ -57,6 +60,8 @@ export function setupCommand(coordinator, vmids = null, options = null) {
  *   firewall?: boolean, rebuildImage?: boolean, noImage?: boolean, images?: string[],
  *   channel?: 'stable'|'rolling', storage?: string, bridge?: string,
  *   expireDays?: number, groups?: number, labsOpen?: number, labsClosed?: number,
+ *   holder?: boolean, holderAgain?: boolean, holderSecret?: string,
+ *   grants?: { upgrades?: boolean, reboot?: boolean },
  * }} PveOptions
  */
 
@@ -121,6 +126,30 @@ export function pveOptionsOf(v) {
     /** @type {any} */ (out)[k] = o[k];
   }
   if ((out.labsOpen ?? 0) + (out.labsClosed ?? 0) > 4) return no('four labs at most, open and closed together');
+  // A MACHINE OF ITS OWN (docs/proxmox.md): whether to make one, whether to
+  // make it again, the secret the person's phone made for it to ask to join
+  // with (src/fleet/protocol/holder-join.js), and what it may do from chat.
+  for (const k of ['holder', 'holderAgain']) {
+    if (o[k] === undefined || o[k] === null) continue;
+    if (typeof o[k] !== 'boolean') return no(`${k} is yes or no`);
+    if (o[k]) /** @type {any} */ (out)[k] = true;
+  }
+  if (out.holderAgain && !out.holder) return no('the machine of its own is made again only while it is asked for');
+  if (o.holderSecret !== undefined && o.holderSecret !== null) {
+    if (!out.holder || typeof o.holderSecret !== 'string' || !HOLDER_SECRET_RE.test(o.holderSecret)) return no('that is not a secret for the machine of its own');
+    out.holderSecret = o.holderSecret;
+  }
+  if (o.grants !== undefined && o.grants !== null) {
+    if (typeof o.grants !== 'object' || Array.isArray(o.grants)) return no('what it may do from chat is a set of yes or no');
+    /** @type {{ upgrades?: boolean, reboot?: boolean }} */
+    const g = {};
+    for (const k of ['upgrades', 'reboot']) {
+      if (o.grants[k] === undefined) continue;
+      if (typeof o.grants[k] !== 'boolean') return no(`${k} is yes or no`);
+      g[/** @type {'upgrades'|'reboot'} */ (k)] = o.grants[k];
+    }
+    if (Object.keys(g).length) out.grants = g;
+  }
   return { options: out, problem: null };
 }
 
@@ -155,8 +184,11 @@ export function optionArgs(options) {
  *
  * @param {string} coordinator @param {string|null} [vmids] @param {PveOptions|null} [options]
  */
-export function startCommand(coordinator, vmids = null, options = null) {
-  const run = `${setupCommand(coordinator, vmids, options)} --line-file ${LINE_FILE}`;
+export function startCommand(coordinator, vmids = null, options = null, holderJoin = false) {
+  // THE MACHINE OF ITS OWN only with the file its pin was written to, and
+  // made again only then: the script refuses one without the other.
+  const holder = holderJoin ? ` --holder-join ${HOLDER_JOIN_FILE}${options?.holderAgain ? ' --holder-again' : ''}` : '';
+  const run = `${setupCommand(coordinator, vmids, options)}${holder} --line-file ${LINE_FILE}`;
   return `systemctl stop ${UNIT} 2>/dev/null; systemctl reset-failed ${UNIT} 2>/dev/null; rm -f ${LINE_FILE}; ` +
     `systemd-run --unit=${UNIT} --collect /bin/bash -c '${run}'`;
 }
@@ -174,11 +206,82 @@ export function pollCommand(since) {
     `echo "state=$(systemctl is-active ${UNIT})"; test -f ${LINE_FILE} && echo line=ready`;
 }
 
+/**
+ * THE CLUSTER'S OWN MACHINES as the script finds them: outside the pool, not
+ * templates, tagged. Asked before a pin is, so a setup run again over a
+ * machine already there spends no pin and reserves no name.
+ */
+export const HOLDER_FIND = 'pvesh get /cluster/resources --type vm --output-format json';
+
+/**
+ * The cluster's own machines in that answer, by name and whether each is up.
+ *
+ * @param {string} out @param {string} [pool]
+ * @returns {Array<{ vmid: number, name: string, running: boolean }>}
+ */
+export function holdersIn(out, pool = 'fleetwright') {
+  let all;
+  try {
+    all = JSON.parse(String(out || '[]'));
+  } catch {
+    return [];
+  }
+  return (Array.isArray(all) ? all : [])
+    .filter((v) => v?.type === 'qemu' && (v.pool ?? '') !== pool && Number(v.template) !== 1 && String(v.tags || '').split(/[;,\s]+/).includes(PVE_HOLDER_TAG))
+    .map((v) => ({ vmid: Number(v.vmid), name: String(v.name || '').slice(0, 80), running: v.status === 'running' }))
+    .sort((a, b) => a.vmid - b.vmid);
+}
+
+/**
+ * THE ADDRESS THE LINE WILL CARRY, worked out on the node as the script works
+ * it out (its first address, port 8006), before a pin is asked for: the
+ * machine of its own is reserved for that address, proves its request with
+ * it and is let hold the vault item named by it, so the three must agree.
+ * The script refuses a join file for any other.
+ */
+export const ADDRESS_FIND = "hostname -I | awk '{print $1}'";
+
+/**
+ * The address the line will carry, from ADDRESS_FIND's answer; null when the
+ * node gave none.
+ *
+ * @param {string} out
+ */
+export function lineAddressOf(out) {
+  const ip = String(out || '').trim().split(/\s+/)[0] ?? '';
+  return /^[0-9A-Fa-f.:]{2,45}$/.test(ip) ? `${ip}:8006` : null;
+}
+
+/**
+ * The file the script reads the pin from, written root-only in one command:
+ * the JSON in base64, so nothing in it reaches the shell as words.
+ *
+ * @param {{ hostId: string, pin: string, address: string, secret?: string|null, grants?: { upgrades?: boolean, reboot?: boolean }|null }} join
+ */
+export function holderJoinCommand({ hostId, pin, address, secret = null, grants = null }) {
+  if (!HOLDER_ID_RE.test(hostId)) throw new Error(`${hostId} is not a name the fleet gives a machine of its own`);
+  if (!/^\d{6}$/.test(pin)) throw new Error('that is not an enrolment pin');
+  if (!/^[A-Za-z0-9.:[\]-]{1,253}$/.test(String(address))) throw new Error('that is not the address of the cluster');
+  if (secret !== null && !HOLDER_SECRET_RE.test(secret)) throw new Error('that is not a secret for a machine of its own');
+  const json = JSON.stringify({ hostId, pin, address, ...(secret ? { secret } : {}), ...(grants && Object.keys(grants).length ? { grants } : {}) });
+  return `umask 077; printf %s ${Buffer.from(json).toString('base64')} | base64 -d >${HOLDER_JOIN_FILE}`;
+}
+
+/**
+ * THE MACHINES OF ITS OWN THIS RUN REMOVED to make one again, read once its
+ * step is over: apart from pollCommand, which both phones send word for word.
+ *
+ * @param {number} since
+ */
+export function removedCommand(since) {
+  return `journalctl -u ${UNIT} --since @${since} -o cat --no-pager | grep '^fleetwright-holder-removed: ' || true`;
+}
+
 /** The line, read once and removed. */
 export const TAKE_LINE = `cat ${LINE_FILE} && rm -f ${LINE_FILE}`;
 
 /** Stopping a run the person cancelled. */
-export const STOP = `systemctl stop ${UNIT} 2>/dev/null; rm -f ${LINE_FILE}`;
+export const STOP = `systemctl stop ${UNIT} 2>/dev/null; rm -f ${LINE_FILE} ${HOLDER_JOIN_FILE}`;
 
 /**
  * What a poll said. `part` is how far into its step the script is: `fill` in
@@ -186,7 +289,7 @@ export const STOP = `systemctl stop ${UNIT} 2>/dev/null; rm -f ${LINE_FILE}`;
  * when it has said nothing of the step it is on.
  *
  * @param {string} out
- * @returns {{ steps: string[], error: string|null, running: boolean, lineReady: boolean, part: { fill: number|null, text: string }|null }}
+ * @returns {{ steps: string[], error: string|null, running: boolean, lineReady: boolean, part: { fill: number|null, text: string }|null, removed: string[] }}
  */
 export function progressOf(out) {
   const lines = String(out || '').split('\n');
@@ -202,6 +305,9 @@ export function progressOf(out) {
     running: lines.includes('state=active') || lines.includes('state=activating'),
     lineReady: lines.includes('line=ready'),
     part: partOf(lines.slice(after).filter((l) => l.startsWith('fleetwright-part: ')).pop()),
+    // THE CLUSTER'S OWN MACHINES IT REMOVED to make one again, by name, and
+    // only names of the fleet's shape: anything else on a VM is a label.
+    removed: lines.filter((l) => l.startsWith('fleetwright-holder-removed: ')).map((l) => l.slice('fleetwright-holder-removed: '.length).trim()).filter((n) => HOLDER_ID_RE.test(n)),
   };
 }
 
@@ -234,6 +340,8 @@ const SCRIPT_STEPS = PVESETUP_STEPS.slice(1);
  *   open: (ctx: any) => Promise<{ remote: (script: string, opts?: { timeoutMs?: number }) => Promise<{ code: number|null, stdout: string, stderr: string }> }>,
  *   coordinatorUrl: string|null,
  *   sealLine: (ctx: any, line: string) => Promise<void>,
+ *   holderPin?: ((ctx: any, address: string) => Promise<{ ok: boolean, pin?: string, hostId?: string, text?: string }|null>)|null,
+ *   removed?: (ctx: any, hostId: string) => void,
  *   say?: (ctx: any, part: { fill: number|null, text: string }) => void,
  *   sleep: (ms: number) => Promise<void>,
  *   now: () => number,
@@ -242,7 +350,7 @@ const SCRIPT_STEPS = PVESETUP_STEPS.slice(1);
  * }} deps
  * @returns {Array<(ctx: any) => Promise<any>>}
  */
-export function pveSteps({ open, coordinatorUrl, sealLine, say = () => {}, sleep, now, pollMs = 5_000, limitMs = 45 * 60_000 }) {
+export function pveSteps({ open, coordinatorUrl, sealLine, holderPin = null, removed = () => {}, say = () => {}, sleep, now, pollMs = 5_000, limitMs = 45 * 60_000 }) {
   /**
    * Wait until the script has said a step after `key`, or ended.
    *
@@ -278,7 +386,28 @@ export function pveSteps({ open, coordinatorUrl, sealLine, say = () => {}, sleep
       const since = Number.parseInt(String(clock.stdout).trim(), 10);
       if (clock.code !== 0 || !Number.isInteger(since)) throw new Error('the node did not say what time it is, so its setup could not be followed. Nothing was started.');
       ctx.since = since;
-      const started = await ctx.pool.remote(startCommand(coordinatorUrl, ctx.rec?.vmids ?? null, ctx.rec?.options ?? null), { timeoutMs: 60_000 });
+      const options = ctx.rec?.options ?? null;
+      // THE CLUSTER'S OWN MACHINE, when asked for: its pin, only when there
+      // is none to keep, written where the script reads it.
+      let holderJoin = false;
+      if (options?.holder) {
+        if (!holderPin) throw new Error('this machine cannot ask the fleet for the pin the cluster’s own machine joins with. Update it, or set the cluster up without one.');
+        const found = await ctx.pool.remote(HOLDER_FIND, { timeoutMs: 60_000 });
+        const there = found.code === 0 ? holdersIn(found.stdout) : [];
+        if (!there.length || options.holderAgain) {
+          const said = await ctx.pool.remote(ADDRESS_FIND, { timeoutMs: 30_000 });
+          const address = said.code === 0 ? lineAddressOf(said.stdout) : null;
+          if (!address) throw new Error('the node did not say its address, which its own machine is reserved for. Nothing was started.');
+          const given = await holderPin(ctx, address);
+          if (!given?.ok || typeof given.pin !== 'string' || typeof given.hostId !== 'string' || !HOLDER_ID_RE.test(given.hostId)) {
+            throw new Error(`the fleet gave no pin for the cluster’s own machine: ${given?.text || 'it did not answer'}. Nothing was started.`);
+          }
+          const wrote = await ctx.pool.remote(holderJoinCommand({ hostId: given.hostId, pin: given.pin, address, secret: options.holderSecret ?? null, grants: options.grants ?? null }), { timeoutMs: 30_000 });
+          if (wrote.code !== 0) throw new Error('the pin for the cluster’s own machine could not be written on the node. Nothing was started.');
+          holderJoin = true;
+        }
+      }
+      const started = await ctx.pool.remote(startCommand(coordinatorUrl, ctx.rec?.vmids ?? null, options, holderJoin), { timeoutMs: 60_000 });
       if (started.code !== 0) throw new Error(`the node would not start the setup: ${lastLine(started.stderr || started.stdout) || `systemd-run said ${started.code}`}.`);
       ctx.started = true;
       ctx.deadline = now() + limitMs;
@@ -287,6 +416,13 @@ export function pveSteps({ open, coordinatorUrl, sealLine, say = () => {}, sleep
     // line
     async (ctx) => {
       await until(ctx, 'line');
+      // A MACHINE OF ITS OWN MADE AGAIN (the script's step `holder`, which
+      // ends before this one): the one it replaced, told to the fleet by
+      // name, which retires the host it was (core.js, #onHolderRemoved).
+      if (ctx.rec?.options?.holderAgain) {
+        const r = await ctx.pool.remote(removedCommand(ctx.since), { timeoutMs: 60_000 });
+        for (const name of progressOf(r.stdout).removed) removed(ctx, name);
+      }
       // THE FILE CAN LAG THE WORD `done` by the write; one more look.
       for (let i = 0; i < 3 && !ctx.last.lineReady; i++) {
         await sleep(Math.min(pollMs, 2_000));

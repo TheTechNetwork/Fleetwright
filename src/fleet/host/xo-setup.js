@@ -867,7 +867,10 @@ export class XoSetups {
     return {
       ok: true,
       text: 'Ready for the root password. Check the key is this machine’s, then send it sealed.',
-      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['pve'] },
+      // `pve-holder`: it makes the cluster a machine of its own, which needs
+      // the fleet's pin; an older one ignores the option, so a phone offers it
+      // only where this is said.
+      xosetup: { job, state: 'waiting', key: key.publicKey, keySig, hostKey, fingerprint: await this.fingerprint(hostKey), can: ['pve', ...(this.holderPin ? ['pve-holder'] : [])] },
     };
   }
 
@@ -2105,6 +2108,11 @@ export class XoSetups {
         const box = await seal({ to: ctx.rec.reply, aad: pvesetupHandoffAad(ctx.rec.job, ctx.rec.address), payload: { v: 1, line } });
         ctx.rec.handoff = `${box.epk}.${box.iv}.${box.ct}`;
       },
+      // THE CLUSTER'S OWN MACHINE: its pin asked for as a policy job's is
+      // (xo-holder.js), and a machine it removed to make it again told to the
+      // fleet, which retires the host it was.
+      holderPin: this.holderPin && this.coordinatorUrl ? (ctx, address) => /** @type {(job: string, address: string) => Promise<any>} */ (this.holderPin)(ctx.rec.job, address) : null,
+      removed: (ctx, hostId) => this.emit({ event: 'xosetup.holder-removed', job: ctx.rec.job, hostId }),
     });
   }
 

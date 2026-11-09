@@ -102,7 +102,7 @@ async function standIn({ cert, firewall = true, perms = null, version = '9.0.3' 
       // reading of them passed here and saw nothing on a real node.
       if (p === '/pools/fleetwright') return ok({ members: [...state.vms.values()].map((v) => ({ type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, status: v.status })) });
       if (p === '/cluster/resources') {
-        const vms = [...state.vms.values()].map((v) => ({ id: `qemu/${v.vmid}`, type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, tags: v.tags, status: v.status, pool: 'fleetwright' }));
+        const vms = [...state.vms.values()].map((v) => ({ id: `qemu/${v.vmid}`, type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, tags: v.tags, status: v.status, ...(v.pool === null ? {} : { pool: v.pool ?? 'fleetwright' }) }));
         return ok(params.type === 'vm' || !params.type ? [...vms, { id: 'qemu/999', type: 'qemu', vmid: 999, node: 'pve1', name: 'someone-elses', template: 1, tags: 'fleetwright-image', status: 'stopped' }] : []);
       }
       if (p === '/cluster/firewall/options') return ok({ enable: state.firewall ? 1 : 0 });
@@ -782,4 +782,29 @@ test('SSH from away reaches only the asker’s running machine, and a phone’s 
   assert.equal(isSshKeysItem(`${SSH_PHONE_KEY_PREFIX}iphone-1a2b`), true);
   assert.equal(isSshKeysItem(`${SSH_PHONE_KEY_PREFIX}../x`), false);
   assert.equal(isSshKeysItem('secret:GITHUB_TOKEN'), false);
+});
+
+
+// THE CLUSTER'S OWN MACHINE, as the setup made it: outside the pool, which
+// is the one thing the token cannot reach into, and tagged. One in the pool
+// with the tag is anybody's who may tag the pool's machines.
+test('the look says the cluster’s own machine, and the box that is it says so', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf });
+  try {
+    pve.state.vms.set(150, { vmid: 150, node: 'pve1', name: 'holder-0a0b0c', template: 0, tags: 'fleetwright-holder', status: 'running', pool: null, config: {} });
+    pve.state.vms.set(151, { vmid: 151, node: 'pve1', name: 'planted', template: 0, tags: 'fleetwright-holder', status: 'running', config: {} });
+    const pools = new PvePools({ now: () => NOW, ...fast });
+    pools.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    await pools.refresh();
+    const [seen] = pools.report();
+    assert.deepEqual(seen.holders.map((/** @type {any} */ h) => [h.name, h.running]), [['holder-0a0b0c', true]]);
+    assert.equal(seen.holder, undefined, 'only the box that is the cluster’s own machine says it is');
+    const it = new PvePools({ now: () => NOW, holderFor: pve.address, ...fast });
+    it.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    await it.refresh();
+    assert.equal(it.report()[0].holder, true);
+  } finally {
+    await pve.close();
+  }
 });
