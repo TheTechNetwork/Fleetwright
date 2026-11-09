@@ -231,9 +231,22 @@ internal class XoLink private constructor(private val socket: SSLSocket, private
          * the pool (ConsoleTunnel, from away): TLS is layered on it with the
          * pool's own host name and held to the same pin.
          */
-        internal suspend fun handshake(address: String, pin: String, path: String, cookie: String?, timeoutMs: Int = 15_000, via: Socket? = null): Pair<SSLSocket, ByteArray> = withContext(Dispatchers.IO) {
-            val (host, port) = splitAddress(address)
+        internal suspend fun handshake(address: String, pin: String, path: String, cookie: String?, timeoutMs: Int = 15_000, via: Socket? = null): Pair<SSLSocket, ByteArray> {
             val trust = PinTrust(pin.lowercase())
+            return handshakeTrusting(address, trust, { trust.mismatch }, path, if (cookie != null) "Cookie: $cookie\r\n" else "", timeoutMs, via)
+        }
+
+        /**
+         * The same upgrade behind any check of the server's chain: a Proxmox
+         * VE cluster's CA (ProxmoxConsole) as well as a pool's pin. [headers]
+         * are whole lines, each ending in CRLF; [mismatched] says whether the
+         * check refused the chain, which is said as WRONG_CERTIFICATE.
+         */
+        internal suspend fun handshakeTrusting(
+            address: String, trust: X509TrustManager, mismatched: () -> Boolean, path: String, headers: String,
+            timeoutMs: Int = 15_000, via: Socket? = null,
+        ): Pair<SSLSocket, ByteArray> = withContext(Dispatchers.IO) {
+            val (host, port) = splitAddress(address)
             val context = SSLContext.getInstance("TLS").apply { init(null, arrayOf<TrustManager>(trust), null) }
             val raw = via ?: Socket()
             try {
@@ -243,10 +256,10 @@ internal class XoLink private constructor(private val socket: SSLSocket, private
                 try {
                     ssl.startHandshake()
                 } catch (e: Exception) {
-                    if (trust.mismatch) throw Failure("the certificate was not the pinned one", Failure.Kind.WRONG_CERTIFICATE)
+                    if (mismatched()) throw Failure("the certificate was not the pinned one", Failure.Kind.WRONG_CERTIFICATE)
                     throw e
                 }
-                val rest = upgrade(ssl, host, port, path, cookie)
+                val rest = upgrade(ssl, host, port, path, headers)
                 // From here a read waits on Xen Orchestra, which may say
                 // nothing for a long while and is not wrong to.
                 ssl.soTimeout = 0
@@ -258,13 +271,13 @@ internal class XoLink private constructor(private val socket: SSLSocket, private
         }
 
         /** The HTTP upgrade, answered with whatever arrived after its headers. */
-        private fun upgrade(ssl: SSLSocket, host: String, port: Int, path: String, cookie: String?): ByteArray {
+        private fun upgrade(ssl: SSLSocket, host: String, port: Int, path: String, headers: String): ByteArray {
             val key = Base64.getEncoder().encodeToString(ByteArray(16).also { SecureRandom().nextBytes(it) })
             val hostHeader = if (host.contains(':')) "[$host]:$port" else "$host:$port"
             val out = ssl.outputStream
             out.write(
                 ("GET $path HTTP/1.1\r\nHost: $hostHeader\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
-                    (if (cookie != null) "Cookie: $cookie\r\n" else "") +
+                    headers +
                     "Sec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\n\r\n").toByteArray(Charsets.ISO_8859_1),
             )
             out.flush()
@@ -274,11 +287,11 @@ internal class XoLink private constructor(private val socket: SSLSocket, private
             var end = -1
             while (end < 0) {
                 val n = input.read(buf)
-                if (n < 0) throw Failure("Xen Orchestra closed the connection before accepting the API upgrade", Failure.Kind.CLOSED)
+                if (n < 0) throw Failure("the server closed the connection before accepting the upgrade", Failure.Kind.CLOSED)
                 head.write(buf, 0, n)
                 end = headerEnd(head.toByteArray())
                 if (end < 0 && head.size() > 16 * 1024) {
-                    throw Failure("Xen Orchestra answered the upgrade with something that is not HTTP", Failure.Kind.CLOSED)
+                    throw Failure("the server answered the upgrade with something that is not HTTP", Failure.Kind.CLOSED)
                 }
             }
             val all = head.toByteArray()
@@ -289,7 +302,7 @@ internal class XoLink private constructor(private val socket: SSLSocket, private
                 if (i < 0) null else l.substring(0, i).trim().lowercase() to l.substring(i + 1).trim()
             }.toMap()
             if (status != "101" || headers["sec-websocket-accept"] != accept(key)) {
-                throw Failure("Xen Orchestra refused the API connection (${status ?: "no status"})", Failure.Kind.REFUSED)
+                throw Failure("the server refused the connection (${status ?: "no status"})", Failure.Kind.REFUSED)
             }
             return all.copyOfRange(end + 4, all.size)
         }

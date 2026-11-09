@@ -103,6 +103,8 @@ internal object ProxmoxDirectHandoff {
     private suspend fun keep(settings: Settings, record: ProxmoxLine.Record, address: String): Outcome =
         PhoneVault(settings).keepHypervisor(Fleet(settings), record.address, record.json).fold(
             onSuccess = {
+                // KEPT HERE TOO, for the console in the app (ProxmoxKept).
+                ProxmoxKept.keep(settings, record)
                 forget(settings, address)
                 Outcome.Kept(record.address)
             },

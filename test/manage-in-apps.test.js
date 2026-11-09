@@ -214,17 +214,20 @@ test('Android: the pin is checked in the handshake, before the upgrade is writte
   // for any other: the handshake ends and nothing is written.
   assert.match(code, /override fun checkServerTrusted\([^)]*\) \{\s*val leaf = chain\?\.firstOrNull\(\) \?: throw CertificateException\([^)]*\)\s*if \(Manage\.fingerprint\(leaf\.encoded\) != pin\) \{\s*mismatch = true\s*throw CertificateException/);
   // ORDER: the handshake, then the upgrade request, the first bytes written.
-  const open = code.slice(code.indexOf('suspend fun open('), code.indexOf('private fun upgrade('));
+  const open = code.slice(code.indexOf('suspend fun handshakeTrusting('), code.indexOf('private fun upgrade('));
   assert.ok(open.indexOf('ssl.startHandshake()') > 0, 'the handshake is not started explicitly');
-  assert.ok(open.indexOf('upgrade(ssl, host, port, path, cookie)') > open.indexOf('ssl.startHandshake()'), 'the upgrade is written before the pin is checked');
+  assert.ok(open.indexOf('upgrade(ssl, host, port, path, headers)') > open.indexOf('ssl.startHandshake()'), 'the upgrade is written before the pin is checked');
   // A wrong certificate is said as one, not as a connection that failed.
-  assert.match(open, /if \(trust\.mismatch\) throw Failure\("the certificate was not the pinned one", Failure\.Kind\.WRONG_CERTIFICATE\)/);
+  assert.match(open, /if \(mismatched\(\)\) throw Failure\("the certificate was not the pinned one", Failure\.Kind\.WRONG_CERTIFICATE\)/);
   // Two trust managers in the app, and neither accepts a certificate that is
   // not pinned: this one, and the relay's look at what an address presents
   // (XoRelay.kt, Reader), which refuses every certificate it reads
-  // (test/relay-in-apps.test.js holds it to that). A third is something new.
+  // (test/relay-in-apps.test.js holds it to that). The third is a Proxmox VE
+  // cluster's (ProxmoxConsole.kt, ClusterTrust): its own CA and only it, or a
+  // public certificate held to its name, as the boxes hold it (pve-api.js);
+  // test/vm-console-in-apps.test.js holds it to that. A fourth is something new.
   const managers = (ANDROID.match(/class (\w+)(?:\([^)]*\))? : X509TrustManager/g) ?? []).map((m) => m.replace(/^class (\w+)[\s\S]*$/, '$1')).sort();
-  assert.deepEqual(managers, ['PinTrust', 'Reader'], 'a trust manager other than the pin and the relay’s look is in the app');
+  assert.deepEqual(managers, ['ClusterTrust', 'PinTrust', 'Reader'], 'a trust manager other than the pin, the relay’s look and a cluster’s CA is in the app');
   assert.ok(!ANDROID.includes('HostnameVerifier'), 'something turns hostname checks off for the rest of the app');
   // TLS only, and a pool set up over plain HTTP is told so in words.
   assert.match(bare(KT_WATCH), /if \(record\.plain \|\| pin == null\) \{\s*phase = Phase\.Stopped\(Manage\.Words\.plainPool\(address\), retry = false\)/);

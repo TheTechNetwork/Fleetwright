@@ -107,3 +107,55 @@ test('the page completes a VNC handshake over the bridge, and types what is type
     await b.close();
   }
 });
+
+// PROXMOX VE'S CONSOLE ASKS FOR A VNC PASSWORD, the one-use ticket its
+// `vncproxy` handed the phone. The page answers with what the phone gave it
+// (`fwConsole.password`) and, given nothing, still says it was asked and
+// sends nothing: Xen Orchestra's console never asks.
+test('the page answers a VNC password with the ticket it was handed, and only then', async (t) => {
+  const b = await browser();
+  if (!b) return t.skip('no browser to run the page in');
+  try {
+    for (const given of ['PVEVNC:6612C0DE::ticket', '']) {
+      const page = await b.newPage();
+      await page.addInitScript(() => {
+        const w = /** @type {any} */ (window);
+        w.sent = [];
+        w.FleetwrightBridge = { post: (/** @type {string} */ s) => w.sent.push(JSON.parse(s)) };
+      });
+      await page.route(BASE, (route) => route.fulfill({ contentType: 'text/html', body: readFileSync(OUTPUTS[1], 'utf8') }));
+      await page.goto(BASE);
+      const posts = () => page.evaluate(() => /** @type {any} */ (window).sent);
+      const waitFor = async (/** @type {(m: any[]) => boolean} */ ok) => {
+        for (let i = 0; i < 100; i++) {
+          const m = await posts();
+          if (ok(m)) return m;
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        throw new Error(`never: ${JSON.stringify(await posts())}`);
+      };
+      const feed = (/** @type {Buffer} */ bytes) => page.evaluate((b64) => /** @type {any} */ (window).fwConsole.data(b64), bytes.toString('base64'));
+      const sentBytes = async () => Buffer.concat((await posts()).filter((m) => m.t === 'send').map((m) => Buffer.from(m.b, 'base64')));
+      await waitFor((m) => m.some((x) => x.t === 'state' && x.s === 'ready'));
+      await page.evaluate((p) => { const c = /** @type {any} */ (window).fwConsole; if (p) c.password(p); c.opened(); }, given);
+      // RFB 3.8 with VNC authentication (type 2), then its 16-byte challenge.
+      await feed(Buffer.from('RFB 003.008\n'));
+      await waitFor((m) => m.some((x) => x.t === 'send'));
+      await feed(Buffer.from([1, 2]));
+      await new Promise((r) => setTimeout(r, 100));
+      const before = (await sentBytes()).length;
+      await feed(Buffer.alloc(16, 7));
+      if (given) {
+        await waitFor(() => true);
+        for (let i = 0; i < 50 && (await sentBytes()).length < before + 16; i++) await new Promise((r) => setTimeout(r, 20));
+        assert.equal((await sentBytes()).length - before, 16, 'the page did not answer the challenge');
+        assert.ok(!(await posts()).some((x) => x.t === 'state' && x.s === 'refused'));
+      } else {
+        await waitFor((m) => m.some((x) => x.t === 'state' && x.s === 'refused' && /VNC password/.test(x.why)));
+      }
+      await page.close();
+    }
+  } finally {
+    await b.close();
+  }
+});

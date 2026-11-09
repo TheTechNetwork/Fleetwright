@@ -3904,8 +3904,9 @@ class Settings(context: Context) {
         val prefixes = listOf(
             "secret.hypervisor.", "secret.xosetup-reply.", "secret.pvesetup-reply.",
             "secret.pvedirect-password.", "secret.pvedirect-line.", "xoSaved.", "holderSecrets.",
+            "secret.proxmox-record.",
         )
-        val whole = setOf("xoHeld", "xoPending", "pveDirectPending", "pvePending", "xoVia", "xoLooked")
+        val whole = setOf("xoHeld", "xoPending", "pveDirectPending", "pvePending", "xoVia", "xoLooked", "pveHeld")
         val gone = prefs.all.keys.filter { k -> k in whole || prefixes.any { k.startsWith(it) } }
         prefs.edit().apply { gone.forEach { remove(it) } }.apply()
     }
@@ -3918,6 +3919,15 @@ class Settings(context: Context) {
     var xoHeld: String
         get() = prefs.getString("xoHeld", "") ?: ""
         set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoHeld") else putString("xoHeld", value) }.apply()
+
+    /**
+     * The Proxmox VE addresses this phone keeps the cluster's record for, as
+     * ProxmoxKept writes them: a JSON array of strings. Not a secret: the
+     * record is kept apart, encrypted.
+     */
+    var pveHeld: String
+        get() = prefs.getString("pveHeld", "") ?: ""
+        set(value) = prefs.edit().apply { if (value.isEmpty()) remove("pveHeld") else putString("pveHeld", value) }.apply()
 
     /** The hypervisor setups still owed a token, as XoHandoff writes them. Not a secret. */
     var xoPending: String

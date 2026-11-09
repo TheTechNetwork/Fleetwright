@@ -60,9 +60,14 @@ import org.json.JSONObject
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun ConsolePage(settings: Settings, address: String, vm: String, name: String, away: Boolean = false, onDismiss: () -> Unit) {
+internal fun ConsolePage(
+    settings: Settings, address: String, vm: String, name: String, away: Boolean = false,
+    /** A Proxmox VE machine, by node and number: opened with the cluster's record this phone keeps (ProxmoxKept). */
+    proxmox: Pair<String, Int>? = null,
+    onDismiss: () -> Unit,
+) {
     val scope = rememberCoroutineScope()
-    val console = remember(vm) { ConsoleBridge(settings, address, vm, name, scope, away) }
+    val console = remember(vm) { ConsoleBridge(settings, address, vm, name, scope, away, proxmox) }
     DisposableEffect(console) { onDispose { console.stop() } }
 
     Dialog(
@@ -136,6 +141,8 @@ internal class ConsoleBridge(
     private val scope: CoroutineScope,
     /** Through one of your machines, from the first try (a page read away) or after this phone could not reach the pool. */
     private var away: Boolean = false,
+    /** Proxmox VE's console, by node and number, in place of Xen Orchestra's. */
+    private val proxmox: Pair<String, Int>? = null,
 ) {
     /** What the console is doing, said above it; null once the screen shows. */
     var line by mutableStateOf<String?>(if (away) Manage.Words.consoleAwayOpening else Manage.Words.consoleOpening(name))
@@ -235,6 +242,15 @@ internal class ConsoleBridge(
 
     private fun open() {
         if (!pageReady || socket != null) return
+        proxmox?.let { (node, vmid) ->
+            val trust = ProxmoxKept.trust(settings, address)
+            if (trust == null) {
+                ended(Manage.Words.consoleShut)
+                return
+            }
+            scope.launch { openProxmox(node, vmid, trust) }
+            return
+        }
         // The record the pool page connects with: the token, and the pin it
         // is only ever sent behind.
         val record = settings.secret(XoHandoff.tokenName(address))?.let { Manage.record(it, address) }
@@ -289,6 +305,81 @@ internal class ConsoleBridge(
             call("fwConsole.opened()")
             opened.start()
         }
+    }
+
+    /** FROM AWAY, a tunnel through one of your machines; null when it could not be opened, which has been said. */
+    private suspend fun reach(): java.net.Socket? {
+        tunnel?.close()
+        show(Manage.Words.consoleAwayOpening)
+        val t = ConsoleTunnel(address)
+        tunnel = t
+        t.onEnd = { why -> main.post { tunnelEnded(t, why) } }
+        return try {
+            val (s, host) = t.open(settings)
+            via = host
+            s
+        } catch (e: Exception) {
+            if (tunnel === t) tunnel = null
+            ended(e.message ?: Manage.Words.consoleShut)
+            null
+        }
+    }
+
+    /**
+     * PROXMOX VE'S, IN TWO REQUESTS: the ticket, then the screen. From away
+     * each takes a tunnel of its own, the ticket's closed before the screen's
+     * opens, because a tunnel carries one connection. A node this phone cannot
+     * reach is tried once through one of your machines. The same as iOS.
+     */
+    private suspend fun openProxmox(node: String, vmid: Int, trust: ProxmoxKept.Trust) {
+        var through: java.net.Socket? = if (away) reach() ?: return else null
+        val handed = try {
+            ProxmoxConsole.ticket(address, node, vmid, trust, via = through)
+        } catch (e: XoLink.Failure) {
+            if (e.kind == XoLink.Failure.Kind.WRONG_CERTIFICATE) show(Manage.Words.wrongCertificate(address), troubled = true, retry = false)
+            else ended(Manage.Words.consoleRefused(e.message ?: "it gave no reason"))
+            return
+        } catch (e: Exception) {
+            if (!away) {
+                away = true
+                openProxmox(node, vmid, trust)
+            } else {
+                ended(Manage.Words.consoleRefused(e.message ?: "it gave no reason"))
+            }
+            return
+        }
+        if (away) {
+            // The ticket's tunnel is done; the screen takes its own.
+            val spent = tunnel
+            tunnel = null
+            spent?.close()
+            through = reach() ?: return
+        }
+        val opened = try {
+            ProxmoxConsole.open(address, node, vmid, trust, handed, via = through)
+        } catch (e: XoLink.Failure) {
+            if (e.kind == XoLink.Failure.Kind.WRONG_CERTIFICATE) show(Manage.Words.wrongCertificate(address), troubled = true, retry = false)
+            else ended(Manage.Words.consoleRefused(e.message ?: "it gave no reason"))
+            return
+        } catch (e: Exception) {
+            ended(Manage.Words.consoleRefused(e.message ?: "it gave no reason"))
+            return
+        }
+        if (web == null) {
+            opened.close()
+            return
+        }
+        opened.onData = { bytes ->
+            val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            main.post { call("fwConsole.data('$b64')") }
+        }
+        opened.onEnd = { why -> main.post { socketEnded(why) } }
+        socket = opened
+        // PROXMOX VE'S VNC TICKET, the password its console asks for, handed
+        // to the page before it is told the socket is open.
+        call("fwConsole.password(${quoted(handed.ticket)})")
+        call("fwConsole.opened()")
+        opened.start()
     }
 
     /** Not reached from here: through one of your machines, once; then said. */
