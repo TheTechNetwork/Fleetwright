@@ -170,6 +170,14 @@ struct HypervisorsView: View {
 struct HypervisorPageView: View {
     let settings: Settings
     let row: HypervisorsView.Row
+    /// HOW ITS EDGE ROUTER IS, as the machine reading it last did
+    /// (src/fleet/host/edge-watch.js, docs/proxmox.md "Watching it"): the
+    /// same report a Xen Orchestra pool's card shows, found by the
+    /// cluster's address. Nil before asking and when no machine reads it,
+    /// said apart by `edgesAsked`.
+    @State private var edges: Fleet.VMEdges?
+    @State private var edgesAsked = false
+    @State private var edgesFailed = false
 
     var body: some View {
         List {
@@ -250,6 +258,7 @@ struct HypervisorPageView: View {
                     case let .there(running, blocks):
                         Text(HypervisorWords.edgeThere(running: running, blocks: blocks)).fleetType(.body).foregroundStyle(running ? Design.Palette.ink : Design.Palette.attention)
                             .frame(minHeight: 44, alignment: .leading)
+                        edgeReading
                         NavigationLink(HypervisorWords.makeEdgeAgain) {
                             AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(edge: true, edgeBlock: blocks ? true : nil, edgeAgain: true))
                         }
@@ -292,6 +301,55 @@ struct HypervisorPageView: View {
         }
         .navigationTitle(row.address)
         .navigationBarTitleDisplayMode(.inline)
+        .task { await loadEdges() }
+        .refreshable { await loadEdges() }
+    }
+
+    private var watchesEdge: Bool {
+        if row.proxmox, case .there = row.fleet?.edge { return true }
+        return false
+    }
+
+    private func loadEdges() async {
+        guard watchesEdge else { return }
+        do {
+            edges = try await Fleet(settings: settings).vmEdges()?.first { $0.address == row.address }
+            edgesFailed = false
+        } catch {
+            edgesFailed = true
+        }
+        edgesAsked = true
+    }
+
+    /// THE VERDICT IN ONE WORD, AND THE PAGE BEHIND IT: the same words and the
+    /// same page a Xen Orchestra pool's routers have (Manage.Words.edgeStatus,
+    /// EdgeRoutersView), its numbers, its log and what it refused. Before any
+    /// machine has read it, that is what is said, never that it is fine (C-5).
+    @ViewBuilder
+    private var edgeReading: some View {
+        if let e = edges, let r = e.routers.first {
+            let status = Manage.Words.edgeStatus(reached: r.reached, problem: r.problem, gateway: r.gateway, role: r.role)
+            NavigationLink {
+                EdgeRoutersView(edges: e)
+            } label: {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(HypervisorWords.edgeHowItIs).fleetType(.body).foregroundStyle(Design.Palette.ink)
+                    Spacer(minLength: 0)
+                    Text(status.word)
+                        .fleetType(.label)
+                        .foregroundStyle(status.trouble ? Design.Palette.attention : Design.Palette.ink)
+                        .contentTransition(.opacity)
+                        .animation(Design.Motion.change, value: status.word)
+                }
+            }
+            .frame(minHeight: 44)
+            .accessibilityHint("Opens the router’s page")
+        } else if edgesAsked {
+            Text(edgesFailed ? HypervisorWords.edgeUnchecked : HypervisorWords.edgeNoReading)
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+                .frame(minHeight: 44, alignment: .leading)
+        }
     }
 }
 
@@ -496,6 +554,10 @@ enum HypervisorWords {
     static let makeEdge = "Make the edge router"
     static let makeEdgeAgain = "Make it again"
     static let makeEdgeAgainFooter = "Builds a fresh one. Machines have no internet access while it starts."
+    // HOW IT IS, read by the cluster's own machine (docs/proxmox.md, "Watching it").
+    static let edgeHowItIs = "How it is"
+    static let edgeNoReading = "No reading yet. The cluster’s own machine reads it once it’s up and approved."
+    static let edgeUnchecked = "Couldn’t check the edge router."
     static func edgeThere(running: Bool, blocks: Bool) -> String {
         running ? (blocks ? "Running, dropping what its threat rules match" : "Running, logging what its threat rules match") : "Off. Setting it up again starts it."
     }

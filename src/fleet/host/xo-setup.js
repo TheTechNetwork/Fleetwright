@@ -2926,8 +2926,8 @@ export const PVE_STEP_WORDS = Object.freeze(/** @type {Record<string, string>} *
   fence: 'Making the firewall group',
   networks: 'Making lab and group networks',
   image: 'Building the machine image',
-  edge: 'Building the edge router',
   holder: 'Making its own machine',
+  edge: 'Building the edge router',
   line: 'Sending the token to this phone',
 }));
 

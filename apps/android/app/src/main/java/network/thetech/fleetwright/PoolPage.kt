@@ -295,7 +295,7 @@ private fun RouterSummary(r: Fleet.VmEdges.Router) {
 
 /** The routers' own page: everything the machine read of them, which the card says in one word per router. The only place the numbers are, so the card stays a verdict. */
 @Composable
-private fun EdgePage(e: Fleet.VmEdges, onDismiss: () -> Unit) {
+internal fun EdgePage(e: Fleet.VmEdges, onDismiss: () -> Unit) {
     FullScreen(Manage.Words.edgeHeading, onDismiss) {
         EdgeReport(e)
     }

@@ -130,6 +130,7 @@ internal fun HypervisorsScreen(
 
     open?.let { row ->
         HypervisorPage(
+            settings,
             row,
             onSetUpAgain = { open = null; onAddProxmox(HypervisorAddress.node(row.address)) },
             onTurnOnFirewall = { open = null; onTurnOnFirewall(HypervisorAddress.node(row.address)) },
@@ -254,7 +255,30 @@ private fun ChoiceRow(title: String, line: String, onClick: () -> Unit) {
  * evidence under it.
  */
 @Composable
-private fun HypervisorPage(row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnOnFirewall: () -> Unit, onMakeOwn: (Boolean) -> Unit, onMakeEdge: (Boolean, Boolean) -> Unit, onDismiss: () -> Unit) {
+private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnOnFirewall: () -> Unit, onMakeOwn: (Boolean) -> Unit, onMakeEdge: (Boolean, Boolean) -> Unit, onDismiss: () -> Unit) {
+    // HOW ITS EDGE ROUTER IS, as the machine reading it last did
+    // (src/fleet/host/edge-watch.js, docs/proxmox.md "Watching it"), every
+    // half minute while the page is open: the same report a Xen Orchestra
+    // pool's card shows, found by the cluster's address. Same as iOS.
+    val watched = row.proxmox && row.fleet?.edge?.there == true
+    var edges by remember { mutableStateOf<Fleet.VmEdges?>(null) }
+    var edgesAsked by remember { mutableStateOf(false) }
+    var edgesFailed by remember { mutableStateOf(false) }
+    var showingEdge by remember { mutableStateOf(false) }
+    LaunchedEffect(row.address, watched) {
+        if (!watched) return@LaunchedEffect
+        while (true) {
+            Fleet(settings).vmEdges()
+                .onSuccess { all -> edges = all?.firstOrNull { it.address == row.address }; edgesFailed = false }
+                .onFailure { edgesFailed = true }
+            edgesAsked = true
+            kotlinx.coroutines.delay(30_000)
+        }
+    }
+    edges?.takeIf { showingEdge }?.let {
+        EdgePage(it) { showingEdge = false }
+        return
+    }
     FullScreen(title = row.address, onDismiss = onDismiss) {
         Text(HypervisorWords.answer(row.fleet), style = Design.Style.body, color = Design.Palette.ink.now)
         SectionHead("Machines")
@@ -298,6 +322,24 @@ private fun HypervisorPage(row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnO
                     style = Design.Style.body,
                     color = if (edge.running) Design.Palette.ink.now else Design.Palette.attention.now,
                 )
+                // THE VERDICT IN ONE WORD, AND THE PAGE BEHIND IT, in the
+                // words a pool's routers have (Manage.Words.edgeStatus). Before
+                // any machine has read it, that is what is said (C-5).
+                val e = edges
+                val r = e?.routers?.firstOrNull()
+                if (e != null && r != null) {
+                    val (word, trouble) = Manage.Words.edgeStatus(r.reached, r.problem, r.gateway, r.role)
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { showingEdge = true },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(HypervisorWords.EDGE_HOW_IT_IS, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                        Text(word, style = Design.Style.label, color = if (trouble) Design.Palette.attention.now else Design.Palette.ink.now)
+                        Text("  ›", style = Design.Style.body, color = Design.Palette.inkDim.now)
+                    }
+                } else if (edgesAsked) {
+                    Hint(if (edgesFailed) HypervisorWords.EDGE_UNCHECKED else HypervisorWords.EDGE_NO_READING)
+                }
             } else {
                 Text(HypervisorWords.EDGE_NONE, style = Design.Style.body, color = Design.Palette.inkDim.now)
             }
@@ -366,6 +408,10 @@ object HypervisorWords {
     const val MAKE_EDGE = "Make the edge router"
     const val MAKE_EDGE_AGAIN = "Make it again"
     const val MAKE_EDGE_AGAIN_FOOTER = "Builds a fresh one. Machines have no internet access while it starts."
+    // HOW IT IS, read by the cluster's own machine (docs/proxmox.md, "Watching it").
+    const val EDGE_HOW_IT_IS = "How it is"
+    const val EDGE_NO_READING = "No reading yet. The cluster’s own machine reads it once it’s up and approved."
+    const val EDGE_UNCHECKED = "Couldn’t check the edge router."
     fun edgeThere(running: Boolean, blocks: Boolean): String =
         if (running) (if (blocks) "Running, dropping what its threat rules match" else "Running, logging what its threat rules match") else "Off. Setting it up again starts it."
     fun ownThere(name: String, running: Boolean): String = if (running) "$name, running" else "$name, off. Setting it up again starts it."
