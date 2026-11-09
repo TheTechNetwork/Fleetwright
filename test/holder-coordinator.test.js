@@ -176,3 +176,23 @@ test('the pool’s own machine is asked first, and the box that set the pool up 
   assert.equal(r.ok, true, r.text);
   assert.deepEqual(asked, ['holder-0a0b0c', 'aaa-laptop']);
 });
+
+test('a phone setting up Proxmox itself is given a pin and a reserved name for the address, a few at a time', async () => {
+  // A NODE SET UP FROM THE PHONE runs no job a box could ask with
+  // (#onHolderPin), and the script clones the machine itself.
+  // docs/proxmox.md, "A machine of its own".
+  const { core } = await fleet();
+  const me = { email: ELI };
+  const a = core.holderPinFor(me, { address: '10.69.10.10:8006' });
+  assert.equal(a.status, 200, a.body.text);
+  assert.match(a.body.hostId, HOLDER_ID_RE);
+  assert.match(a.body.pin, /^\d{6}$/);
+  assert.equal(core.holdersFor(me).find((r) => r.hostId === a.body.hostId)?.address, '10.69.10.10:8006', 'reserved for the address, so the secret join is let in');
+  const spent = await core.enrollment.redeem(a.body.pin, 'host', a.body.hostId);
+  assert.equal(spent.ok && spent.entry.actor, ELI, 'it joins in the asker’s name');
+  assert.equal(core.holderPinFor(null, { address: '10.69.10.10:8006' }).status, 403, 'nobody signed in, nothing');
+  assert.equal(core.holderPinFor({ email: 'gone@example.com' }, { address: '10.69.10.10:8006' }).status, 403, 'nor anybody holding no credential');
+  assert.equal(core.holderPinFor(me, { address: 'not an address' }).status, 400);
+  for (let i = 1; i < MAX_HOLDER_PINS; i++) assert.equal(core.holderPinFor(me, { address: '10.69.10.10:8006' }).status, 200);
+  assert.equal(core.holderPinFor(me, { address: '10.69.10.10:8006' }).body.error.code, 'too_many', 'the reservations are the fleet’s, so one person holds only a few');
+});
