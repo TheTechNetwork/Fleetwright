@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
@@ -25,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -97,6 +100,10 @@ internal fun ProxmoxSheet(
     var progress by remember { mutableStateOf<ProxmoxSsh.Progress?>(null) }
     var sshText by remember { mutableStateOf("") }
     var sshBusy by remember { mutableStateOf(false) }
+    /** WHAT THE NODE HAS TO CHOOSE FROM, once read; null before, and the fields are typed in. */
+    var choices by remember { mutableStateOf<ProxmoxSsh.Choices?>(null) }
+    var choicesBusy by remember { mutableStateOf(false) }
+    var choicesText by remember { mutableStateOf("") }
     /** The phone could not reach the node: a machine that can does it. */
     var through by rememberSaveable { mutableStateOf(false) }
     val coordinatorOk = Regex("^https://[A-Za-z0-9.:/_-]+$").matches(settings.coordinatorUrl)
@@ -181,6 +188,40 @@ internal fun ProxmoxSheet(
      * key checked before goes straight on; any other key is shown to be
      * checked, and nothing is sent until it is.
      */
+    /**
+     * WHAT THE NODE HAS TO CHOOSE FROM, over the SSH the setup starts on: its
+     * key checked as Start checks it, then one read-only command. A key not
+     * checked before is offered below and asked again after. Same as iOS.
+     */
+    suspend fun readChoices() {
+        choicesBusy = true
+        choicesText = ""
+        val at = node.trim()
+        if (trusted == null) {
+            val answered = ProxmoxSsh.hostKey(at).getOrElse { e ->
+                choicesText = ProxmoxWords.choicesFailed(e.message ?: "")
+                choicesBusy = false
+                return
+            }
+            if (known.getString(at, null) != answered) {
+                offered = answered
+                choicesText = ProxmoxWords.CHOICES_KEY
+                choicesBusy = false
+                return
+            }
+            trusted = answered
+        }
+        val key = trusted ?: run { choicesBusy = false; return }
+        ProxmoxSsh.run(at, key, password, ProxmoxSsh.CHOICES_FIND).fold(
+            onSuccess = { (status, out) ->
+                val read = ProxmoxSsh.choicesIn(out)
+                if (status == 0 && (read.storages.isNotEmpty() || read.bridges.isNotEmpty())) choices = read else choicesText = ProxmoxWords.CHOICES_NONE
+            },
+            onFailure = { e -> choicesText = ProxmoxWords.choicesFailed(e.message ?: "") },
+        )
+        choicesBusy = false
+    }
+
     suspend fun start() {
         sshBusy = true
         sshText = ""
@@ -284,7 +325,7 @@ internal fun ProxmoxSheet(
         SectionHead("Set it up")
         OutlinedTextField(
             value = node,
-            onValueChange = { node = it; offered = null; trusted = null },
+            onValueChange = { node = it; offered = null; trusted = null; choices = null; choicesText = "" },
             enabled = since == null && !kept,
             label = { Text("The node's address") },
             placeholder = { Text("10.0.0.5") },
@@ -314,7 +355,11 @@ internal fun ProxmoxSheet(
             modifier = Modifier.fillMaxWidth(),
         )
         if (!vmidsOk) Hint("Two numbers from 100 up with a dash between, the first no larger, such as 9000-9099.", color = Design.Palette.bad.now)
-        ProxmoxOptionsBlock(options, enabled = since == null && !kept, open = optionsOpen, onOpen = { optionsOpen = it }) {
+        ProxmoxOptionsBlock(
+            options, enabled = since == null && !kept, open = optionsOpen, onOpen = { optionsOpen = it },
+            choices = choices, choicesBusy = choicesBusy, choicesText = choicesText,
+            onReadChoices = if (node.isNotBlank() && password.isNotEmpty() && since == null) ({ scope.launch { readChoices() } }) else null,
+        ) {
             options = it
             known.edit().putString("options", it.saved()).apply()
         }
@@ -471,6 +516,23 @@ internal object ProxmoxWords {
     const val FIREWALL_HINT = "Blocks traffic into the nodes except the web interface, SSH and cluster traffic."
     const val HOLDER_HINT = "A machine on the cluster that stays up and manages it for your fleet, so it doesn’t depend on this phone or a laptop being awake. You approve it once it joins."
     const val EDGE_HINT = "Filters what the cluster’s machines do for threats: the names they look up, and what its threat rules match. Needs about 4 GB free on the node while it’s built."
+    // WHAT THE NODE HAS TO CHOOSE FROM (ProxmoxSsh.CHOICES_FIND), the same on iOS.
+    const val CHOICES_READ = "List the node’s storage and bridges"
+    const val CHOICES_READING = "Reading the node…"
+    const val CHOICES_KEY = "Check the node’s key below, then list them again."
+    const val CHOICES_NONE = "The node listed no storage or bridges. Type them in, or leave them empty."
+    fun choicesFailed(why: String) = "Couldn’t read the node: $why"
+    const val STORAGE_AUTO = "Found by itself"
+    const val BRIDGE_AUTO = "vmbr0"
+    fun storage(s: ProxmoxSsh.Storage): String =
+        "${s.id} · ${s.type}${if (s.shared) ", shared" else ""}" + (s.free?.let { " · " + bytes(it) + " free" } ?: "")
+    /** Decimal units, as iOS's ByteCountFormatter says a disk's size. */
+    private fun bytes(n: Long): String = when {
+        n >= 1_000_000_000_000 -> String.format(java.util.Locale.ROOT, "%.1f TB", n / 1e12)
+        n >= 1_000_000_000 -> "${n / 1_000_000_000} GB"
+        else -> "${n / 1_000_000} MB"
+    }
+    fun bridge(b: ProxmoxSsh.Bridge): String = listOfNotNull(b.name, b.address, b.comment).joinToString(" · ")
     const val EDGE_BLOCK = "Drop what the threat rules match"
     const val EDGE_BLOCK_HINT = "Otherwise it logs it and lets it through."
     const val EDGE_PAIR = "Two edge routers"
@@ -633,9 +695,31 @@ internal data class ProxmoxOptions(
     }
 }
 
+/** One choice of several, 48dp tall, its radio button saying which is chosen. */
+@Composable
+private fun PickRow(label: String, selected: Boolean, enabled: Boolean, onPick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onPick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = null, enabled = enabled)
+        Text(label, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+    }
+}
+
 /** Every option, folded away until opened: the defaults are what most nodes want, and each says what it changes. */
 @Composable
-internal fun ProxmoxOptionsBlock(options: ProxmoxOptions, enabled: Boolean, open: Boolean, onOpen: (Boolean) -> Unit, onChange: (ProxmoxOptions) -> Unit) {
+internal fun ProxmoxOptionsBlock(
+    options: ProxmoxOptions,
+    enabled: Boolean,
+    open: Boolean,
+    onOpen: (Boolean) -> Unit,
+    choices: ProxmoxSsh.Choices? = null,
+    choicesBusy: Boolean = false,
+    choicesText: String = "",
+    onReadChoices: (() -> Unit)? = null,
+    onChange: (ProxmoxOptions) -> Unit,
+) {
     OpenRow(if (open) "Options ▾" else "Options") { onOpen(!open) }
     if (!open) return
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -664,18 +748,36 @@ internal fun ProxmoxOptionsBlock(options: ProxmoxOptions, enabled: Boolean, open
             FilterChip(selected = options.channel == k, onClick = { onChange(options.copy(channel = k)) }, enabled = enabled, label = { Text(label) })
         }
     }
-    OutlinedTextField(
-        value = options.storage, onValueChange = { onChange(options.copy(storage = it)) }, enabled = enabled,
-        label = { Text("Storage (found by itself when empty)") }, singleLine = true,
-        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    OutlinedTextField(
-        value = options.bridge, onValueChange = { onChange(options.copy(bridge = it)) }, enabled = enabled,
-        label = { Text("Bridge (vmbr0 when empty)") }, singleLine = true,
-        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
-        modifier = Modifier.fillMaxWidth(),
-    )
+    // PICKED FROM WHAT THE NODE HAS, once it is read; typed in only when it
+    // could not be. Same as iOS.
+    if (choices != null && choices.storages.isNotEmpty()) {
+        Hint("Storage", Design.Palette.ink.now)
+        PickRow(ProxmoxWords.STORAGE_AUTO, options.storage.isEmpty(), enabled) { onChange(options.copy(storage = "")) }
+        choices.storages.forEach { s -> PickRow(ProxmoxWords.storage(s), options.storage == s.id, enabled) { onChange(options.copy(storage = s.id)) } }
+    } else {
+        OutlinedTextField(
+            value = options.storage, onValueChange = { onChange(options.copy(storage = it)) }, enabled = enabled,
+            label = { Text("Storage (found by itself when empty)") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    if (choices != null && choices.bridges.isNotEmpty()) {
+        Hint("Bridge", Design.Palette.ink.now)
+        PickRow(ProxmoxWords.BRIDGE_AUTO, options.bridge.isEmpty(), enabled) { onChange(options.copy(bridge = "")) }
+        choices.bridges.forEach { b -> PickRow(ProxmoxWords.bridge(b), options.bridge == b.name, enabled) { onChange(options.copy(bridge = b.name)) } }
+    } else {
+        OutlinedTextField(
+            value = options.bridge, onValueChange = { onChange(options.copy(bridge = it)) }, enabled = enabled,
+            label = { Text("Bridge (vmbr0 when empty)") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    if (choices == null && onReadChoices != null) {
+        OpenRow(if (choicesBusy) ProxmoxWords.CHOICES_READING else ProxmoxWords.CHOICES_READ) { if (!choicesBusy) onReadChoices() }
+        if (choicesText.isNotEmpty()) Hint(choicesText)
+    }
     Hint("Access expires after", Design.Palette.ink.now)
     Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         ProxmoxOptions.LIFETIMES.forEach { d ->
