@@ -140,6 +140,7 @@ enum ProxmoxSSH {
         case "fence": return "The firewall group"
         case "networks": return "Lab and group networks"
         case "image": return "The machine image, which takes a few minutes"
+        case "edge": return "The edge router, which takes a few minutes"
         case "holder": return "Its own machine"
         case "line": return "Saving the token"
         case "done": return "Done"

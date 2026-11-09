@@ -132,6 +132,16 @@ struct AddProxmoxView: View {
                     Stepper("Group networks: \(options.groups)", value: $options.groups, in: 0...4)
                     Stepper("Open labs: \(options.labsOpen)", value: $options.labsOpen, in: 0...4)
                     Stepper("Closed labs: \(options.labsClosed)", value: $options.labsClosed, in: 0...4)
+                    Toggle("An edge router", isOn: Binding(get: { options.wantsEdge }, set: { options.edge = $0 }))
+                    Text(ProxmoxWords.edgeHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                    if options.wantsEdge {
+                        Toggle(ProxmoxWords.edgeBlock, isOn: Binding(get: { options.edgeBlock == true }, set: { options.edgeBlock = $0 ? true : nil }))
+                        Text(ProxmoxWords.edgeBlockHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        if options.edgeAgain == true || startOptions?.edgeAgain == true {
+                            Toggle(HypervisorWords.makeEdgeAgain, isOn: Binding(get: { options.edgeAgain == true }, set: { options.edgeAgain = $0 ? true : nil }))
+                            Text(HypervisorWords.makeEdgeAgainFooter).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        }
+                    }
                     Toggle("A machine of its own", isOn: Binding(get: { options.wantsHolder }, set: { options.holder = $0 }))
                     Text(ProxmoxWords.holderHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     // MADE AGAIN only when the cluster's page asked; on here
@@ -464,6 +474,9 @@ enum ProxmoxWords {
     static let systemsHint = "Each system chosen becomes an image a session's machine can be made from. One already on the cluster is kept, and built again only when asked."
     static let firewallHint = "Blocks traffic into the nodes except the web interface, SSH and cluster traffic."
     static let holderHint = "A machine on the cluster that stays up and manages it for your fleet, so it doesn’t depend on this phone or a laptop being awake. You approve it once it joins."
+    static let edgeHint = "Filters what the cluster’s machines do for threats: the names they look up, and what its threat rules match. Needs about 4 GB free on the node while it’s built."
+    static let edgeBlock = "Drop what the threat rules match"
+    static let edgeBlockHint = "Otherwise it logs it and lets it through."
     static let holderNeedsImage = "It’s made from the cluster’s Debian image, so one has to be there already."
 }
 
@@ -490,6 +503,16 @@ struct ProxmoxOptions: Codable, Equatable {
     var holderAgain: Bool? = nil
 
     var wantsHolder: Bool { holder ?? true }
+    /// AN EDGE ROUTER on the cluster (docs/proxmox.md, "The edge router"):
+    /// nil is yes, which options saved before there was a choice read as.
+    var edge: Bool? = nil
+    /// It drops what the threat rules match, rather than logging it.
+    var edgeBlock: Bool? = nil
+    /// The one there made again, asked for from the cluster's page; never
+    /// kept for the next run.
+    var edgeAgain: Bool? = nil
+
+    var wantsEdge: Bool { edge ?? true }
 
     /// Every system the setup can build, in its own order: the catalogue
     /// Xen Orchestra pools build from too (src/fleet/host/vm-image.js, IMAGES).
@@ -549,6 +572,8 @@ struct ProxmoxOptions: Codable, Equatable {
         if groups != 2 { a += " --groups \(groups)" }
         if labsOpen != 1 { a += " --labs-open \(labsOpen)" }
         if labsClosed != 1 { a += " --labs-closed \(labsClosed)" }
+        if wantsEdge { a += edgeBlock == true ? " --edge-block" : " --edge" }
+        if wantsEdge && edgeAgain == true { a += " --edge-again" }
         return a
     }
 
@@ -569,6 +594,11 @@ struct ProxmoxOptions: Codable, Equatable {
         if labsClosed != 1 { p["labsClosed"] = labsClosed }
         // ITS OWN MACHINE'S PIN is asked for by the machine running the
         // setup, and its secret added by the screen that sends this.
+        if wantsEdge {
+            p["edge"] = true
+            if edgeBlock == true { p["edgeBlock"] = true }
+            if edgeAgain == true { p["edgeAgain"] = true }
+        }
         if wantsHolder {
             p["holder"] = true
             if holderAgain == true { p["holderAgain"] = true }
@@ -584,6 +614,7 @@ struct ProxmoxOptions: Codable, Equatable {
     var saved: String {
         var kept = self
         kept.holderAgain = nil
+        kept.edgeAgain = nil
         return (try? JSONEncoder().encode(kept)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
 }

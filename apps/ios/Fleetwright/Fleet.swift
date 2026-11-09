@@ -1904,7 +1904,33 @@ struct Fleet {
         /// ITS OWN MACHINE (docs/proxmox.md, "A machine of its own"). Nil is
         /// no box said, from an older box or coordinator, never "none".
         var holder: OwnMachine? = nil
+        /// ITS EDGE ROUTER (docs/proxmox.md, "The edge router"). Nil is no
+        /// box said, never "none".
+        var edge: Edge? = nil
         var id: String { "\(kind) \(address)" }
+
+        /// `false` from a box that looked and saw none, or the router.
+        enum Edge: Codable, Hashable {
+            case none
+            case there(running: Bool, blocks: Bool)
+
+            private struct Seen: Codable { let running: Bool?; let blocks: Bool? }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.singleValueContainer()
+                if let seen = try? c.decode(Bool.self), seen == false { self = .none; return }
+                let r = try c.decode(Seen.self)
+                self = .there(running: r.running == true, blocks: r.blocks == true)
+            }
+
+            func encode(to encoder: Encoder) throws {
+                var c = encoder.singleValueContainer()
+                switch self {
+                case .none: try c.encode(false)
+                case let .there(running, blocks): try c.encode(Seen(running: running, blocks: blocks))
+                }
+            }
+        }
         var onProxmox: Bool { kind == "proxmox" }
 
         /// `false` from a box that looked and saw none, or the machine.

@@ -112,3 +112,30 @@ test('both phones say the step and the cluster’s own machine in the same words
     assert.equal(new RegExp(`const val ${android} = "([^"]+)"`).exec(ANDROID_SHEET)?.[1], a);
   }
 });
+
+test('both phones offer the edge router with the box’s flags and keys, and say it in the same words', () => {
+  assert.ok(PVESETUP_STEPS.includes('edge'));
+  assert.ok(IOS_SSH.includes('case "edge": return "The edge router, which takes a few minutes"'));
+  assert.ok(ANDROID_SSH.includes('"edge" -> "The edge router, which takes a few minutes"'));
+  // The flags the box's optionArgs gives, in its order: after the labs.
+  assert.equal(pveSetup.optionArgs({ labsClosed: 2, edge: true, edgeBlock: true, edgeAgain: true }), ' --labs-closed 2 --edge-block --edge-again');
+  assert.ok(IOS_ADD.includes('if wantsEdge { a += edgeBlock == true ? " --edge-block" : " --edge" }'));
+  assert.ok(IOS_ADD.includes('if wantsEdge && edgeAgain == true { a += " --edge-again" }'));
+  assert.ok(ANDROID_SHEET.includes('if (edge) a.append(if (edgeBlock) " --edge-block" else " --edge")'));
+  assert.ok(ANDROID_SHEET.includes('if (edge && edgeAgain == true) a.append(" --edge-again")'));
+  for (const key of ['"edge"', '"edgeBlock"', '"edgeAgain"']) assert.ok(IOS_ADD.includes(key) && ANDROID_SHEET.includes(key), key);
+  assert.match(IOS_ADD, /kept\.edgeAgain = nil/);
+  for (const [ios, android] of [['edgeHeader', 'EDGE_HEADER'], ['edgeNone', 'EDGE_NONE'], ['makeEdge', 'MAKE_EDGE'], ['makeEdgeAgain', 'MAKE_EDGE_AGAIN'], ['makeEdgeAgainFooter', 'MAKE_EDGE_AGAIN_FOOTER']]) {
+    const a = new RegExp(`static let ${ios} = "([^"]+)"`).exec(IOS_PAGE)?.[1];
+    assert.ok(a, `iOS has no ${ios}`);
+    assert.equal(new RegExp(`const val ${android} = "([^"]+)"`).exec(ANDROID_PAGE)?.[1], a, `${android} differs`);
+  }
+  for (const [ios, android] of [['edgeHint', 'EDGE_HINT'], ['edgeBlock', 'EDGE_BLOCK'], ['edgeBlockHint', 'EDGE_BLOCK_HINT']]) {
+    const a = new RegExp(`static let ${ios} = "([^"]+)"`).exec(IOS_ADD)?.[1];
+    assert.ok(a, `iOS has no ${ios}`);
+    assert.equal(new RegExp(`const val ${android} = "([^"]+)"`).exec(ANDROID_SHEET)?.[1], a);
+  }
+  for (const words of ['Running, dropping what its threat rules match', 'Running, logging what its threat rules match']) {
+    assert.ok(IOS_PAGE.includes(words) && ANDROID_PAGE.includes(words), words);
+  }
+});
