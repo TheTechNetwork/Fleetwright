@@ -332,7 +332,7 @@ dependencies {
   // (BrowsePage.kt, docs/browse.md). Android's WebView has no proxy setting
   // of its own; ProxyController is the only way to point it at one, and it
   // lives here. Pinned, like everything else here. docs/dependencies.md.
-  implementation("androidx.webkit:webkit:1.14.0")
+  implementation("androidx.webkit:webkit:1.18.0")
 
   // A WEBSOCKET, for one thing: a relay through this phone to a pool no
   // machine in the fleet can reach (XoRelay.kt). HttpURLConnection, which
