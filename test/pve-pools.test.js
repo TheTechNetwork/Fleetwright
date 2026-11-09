@@ -140,7 +140,12 @@ async function standIn({ cert, firewall = true, perms = null, version = '9.0.3' 
         if (rest === '/firewall/ipset') return (state.ipsets[v.vmid] = []), ok(null);
         if (rest === '/firewall/ipset/fwallow' && req.method === 'GET') return ok((state.ipsets[v.vmid] ?? []).map((cidr) => ({ cidr })));
         if (rest === '/firewall/ipset/fwallow') return (state.ipsets[v.vmid] ??= []).push(params.cidr), ok(null);
-        if (rest === '/status/start') return (v.status = 'running'), ok(upid('qmstart'));
+        if (rest === '/status/start') {
+          // A node that will not start it (not that much memory free), as a test asks.
+          const why = state.startRefuses?.(v);
+          if (why) return res.writeHead(500, why).end();
+          return (v.status = 'running'), ok(upid('qmstart'));
+        }
         if (rest === '/status/stop') return (v.status = 'stopped'), ok(upid('qmstop'));
         if (rest === '/status/shutdown') return (v.status = 'stopped'), ok(upid('qmshutdown'));
         if (rest === '' && req.method === 'DELETE') return state.vms.delete(v.vmid), ok(upid('qmdestroy'));
@@ -472,6 +477,10 @@ test('a machine is given longer from when it was made, refused past the cap, and
     assert.equal(end.ok, true, end.text);
     assert.ok(pve.state.asked.includes('POST /nodes/pve1/qemu/302/status/shutdown'));
     assert.ok(!pve.state.asked.includes('POST /nodes/pve1/qemu/302/status/stop'));
+    // Ended now, as on Xen Orchestra: removed with its disk, not left for the next look.
+    assert.ok(pve.state.asked.includes('DELETE /nodes/pve1/qemu/302'));
+    assert.equal(pve.state.vms.has(302), false);
+    assert.match(end.text, /removed with its disk/);
   } finally {
     await pve.close();
   }
@@ -836,6 +845,47 @@ test('a machine goes behind the edge router while one is up, and the look says i
     await pools.refresh();
     const off = await pools.make({ owner: OWNER, template: pools.report()[0].images[0].id, ticket: `fwt_0123456789ac_${'c'.repeat(48)}`, minutes: 90, coordinatorUrl: 'https://fleet.example.com' });
     assert.equal(off.ok, false, 'with the firewall off and no router up, nothing is made by default');
+  } finally {
+    await pve.close();
+  }
+});
+
+test('a resize the node will not start goes back to the old size, and a machine that will not start at all is kept, not swept', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf });
+  const made = NOW / 1000 - 600;
+  pve.state.vms.set(302, { vmid: 302, node: 'pve1', name: 'vm-cccccccccccc', template: 0, tags: 'fleetwright-session', status: 'running', config: { cores: 2, sockets: 1, memory: 4096, description: markText({ for: OWNER, until: made + 3600, made }) } });
+  try {
+    const pools = new PvePools({ now: () => NOW, ...fast });
+    pools.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    const vm = () => pve.state.vms.get(302);
+
+    // More memory than the node has free: refused, and back at 4 GiB, running.
+    pve.state.startRefuses = (/** @type {any} */ v) => (Number(v.config.memory) > 32768 ? 'not enough memory' : null);
+    const big = await pools.control({ owner: OWNER, name: 'vm-cccccccccccc', action: 'resize', cpus: 8, memory: 64 });
+    assert.equal(big.ok, false);
+    assert.match(big.text, /restarted at its old size/);
+    assert.equal(vm().status, 'running');
+    assert.equal(Number(vm().config.memory), 4096);
+    assert.equal(Number(vm().config.cores), 2);
+    assert.equal(markOf(vm().config.description)?.busy, null);
+
+    // One value alone is a resize too, and the other is left as it was.
+    pve.state.startRefuses = null;
+    const cpus = await pools.control({ owner: OWNER, name: 'vm-cccccccccccc', action: 'resize', cpus: 4 });
+    assert.equal(cpus.ok, true, cpus.text);
+    assert.equal(Number(vm().config.cores), 4);
+    assert.equal(Number(vm().config.memory), 4096);
+
+    // Will not start at any size: stopped, still busy, and the next look leaves it.
+    pve.state.startRefuses = () => 'the node is out of memory';
+    const stuck = await pools.control({ owner: OWNER, name: 'vm-cccccccccccc', action: 'resize', memory: 8 });
+    assert.equal(stuck.ok, false);
+    assert.match(stuck.text, /It was not removed/);
+    assert.equal(vm().status, 'stopped');
+    assert.ok(markOf(vm().config.description)?.busy);
+    await pools.refresh();
+    assert.equal(pve.state.vms.has(302), true, 'the sweep took a machine stopped by a resize');
   } finally {
     await pve.close();
   }
