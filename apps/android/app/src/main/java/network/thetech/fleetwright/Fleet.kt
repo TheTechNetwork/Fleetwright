@@ -2247,7 +2247,8 @@ class Fleet(
     data class OwnMachine(val name: String?, val running: Boolean)
 
     /** A box looked and saw none ([there] false), or the router, whether it is up, and whether it drops. */
-    data class EdgeRouter(val there: Boolean, val running: Boolean, val blocks: Boolean)
+    /** `pair`: two of them, sharing the gateway (docs/proxmox.md, "Two of them"). */
+    data class EdgeRouter(val there: Boolean, val running: Boolean, val blocks: Boolean, val pair: Boolean = false)
 
     /** What one box holding a hypervisor last saw: null is it has not looked yet, never no. */
     data class HypervisorBox(val hostId: String, val reachable: Boolean?, val problem: String?)
@@ -2280,7 +2281,7 @@ class Fleet(
                     edge = o.opt("edge").let { e ->
                         when {
                             e == false -> EdgeRouter(false, false, false)
-                            e is JSONObject -> EdgeRouter(true, e.optBoolean("running", false), e.optBoolean("blocks", false))
+                            e is JSONObject -> EdgeRouter(true, e.optBoolean("running", false), e.optBoolean("blocks", false), e.optBoolean("pair", false))
                             else -> null
                         }
                     },

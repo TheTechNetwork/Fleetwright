@@ -255,12 +255,12 @@ struct HypervisorPageView: View {
                 // makes one. Unsaid by an older box, so nothing is drawn.
                 Section {
                     switch edge {
-                    case let .there(running, blocks):
-                        Text(HypervisorWords.edgeThere(running: running, blocks: blocks)).fleetType(.body).foregroundStyle(running ? Design.Palette.ink : Design.Palette.attention)
+                    case let .there(running, blocks, pair):
+                        Text(HypervisorWords.edgeThere(running: running, blocks: blocks, pair: pair)).fleetType(.body).foregroundStyle(running ? Design.Palette.ink : Design.Palette.attention)
                             .frame(minHeight: 44, alignment: .leading)
                         edgeReading
                         NavigationLink(HypervisorWords.makeEdgeAgain) {
-                            AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(edge: true, edgeBlock: blocks ? true : nil, edgeAgain: true))
+                            AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(edge: true, edgeBlock: blocks ? true : nil, edgeAgain: true, edgePair: pair ? true : nil))
                         }
                         .frame(minHeight: 44)
                     case .none:
@@ -327,23 +327,30 @@ struct HypervisorPageView: View {
     /// machine has read it, that is what is said, never that it is fine (C-5).
     @ViewBuilder
     private var edgeReading: some View {
-        if let e = edges, let r = e.routers.first {
-            let status = Manage.Words.edgeStatus(reached: r.reached, problem: r.problem, gateway: r.gateway, role: r.role)
+        if let e = edges, !e.routers.isEmpty {
+            // ONE ROUTER IS "HOW IT IS"; A PAIR IS EACH BY NAME, each with its
+            // own word (Primary, Standby, or what is wrong), the same as a
+            // pool's card says them.
             NavigationLink {
                 EdgeRoutersView(edges: e)
             } label: {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(HypervisorWords.edgeHowItIs).fleetType(.body).foregroundStyle(Design.Palette.ink)
-                    Spacer(minLength: 0)
-                    Text(status.word)
-                        .fleetType(.label)
-                        .foregroundStyle(status.trouble ? Design.Palette.attention : Design.Palette.ink)
-                        .contentTransition(.opacity)
-                        .animation(Design.Motion.change, value: status.word)
+                VStack(alignment: .leading, spacing: Design.Space.hair) {
+                    ForEach(e.routers, id: \.name) { r in
+                        let status = Manage.Words.edgeStatus(reached: r.reached, problem: r.problem, gateway: r.gateway, role: r.role)
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(e.routers.count > 1 ? r.name : HypervisorWords.edgeHowItIs).fleetType(.body).foregroundStyle(Design.Palette.ink)
+                            Spacer(minLength: 0)
+                            Text(status.word)
+                                .fleetType(.label)
+                                .foregroundStyle(status.trouble ? Design.Palette.attention : Design.Palette.ink)
+                                .contentTransition(.opacity)
+                                .animation(Design.Motion.change, value: status.word)
+                        }
+                    }
                 }
             }
             .frame(minHeight: 44)
-            .accessibilityHint("Opens the router’s page")
+            .accessibilityHint(e.routers.count > 1 ? "Opens the routers’ page" : "Opens the router’s page")
         } else if edgesAsked {
             Text(edgesFailed ? HypervisorWords.edgeUnchecked : HypervisorWords.edgeNoReading)
                 .fleetType(.label)
@@ -558,8 +565,11 @@ enum HypervisorWords {
     static let edgeHowItIs = "How it is"
     static let edgeNoReading = "No reading yet. The cluster’s own machine reads it once it’s up and approved."
     static let edgeUnchecked = "Couldn’t check the edge router."
-    static func edgeThere(running: Bool, blocks: Bool) -> String {
-        running ? (blocks ? "Running, dropping what its threat rules match" : "Running, logging what its threat rules match") : "Off. Setting it up again starts it."
+    static func edgeThere(running: Bool, blocks: Bool, pair: Bool = false) -> String {
+        if pair {
+            return running ? (blocks ? "Two running, dropping what their threat rules match" : "Two running, logging what their threat rules match") : "Both off. Setting it up again starts them."
+        }
+        return running ? (blocks ? "Running, dropping what its threat rules match" : "Running, logging what its threat rules match") : "Off. Setting it up again starts it."
     }
     static func ownThere(_ name: String, running: Bool) -> String { running ? "\(name), running" : "\(name), off. Setting it up again starts it." }
     static let xoElsewhere = "Its page opens on the phone that set it up."

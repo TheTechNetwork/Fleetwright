@@ -137,6 +137,8 @@ struct AddProxmoxView: View {
                     if options.wantsEdge {
                         Toggle(ProxmoxWords.edgeBlock, isOn: Binding(get: { options.edgeBlock == true }, set: { options.edgeBlock = $0 ? true : nil }))
                         Text(ProxmoxWords.edgeBlockHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        Toggle(ProxmoxWords.edgePair, isOn: Binding(get: { options.edgePair == true }, set: { options.edgePair = $0 ? true : nil }))
+                        Text(ProxmoxWords.edgePairHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                         if options.edgeAgain == true || startOptions?.edgeAgain == true {
                             Toggle(HypervisorWords.makeEdgeAgain, isOn: Binding(get: { options.edgeAgain == true }, set: { options.edgeAgain = $0 ? true : nil }))
                             Text(HypervisorWords.makeEdgeAgainFooter).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
@@ -477,6 +479,8 @@ enum ProxmoxWords {
     static let edgeHint = "Filters what the cluster’s machines do for threats: the names they look up, and what its threat rules match. Needs about 4 GB free on the node while it’s built."
     static let edgeBlock = "Drop what the threat rules match"
     static let edgeBlockHint = "Otherwise it logs it and lets it through."
+    static let edgePair = "Two edge routers"
+    static let edgePairHint = "One carries the machines while the other restarts or updates."
     static let holderNeedsImage = "It’s made from the cluster’s Debian image, so one has to be there already."
 }
 
@@ -511,6 +515,8 @@ struct ProxmoxOptions: Codable, Equatable {
     /// The one there made again, asked for from the cluster's page; never
     /// kept for the next run.
     var edgeAgain: Bool? = nil
+    /// TWO OF THEM, sharing the gateway (docs/proxmox.md, "Two of them").
+    var edgePair: Bool? = nil
 
     var wantsEdge: Bool { edge ?? true }
 
@@ -574,6 +580,7 @@ struct ProxmoxOptions: Codable, Equatable {
         if labsClosed != 1 { a += " --labs-closed \(labsClosed)" }
         if wantsEdge { a += edgeBlock == true ? " --edge-block" : " --edge" }
         if wantsEdge && edgeAgain == true { a += " --edge-again" }
+        if wantsEdge && edgePair == true { a += " --edge-pair" }
         return a
     }
 
@@ -598,6 +605,7 @@ struct ProxmoxOptions: Codable, Equatable {
             p["edge"] = true
             if edgeBlock == true { p["edgeBlock"] = true }
             if edgeAgain == true { p["edgeAgain"] = true }
+            if edgePair == true { p["edgePair"] = true }
         }
         if wantsHolder {
             p["holder"] = true

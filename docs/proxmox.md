@@ -513,6 +513,11 @@ gave it, and the second updates itself an hour after the first.
 - **On one node.** Both are made on the node the setup runs on, so the pair
   outlasts a router restarting or updating, not that node going down.
 
+**On the phones** it is **Two edge routers**, under the edge router's
+options. The cluster's page says "Two running" and lists each by name with
+its own word (Primary, Standby, or what is wrong), opening the routers' page;
+**Make it again** makes two again.
+
 **Not built yet**: labs behind it. **Not yet run** on a
 real node: the image under KVM's virtio, which it was checked under QEMU
 with, `import-from` with the storage the setup chose, and the router's
