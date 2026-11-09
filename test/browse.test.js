@@ -598,6 +598,10 @@ test('a page with a hole in it is closed: the box drops it when a frame cannot b
     policy: () => ({ web: true, entries: [] }),
     checkSession: async () => ({ ok: true }),
     dialSession: async () => ({ ok: false, text: 'no' }),
+    // This test's own world: the system resolver made it wait on real DNS,
+    // which CI answered after the test had stopped looking.
+    lookup: async () => [PUBLIC_IP],
+    own: () => ({ addresses: [], networks: [] }),
   });
   const id = 'b'.repeat(24);
   box.onFrame({ browse: id, op: 'open', owner: OWNER, session: null, box: true });
@@ -605,7 +609,9 @@ test('a page with a hole in it is closed: the box drops it when a frame cannot b
   assert.equal(box.sockets.size, 1);
   up = false;
   box.onFrame({ browse: id, op: 'connect', stream: 1, host: 'example.com', port: 22 });
-  await new Promise((r) => setTimeout(r, 20));
+  // Until the refusal it could not send has been tried, not for a guess at how long.
+  for (let i = 0; i < 100 && !sent.some((f) => f.op === 'failed'); i++) await new Promise((r) => setTimeout(r, 5));
+  assert.ok(sent.some((f) => f.op === 'failed'), 'the refusal was never tried');
   assert.equal(box.sockets.size, 0, 'a page whose frame could not be sent stayed open');
   up = true;
   box.onFrame({ browse: id, op: 'connect', stream: 2, host: 'example.com', port: 443 });
