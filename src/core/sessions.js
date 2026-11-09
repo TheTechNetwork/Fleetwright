@@ -74,6 +74,10 @@ export class SessionManager {
     // counted against memory they have not taken yet (core/capacity.js).
     /** @type {number[]} */
     this.launchedAt = [];
+    // Told when a session goes from working back to its prompt or to waiting
+    // on a person; index.js pushes its archive then. Null is nobody told.
+    /** @type {((name: string) => void)|null} */
+    this.onPause = null;
     this.registry = registry;
     // Serves the per-session hook sockets a sandboxed session reports through.
     // Optional: an unsandboxed deployment does not need one, and the fleet
@@ -1347,6 +1351,16 @@ export class SessionManager {
       return { ok: true, phase: null };
     }
     this.activity.set(name, { phase, event, detail, at, context: context ?? prev?.context ?? null });
+    // A TURN JUST ENDED, so its archive has something new (core/archive.js,
+    // ArchivePacer). From working only: a second Notification while already
+    // at the prompt is not another turn.
+    if (prev?.phase === 'working' && (phase === 'ready' || phase === 'awaiting')) {
+      try {
+        this.onPause?.(name);
+      } catch (e) {
+        log.warn(`hook: ${name} pause handler failed`, e);
+      }
+    }
     this.phases.set(name, advancePhases(this.phases.get(name), phase, at));
     // Working is every tool call; the two that change what a person does
     // are the ones worth a line.

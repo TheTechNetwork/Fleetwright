@@ -17,7 +17,9 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, statSync, utimesS
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { pushArchive, workspacePatch, archiveFiles, archiveSession, branchFor, MAX_FILE_BYTES } from '../src/core/archive.js';
+import { pushArchive, workspacePatch, archiveFiles, archiveSession, branchFor, MAX_FILE_BYTES,
+  splitBase, TRANSCRIPT_SCRIPT, ArchivePacer, updateIndex, indexLine } from '../src/core/archive.js';
+import { symlinkSync, mkdirSync } from 'node:fs';
 import { Registry } from '../src/core/registry.js';
 import { Connections } from '../src/core/connectors.js';
 import { HOST_ROW } from '../src/core/accounts.js';
@@ -170,6 +172,100 @@ test('the workspace patch puts back what the session changed, and writes nothing
   assert.equal(readFileSync(path.join(back, 'notes.md'), 'utf8'), 'new file\n');
   assert.deepEqual([...readFileSync(path.join(back, 'logo.png'))], [0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 0xff]);
   assert.equal(existsSync(path.join(back, 'node_modules', 'big.js')), false, 'an ignored file was archived');
+
+  // AND IT SAYS WHAT IT APPLIES TO, off the patch itself.
+  assert.ok(r.ok && r.base);
+  assert.equal(r.ok && r.base?.commit, git(ws, ['rev-parse', 'HEAD']).stdout.trim());
+  assert.equal(r.ok && r.base?.branch, 'main');
+  assert.equal(r.ok && r.base?.remote, null);
+  const json = JSON.parse(archiveFiles({
+    rec: /** @type {any} */ ({ name: 'job', status: 'running', createdAt: 0 }),
+    host: 'deb14', reason: 'stop', at: 0, pane: 'p', transcript: { ok: false, why: 'x' }, patch: r,
+  })['session.json'].toString());
+  assert.deepEqual(json.workspace, r.ok ? r.base : null);
+});
+
+test('the base line is taken off the patch, and a token in the remote never reaches a commit', () => {
+  const out = Buffer.from(`fleetwright-base\t${'a'.repeat(40)}\tfix/thing\thttps://x-access-token:ghs_SECRET@github.com/eli/app.git\ndiff --git a/x b/x\n`);
+  const { base, rest } = splitBase(out);
+  assert.deepEqual(base, { commit: 'a'.repeat(40), branch: 'fix/thing', remote: 'https://github.com/eli/app.git' });
+  assert.equal(rest.toString(), 'diff --git a/x b/x\n');
+  assert.deepEqual(splitBase(Buffer.from('fleetwright-base\t-\t-\t-\n')).base, { commit: null, branch: null, remote: null });
+  // A patch from before the header is a patch, whole.
+  assert.equal(splitBase(Buffer.from('diff --git a/x b/x\n')).rest.toString(), 'diff --git a/x b/x\n');
+  const readme = archiveFiles({
+    rec: /** @type {any} */ ({ name: 'job', status: 'running', createdAt: 0 }), host: 'deb14', reason: 'stop', at: 0, pane: 'p',
+    transcript: { ok: false, why: 'x' },
+    patch: { ok: true, patch: Buffer.from('diff'), tooBig: false, base: { commit: 'a'.repeat(40), branch: 'main', remote: 'https://github.com/eli/app.git' } },
+  })['README.md'].toString();
+  assert.match(readme, new RegExp(`git checkout ${'a'.repeat(40)}\` in a clone of https://github.com/eli/app.git`));
+});
+
+test('a sandboxed session’s transcript is the one file named for its uuid, and never a link', () => {
+  const vol = scratch('archive-vol-');
+  const uuid = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  mkdirSync(path.join(vol, 'projects', '-work'), { recursive: true });
+  writeFileSync(path.join(vol, '.credentials.json'), '{"secret":true}');
+  writeFileSync(path.join(vol, 'projects', '-work', `${uuid}.jsonl`), '{"type":"user"}\n');
+  const run = (/** @type {string} */ u, max = 1000) => spawnSync('sh', ['-c', TRANSCRIPT_SCRIPT, 'sh', u, String(max), vol], { encoding: 'utf8' });
+  const r = run(uuid);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '{"type":"user"}\n');
+  // Over the limit: one byte past it, so the caller can say "too big".
+  assert.equal(run(uuid, 4).stdout.length, 5);
+  // A link where the transcript should be is not followed to what it names.
+  const other = '11111111-2222-4333-8444-555555555555';
+  symlinkSync(path.join(vol, '.credentials.json'), path.join(vol, 'projects', '-work', `${other}.jsonl`));
+  const linked = run(other);
+  assert.notEqual(linked.status, 0);
+  assert.doesNotMatch(linked.stdout, /secret/);
+});
+
+test('coming back to its prompt pushes at most once a minute, and the last turn in the gap is not lost', () => {
+  let t = 0;
+  /** @type {string[]} */ const pushed = [];
+  /** @type {Array<{ fn: () => void, at: number }>} */ const timers = [];
+  const pacer = new ArchivePacer({ push: (n) => pushed.push(`${n}@${t}`), gapMs: 60_000, now: () => t, later: (fn, ms) => timers.push({ fn, at: t + ms }) });
+  pacer.poke('job');
+  assert.deepEqual(pushed, ['job@0']);
+  t = 10_000; pacer.poke('job');
+  t = 20_000; pacer.poke('job');
+  assert.equal(timers.length, 1, 'turns inside the gap wait together');
+  assert.equal(timers[0].at, 60_000);
+  t = 60_000; timers[0].fn();
+  assert.deepEqual(pushed, ['job@0', 'job@60000']);
+  t = 200_000; pacer.poke('job');
+  assert.deepEqual(pushed, ['job@0', 'job@60000', 'job@200000']);
+  // Another session is paced on its own.
+  pacer.poke('other');
+  assert.equal(pushed.at(-1), 'other@200000');
+});
+
+test('INDEX.md gets one line per session, newest first, replaced when it ends again, and retried on a race', async () => {
+  /** @type {{ content: string, sha: string }|null} */ let file = null;
+  let conflicts = 1;
+  const impl = /** @type {any} */ (async (/** @type {string} */ url, /** @type {any} */ init = {}) => {
+    assert.match(url, /\/repos\/eli\/work\/contents\/INDEX\.md$/);
+    if ((init.method || 'GET') === 'GET') return file ? json(200, { content: Buffer.from(file.content).toString('base64'), sha: file.sha }) : json(404, {});
+    const body = JSON.parse(init.body);
+    if (conflicts-- > 0) return json(409, {});
+    assert.equal(body.sha, file?.sha);
+    file = { content: Buffer.from(body.content, 'base64').toString(), sha: sha(body.content) };
+    return json(200, {});
+  });
+  const rec = (/** @type {string} */ name, /** @type {string} */ title, /** @type {number} */ at) => /** @type {any} */ ({ name, title, createdAt: at });
+  const a = branchFor('deb14', rec('a', 'x', 0));
+  const b = branchFor('deb14', rec('b', 'y', 60_000));
+  assert.equal((await updateIndex({ repo: 'eli/work', token: 't', branch: a, line: indexLine(rec('a', 'First [job](http://x)', 0), 'deb14', 0, a), fetchImpl: impl })).ok, true);
+  assert.equal((await updateIndex({ repo: 'eli/work', token: 't', branch: b, line: indexLine(rec('b', 'Second', 60_000), 'deb14', 0, b), fetchImpl: impl })).ok, true);
+  assert.equal((await updateIndex({ repo: 'eli/work', token: 't', branch: a, line: indexLine(rec('a', 'First again', 0), 'deb14', 0, a), fetchImpl: impl })).ok, true);
+  const lines = String(file && /** @type {any} */ (file).content).split('\n').filter((l) => l.startsWith('- '));
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /First again/);
+  assert.match(lines[1], /Second/);
+  assert.match(lines[1], /\[b\]\(\.\.\/\.\.\/tree\/fleetwright\/deb14\/b-19700101T000100Z\)$/);
+  // A title cannot make a link of its own.
+  assert.doesNotMatch(indexLine(rec('a', 'First [job](http://x)', 0), 'deb14', 0, a), /\]\(http/);
 });
 
 test('a workspace that is not a checkout is archived whole, and one too big is left out rather than cut', { skip: !HAVE_GIT && 'no git' }, async () => {
@@ -276,4 +372,29 @@ test('the fleet’s archive reaches the hub as one token, and nothing else does'
   assert.throws(() => toCommandLine({ verb: 'start', params: { name: 'job', archive: 'eli/work --dangerous' } }));
   assert.equal(toCommandLine({ verb: 'linkrepo', params: { role: 'archive', repo: 'eli/work' } }), '/linkrepo archive eli/work');
   assert.throws(() => toCommandLine({ verb: 'linkrepo', params: { role: 'scratch', repo: 'eli/work' } }));
+});
+
+test('a turn ending is what tells the archive, and only a turn ending', async (t) => {
+  const { SessionManager } = await import('../src/core/sessions.js');
+  const dir = scratch('archive-sm-');
+  const cfg = /** @type {any} */ ({ stateDir: dir, profileDir: path.join(dir, 'profiles'), workdir: dir, stateFile: path.join(dir, 'state.json'), spoolFile: path.join(dir, 'spool') });
+  const sm = new SessionManager(cfg, new Registry({ stateFile: cfg.stateFile, spoolFile: cfg.spoolFile }), null);
+  sm.reconcile = () => false;
+  /** @type {string[]} */ const paused = [];
+  sm.onPause = (name) => paused.push(name);
+  sm.recordEvent({ name: 'job', event: 'Stop' });
+  assert.deepEqual(paused, [], 'at its prompt without having worked is not a turn');
+  sm.recordEvent({ name: 'job', event: 'UserPromptSubmit' });
+  sm.recordEvent({ name: 'job', event: 'PostToolUse', detail: 'Bash' });
+  sm.recordEvent({ name: 'job', event: 'Stop' });
+  assert.deepEqual(paused, ['job']);
+  sm.recordEvent({ name: 'job', event: 'Notification', detail: 'idle_prompt' });
+  assert.deepEqual(paused, ['job'], 'a second word from the prompt is not another turn');
+  sm.recordEvent({ name: 'job', event: 'PostToolUse', detail: 'Edit' });
+  sm.recordEvent({ name: 'job', event: 'PermissionRequest' });
+  assert.deepEqual(paused, ['job', 'job'], 'waiting on a person is a pause too');
+  // A handler that throws does not take the hook down with it.
+  sm.onPause = () => { throw new Error('boom'); };
+  sm.recordEvent({ name: 'job', event: 'UserPromptSubmit' });
+  assert.equal(sm.recordEvent({ name: 'job', event: 'Stop' }).ok, true);
 });

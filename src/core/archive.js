@@ -16,18 +16,24 @@
 //   README.md          what this is, what is in it and what is not, in words
 //   session.json       the record: name, title, brief, host, who, when, why now
 //   pane.txt           the console's scrollback — the part #314 is about
-//   transcript.jsonl   the conversation, when this box can read it. An
-//                      unsandboxed session's (a runner's) can be; a sandboxed
-//                      one's is inside a volume that also holds its Claude
-//                      credential, which nothing here mounts, and it survives a
-//                      stop anyway: `resume` reads it
+//   transcript.jsonl   the conversation. An unsandboxed session's (a
+//                      runner's) is the file its hook named; a sandboxed one's
+//                      is read out of its own volume, read-only, one file by
+//                      its uuid and nothing else (sandboxTranscript) — that
+//                      volume also holds its Claude credential. It used to be
+//                      left out because `resume` reads it, which is true only
+//                      until the recycle bin deletes the volume
 //   workspace.patch    what changed in /work — against HEAD when it is a git
 //                      checkout, every file when it is not — as a binary
-//                      patch, so `git apply` puts it back
+//                      patch, so `git apply` puts it back. session.json says
+//                      which commit, branch and remote it applies to
 //
 // WHEN, and the three answer different ways of losing the work:
 //
 //   before a stop, forget or purge   the container is about to go
+//   when it comes back to its prompt  a turn just ended, which is when the
+//                                     transcript has something new; at most
+//                                     once a PAUSE_GAP_MS (ArchivePacer)
 //   every ARCHIVE_EVERY_MS            a runner is killed when its job ends,
 //                                     and nothing gets to run first; a
 //                                     checkpoint ten minutes old is the bound
@@ -88,6 +94,8 @@ export const MAX_FILE_BYTES = 6 * 1024 * 1024;
 
 /** Bounds on the parts that run something: a patch, and each GitHub call. */
 const PATCH_TIMEOUT_MS = 120_000;
+/** Room for PATCH_SCRIPT's first line: a commit, a branch and a remote, each cut short. */
+const BASE_LINE_MAX = 1024;
 const GITHUB_TIMEOUT_MS = 30_000;
 
 /**
@@ -109,6 +117,13 @@ cd "$w" 2>/dev/null || { echo "no workspace at $w" >&2; exit 4; }
 # A workspace owned by another uid is "dubious" to git, and a mount seen
 # through a user namespace always is. Command-line scope is the one git honours.
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
+# WHAT THE PATCH APPLIES TO, as the first line: the commit, the branch and
+# the remote, tab-separated, "-" for each it does not have. Read-only.
+c=$(git rev-parse -q --verify HEAD 2>/dev/null | head -c 64)
+b=$(git symbolic-ref -q --short HEAD 2>/dev/null | head -c 300)
+o=$(git remote get-url origin 2>/dev/null | head -c 300)
+c=\${c:--}; b=\${b:--}; o=\${o:--}
+printf 'fleetwright-base\t%s\t%s\t%s\n' "$c" "$b" "$o"
 {
   # A COPY OF THE INDEX, because a diff refreshes the one it reads as a side
   # effect, optional locks or not, and that would be a write into somebody
@@ -175,10 +190,14 @@ function capture(bin, args, { timeout, cap }) {
  *
  * @param {import('../config.js').Config} cfg
  * @param {import('./registry.js').SessionRecord} rec
- * @returns {Promise<{ ok: true, patch: Buffer, tooBig: boolean } | { ok: false, why: string }>}
+ * @returns {Promise<{ ok: true, patch: Buffer, tooBig: boolean, base?: WorkspaceBase|null } | { ok: false, why: string }>}
  */
 export async function workspacePatch(cfg, rec) {
   const cap = MAX_FILE_BYTES;
+  // The base line rides ahead of the patch, outside the script's `head -c`,
+  // and is at most about 700 bytes; it gets room of its own, so the patch is
+  // still measured against the whole limit and never cut.
+  const room = cap + BASE_LINE_MAX;
   let r;
   if (cfg.sandbox) {
     // THE SAME CONFINEMENT files.js runs a file browser in: one volume, read
@@ -193,14 +212,101 @@ export async function workspacePatch(cfg, rec) {
       '--network', 'none',
       sessionImage(cfg),
       'sh', '-c', PATCH_SCRIPT, 'sh', '/work', String(cap),
-    ], { timeout: PATCH_TIMEOUT_MS, cap });
+    ], { timeout: PATCH_TIMEOUT_MS, cap: room });
   } else {
     if (!rec.cwd || !existsSync(rec.cwd)) return { ok: false, why: 'its working directory is gone' };
-    r = await capture('sh', ['-c', PATCH_SCRIPT, 'sh', rec.cwd, String(cap)], { timeout: PATCH_TIMEOUT_MS, cap });
+    r = await capture('sh', ['-c', PATCH_SCRIPT, 'sh', rec.cwd, String(cap)], { timeout: PATCH_TIMEOUT_MS, cap: room });
   }
   if (r.status !== 0 && !r.stdout.length) return { ok: false, why: (r.stderr || `the patch exited ${r.status}`).trim().slice(0, 200) };
-  if (r.stdout.length > cap) return { ok: true, patch: Buffer.alloc(0), tooBig: true };
-  return { ok: true, patch: r.stdout, tooBig: false };
+  const { base, rest } = splitBase(r.stdout);
+  if (rest.length > cap) return { ok: true, patch: Buffer.alloc(0), tooBig: true, base };
+  return { ok: true, patch: rest, tooBig: false, base };
+}
+
+/**
+ * @typedef {{ commit: string|null, branch: string|null, remote: string|null }} WorkspaceBase
+ *   what a workspace patch applies to, as its own git said
+ */
+
+/**
+ * The header PATCH_SCRIPT writes first, taken off the patch. A remote URL
+ * loses any user and password in it: a clone made with a token in its URL
+ * keeps it there, and this goes into a commit.
+ *
+ * @param {Buffer} out
+ * @returns {{ base: WorkspaceBase|null, rest: Buffer }}
+ */
+export function splitBase(out) {
+  const nl = out.indexOf(10);
+  const first = nl === -1 ? '' : out.subarray(0, nl).toString('utf8');
+  if (!first.startsWith('fleetwright-base\t')) return { base: null, rest: out };
+  const [, commit, branch, remote] = first.split('\t');
+  const keep = (/** @type {string|undefined} */ v) => (v && v !== '-' ? v.slice(0, 300) : null);
+  const sha = keep(commit);
+  return {
+    base: {
+      commit: sha && /^[0-9a-f]{40,64}$/.test(sha) ? sha : null,
+      branch: keep(branch),
+      remote: keep(remote)?.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1') ?? null,
+    },
+    rest: out.subarray(nl + 1),
+  };
+}
+
+/**
+ * Reads ONE conversation out of a sandboxed session's own volume: the file
+ * named for its uuid under projects/, a regular file and not a link, or
+ * nothing. `$1` is the uuid, checked to be one before it gets here, `$2`
+ * the most it may be, and `$3` where the volume is (a test's directory). The volume also holds the session's Claude credential,
+ * so what leaves is decided here, never by the volume: one name, one file.
+ */
+export const TRANSCRIPT_SCRIPT = `
+u="$1"; max="$2"; d="\${3:-/dest}"
+f=$(find "$d/projects" -mindepth 2 -maxdepth 2 -type f -name "$u.jsonl" 2>/dev/null | head -n 1)
+[ -n "$f" ] || { echo "no transcript named $u" >&2; exit 3; }
+[ -L "$f" ] && { echo "the transcript is a link" >&2; exit 5; }
+head -c "$((max + 1))" "$f"
+`;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * A sandboxed session's transcript, read the way volumeAccount (podman.js)
+ * reads that volume: mounted read-only, no network, the session's own image,
+ * and only the one file TRANSCRIPT_SCRIPT names. It used to be left out with
+ * "`resume` brings it back", which stopped being true the day the recycle bin
+ * deleted the volume.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {import('./registry.js').SessionRecord} rec
+ * @returns {Promise<{ ok: true, bytes: Buffer } | { ok: false, why: string }>}
+ */
+export async function sandboxTranscript(cfg, rec) {
+  if (!rec.uuid || !UUID_RE.test(rec.uuid)) return { ok: false, why: 'the session has not started a conversation yet' };
+  const { claude } = sandboxNames(rec.name);
+  const r = await capture(cfg.podmanBin, [
+    'run', '--rm', ...usernsArgs(cfg),
+    '-v', `${claude}:/dest:ro`,
+    '--network', 'none',
+    sessionImage(cfg),
+    'sh', '-c', TRANSCRIPT_SCRIPT, 'sh', rec.uuid, String(MAX_FILE_BYTES),
+  ], { timeout: PATCH_TIMEOUT_MS, cap: MAX_FILE_BYTES });
+  if (r.status !== 0) return { ok: false, why: `it could not be read (${(r.stderr || `exit ${r.status}`).trim().slice(0, 160)})` };
+  if (r.stdout.length > MAX_FILE_BYTES) return { ok: false, why: `it is over the ${MAX_FILE_BYTES / 1048576}MB an archive carries` };
+  return { ok: true, bytes: r.stdout };
+}
+
+/**
+ * The transcript from wherever this session keeps it: the file its hook named
+ * on this box, or its own volume when it is sandboxed.
+ *
+ * @param {import('../config.js').Config} cfg
+ * @param {import('./registry.js').SessionRecord} rec
+ */
+export async function collectTranscript(cfg, rec) {
+  if (rec.transcriptPath) return readTranscript(rec.transcriptPath);
+  if (cfg.sandbox) return sandboxTranscript(cfg, rec);
+  return readTranscript(null);
 }
 
 /**
@@ -212,7 +318,7 @@ export async function workspacePatch(cfg, rec) {
  * @returns {{ ok: true, bytes: Buffer } | { ok: false, why: string }}
  */
 export function readTranscript(file) {
-  if (!file) return { ok: false, why: 'this box cannot read it — a sandboxed session keeps it in its own volume, and `resume` brings it back' };
+  if (!file) return { ok: false, why: 'its hook never said where it is' };
   let fd;
   try {
     fd = openSync(file, 'r');
@@ -249,7 +355,7 @@ export function branchFor(host, rec) {
  *
  * @param {{ rec: import('./registry.js').SessionRecord, host: string, reason: string, at: number,
  *   pane: string|null, transcript: { ok: true, bytes: Buffer } | { ok: false, why: string },
- *   patch: { ok: true, patch: Buffer, tooBig: boolean } | { ok: false, why: string } }} parts
+ *   patch: { ok: true, patch: Buffer, tooBig: boolean, base?: WorkspaceBase|null } | { ok: false, why: string } }} parts
  * @returns {Record<string, Buffer>}
  */
 export function archiveFiles({ rec, host, reason, at, pane, transcript, patch }) {
@@ -271,9 +377,12 @@ export function archiveFiles({ rec, host, reason, at, pane, transcript, patch })
   } else {
     missing.push(`- the transcript: ${transcript.why}`);
   }
+  const base = patch.ok ? patch.base ?? null : null;
   if (patch.ok && !patch.tooBig && patch.patch.length) {
     files['workspace.patch'] = patch.patch;
-    here.push('- `workspace.patch` — what changed in the workspace; `git apply workspace.patch` in a checkout of the same commit puts it back');
+    here.push(base?.commit
+      ? `- \`workspace.patch\` — what changed in the workspace; \`git checkout ${base.commit}\`${base.remote ? ` in a clone of ${base.remote}` : ''}, then \`git apply --binary workspace.patch\`, puts it back`
+      : '- `workspace.patch` — what changed in the workspace, every file of it: it was not a git checkout, so `git apply --binary workspace.patch` in an empty directory puts it back');
   } else if (patch.ok && patch.tooBig) {
     missing.push(`- the workspace: its changes are over the ${MAX_FILE_BYTES / 1048576}MB an archive carries, so none of them are here rather than half`);
   } else if (patch.ok) {
@@ -291,6 +400,8 @@ export function archiveFiles({ rec, host, reason, at, pane, transcript, patch })
     createdAt: rec.createdAt ? new Date(rec.createdAt).toISOString() : null,
     status: rec.status,
     uuid: rec.uuid ?? null,
+    // What workspace.patch applies to. Null when there was no patch to make.
+    workspace: base,
     archivedAt: when,
     reason,
   }, null, 2)}\n`);
@@ -319,6 +430,7 @@ const REASONS = /** @type {Record<string, string>} */ ({
   forget: 'as it was forgotten',
   purge: 'as it was purged',
   checkpoint: 'on its ten-minute checkpoint',
+  pause: 'as it came back to its prompt',
   shutdown: 'as its machine was shutting down',
   asked: 'because somebody asked',
 });
@@ -501,6 +613,39 @@ export async function archiveSession({ cfg, registry, name, reason, fetchImpl = 
   const rec = registry.get(name);
   const repo = rec?.archive;
   if (!rec || !repo || !REPO_RE.test(repo)) return { ok: true, skipped: true, text: '' };
+  // ONE PUSH PER SESSION AT A TIME. Two would both read the same branch head,
+  // and the second to move it would be refused as not a fast-forward. A stop
+  // that arrives during a pause's push waits for it, because the stop is the
+  // last chance and must not be the one dropped.
+  while (pushing.has(name)) {
+    if (reason === 'pause' || reason === 'checkpoint') return { ok: true, skipped: true, text: 'already being pushed' };
+    await pushing.get(name);
+  }
+  /** @type {() => void} */
+  let done = () => {};
+  pushing.set(name, new Promise((resolve) => { done = () => resolve(undefined); }));
+  try {
+    return await archiveOnce({ cfg, registry, rec, repo, name, reason, fetchImpl, now, broker });
+  } finally {
+    pushing.delete(name);
+    done();
+  }
+}
+
+/** Sessions with a push under way, and the promise that settles when it ends. */
+/** @type {Map<string, Promise<unknown>>} */
+const pushing = new Map();
+
+/** The reasons a session is not coming back from, which put it in the index. */
+const ENDINGS = new Set(['stop', 'forget', 'purge', 'shutdown']);
+
+/**
+ * @param {{ cfg: import('../config.js').Config, registry: import('./registry.js').Registry,
+ *   rec: import('./registry.js').SessionRecord, repo: string, name: string, reason: string,
+ *   fetchImpl: typeof globalThis.fetch, now: () => number, broker?: string }} args
+ * @returns {Promise<{ ok: boolean, text: string, skipped?: boolean }>}
+ */
+async function archiveOnce({ cfg, registry, rec, repo, name, reason, fetchImpl, now, broker }) {
   const host = cfg.hostname;
   const branch = branchFor(host, rec);
   const at = now();
@@ -526,7 +671,7 @@ export async function archiveSession({ cfg, registry, name, reason, fetchImpl = 
     reason,
     at,
     pane: running ? capturePane(name, PANE_LINES) : null,
-    transcript: readTranscript(rec.transcriptPath),
+    transcript: await collectTranscript(cfg, rec),
     patch: await workspacePatch(cfg, rec),
   });
   const pushed = await pushArchive({
@@ -537,9 +682,125 @@ export async function archiveSession({ cfg, registry, name, reason, fetchImpl = 
     token: cred.token,
     fetchImpl,
   });
-  return pushed.ok
-    ? note({ ok: true, commit: pushed.commit, text: pushed.unchanged ? pushed.text : `Archived to ${repo} on ${branch}.` })
-    : note({ ok: false, text: `Not archived to ${repo}: ${pushed.text}` });
+  if (!pushed.ok) return note({ ok: false, text: `Not archived to ${repo}: ${pushed.text}` });
+  // THE TABLE OF CONTENTS, when it ends: one line on the default branch per
+  // session. Never the session's files — every branch has the same names at
+  // its top, and a main that took them all would grow by every transcript.
+  if (ENDINGS.has(reason)) {
+    const indexed = await updateIndex({ repo, token: cred.token, branch, line: indexLine(rec, host, at, branch), fetchImpl });
+    if (!indexed.ok) log.warn(`archive: ${name} → ${repo} INDEX.md: ${indexed.text}`);
+  }
+  return note({ ok: true, commit: pushed.commit, text: pushed.unchanged ? pushed.text : `Archived to ${repo} on ${branch}.` });
+}
+
+/**
+ * A session's line in INDEX.md. The title is the session's, so it is held to
+ * one line with nothing Markdown would read as a link or emphasis.
+ *
+ * @param {import('./registry.js').SessionRecord} rec @param {string} host @param {number} at @param {string} branch
+ */
+export function indexLine(rec, host, at, branch) {
+  const title = String(rec.title || rec.name).replace(/[\s]+/g, ' ').replace(/[[\]()<>*_`|\\#!]/g, '').trim().slice(0, 80) || rec.name;
+  const when = new Date(Number(rec.createdAt) || at).toISOString().slice(0, 16).replace('T', ' ');
+  const link = branch.split('/').map(encodeURIComponent).join('/');
+  return `- ${when} UTC · ${title} · \`${host}\` · [${rec.name}](../../tree/${link})`;
+}
+
+const INDEX_HEAD = '# Sessions\n\nOne line per session, newest first. Each links to its branch, where the session is.\n\n';
+
+/**
+ * Put a session's line at the top of INDEX.md on the default branch, or
+ * replace the line it already has there (a resumed session ends again). Retried
+ * on a conflict, because two sessions ending together both write this file.
+ * NEVER THROWS, and never blocks the archive it follows: the branch is the
+ * record, this is only the way to find it.
+ *
+ * @param {{ repo: string, token: string, branch: string, line: string, fetchImpl?: typeof globalThis.fetch }} args
+ * @returns {Promise<{ ok: boolean, text: string }>}
+ */
+export async function updateIndex({ repo, token, branch, line, fetchImpl = fetch }) {
+  const url = `https://api.github.com/repos/${repo}/contents/INDEX.md`;
+  const headers = {
+    authorization: `Bearer ${token}`,
+    accept: 'application/vnd.github+json',
+    'x-github-api-version': '2022-11-28',
+    'user-agent': 'fleetwright',
+  };
+  const mark = `(../../tree/${branch.split('/').map(encodeURIComponent).join('/')})`;
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const got = await fetchImpl(url, { headers, signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) });
+      if (!got.ok && got.status !== 404) return { ok: false, text: `GitHub answered ${got.status} reading it` };
+      const now = got.ok ? /** @type {any} */ (await got.json()) : null;
+      const text = now ? Buffer.from(String(now.content || ''), 'base64').toString('utf8') : INDEX_HEAD;
+      const lines = text.split('\n').filter((l) => !l.endsWith(mark));
+      const at = lines.findIndex((l) => l.startsWith('- '));
+      const body = at === -1
+        ? `${lines.join('\n').replace(/\n*$/, '\n\n')}${line}\n`
+        : [...lines.slice(0, at), line, ...lines.slice(at)].join('\n');
+      const put = await fetchImpl(url, {
+        method: 'PUT',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ message: `INDEX: ${line.slice(2, 120)}`, content: Buffer.from(body).toString('base64'), ...(now?.sha ? { sha: now.sha } : {}) }),
+        signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+      });
+      if (put.ok) return { ok: true, text: 'indexed' };
+      if (put.status !== 409 && put.status !== 422) return { ok: false, text: `GitHub answered ${put.status} writing it` };
+    }
+    return { ok: false, text: 'it kept changing under this write' };
+  } catch (e) {
+    return { ok: false, text: `could not reach GitHub: ${/** @type {Error} */ (e).message}` };
+  }
+}
+
+/** The least time between two pushes of one session for coming back to its prompt. */
+export const PAUSE_GAP_MS = 60_000;
+
+/**
+ * Pushes a session each time it comes back to its prompt, at most once a
+ * PAUSE_GAP_MS: a turn that ends inside the gap is pushed when the gap is
+ * over, once, however many ended in it. That is the live copy — a session
+ * answering every few seconds is a commit a minute, not one per answer — and
+ * the ten-minute checkpoint stays behind it for a session that works for an
+ * hour without stopping.
+ */
+export class ArchivePacer {
+  /**
+   * @param {{ push: (name: string) => unknown, gapMs?: number, now?: () => number,
+   *   later?: (fn: () => void, ms: number) => unknown }} opts
+   */
+  constructor({ push, gapMs = PAUSE_GAP_MS, now = () => Date.now(), later = (fn, ms) => setTimeout(fn, ms).unref?.() }) {
+    this.push = push;
+    this.gapMs = gapMs;
+    this.now = now;
+    this.later = later;
+    /** @type {Map<string, number>} */
+    this.last = new Map();
+    /** @type {Set<string>} */
+    this.waiting = new Set();
+  }
+
+  /** @param {string} name */
+  poke(name) {
+    if (this.waiting.has(name)) return;
+    const wait = (this.last.get(name) ?? -Infinity) + this.gapMs - this.now();
+    if (wait <= 0) return this.#run(name);
+    this.waiting.add(name);
+    this.later(() => this.#run(name), wait);
+  }
+
+  /** @param {string} name */
+  forget(name) {
+    this.last.delete(name);
+    this.waiting.delete(name);
+  }
+
+  /** @param {string} name */
+  #run(name) {
+    this.waiting.delete(name);
+    this.last.set(name, this.now());
+    void this.push(name);
+  }
 }
 
 /** One pass at a time: a slow GitHub must not stack passes on top of each other. */
