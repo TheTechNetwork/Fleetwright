@@ -160,7 +160,7 @@ export const PVE_MIN_MAJOR = 9;
 const MAX_MACHINES = 200;
 
 /**
- * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', name?: string, grants?: any, vmids?: { from: number, to: number } }} PveRecord
+ * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', name?: string, grants?: any, vmids?: { from: number, to: number }, edge?: { key: string, secret: string, pin: string } }} PveRecord
  * @typedef {{ id: string, name: string, key: string|null, os: string|null, node: string, vmid: number, pool: string|null, poolName: string|null, bridge: string|null }} PveImage
  * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string, lab?: 'open'|'closed', gateway?: string|null, taken?: boolean|null, edge?: boolean }} PveNetwork
  */
@@ -269,7 +269,24 @@ function checked(r, address) {
   const name = trust === 'public' && typeof r.name === 'string' ? r.name.toLowerCase() : null;
   const grants = machineGrantsOf(r.grants);
   const vmids = vmidsOf(r.vmids);
-  return { record: { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(name ? { name } : {}), ...(grants ? { grants } : {}), ...(vmids ? { vmids } : {}) }, problem: null };
+  const edge = edgeKeyOf(r.edge);
+  return { record: { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(name ? { name } : {}), ...(grants ? { grants } : {}), ...(vmids ? { vmids } : {}), ...(edge ? { edge } : {}) }, problem: null };
+}
+
+/**
+ * THE EDGE ROUTER'S KEY, as the setup script made it and the line carried it
+ * (install/fleetwright-pve-setup, `watch_keep`): the key and secret in the
+ * shape OpenSSL's base64 of sixty bytes is, which holds neither `|` nor `:`,
+ * and the SHA-256 of the router's certificate, which edge-watch.js holds the
+ * connection to before the key is sent. Anything else is no key, and the
+ * cluster is still held: its router is then not read, which the phone says.
+ *
+ * @param {any} e @returns {{ key: string, secret: string, pin: string }|null}
+ */
+export function edgeKeyOf(e) {
+  const b64 = /^[A-Za-z0-9+/]{80}$/;
+  if (!e || typeof e !== 'object' || !b64.test(String(e.key)) || !b64.test(String(e.secret)) || !/^[0-9a-f]{64}$/.test(String(e.pin))) return null;
+  return { key: e.key, secret: e.secret, pin: e.pin };
 }
 
 /**
@@ -662,6 +679,39 @@ export class PvePools {
   sshAddress(owner, address, name) {
     const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
     return held ? sshTarget(this.seen, this.machineOwners, owner, address, name) : null;
+  }
+
+  /**
+   * WHERE THE CLUSTER'S EDGE ROUTER IS, for edge-watch.js: the WAN address
+   * its guest agent reports (the router's own os-qemu-guest-agent), on the
+   * interface whose MAC is net0's, which the setup put on the bridge. The
+   * setup gave the token VM.Audit and VM.GuestAgent.Audit on that machine
+   * alone. One router on Proxmox VE, under the name its syslog says. An
+   * empty map is asked and has none yet; null is could not ask.
+   *
+   * @param {string} key  `owner address`
+   * @returns {Promise<Map<string, string>|null>}
+   */
+  async edgeAddresses(key) {
+    const held = this.held.get(key);
+    if (!held) return null;
+    try {
+      const api = this.#client(held.record);
+      const all = await api.get('/cluster/resources', { type: 'vm' });
+      const edge = (Array.isArray(all) ? all : [])
+        .filter((m) => m?.type === 'qemu' && (m.pool ?? '') !== held.record.pool && Number(m.template) !== 1 && tagsOf(m).includes(PVE_EDGE_TAG))
+        .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || Number(a.vmid) - Number(b.vmid))[0];
+      /** @type {Map<string, string>} */
+      const out = new Map();
+      if (!edge || edge.status !== 'running') return out;
+      const base = `/nodes/${encodeURIComponent(String(edge.node))}/qemu/${Number(edge.vmid)}`;
+      const cfg = await api.get(`${base}/config`);
+      const ip = agentAddress(await api.get(`${base}/agent/network-get-interfaces`).catch(() => null), cfg?.net0);
+      if (ip) out.set(PVE_EDGE_TAG, ip);
+      return out;
+    } catch {
+      return null;
+    }
   }
 
   /** Whether this box holds a cluster of this person's at all. @param {string} owner */

@@ -429,241 +429,54 @@ of the cluster's page: running and whether it drops or logs, or off, with
 **Make it again**, or **Make the edge router** where a box looked and saw
 none.
 
-**Not built yet**: watching it from the phone (its CARP, Unbound and
-gateway status and its syslog, which Xen Orchestra's routers send to the
-boxes that watch them), two of them, and labs behind it. **Not yet run** on a
+#### Watching it
+
+Asked for: *"Keep going, build the edge logs"*. The router is **watched the
+way a Xen Orchestra pool's are** (`hypervisors.md`, "Watching the edge
+routers"): a box reads its CARP, Unbound, gateway and lease status over its
+API every half minute, and hears its syslog (CARP, Unbound, dnsmasq, the
+gateway monitor, Suricata's alerts and drops) as it happens. The phone shows
+the same card on the cluster's page and the same page behind it.
+
+- **The key and the certificate are made on the node**, with OpenSSL, the
+  first time a router is built (`watch_keep`): a user `fleetwright-watch`
+  with one API key and the status pages alone, refused every change to the
+  configuration, and a P-256 certificate for the web interface whose SHA-256
+  the box holds the connection to before the key is sent. They are kept in
+  `/etc/pve/priv/fleetwright-edge-watch.json`, which only root reads, so a
+  router made again has the same key and the app's record stays right.
+- **Written in where the configuration's marks are.** The published
+  configurations carry four marks where the watch goes
+  (`edge-router.js`, `PVE_WATCH_MARKS`), still pinned by SHA-256; the node
+  fills them in (`edge_fill`) and pads to the block the image takes.
+  `test/pve-edge.test.js` runs the script's filler and its key-maker and holds
+  what they write to the boxes' own `edgeConfig`, byte for byte, the
+  password hash from `openssl passwd -6` included.
+- **The key travels in the line**, beside the token (`edge`: key, secret and
+  pin), which the app keeps as it always has, and hands to the boxes you
+  approve for the cluster. A key that is not one costs the router its watch,
+  never the cluster.
+- **Where it is** comes from its guest agent: the setup gives the token
+  `VM.Audit` and `VM.GuestAgent.Audit` on the router alone (role
+  `FleetwrightEdge`), and a box asks for the address on its WAN, the
+  interface on the bridge. Its API takes HTTPS on that address from private
+  addresses only; nothing behind it reaches it.
+- **Its logs go to the cluster's own machine**, at the address its guest
+  agent reports, which is why the setup now makes that machine before the
+  router and waits up to three minutes for one just made to say. With no
+  machine of its own running, the router is built sending its logs nowhere,
+  and its state is still read. Where the logs go is not a reason to build it
+  again: **Make it again** sends them to the machine there now.
+- **A router from before this** has no key, and the next setup run makes it
+  again once to give it one, as a Xen Orchestra pool's is.
+- **Which box reads it**: one that reached the cluster's Proxmox VE, and no
+  other, since the router answers on the same network. A box that cannot is
+  shown as cannot tell, never as down, in Proxmox VE's words.
+
+**Not built yet**: two of them, and labs behind it. **Not yet run** on a
 real node: the image under KVM's virtio, which it was checked under QEMU
-with, and `import-from` with the storage the setup chose.
-
-### A machine of its own
-
-Asked for after Proxmox shipped without one: *"No holder vm"*. The same as
-a Xen Orchestra pool's (`hypervisors.md`, "A machine of its own"): a
-permanent fleet host on the cluster, so the fleet reaches it while the
-phone and the laptop that set it up are asleep. The setup's step `holder`
-makes it, as root, because here root runs the setup:
-
-- **From the Debian image**, or any of the pool's when there is none,
-  cloned in full onto the fleet's storage, and named as the fleet named it
-  (`holder-` and six hex).
-- **Outside the pool**, which is the one place the fleet's token cannot
-  reach into: it can neither change the machine nor remove it. It can see
-  it, by `VM.Audit` on that machine alone (role `FleetwrightHolder`), so the
-  phone can say it is there and running. A machine in the pool with the
-  tag is anybody's who may tag the pool's, and is never taken for it.
-- **On the bridge with no fence**, because it must reach the node's API and
-  the fleet, and the fence holds a machine to the internet alone.
-- **It joins with a pin and a name the fleet gave**: a box running the
-  setup asks for them as a policy job's box does (`holder-pin`), and a
-  phone setting the node up itself asks the coordinator directly
-  (`POST /api/holders`). Either writes them root-only to
-  `/root/.fleetwright-holder-join`, which the script reads and removes,
-  with the secret the phone made for it to ask to join with
-  (`src/fleet/protocol/holder-join.js`) and what it may do from chat. The
-  first-boot lines are Xen Orchestra's holder's, word for word.
-- **The pin goes after boot.** Two hours on, a timer removes the snippet
-  that held it and takes the cloud-init drive off at the machine's next
-  restart, as Xen Orchestra destroyed its drive. The pin lasts ten minutes
-  and is spent once; this is the rest.
-- **It holds nothing until you approve it.** Your phone asks, once it has
-  joined, whether it may manage this cluster, and then it holds the
-  cluster's token beside the box that set it up, and is asked first.
-
-Running the setup again keeps the one there and starts it if it is off, and
-asks for no pin. **Make it again** removes it, disk and all, tells the fleet
-the name it had so the host is retired, and makes a new one.
-
-**On the phones** it is an option of the setup, **A machine of its own**, on
-unless turned off, and a section of the cluster's page: its name and whether
-it is running, with **Make it again**, or **Make its own machine** where a box
-looked and saw none. Through a machine it is offered only by a box that says
-it can (`pve-holder`). The secret the phone makes for it is kept under no
-address, because the line's address is not known until the setup says it,
-and approving tries it beside the address's own: the proof says which.
-
-### Where a cluster shows
-
-Machines › **Hypervisors** lists it beside any Xen Orchestra pools, with what
-each machine holding its token saw: reached it, could not and why, or has not
-looked yet (`hypervisors.md`, "One page"). Its page lists them machine by
-machine, with the version, the fence, the image and the machines on it, and
-**Set it up again**. A cluster that no machine reaches shows here with the
-reason. Before this page it showed nowhere: the first real node's line sat in
-the vault, refused by every box, and nothing said so.
-
-### A machine's page
-
-A machine made on a cluster has the same page as one on Xen Orchestra
-(`hypervisors.md`, "Working a machine"), with two differences that come from
-Proxmox VE itself:
-
-- **Its console opens in the app, from home and from away.** Asked for:
-  "if it's not on local network should be able to reach it somehow". The
-  phone that set the cluster up keeps its record (`ProxmoxKept`, this device
-  only, gone at sign-out), and opens the console itself: `vncproxy` with the
-  token hands back a port and a one-use ticket, `vncwebsocket` carries the
-  VNC, and the ticket is the VNC password noVNC is asked for. Both requests
-  go behind TLS held to the cluster's own CA, as the boxes hold it
-  (`pve-api.js`, `connectTrusted`), and the token travels only in Proxmox
-  VE's `Authorization` header. **From away**, or when the node does not answer
-  this phone, each request goes through one of your machines that holds the
-  cluster (`ConsoleTunnel`, `consoleAddress` in `pve-pools.js`): that machine
-  makes one plain TCP connection to the node and carries the TLS records, so
-  neither it nor the fleet can read the screen or the token. A tunnel carries
-  one connection, so the ticket takes one and the screen another, the first
-  closed before the second opens; the ticket outlasts that. The token needs
-  `VM.Console` on the pool, now in the fleet's role. **Run the setup again**
-  on a cluster set up before this, both for that and so this phone keeps the
-  record. A phone that did not set the cluster up offers Proxmox VE's own
-  console page, `https://<node>:8006/?console=kvm&novnc=1&vmid=<n>&node=<node>`,
-  where you sign in; the page said "Open its console in Xen Orchestra" and
-  opened Xen Orchestra's path, which landed on no machine at all. The
-  coordinator passes each machine's `kind`, `node` and `vmid`.
-- **Its address is its guest agent's**, read by the box from
-  `agent/network-get-interfaces` on the interface the fleet put it on, which
-  is what turns "No address yet" into the SSH command. The box never asked,
-  so it stayed for good. Proxmox VE 9 allows that read with
-  `VM.GuestAgent.Audit` (it replaced `VM.Monitor`), now in the fleet's role.
-  **Run the setup again** on a cluster set up before this, so the role has
-  it; until then the address is *cannot tell*, as before.
-
-### Machine numbers
-
-Asked for: *"vmid range user deserves a choice"*. Add Proxmox VE takes an
-optional **Machine numbers**, such as `9000-9099`, kept for the next time;
-by hand it is `--vmids 9000-9099`. The image is built at the first free
-number in it, and the line carries it (`vmids: { from, to }`), so every
-machine a box clones takes the first number in it the cluster says is free
-(`/cluster/nextid?vmid=N`, at most 64 asked per machine). A full range is
-said, with nothing made. Left empty, numbers are the cluster's next free
-ones, as before. The machine running the setup for a phone checks it is
-digits and a dash before it goes into a command (`VMIDS_RE`), and the script
-and the boxes hold it to Proxmox's bounds again.
-
-## How a machine is made
-
-1. The coordinator asks a box for `provision { platform: vm, template }`
-   exactly as for Xen Orchestra. The template is a UUID this box made for the
-   Proxmox template (`pveIdOf`: the address, its number, and when it was
-   made, so one made again under the same number is another image).
-2. The box clones it into the pool under a free number, retrying if another
-   box took the same one, with its mark in the notes.
-3. It writes the join (coordinator, ticket, owner, the backstop) into the
-   clone's SMBIOS serial, keeping the clone's own UUID; your SSH keys through
-   Proxmox's own cloud-init; and the interface on the image's bridge, or the
-   one you chose, with the firewall on.
-4. On the default network, the machine goes behind `fleetwright-fence`:
-   inbound dropped but SSH, outbound to the internet and nothing private.
-5. It starts. The template's vendor snippet copies the serial, as root, where
-   `fleetwright-vm-join` takes it from, and the join is the one Xen
-   Orchestra's machines run.
-6. Anything that fails after the clone removes the clone.
-
-## Labs and groups
-
-The same three things Xen Orchestra's pools offer (`hypervisors.md`,
-"Machines that work together" and "Labs"), promising the same and no more,
-held by the cluster's own firewall instead of an edge router.
-
-**The networks are the setup's**, because only root can make an SDN
-network and the fleet's token may use one, never make one: the reason Xen
-Orchestra's policy job made them with the admin sign-in. `--groups`,
-`--labs-open` and `--labs-closed` (two, one and one by default; four labs at
-most) make, in two simple SDN zones:
-
-- **group networks** `fwgrp1` to `fwgrp4` in `fwgrp`: no address of the
-  node's on them, so nothing reaches them but their machines;
-- **labs** `fwlab1` to `fwlab4` in `fwlab`, each `10.250.<n>.0/24` with the
-  node at `.1` doing NAT, its kind in the VNet's alias
-  (`fleetwright-lab:open` or `:closed`), and dnsmasq on the node handing out
-  addresses from `.100` and answering names: for the open labs from the
-  node's own resolver, for the closed ones only the fleet's coordinator and
-  the hosts Claude cannot work without (`REQUIRED_HOSTS` in
-  `src/core/egress.js`, the list the edge router uses), and the names under
-  each. Every other name a closed lab asks is refused. A datacenter rule lets
-  the labs ask the node for names and addresses when its firewall is on.
-
-The token is given `SDN.Use` and `SDN.Audit` on each, and the box finds them
-by those grants and the VNet's alias; a lab VNet whose alias names no kind is
-not offered, since what it reaches could not be promised.
-
-**A machine in a group** gets a second interface on the group network, with
-a MAC and an address in `10.200.0.0/16` from its ticket's id, moved past any
-other machine in the group has (`groupPlace`, shared with Xen Orchestra), set
-by Proxmox's own cloud-init (`ipconfig1`) before anything inside listens.
-Its firewall lets everything in and out on that interface and then puts it
-behind the fence as usual, so it reaches the others in its group and is
-still closed to every other machine. Names over mDNS need avahi, which
-images built from this change carry; an image built before has addresses
-and no names until it is built again (`--rebuild-image`). A group network in
-a simple zone is local to one node, and a cluster's machines are made on the
-node their image is on, so a group's machines meet there.
-
-**A machine in a lab** is alone on it: the box takes only a lab it saw
-empty, and looks again once the machine is up, removing its own if another
-box made one there first. Its firewall, outside its reach:
-
-- **open**: names from the lab's gateway alone, then the fence, so the
-  internet and nothing private;
-- **closed**: names from the lab's gateway alone (which answers only the
-  fleet's and Claude's), DHCP, HTTPS to an address set on the machine
-  (`fwallow`) and nothing else in or out. The box fills the set with what
-  those names resolve to before it makes the machine, refusing when none
-  resolves, and adds to it on every look, never taking away.
-
-**Where it is weaker than the edge router**, said plainly: no Suricata
-watches a lab, and nothing records what a machine reached; a closed lab's
-HTTPS goes to addresses, so a name of Claude's that moves to an address the
-box has not resolved yet is unreachable until the next look. The scoped
-ipset name the rule uses (`+guest/fwallow`) and the SDN pieces are written
-from Proxmox VE 9's documentation and have not met a real node.
-
-**The phones say which.** `vmImages` carries `kind`, and both phones word a
-lab on Proxmox as a network on the cluster, and the default network as
-behind the cluster's firewall, not behind an edge router.
-
-## The phones: one screen per thing, no wizard
-
-**Add Proxmox VE is built to this shape on both phones**, and not to
-`AddHypervisorView`; the cluster's page below is not built yet.
-
-**Add Proxmox VE** is one screen: the node's address and its root password,
-and Set it up. Then the host key, once, and the steps as they happen. When
-the phone reaches the node there is no probe of every box, no machine to
-pick and no fleet machine's fingerprint to compare. When it does not, the
-same press goes to a machine, chosen for the person and changeable, and
-that machine's key is the one thing added. Pasting a line made by hand is
-the other way in, on the same screen.
-
-**The cluster's page** is the component row from `manage.md`, read from the
-health entry, three sections and no form:
-
-- *What it is*: address, Proxmox version, pool, which box last reached it
-  and when.
-- *How it is*: one line each, worded, never colour alone. **Fenced** or
-  **Not fenced: the datacenter firewall is off** (C-5: `null` is "could not
-  tell", never "fenced"). **Token as designed**, or **Token can do more than
-  the fleet needs**, with each path and privilege from `wide`. The images, the
-  networks, and the machines, each machine row the same shape as a Xen
-  Orchestra one.
-- *What it can do*: **New machine here** (opens New session › Where with this
-  cluster chosen), **Run setup again** (copies the command), **Forget**. Each
-  only when it works: no New machine while there is no image, and the
-  sentence says why instead.
-
-Changing what the fleet may use is not on the phone, because it is not the
-fleet's to change. The page says what Proxmox grants and links to where it
-is changed.
-
-## One seam
-
-`src/fleet/host/pools.js` puts `XoPools` and `PvePools` behind the face the
-sidecar already called. A record says which it is: Xen Orchestra's carry no
-`kind`, and `xo-pools.js` passes over any that does. The health frame's
-`xo[]` carries both, a Proxmox entry with `kind: "proxmox"`, `fenced` and
-`wide` beside the fields they share. `make` goes to the driver that saw the
-image; `handLogin` and `control` to Xen Orchestra's first and Proxmox's when
-it answers `notHere`, and an `unreachable` from either is kept.
+with, `import-from` with the storage the setup chose, and the router's
+guest agent reporting its WAN address to the token.
 
 ## Not built
 

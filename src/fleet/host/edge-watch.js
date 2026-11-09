@@ -33,6 +33,13 @@
 // log lines are not sent here at all: what a session's machine tried to reach
 // is not this report's to carry.
 //
+// ON PROXMOX VE the same, for the one router the cluster's setup made
+// (install/fleetwright-pve-setup, step `edge`): its key comes in the line
+// the app keeps (pve-pools.js, edgeKeyOf), where it is comes from its guest
+// agent through the cluster's API (pve-pools.js, edgeAddresses), and its
+// syslog goes to the cluster's own machine. Wherever this says Xen
+// Orchestra, read the cluster's Proxmox VE.
+//
 // WHICH BOX READS THEM: one whose own look at the pool's Xen Orchestra reached
 // it (xo-pools.js, `seen`), and no other. Asked for: "a host that can't reach
 // it should never try", after a cloud runner holding the pool's token read
@@ -160,7 +167,7 @@ export function statusOf({ vip, unbound, gateways, leases, stats }) {
 export class EdgeWatch {
   /**
    * @param {{
-   *   pools: { held: Map<string, { owner: string, record: any }>, seen?: Map<string, { reachable: boolean|null }>, edgeAddresses?: (key: string) => Promise<Map<string, string>|null> },
+   *   pools: { held: Map<string, { owner: string, record: any }>, seen?: Map<string, { reachable: boolean|null }>, edgeAddresses?: (key: string) => Promise<Map<string, string>|null>, kindOf?: (key: string) => string },
    *   reaches?: ((key: string) => boolean|null)|null,
    *   connect?: typeof connectPinnedTls,
    *   createSocket?: () => dgram.Socket,
@@ -332,7 +339,10 @@ export class EdgeWatch {
       for (const [k, { record }] of watched) {
         const can = this.#canTry(k, record);
         if (can === true) await this.#reread(k);
-        const names = [...new Set([...(record.edge.routers || []).map((/** @type {any} */ r) => r?.name), ...(this.learned.get(k)?.keys() ?? []), ...(this.fromXo.get(k)?.routers?.keys() ?? [])])].filter((n) => NAMES.includes(n));
+        // A PROXMOX VE CLUSTER HAS ONE, which the setup made and named; a
+        // pool's are the ones its policy job made (record.edge.routers).
+        const one = this.#hypervisor(k) === 'Proxmox VE' ? [NAMES[0]] : [];
+        const names = [...new Set([...one, ...(record.edge.routers || []).map((/** @type {any} */ r) => r?.name), ...(this.learned.get(k)?.keys() ?? []), ...(this.fromXo.get(k)?.routers?.keys() ?? [])])].filter((n) => NAMES.includes(n));
         /** @type {RouterState[]} */
         const routers = [];
         for (const name of names.sort()) routers.push(await this.#read(k, record, name, can));
@@ -368,9 +378,26 @@ export class EdgeWatch {
     if (now !== null && this.said.get(k) !== now) {
       this.said.set(k, now);
       const where = String(record?.address || k);
-      this.log.info(now ? `sidecar: reading the edge routers of ${where} from here: this box reaches its Xen Orchestra` : `sidecar: not reading the edge routers of ${where} from here: this box cannot reach its Xen Orchestra, and they answer on that network`);
+      const its = this.#hypervisor(k);
+      this.log.info(now ? `sidecar: reading the edge routers of ${where} from here: this box reaches its ${its}` : `sidecar: not reading the edge routers of ${where} from here: this box cannot reach its ${its}, and they answer on that network`);
     }
     return now;
+  }
+
+  /**
+   * What the routers' pool runs on, in words: a Proxmox VE cluster's edge
+   * router is read the same way, found by its own API (pve-pools.js,
+   * edgeAddresses), and the phone is told which one it could not reach.
+   * @param {string} k
+   */
+  #hypervisor(k) {
+    let kind = 'xo';
+    try {
+      kind = this.pools?.kindOf?.(k) ?? 'xo';
+    } catch {
+      kind = 'xo';
+    }
+    return kind === 'proxmox' ? 'Proxmox VE' : 'Xen Orchestra';
   }
 
   /**
@@ -404,16 +431,27 @@ export class EdgeWatch {
     if (can !== true) {
       // NOT FROM HERE. Nothing is opened to the router, and the phone is told
       // it was not tried, not that it did not answer (C-5).
+      const its = this.#hypervisor(k);
       const problem =
-        can === false
-          ? 'This machine did not try: it cannot reach the pool’s Xen Orchestra, and the routers answer on that network.'
-          : 'This machine has not tried yet: it has not reached the pool’s Xen Orchestra, and the routers answer on that network.';
+        its === 'Proxmox VE'
+          ? can === false
+            ? 'This machine did not try: it cannot reach the cluster’s Proxmox VE, and the router answers on that network.'
+            : 'This machine has not tried yet: it has not reached the cluster’s Proxmox VE, and the router answers on that network.'
+          : can === false
+            ? 'This machine did not try: it cannot reach the pool’s Xen Orchestra, and the routers answer on that network.'
+            : 'This machine has not tried yet: it has not reached the pool’s Xen Orchestra, and the routers answer on that network.';
       return { ...base, reached: null, ...UNREAD, problem };
     }
     if (!address) {
       // XEN ORCHESTRA SAID IT HAS NONE, or could not be asked: two different
       // things, said as such (C-5).
       const asked = this.fromXo.get(k)?.routers;
+      if (this.#hypervisor(k) === 'Proxmox VE') {
+        const problem = asked
+          ? 'Proxmox VE has no address for it yet: its guest agent reports one a minute or two after the router starts, and it is not running or has not. It has not sent this machine its logs either.'
+          : 'Proxmox VE could not be asked where it is, and it has not sent this machine its logs.';
+        return { ...base, reached: null, ...UNREAD, problem };
+      }
       const problem = asked
         ? `Xen Orchestra does not know its address yet: its guest agent has not reported it (one built before the image carried the agent gets it with its first update, after ${EDGE_UPDATES.hours}:00 UTC). It has not sent this machine its logs either.`
         : 'Xen Orchestra did not know its address when the policy last ran, and it has not sent this machine its logs.';
