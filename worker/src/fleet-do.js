@@ -1201,6 +1201,39 @@ export class Fleet {
       return new Response(null, { status: 101, webSocket: phoneEnd });
     }
 
+    // A PAGE THROUGH A MACHINE: this phone's socket, joined to the TCP
+    // connections a box makes for its web view (browse.js, docs/browse.md).
+    // Many streams on one socket; an https page's TLS is opened by the
+    // phone's web view through its stream, so this object carries ciphertext
+    // for those. Accepted without hibernation, for the reason a relay is.
+    if (url.pathname === '/api/browse' && request.method === 'GET') {
+      if (!client?.email) {
+        return json({ ok: false, error: { code: 'not_signed_in' }, text: 'A page through a machine is opened by the phone of a signed-in person.' }, 403);
+      }
+      if (request.headers.get('upgrade') !== 'websocket') {
+        return json({ ok: false, error: { code: 'upgrade_required' }, text: 'A page through a machine is a WebSocket: ask for an upgrade.' }, 426);
+      }
+      const pair = new WebSocketPair();
+      const [phoneEnd, server] = Object.values(pair);
+      server.accept();
+      const opened = this.core.openBrowse(
+        requesterFor(client),
+        client.id ?? null,
+        { host: url.searchParams.get('host'), session: url.searchParams.get('session') },
+        {
+          send: (msg) => server.send(JSON.stringify(msg)),
+          close: (code, reason) => server.close(code, reason),
+        },
+      );
+      if (opened.ok) {
+        const browse = opened.browse;
+        server.addEventListener('message', (ev) => this.core.browseFromPhone(browse, typeof ev.data === 'string' ? ev.data : ''));
+        server.addEventListener('close', () => this.core.browsePhoneGone(browse));
+        server.addEventListener('error', () => this.core.browsePhoneGone(browse));
+      }
+      return new Response(null, { status: 101, webSocket: phoneEnd });
+    }
+
     if (url.pathname === '/api/runner-tokens' && request.method === 'POST') {
       if (!client?.email) {
         return json({ ok: false, text: 'Sign in first — a runner token belongs to a person.' }, 403);

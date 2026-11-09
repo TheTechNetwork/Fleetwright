@@ -26,6 +26,7 @@ import { Delegations } from './delegations.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, PVESETUP_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage, PIN_SENTENCES } from '../protocol/intents.js';
 import { Relays, RELAY_MAX_BYTES } from './relays.js';
 import { Tunnels, TUNNEL_MAX_BYTES, TUNNEL_TTL_MS } from './tunnels.js';
+import { Browses, BROWSE_MAX_BYTES, BROWSE_MAX_STREAMS, BROWSE_TTL_MS } from './browse.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { fromB64Url } from '../crypto.js';
 import { PendingAuthorizations, authorizeUrl, relayAuthorizeUrl, exchangeCode, cloudflareAuthorizeUrl, exchangeCloudflareCode, connectedText, DEVICE_STATE_RE, deviceReturnUrl, SIGNER_STATE_RE, signerReturnUrl, handBack, normaliseOrigin } from './oauth.js';
@@ -129,6 +130,8 @@ const BOX_SECRETS_PROTOCOL = 14;
 const VAULT_SIGNIN_PROTOCOL = 15;
 /** The protocol a box speaks to carry a VM's console to a phone away from the pool (`tunnel` frames, v17). */
 const TUNNEL_PROTOCOL = 17;
+/** The protocol a box speaks to carry a web view's connections for a phone (`browse` frames, v18). */
+const BROWSE_PROTOCOL = 18;
 /**
  * How long a machine's ticket lives: as long as the fleet waits for a machine
  * kept ready to enrol before it takes it to have failed (vm-standby.js), and
@@ -585,6 +588,21 @@ export class CoordinatorCore {
         if (host?.connected && typeof host.send === 'function') host.send({ v: PROTOCOL_VERSION, kind: 'tunnel', ...frame });
       },
     });
+    /**
+     * A web view on a phone whose connections leave from one of the person's
+     * machines (browse.js, docs/browse.md): the phone's socket joined to the
+     * TCP connections a box makes. Memory only, as a tunnel is.
+     */
+    this.browses = new Browses({
+      now,
+      setTimer,
+      clearTimer,
+      log: this.log,
+      toHost: (hostId, frame) => {
+        const host = this.registry.hosts.get(hostId);
+        if (host?.connected && typeof host.send === 'function') host.send({ v: PROTOCOL_VERSION, kind: 'browse', ...frame });
+      },
+    });
     // EACH PERSON'S OWN RUNNER REPOSITORY, when they set one — see
     // runner-repos.js for why a member may, and what bounds it.
     this.runnerRepos = new RunnerRepos({ now });
@@ -789,6 +807,7 @@ export class CoordinatorCore {
     // told so rather than left pumping bytes at a socket nobody reads.
     this.relays.closeForHost(hostId, `${hostId} left the fleet's socket, so nothing reaches it through this phone now.`);
     this.tunnels.closeForHost(hostId, `${hostId} left the fleet, so the console it was carrying closed. Open it again.`);
+    this.browses.closeForHost(hostId, `${hostId} left the fleet, so the page it was carrying closed. Open it again.`);
     const ephemeral = this.registry.get(hostId)?.ephemeral === true;
     this.registry.disconnect(hostId, reason);
     this.log.warn(`coordinator: ${hostId} disconnected (${reason})`);
@@ -1059,6 +1078,8 @@ export class CoordinatorCore {
     if (msg.kind === 'relay') return this.relays.fromHost(hostId, msg);
     // AND THE BOX CARRYING A CONSOLE TO A PHONE AWAY: TLS the phone opened.
     if (msg.kind === 'tunnel') return this.tunnels.fromHost(hostId, msg);
+    // AND THE BOX CARRYING A WEB VIEW'S CONNECTIONS (browse.js).
+    if (msg.kind === 'browse') return this.browses.fromHost(hostId, msg);
 
     // THE HEARTBEAT. "Are you there" wants "yes" and nothing else: no state
     // moves, no event is recorded, no log line — twenty hosts ask three times a
@@ -2197,6 +2218,113 @@ export class CoordinatorCore {
   /** A phone's console socket closed. @param {string} tunnel */
   tunnelPhoneGone(tunnel) {
     this.tunnels.phoneGone(tunnel);
+  }
+
+  /**
+   * A web view on a phone whose connections leave from one of the person's
+   * machines (browse.js). docs/browse.md.
+   *
+   * WHAT IT OPENS ON, and who may. A session's own ports, for the person whose
+   * session it is, on a box that contains its sessions (`health.browse.
+   * sessions`). The box's listed names and the public web, for somebody who
+   * administers the box (hosts.js administers), where its owner turned either
+   * on. One socket can be both: a session's page that loads what it pulls from
+   * elsewhere. Neither, and nothing is opened. Where each connection goes is
+   * the box's to decide, every time; this only chooses which rules it is
+   * asked to apply. The answer is sent down the socket as well as returned.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @param {string|null} device
+   * @param {{ host?: unknown, session?: unknown }} ask
+   * @param {{ send: (msg: Record<string, unknown>) => void, close: (code: number, reason: string) => void }} phone
+   * @returns {{ ok: true, browse: string, hostId: string } | { ok: false, error: { code: string }, text: string }}
+   */
+  openBrowse(requester, device, ask, phone) {
+    /** @param {{ ok: false, error: { code: string }, text: string }} r */
+    const refuse = (r) => {
+      try {
+        phone.send({ op: 'closed', error: r.error, text: r.text });
+        phone.close(1008, r.error.code);
+      } catch { /* the socket is already going */ }
+      return r;
+    };
+    const owner = requester?.email ? String(requester.email).toLowerCase() : null;
+    if (!owner || !device) {
+      return refuse({ ok: false, error: { code: 'not_signed_in' }, text: 'A page through a machine is opened by the phone of a signed-in person. Sign in on this phone first.' });
+    }
+    const hostId = typeof ask?.host === 'string' ? ask.host : '';
+    const session = typeof ask?.session === 'string' && ask.session ? ask.session : null;
+    if (!hostId || hostId.length > 128 || (session !== null && !SESSION_NAME_RE.test(session))) {
+      return refuse({ ok: false, error: { code: 'bad_params' }, text: 'Say which machine, and which of your sessions if it is one.' });
+    }
+    const entry = this.registry.hosts.get(hostId);
+    if (!entry || !entry.connected || !mayActFor(entry, owner)) {
+      return refuse({ ok: false, error: { code: 'no_hosts' }, text: `${hostId} is not connected to the fleet now, so no page can go through it.` });
+    }
+    const health = /** @type {any} */ (entry.health);
+    if (!health || Number(health.protocol) < BROWSE_PROTOCOL || !health.browse || typeof health.browse !== 'object') {
+      return refuse({ ok: false, error: { code: 'host_outdated' }, text: `${hostId} is too old to open pages for a phone. Update it and open the page again.` });
+    }
+    const opens = /** @type {{ sessions?: unknown, web?: unknown, hosts?: unknown }} */ (health.browse);
+    if (session !== null) {
+      // THE PERSON'S OWN SESSION, as the box reported it: not somebody else's,
+      // not even for the fleet's admin, because the box opens a session's
+      // ports only for the person who started it.
+      const row = (Array.isArray(health.sessions) ? health.sessions : []).find((/** @type {any} */ s) => s?.name === session);
+      const theirs = row ? String(row.createdBy || '').toLowerCase() : '';
+      if (!row || (theirs !== `fleet:${owner}` && theirs !== owner)) {
+        return refuse({ ok: false, error: { code: 'not_found' }, text: `${hostId} reports no session of yours called ${session}.` });
+      }
+      if (row.status !== 'running') {
+        return refuse({ ok: false, error: { code: 'not_running' }, text: `${session} is not running, so nothing is listening in it. Resume it first.` });
+      }
+      if (opens.sessions !== true) {
+        return refuse({ ok: false, error: { code: 'not_contained' }, text: `${hostId} does not run sessions in containers, so a session there shares the machine's own addresses and its ports are not opened from a phone.` });
+      }
+    }
+    const listed = Array.isArray(opens.hosts) ? opens.hosts.length : 0;
+    const box = administers(entry, requester) && (opens.web === true || listed > 0);
+    if (session === null && !box) {
+      return refuse({
+        ok: false,
+        error: { code: 'nothing_to_open' },
+        text: administers(entry, requester)
+          ? `${hostId} opens no pages: its owner has listed no addresses and has not turned on the web (FLEETWRIGHT_BROWSE_HOSTS, FLEETWRIGHT_BROWSE_WEB).`
+          : `Only people who administer ${hostId} open pages through it. A session of yours there can still open its own ports.`,
+      });
+    }
+    const started = this.browses.start({ owner, device, hostId, session, box, toPhone: phone.send, closePhone: phone.close });
+    if (!started.ok) return refuse(started);
+    // ON THE RECORD: connections from a person's phone now leave from a box.
+    // Who, which machine and which session, never which pages.
+    this.record({ event: 'browse.opened', actor: owner, hostId, text: `${owner} opened a page through ${hostId}${session ? ` on ${session}` : ''}` });
+    try {
+      phone.send({
+        op: 'ready',
+        browse: started.browse.id,
+        hostId,
+        session,
+        // WHAT THE BOX OPENS FOR THIS PERSON, so the screen can say it: its
+        // listed names and whether it opens the web, only where those rules
+        // apply to them.
+        opens: box ? { web: opens.web === true, hosts: Array.isArray(opens.hosts) ? opens.hosts : [] } : null,
+        maxBytes: BROWSE_MAX_BYTES,
+        maxStreams: BROWSE_MAX_STREAMS,
+        ttlMs: BROWSE_TTL_MS,
+      });
+    } catch { /* the socket is going; its close ends it */ }
+    this.browses.ask(started.browse.id);
+    return { ok: true, browse: started.browse.id, hostId };
+  }
+
+  /** A message on a phone's browse socket. @param {string} browse @param {unknown} raw */
+  browseFromPhone(browse, raw) {
+    this.browses.fromPhone(browse, raw);
+  }
+
+  /** A phone's browse socket closed. @param {string} browse */
+  browsePhoneGone(browse) {
+    this.browses.phoneGone(browse);
   }
 
   /** A message on a phone's relay socket. @param {string} relay @param {unknown} raw */
@@ -8698,6 +8826,14 @@ function visibleHost(host, requester, entry) {
     const { admins, ...rest } = host.health;
     const seen = adminsSeenBy(admins, requester);
     host = { ...host, health: seen ? { ...rest, admins: seen } : rest };
+  }
+  // WHAT A BOX OPENS FOR A PHONE'S WEB VIEW (docs/browse.md): whether it opens
+  // a session's ports is everybody's, because each person's own session is
+  // theirs to open; the names its owner listed and whether it opens the web
+  // are the owner's settings, and the names are places on the owner's own
+  // network, so only people who administer the box are shown them.
+  if (host?.health?.browse && typeof host.health.browse === 'object' && !administers(entry ?? undefined, requester)) {
+    host = { ...host, health: { ...host.health, browse: { sessions: host.health.browse.sessions === true, web: false, hosts: [] } } };
   }
   if (!requester || requester.admin || !host) return host;
   // WHOSE TEMPORARY MACHINE IT IS is an email, and a member is shown it only

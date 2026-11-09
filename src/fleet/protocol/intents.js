@@ -469,8 +469,19 @@ export const PVESETUP_STEPS = Object.freeze([
 // coordinator carry ciphertext (src/fleet/coordinator/tunnels.js). Frames, not
 // a verb, so an older box would drop them and the console would hang: the
 // coordinator opens a tunnel only through a box that speaks 17.
+//
+// v18, 9 Nov 2026: A PAGE THROUGH A MACHINE. A phone's web view whose
+// connections leave from one of the person's boxes: `browse` frames carry
+// many TCP connections the box makes on one phone socket, to a session's own
+// ports, to names the box's owner listed, or to the public web where the
+// owner turned it on, and the box decides each one itself
+// (src/fleet/host/browse.js). The health frame says what a box opens as
+// `browse`. Frames, not a verb, so an older box would drop them and the page
+// would hang: the coordinator opens one only through a box that speaks 18,
+// and a box older than it sends no `browse`, so no phone offers one there.
+// docs/browse.md.
 /** @type {number} */
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 
 /**
  * The GitHub images each runner platform may run on, newest first, and the
