@@ -955,6 +955,9 @@ class Fleet(
         val incomplete: String? = null,
     )
 
+    /** One Proxmox VE machine a box made, and how its join went, as the box kept it. */
+    data class BootMachine(val name: String, val address: String?, val at: Long?, val reading: Boolean, val joined: Boolean)
+
     data class Reply(
         val ok: Boolean,
         /**
@@ -973,6 +976,11 @@ class Fleet(
          */
         val text: String,
         val sessions: List<Session>,
+        /**
+         * The machines a box made, from `logs` with `service = "boot"` and no
+         * machine named (src/fleet/host/pve-console.js). Null from anything else.
+         */
+        val boot: List<BootMachine>? = null,
         /**
          * What could be connected and what is, when the reply is about
          * credentials. Never a token — the host does not send one and there is
@@ -1751,12 +1759,14 @@ class Fleet(
         )
 
     /** A service journal, or what a session printed. */
-    suspend fun logs(host: String? = null, session: String? = null, service: String? = null, lines: Int? = null): Reply =
+    /** What a Proxmox VE machine this box made showed as it booted: `machine` goes with `service = "boot"` (BootLogs.kt). */
+    suspend fun logs(host: String? = null, session: String? = null, service: String? = null, machine: String? = null, lines: Int? = null): Reply =
         intent(
             "logs",
             buildMap {
                 if (!session.isNullOrBlank()) put("name", session)
                 if (!service.isNullOrBlank()) put("service", service)
+                if (!machine.isNullOrBlank()) put("machine", machine)
             },
             host = host,
             numeric = buildMap { if (lines != null) put("lines", lines) },
@@ -3222,6 +3232,19 @@ class Fleet(
                     code = json.optJSONObject("error")?.optString("code")?.takeIf { it.isNotBlank() && it != "null" },
                     why = json.optJSONObject("error")?.optString("why")?.takeIf { it.isNotBlank() && it != "null" },
                     sessions = parseSessions(json.optJSONArray("sessions")),
+                    boot = json.optJSONObject("boot")?.optJSONArray("machines")?.let { a ->
+                        (0 until a.length()).mapNotNull { i ->
+                            val m = a.optJSONObject(i) ?: return@mapNotNull null
+                            val name = m.optString("name").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                            BootMachine(
+                                name = name,
+                                address = m.optString("address").takeIf { it.isNotBlank() && it != "null" },
+                                at = if (m.has("at") && !m.isNull("at")) m.optLong("at") else null,
+                                reading = m.optBoolean("reading", false),
+                                joined = m.optBoolean("joined", false),
+                            )
+                        }
+                    },
                     connections = parseConnections(json.optJSONObject("connections")),
                     entries = json.optJSONArray("entries")?.let { a ->
                         (0 until a.length()).mapNotNull { i ->

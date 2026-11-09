@@ -575,6 +575,8 @@ private fun MachinePage(
     var confirmingRevoke by remember { mutableStateOf(false) }
     var pin by remember { mutableStateOf("") }
     var poolPage by remember { mutableStateOf(false) }
+    // What the Proxmox VE machines it made showed as they booted (BootLogs.kt).
+    var bootPage by remember { mutableStateOf(false) }
     // Whether the one explanation on this page, under the grants, is open.
     // Closed by default: it is the mechanism, read once.
     var howGrantsWork by remember { mutableStateOf(false) }
@@ -635,6 +637,7 @@ private fun MachinePage(
     }
 
     if (poolPage) VmMachinePage(settings, hostId, onDismiss = { poolPage = false })
+    if (bootPage) BootLogsPage(settings, hostId, onDismiss = { bootPage = false })
     if (confirmingRevoke) {
         AlertDialog(
             onDismissRequest = { confirmingRevoke = false },
@@ -886,8 +889,14 @@ private fun MachinePage(
                 // of the three journals exist here. One word, never "none".
                 logs == null -> Hint("Unknown")
                 logs.isEmpty() -> Hint("No logs here")
-                else -> logs.forEach { source ->
-                    OutlinedButton(onClick = { run { it.logs(hostId, service = source) } }, enabled = !busy) { Text(logName(source)) }
+                else -> {
+                    logs.filter { it != "boot" }.forEach { source ->
+                        OutlinedButton(onClick = { run { it.logs(hostId, service = source) } }, enabled = !busy) { Text(logName(source)) }
+                    }
+                    // WHAT THE MACHINES IT MADE SHOWED AS THEY BOOTED, a page of
+                    // its own: a list to pick the machine that did not join
+                    // from. Only where the box says it keeps them. Same as iOS.
+                    if ("boot" in logs) OutlinedButton(onClick = { bootPage = true }) { Text(BootWords.TITLE) }
                 }
             }
             Hint("The last 40 lines. A session's own output is on its page, as Output.")

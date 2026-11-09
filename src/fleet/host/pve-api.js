@@ -38,7 +38,7 @@
 import https from 'node:https';
 import tls from 'node:tls';
 import net from 'node:net';
-import { splitAddress } from './xo-ws.js';
+import { splitAddress, upgrade } from './xo-ws.js';
 
 /** Proxmox's API port, when an address names none. */
 export const PVE_PORT = 8006;
@@ -217,6 +217,30 @@ export class PveApi {
       req.on('error', reject);
       if (!inQuery) req.write(form);
       req.end();
+    });
+  }
+
+  /**
+   * A WebSocket to one API path, on a socket checked as `call`'s are, with
+   * the token on the upgrade: Proxmox VE's `vncwebsocket`, which is how a
+   * machine's serial console is read (pve-console.js). Binary frames, as the
+   * console sends them.
+   *
+   * @param {string} path  under /api2/json, starting with a slash
+   * @param {Record<string, unknown>} [params]
+   */
+  async websocket(path, params = {}) {
+    if (!path.startsWith('/') || path.includes('..')) throw new Error(`not a Proxmox API path: ${path}`);
+    const socket = await this.connect({ host: this.host, port: this.port, trust: this.trust, timeoutMs: this.timeoutMs });
+    const form = formOf(params);
+    return upgrade(/** @type {any} */ (socket), {
+      host: this.host,
+      port: this.port,
+      path: `/api2/json${path}${form ? `?${form}` : ''}`,
+      timeoutMs: this.timeoutMs,
+      headers: { Authorization: `PVEAPIToken=${this.token}`, 'Sec-WebSocket-Protocol': 'binary' },
+      binary: true,
+      who: this.address,
     });
   }
 

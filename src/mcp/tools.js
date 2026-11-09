@@ -219,7 +219,7 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       'rendered; this is the raw stream and may carry terminal escapes.',
     // The session half only. `service` is a different question and has its own
     // tool; offering both here would rebuild the ambiguity this exists to end.
-    omit: ['service'],
+    omit: ['service', 'machine'],
   },
 ];
 
@@ -244,6 +244,8 @@ const OVERRIDE = {
   logs: {
     description:
       'Read a service journal on one host — the hub, the coordinator or the sidecar. ' +
+      'Or `service: boot`: what a Proxmox VE machine this host made printed on its console while it booted, ' +
+      'for one that never joined and cannot be reached; without `machine` it lists them. ' +
       "For what a SESSION printed, use fleet_read_log instead.",
     omit: ['name'],
   },

@@ -120,7 +120,7 @@ and "dead host" is the one it retries.
 | `restore` | `name` | ✅ | `/restore <name>` |
 | `purge` | `name` | ✅ | `/purge <name>` — the irreversible one |
 | `answer` | `name`, `option` (1–9), `promptId?` | ✅ | `/answer <name> <1-9> [promptId]` |
-| `logs` | `name?`, `service?` (`hub`\|`coordinator`\|`sidecar`), `lines?` (1–200) | | `/logs [name\|service] [lines]` |
+| `logs` | `name?`, `service?` (`hub`\|`coordinator`\|`sidecar`\|`boot`), `machine?` (18), `lines?` (1–200) | | `/logs [name\|service] [lines]`; `boot` is answered by the sidecar itself (`docs/proxmox.md`, "A machine that does not join") |
 | `update` | `restart?` (`yes`\|`no`) | ✅ | `/update [--restart]` |
 | `upgrade` | `apply?` (`yes`\|`no`) | ✅ | `/upgrade [apply]` |
 | `reboot` | `pin?`, `confirm?` | ✅ | `/reboot [pin] [hostname]` |

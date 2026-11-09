@@ -1218,7 +1218,7 @@ test('the two log tools ask different questions', async () => {
   assert.ok(journal && session);
 
   // The service half and the session half, and neither offers the other's.
-  assert.deepEqual(Object.keys(journal.inputSchema.properties).sort(), ['host', 'lines', 'service', 'tag']);
+  assert.deepEqual(Object.keys(journal.inputSchema.properties).sort(), ['host', 'lines', 'machine', 'service', 'tag']);
   assert.deepEqual(Object.keys(session.inputSchema.properties).sort(), ['host', 'lines', 'name', 'tag']);
   // `name` is what fleet_read_log exists for. Narrowing the base tool before
   // the alias copied its properties took it away once.

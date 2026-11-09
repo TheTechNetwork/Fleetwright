@@ -39,7 +39,7 @@ const BASELINE = Object.freeze({
   resume: { name: 1, choice: 1, boxSecrets: 14 },
   stop: { name: 1 },
   updates: {},
-  logs: { name: 1, service: 1, lines: 1 },
+  logs: { name: 1, service: 1, lines: 1, machine: 18 },
   files: { name: 1, path: 1 },
   readfile: { name: 1, path: 1 },
   writefile: { name: 1, path: 1, content: 1 },

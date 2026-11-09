@@ -565,8 +565,15 @@ struct HostView: View {
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                 }
-                ForEach(logs, id: \.self) { source in
+                ForEach(logs.filter { $0 != "boot" }, id: \.self) { source in
                     Button(logName(source)) { run { try await fleet.logs(host: hostId, service: source) } }
+                }
+                // WHAT THE MACHINES IT MADE SHOWED AS THEY BOOTED, a page of
+                // its own rather than forty lines in the box below: it is a
+                // list to pick the machine that did not join from
+                // (BootLogsView). Only where the box says it keeps them.
+                if logs.contains("boot") {
+                    NavigationLink(BootWords.title) { BootLogsView(fleet: fleet, hostId: hostId) }
                 }
             } else {
                 // NIL IS CANNOT TELL (§7). A host older than this field still

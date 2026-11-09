@@ -54,6 +54,7 @@
 // twice (docs/hypervisors.md, "How a clone joins").
 
 import { createHash } from 'node:crypto';
+import { BootConsoles } from './pve-console.js';
 import { PveApi, PVE_PORT } from './pve-api.js';
 import { splitAddress } from './xo-ws.js';
 import { seal, claudeBindingFor } from '../seal.js';
@@ -562,10 +563,13 @@ export class PvePools {
    *   sleep?: (ms: number) => Promise<void>,
    *   holderFor?: string,
    *   resolve?: (host: string) => Promise<string[]>,
+   *   consoles?: BootConsoles,
    * }} [opts]
    */
-  constructor({ api = (o) => new PveApi(o), now = () => Date.now(), log, sleep, holderFor = '', resolve = async (h) => (await lookup(h, { all: true, family: 4 })).map((a) => a.address) } = {}) {
+  constructor({ api = (o) => new PveApi(o), now = () => Date.now(), log, sleep, holderFor = '', resolve = async (h) => (await lookup(h, { all: true, family: 4 })).map((a) => a.address), consoles } = {}) {
     this.api = api;
+    /** What each machine this box made printed as it booted (pve-console.js). */
+    this.consoles = consoles ?? new BootConsoles({ log });
     /**
      * The cluster this box holds as its own machine (the setup's `holder`
      * step), from FLEETWRIGHT_HOLDER_FOR, as Xen Orchestra's (xo-pools.js):
@@ -1013,6 +1017,10 @@ export class PvePools {
       // group, on the bridge, out of the guest's reach.
       if (!chosen) await this.#fence(api, dst, { lab: labNet, group: Boolean(joined), coordinatorUrl });
       await api.waitTask(await api.post(`${dst}/status/start`, {}), { sleep: this.sleep });
+      // WHAT IT PRINTS AS IT BOOTS, kept for the machine that never joins
+      // (pve-console.js): read from now, while it is still in its firmware.
+      // Not awaited: it reads for up to the ticket's life, and never throws.
+      void this.consoles.record(name, { api, node: image.node, vmid, address: record.address, owner: who });
       // ALONE IN ITS LAB: another box may have put a machine on the same lab
       // in the same moment. The one made second goes, as on Xen Orchestra.
       if (labNet) {
@@ -1308,6 +1316,62 @@ export function agentAddress(answer, net0) {
 }
 
 /**
+ * WHAT A MACHINE SAYS ON ITS CONSOLE WHILE IT HAS NOT JOINED, for the box that
+ * made it to keep (pve-console.js): at one, three, seven and twelve minutes,
+ * its addresses, its route, its name servers, what they say for the fleet,
+ * whether the fleet answers, and the sidecar's last lines with anything long
+ * enough to be a ticket or a token taken out; then `fleetwright-join: joined`
+ * once the coordinator has named it (identity.js, host-id.json). Asked for:
+ * "add some troubleshooting for VMs that dont join as we cant ssh and get the
+ * logs". It reads and prints, and runs nothing it is told.
+ *
+ * In the vendor snippet, so a cluster has it once the setup runs again, with
+ * the image it already has.
+ */
+export const JOIN_REPORT = Object.freeze([
+  "#!/bin/sh",
+  "# Says on the console how this machine's join is going, until it has joined",
+  "# (docs/proxmox.md, \"A machine that does not join\"). The box that made it",
+  "# reads the console; nothing here is sent anywhere else.",
+  "out=/dev/ttyS0",
+  "say() { printf 'fleetwright-join: %s\\n' \"$*\" >\"$out\" 2>/dev/null || true; }",
+  "joined() { [ -s /var/lib/fleetwright-sidecar/host-id.json ]; }",
+  "url() { sed -n 's/^FLEETWRIGHT_COORDINATOR_URL=//p' /etc/fleetwright-sidecar.env 2>/dev/null | head -n 1; }",
+  "report() {",
+  "  u=\"$(url)\"",
+  "  h=\"$(printf '%s' \"$u\" | sed -E 's#^https://([^/:]+).*#\\1#')\"",
+  "  say \"not joined yet, $(cut -d. -f1 /proc/uptime) seconds after boot\"",
+  "  say \"addresses: $(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2 \" \" $4}' | tr '\\n' ' ')\"",
+  "  say \"route: $(ip -4 route show default 2>/dev/null | head -n 1)\"",
+  "  if command -v resolvectl >/dev/null 2>&1; then",
+  "    say \"name servers: $(resolvectl dns 2>/dev/null | tr '\\n' ' ')\"",
+  "  else",
+  "    say \"name servers: $(awk '/^nameserver/ {print $2}' /etc/resolv.conf | tr '\\n' ' ')\"",
+  "  fi",
+  "  if [ -n \"$h\" ]; then",
+  "    a=\"$(getent ahostsv4 \"$h\" 2>/dev/null | awk '{print $1}' | sort -u | tr '\\n' ' ')\"",
+  "    say \"$h: ${a:-no answer from the name server}\"",
+  "    c=\"$(curl -sS -o /dev/null -m 10 -w '%{http_code}' \"$u/\" 2>&1 | tr '\\n' ' ' | cut -c1-200)\"",
+  "    say \"the fleet at $u answers: $c\"",
+  "  else",
+  "    say \"no fleet named yet: the join has not run\"",
+  "  fi",
+  "  say \"services: fleetwright $(systemctl is-active fleetwright 2>/dev/null), sidecar $(systemctl is-active fleetwright-sidecar 2>/dev/null)\"",
+  "  journalctl -u fleetwright-sidecar -n 12 --no-pager -o cat 2>/dev/null |",
+  "    sed -E 's/fwt_[0-9a-f_]+/[ticket]/g; s/[A-Za-z0-9_+\\/=.-]{32,}/[removed]/g' | cut -c1-240 |",
+  "    while IFS= read -r l; do say \"sidecar: $l\"; done",
+  "}",
+  "t=0",
+  "while [ \"$t\" -le 780 ]; do",
+  "  if joined; then say \"joined\"; exit 0; fi",
+  "  case \"$t\" in 60 | 180 | 420 | 720) report ;; esac",
+  "  sleep 15",
+  "  t=$((t + 15))",
+  "done",
+  "say \"gave up saying: not joined after 13 minutes\"",
+]);
+
+/**
  * THE VENDOR SNIPPET every machine cloned from the image boots with, which the
  * setup script writes to the cluster's snippets storage and names on the
  * template (`cicustom: vendor=`). It holds nothing of anybody's: the join is
@@ -1324,8 +1388,14 @@ export function pveVendorConfig() {
     '# Fleetwright: a machine cloned from this template joins the fleet by itself',
     '# (docs/proxmox.md). The join is in its SMBIOS serial, put there by the box',
     '# that cloned it; this reads it as root on the first boot.',
+    'write_files:',
+    '  - path: /usr/local/sbin/fleetwright-join-report',
+    "    permissions: '0755'",
+    '    content: |',
+    ...JOIN_REPORT.map((l) => (l ? `      ${l}` : '')),
     'runcmd:',
     "  - [sh, -c, 'umask 077; mkdir -p /run/fleetwright && cat /sys/class/dmi/id/product_serial >/run/fleetwright/join.json']",
+    '  - [systemd-run, --unit=fleetwright-join-report, --no-block, --quiet, /usr/local/sbin/fleetwright-join-report]',
     JOIN_RUNCMD,
     '',
   ].join('\n');
