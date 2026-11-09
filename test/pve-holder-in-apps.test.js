@@ -139,3 +139,22 @@ test('both phones offer the edge router with the box’s flags and keys, and say
     assert.ok(IOS_PAGE.includes(words) && ANDROID_PAGE.includes(words), words);
   }
 });
+
+test('both phones show how the edge router is, in a pool’s words, and open the routers’ page', () => {
+  // The same words on both, and the same one-word verdict a pool's card gives.
+  for (const [s, k] of [['edgeHowItIs', 'EDGE_HOW_IT_IS'], ['edgeNoReading', 'EDGE_NO_READING'], ['edgeUnchecked', 'EDGE_UNCHECKED']]) {
+    const ios = new RegExp(`static let ${s} = "([^"]*)"`).exec(IOS_PAGE)?.[1];
+    assert.ok(ios, `iOS has no ${s}`);
+    assert.equal(new RegExp(`const val ${k} = "([^"]*)"`).exec(ANDROID_PAGE)?.[1], ios, `${s} differs`);
+    assert.ok(ios.length <= 100);
+  }
+  assert.match(IOS_PAGE, /Manage\.Words\.edgeStatus\(reached: r\.reached, problem: r\.problem, gateway: r\.gateway, role: r\.role\)/);
+  assert.match(ANDROID_PAGE, /Manage\.Words\.edgeStatus\(r\.reached, r\.problem, r\.gateway, r\.role\)/);
+  // The report found by the cluster's address, and the pool's page behind it.
+  assert.match(IOS_PAGE, /vmEdges\(\)\?\.first \{ \$0\.address == row\.address \}/);
+  assert.match(ANDROID_PAGE, /all\?\.firstOrNull \{ it\.address == row\.address \}/);
+  assert.match(IOS_PAGE, /EdgeRoutersView\(edges: e\)/);
+  assert.match(ANDROID_PAGE, /EdgePage\(it\) \{ showingEdge = false \}/);
+  // Its own machine is made first, so the router knows where to send its logs.
+  assert.ok(PVESETUP_STEPS.indexOf('holder') < PVESETUP_STEPS.indexOf('edge'));
+});

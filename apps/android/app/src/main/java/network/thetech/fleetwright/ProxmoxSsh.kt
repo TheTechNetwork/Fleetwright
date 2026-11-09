@@ -145,8 +145,8 @@ internal object ProxmoxSsh {
         "fence" -> "The firewall group"
         "networks" -> "Lab and group networks"
         "image" -> "The machine image, which takes a few minutes"
-        "edge" -> "The edge router, which takes a few minutes"
         "holder" -> "Its own machine"
+        "edge" -> "The edge router, which takes a few minutes"
         "line" -> "Saving the token"
         "done" -> "Done"
         else -> step

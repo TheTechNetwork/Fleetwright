@@ -473,6 +473,14 @@ the same card on the cluster's page and the same page behind it.
   other, since the router answers on the same network. A box that cannot is
   shown as cannot tell, never as down, in Proxmox VE's words.
 
+**On the phones**, the cluster's page has **How it is** under its edge
+router: the one word a pool's card gives each router (Internet up or down,
+Primary or Standby where there are two, Unknown when no machine could read
+it), opening the same page a pool's routers have: the numbers, the names it
+refused most and the log lines lately, Suricata's among them. Before any
+machine has read it the page says so, and never that it is fine. The setup's
+own machine now comes before the edge router in its steps on both phones.
+
 **Not built yet**: two of them, and labs behind it. **Not yet run** on a
 real node: the image under KVM's virtio, which it was checked under QEMU
 with, `import-from` with the storage the setup chose, and the router's
