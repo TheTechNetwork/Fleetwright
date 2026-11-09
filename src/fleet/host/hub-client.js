@@ -11,6 +11,7 @@
 //   POST /api/update-evidence      {which}    → {ok, noted, why?}
 //   POST /api/renew-providers      {secrets}  → {ok, results}
 //   POST /api/runner-login         {email, login, token} → {ok, text}
+//   GET  /api/session-port?name=…  (upgrade)  → one byte stream into a session
 //   GET  /healthz                             → {ok, host}
 //
 // Three things about that API are worth knowing before reading the sidecar,
@@ -43,6 +44,8 @@
 // stop and link. The verb allowlist in the sidecar is what stands between the
 // coordinator and that, which is why the command line is built from literals
 // there and never received.
+
+import http from 'node:http';
 
 /** Distinguishable failures, so a coordinator can tell "hub is down" — which it
  * should retry — from "the hub refused" — which it should not. */
@@ -140,6 +143,65 @@ export class HubClient {
     // a flag would arrive as a flag. The hub validates them again on arrival,
     // because this is not the only caller that can reach that route.
     return this.#json('POST', '/api/command', { command: line, ...meta }, this.commandTimeoutMs);
+  }
+
+  /**
+   * One byte stream to one port inside one of this box's sessions, for a
+   * phone's page (src/core/session-port.js, docs/browse.md). An HTTP upgrade
+   * on the hub's own listener, with this sidecar's token: the hub checks the
+   * session is running and is `owner`'s, and that the box contains its
+   * sessions, then joins the socket to a connection inside the container.
+   *
+   * @param {string} name @param {number} port @param {string} owner
+   * @returns {Promise<{ ok: true, wire: import('node:net').Socket } | { ok: false, text: string }>}
+   */
+  dialSessionPort(name, port, owner) {
+    return new Promise((resolve) => {
+      let base;
+      try {
+        base = new URL(this.baseUrl);
+      } catch {
+        resolve({ ok: false, text: 'This machine’s session manager has no address.' });
+        return;
+      }
+      if (base.protocol !== 'http:') {
+        resolve({ ok: false, text: 'This machine’s session manager is not on plain loopback HTTP, so a session’s port cannot be opened through it.' });
+        return;
+      }
+      const query = new URLSearchParams({ name, port: String(port), owner }).toString();
+      const req = http.request({
+        host: base.hostname.replace(/^\[(.*)\]$/, '$1'),
+        port: base.port || 80,
+        path: `/api/session-port?${query}`,
+        headers: {
+          connection: 'Upgrade',
+          upgrade: 'fleetwright-port',
+          ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+        },
+        timeout: 20_000,
+      });
+      req.on('upgrade', (_res, socket, head) => {
+        if (head?.length) socket.unshift(head);
+        resolve({ ok: true, wire: socket });
+      });
+      req.on('response', (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (d) => {
+          if (body.length < 4096) body += d;
+        });
+        res.on('end', () => {
+          let text = '';
+          try {
+            text = String(JSON.parse(body)?.text || '');
+          } catch { /* below */ }
+          resolve({ ok: false, text: text || `This machine’s session manager would not open that port (HTTP ${res.statusCode}).` });
+        });
+      });
+      req.on('timeout', () => req.destroy(new Error('timeout')));
+      req.on('error', () => resolve({ ok: false, text: 'This machine’s session manager did not answer.' }));
+      req.end();
+    });
   }
 
   /** Everything the hub knows: sessions, cap, auth. @returns {Promise<any>} */

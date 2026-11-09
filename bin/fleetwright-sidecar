@@ -279,6 +279,10 @@ const sidecar = new Sidecar({
     // runs sessions in, which it reads from a state directory this process
     // may not be able to (#270). See auto-labels.js and Sidecar#labels.
     labels: cfg.labels,
+    // WHAT A PHONE'S WEB VIEW MAY OPEN FROM HERE besides its people's own
+    // sessions: FLEETWRIGHT_BROWSE_HOSTS and FLEETWRIGHT_BROWSE_WEB, from this
+    // process's own env file (docs/browse.md).
+    browse: { hosts: cfg.browseHosts, web: cfg.browseWeb === 'on' },
     maxSkewMs: cfg.maxSkewMs,
     // FLEETWRIGHT_REQUIRE_SIGNED, from this box's own env file only.
     requireSigned: cfg.requireSigned,
