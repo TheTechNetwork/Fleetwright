@@ -14,6 +14,7 @@
 // bind loopback. That way the port is never listening on a routable interface,
 // and Cloudflare Access can gate it in front of the token.
 
+import { roomOf } from '../core/capacity.js';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -290,11 +291,19 @@ export class HttpAdapter {
 
     if (p === '/api/state' && method === 'GET') {
       const sessions = this.sessions.list();
+      const running = sessions.filter((s) => s.status === 'running').length;
+      // MEASURED, not configured (core/capacity.js). `maxSessions` stays the
+      // field an older sidecar reads, and is what "n of limit" should say now:
+      // running plus what the box would still admit, so an older sidecar's own
+      // `maxSessions - running` comes out as the same `free`.
+      const room = roomOf(this.sessions, this.cfg, running);
       return json(res, 200, {
         host: this.cfg.hostname,
         workdir: this.cfg.workdir,
-        maxSessions: this.cfg.maxSessions,
-        running: sessions.filter((s) => s.status === 'running').length,
+        maxSessions: room.limit,
+        free: room.free,
+        capacity: { ceiling: room.ceiling, bound: room.bound, why: room.why },
+        running,
         loginEnabled: this.cfg.loginEnabled,
         auth: { ...this.login.status(), summary: describe(this.login.status()) },
         // WHAT A SESSION WOULD GET, which is not the same question as `auth`

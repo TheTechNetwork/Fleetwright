@@ -468,7 +468,7 @@ test('a host does not publish a count of everybody\u2019s sessions', async () =>
     false,
     '/status is publishing a count of every session on the box again',
   );
-  assert.match(src, /\$\{running\}\/\$\{ctx\.cfg\.maxSessions\} sessions running/, 'capacity is still reported');
+  assert.match(src, /\$\{running\}\/\$\{sessionLimit\(ctx, running\)\} sessions running/, 'capacity is still reported');
 });
 
 test('the shorthand route is not a way around any of this', async () => {

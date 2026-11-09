@@ -105,6 +105,7 @@
  * @property {any} [check]                what a stored token can do, when asked
  */
 
+import { roomOf } from '../core/capacity.js';
 import { describe } from '../core/login.js';
 import { seal, SEAL_KEY_RE, SETUP_TOKEN_AAD } from '../fleet/seal.js';
 import { Connections, catalogue, isProvider, verifyToken, PROVIDERS } from '../core/connectors.js';
@@ -1334,7 +1335,7 @@ export const COMMANDS = {
       }
       const running = all.filter((s) => s.status === 'running');
       const rest = all.filter((s) => s.status !== 'running');
-      const lines = [`${running.length}/${ctx.cfg.maxSessions} running on ${ctx.cfg.hostname}`, ''];
+      const lines = [`${running.length}/${sessionLimit(ctx, running.length)} running on ${ctx.cfg.hostname}`, ''];
       for (const s of running) {
         const since = ago(s.createdAt);
         lines.push(
@@ -1400,7 +1401,7 @@ export const COMMANDS = {
             // that other people were here.
             //
             // `/list` answers "what is there" for whoever may see it.
-            `${running}/${ctx.cfg.maxSessions} sessions running`,
+            `${running}/${sessionLimit(ctx, running)} sessions running`,
             `workdir: ${ctx.cfg.workdir}`,
             // NOT `loggedIn`. The box having no Claude account of its own is
             // the ORDINARY state under one-account-per-person; reporting it as
@@ -2875,4 +2876,13 @@ function noteImage(cfg, image) {
   }
   recordUpdateOutcome(cfg.stateDir, { image: { ok: true, text: 'finished' } }, { fresh: true });
   return image.text ? `\n\n${image.text}` : '';
+}
+
+/**
+ * "n of what": running plus what the box would still admit, measured
+ * (core/capacity.js).
+ * @param {any} ctx @param {number} running
+ */
+function sessionLimit(ctx, running) {
+  return roomOf(ctx.sessions, ctx.cfg, running).limit;
 }

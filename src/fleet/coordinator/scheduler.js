@@ -878,7 +878,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       return {
         kind: 'refused',
         code: 'at_capacity',
-        reason: `${preferHost} is full: ${chosen.health?.running}/${chosen.health?.maxSessions} sessions.`,
+        reason: `${preferHost} is full: ${fullness(chosen.health)}.`,
       };
     }
     return { kind: 'host', host: chosen };
@@ -990,7 +990,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
       kind: 'refused',
       code: 'at_capacity',
       reason: open
-        .map((h) => `${h.hostId} ${h.health?.running}/${h.health?.maxSessions}`)
+        .map((h) => `${h.hostId} ${fullness(h.health)}`)
         .join(', '),
     };
   }
@@ -1207,4 +1207,21 @@ function normaliseLabels(value) {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+/**
+ * Why a box takes no more sessions, from its own frame: what bound it
+ * (core/capacity.js, sent as a code) and the numbers that say so. A box from
+ * before that sends no bound and had a fixed count, which is what is said.
+ * @param {any} health
+ */
+export function fullness(health) {
+  const count = `${health?.running}/${health?.maxSessions} sessions`;
+  const gb = (/** @type {unknown} */ b) => (typeof b === 'number' ? `${(b / 1024 ** 3).toFixed(1)}GB` : '?');
+  switch (health?.capacityBound) {
+    case 'memory': return `${count}, short on memory (${gb(health.freeMemBytes)} available)`;
+    case 'load': return `${count}, too busy (load ${Number(health.loadavg?.[0] ?? 0).toFixed(1)} on ${health.cpus ?? '?'} cores)`;
+    case 'ceiling': return `${count}, its own limit`;
+    default: return count;
+  }
 }
