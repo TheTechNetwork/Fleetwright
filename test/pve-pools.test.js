@@ -567,9 +567,9 @@ test('a token that can do more than the fleet needs is reported, by path and pri
   const wide = wideOf({
     '/pool/fleetwright': { 'VM.Allocate': 1, 'VM.Clone': 1 },
     '/': { 'Sys.Audit': 1, 'Permissions.Modify': 1, 'Sys.Modify': 1 },
-    '/vms/104': { 'VM.Console': 1 },
+    '/vms/104': { 'VM.Migrate': 1 },
   }, 'fleetwright');
-  assert.deepEqual(wide, [{ path: '/', privs: ['Permissions.Modify', 'Sys.Modify'] }, { path: '/vms/104', privs: ['VM.Console'] }]);
+  assert.deepEqual(wide, [{ path: '/', privs: ['Permissions.Modify', 'Sys.Modify'] }, { path: '/vms/104', privs: ['VM.Migrate'] }]);
 });
 
 test('Proxmox records go to the Proxmox driver and out of the hub’s bundle, and its images are made there', { skip }, async () => {
@@ -744,4 +744,20 @@ test('a machine’s address is its guest agent’s IPv4 on net0, and nothing els
   assert.equal(agentAddress({ result: [nic('bc:24:11:00:00:09', ['10.200.0.5'])] }, net0), null);
   assert.equal(agentAddress({ result: [nic('bc:24:11:00:00:07', ['fe80::1'])] }, net0), null);
   assert.equal(agentAddress(answer, 'bridge=vmbr0'), null);
+});
+
+// A CONSOLE FROM AWAY dials a node this box holds for THAT person, and no
+// other address: a tunnel is never a way into the box's network. The phone
+// opens TLS through it, held to the cluster's CA, and signs in with its own
+// copy of the token; the box carries ciphertext.
+test('a console from away reaches only a cluster this box holds for that person', async () => {
+  const { Pools } = await import('../src/fleet/host/pools.js');
+  const { XoPools } = await import('../src/fleet/host/xo-pools.js');
+  const certs = certificates();
+  const pools = new Pools({ xo: new XoPools({}), pve: new PvePools(fast) });
+  pools.adopt(vaultWith(recordFor('10.69.10.10:8006', certs.ca)));
+  assert.deepEqual(pools.consoleAddress(OWNER, '10.69.10.10:8006'), { host: '10.69.10.10', port: 8006 });
+  assert.equal(pools.consoleAddress('sam@example.com', '10.69.10.10:8006'), null, 'another person’s console through this box');
+  assert.equal(pools.consoleAddress(OWNER, '10.69.10.11:8006'), null, 'an address this box holds nothing at');
+  assert.equal(pools.consoleAddress(OWNER, '10.69.10.10:22'), null, 'another port at the node');
 });

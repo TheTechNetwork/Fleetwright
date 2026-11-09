@@ -70,7 +70,7 @@ pinned() {
 }
 
 # EVERY PRIVILEGE, by where it applies (src/fleet/host/pve-pools.js, PVE_*_PRIVS).
-ROLE_PRIVS="VM.Allocate VM.Clone VM.Audit VM.PowerMgmt VM.Config.CPU VM.Config.Memory VM.Config.Network VM.Config.Options VM.Config.HWType VM.Config.Cloudinit Pool.Audit VM.GuestAgent.Audit"
+ROLE_PRIVS="VM.Allocate VM.Clone VM.Audit VM.PowerMgmt VM.Config.CPU VM.Config.Memory VM.Config.Network VM.Config.Options VM.Config.HWType VM.Config.Cloudinit Pool.Audit VM.GuestAgent.Audit VM.Console"
 STORAGE_PRIVS="Datastore.AllocateSpace Datastore.Audit"
 NET_PRIVS="SDN.Use SDN.Audit"
 ROOT_PRIVS="Sys.Audit"
