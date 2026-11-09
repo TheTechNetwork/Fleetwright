@@ -42,7 +42,7 @@ function hostKeyBlob() {
  * A node over SSH, with a run of the setup the scenario describes: the steps
  * it says, then an error, the line, or nothing yet (`hangs`).
  *
- * @param {{ steps?: string[], parts?: string[], error?: string, hangs?: boolean }} scenario
+ * @param {{ steps?: string[], parts?: string[], error?: string, hangs?: boolean, resources?: any[], removed?: string[] }} scenario
  */
 function node(scenario) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-pve-node-'));
@@ -56,7 +56,7 @@ function node(scenario) {
   const state = path.join(dir, 'state');
   const asked = path.join(dir, 'asked');
   const steps = (scenario.steps ?? ['pool', 'user', 'token', 'fence', 'networks', 'image', 'line', 'done']).map((s) => `fleetwright-step: ${s}`);
-  const end = [...(scenario.parts ?? []).map((l) => `fleetwright-part: ${l}`), ...(scenario.error ? [`fleetwright-error: ${scenario.error}`] : [])];
+  const end = [...(scenario.removed ?? []).map((n) => `fleetwright-holder-removed: ${n}`), ...(scenario.parts ?? []).map((l) => `fleetwright-part: ${l}`), ...(scenario.error ? [`fleetwright-error: ${scenario.error}`] : [])];
   const lineFile = `${root}/.fleetwright-pve-line`;
   const config = path.join(dir, 'config.json');
   writeFileSync(config, JSON.stringify({ keys: [{ type: 'ssh-ed25519', blob }], password: ROOT_PASSWORD, log: logPath, poolPath: bin, root }));
@@ -65,6 +65,9 @@ function node(scenario) {
       (scenario.hangs ? `echo active > '${state}'\n` : scenario.error ? `echo failed > '${state}'\n` : `echo inactive > '${state}'\nprintf '%s\\n' '${LINE}' > '${lineFile}'\n`),
     systemctl: `echo "systemctl $*" >> '${asked}'\ncase "$1" in is-active) cat '${state}' 2>/dev/null || echo inactive;; stop) echo inactive > '${state}';; esac\n`,
     journalctl: `cat '${journal}' 2>/dev/null\n`,
+    // THE CLUSTER'S GUESTS, as the token-less root sees them, for the look
+    // that comes before a pin is asked for.
+    pvesh: `echo "pvesh $*" >> '${asked}'\nprintf '%s\\n' '${JSON.stringify(scenario.resources ?? [])}'\n`,
   };
   for (const [name, body] of Object.entries(tools)) {
     writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}`);
@@ -80,14 +83,17 @@ function node(scenario) {
     asked: () => (existsSync(asked) ? readFileSync(asked, 'utf8') : '').trim().split('\n').filter(Boolean),
     sshLog: () => (existsSync(logPath) ? readFileSync(logPath, 'utf8') : '').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)),
     lineLeft: () => existsSync(lineFile),
+    /** The file the pin was written to, as the script would read it, or null. */
+    holderJoin: () => (existsSync(`${root}/.fleetwright-holder-join`) ? JSON.parse(readFileSync(`${root}/.fleetwright-holder-join`, 'utf8')) : null),
   };
 }
 
-async function machine({ coordinatorUrl = /** @type {string|null} */ (FLEET) } = {}) {
+async function machine({ coordinatorUrl = /** @type {string|null} */ (FLEET), holderPin = /** @type {any} */ (undefined) } = {}) {
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const events = [];
   const setups = new XoSetups({
+    holderPin,
     signer: { publicJwk: keys.publicJwk, sign: (m) => sign(keys.privateJwk, m) },
     emit: (e) => events.push(e),
     stateDir: mkdtempSync(path.join(os.tmpdir(), 'pve-state-')),
@@ -291,4 +297,112 @@ test('the setup\'s options are checked, become the script\'s flags, and the scri
   for (const flag of optionArgs({ ...all, rebuildImage: false, noImage: true }).match(/--[a-z-]+/g) ?? []) {
     assert.ok(script.includes(`    ${flag})`), `the script does not read ${flag}`);
   }
+});
+
+
+// A MACHINE OF ITS OWN ON THE CLUSTER, asked for after Proxmox shipped
+// without one: "No holder vm". The pin is asked for only when the cluster has
+// none to keep, and goes to the node root-only, where the script reads it.
+test('the cluster’s own machine: a pin only when there is none, written root-only for the script', async () => {
+  /** @type {Array<[string, string]>} */
+  const asked = [];
+  const holderPin = async (/** @type {string} */ job, /** @type {string} */ address) => {
+    asked.push([job, address]);
+    return { ok: true, pin: '482913', hostId: 'holder-0a0b0c' };
+  };
+  const secret = 'ab'.repeat(32);
+  const n = node({ resources: [] });
+  const m = await machine({ holderPin });
+  const begun = await m.setups.beginPve({ address: NODE, pin: n.pin, actor: ACTOR });
+  assert.ok(begun.xosetup.can.includes('pve-holder'), 'a phone offers it only where the machine says it can');
+  const p = await phone(begun, n.pin, { options: { holder: true, holderSecret: secret, grants: { upgrades: false } } });
+  assert.equal((await m.setups.run({ job: begun.xosetup.job, sealed: p.sealed, actor: ACTOR })).ok, true);
+  assert.equal((await settled(m.setups, begun.xosetup.job)).state, 'done');
+  assert.deepEqual(asked, [[begun.xosetup.job, NODE]]);
+  assert.deepEqual(n.holderJoin(), { hostId: 'holder-0a0b0c', pin: '482913', secret, grants: { upgrades: false } });
+  assert.ok(n.asked().some((l) => l.startsWith('systemd-run') && / --holder-join \S*\/\.fleetwright-holder-join --line-file /.test(l)), n.asked().join('\n'));
+  assert.ok(!JSON.stringify(m.events).includes('482913'), 'the pin is never in the progress the coordinator relays');
+
+  // ONE THERE ALREADY: no pin, no file, and the script starts it if it is off.
+  const there = node({ resources: [{ type: 'qemu', vmid: 120, node: 'pve1', name: 'holder-0a0b0c', status: 'stopped', tags: 'fleetwright-holder' }] });
+  const again = await m.setups.beginPve({ address: NODE, pin: there.pin, actor: ACTOR });
+  const q = await phone(again, there.pin, { options: { holder: true } });
+  await m.setups.run({ job: again.xosetup.job, sealed: q.sealed, actor: ACTOR });
+  assert.equal((await settled(m.setups, again.xosetup.job)).state, 'done');
+  assert.equal(asked.length, 1, 'a setup run again spends no pin on a machine already there');
+  assert.ok(!there.asked().some((l) => l.includes('--holder-join')));
+});
+
+test('made again: the one there goes, and the fleet is told the name it had', async () => {
+  const holderPin = async () => ({ ok: true, pin: '482913', hostId: 'holder-1a1b1c' });
+  const n = node({ resources: [{ type: 'qemu', vmid: 120, node: 'pve1', name: 'holder-0a0b0c', status: 'running', tags: 'fleetwright-holder' }], removed: ['holder-0a0b0c', 'not-ours'] });
+  const m = await machine({ holderPin });
+  const begun = await m.setups.beginPve({ address: NODE, pin: n.pin, actor: ACTOR });
+  const p = await phone(begun, n.pin, { options: { holder: true, holderAgain: true } });
+  await m.setups.run({ job: begun.xosetup.job, sealed: p.sealed, actor: ACTOR });
+  assert.equal((await settled(m.setups, begun.xosetup.job)).state, 'done');
+  assert.ok(n.asked().some((l) => /--holder-join \S*\/\.fleetwright-holder-join --holder-again --line-file /.test(l)), n.asked().join('\n'));
+  assert.deepEqual(m.events.filter((e) => e.event === 'xosetup.holder-removed').map((e) => e.hostId), ['holder-0a0b0c'], 'only a name of the fleet’s shape, once');
+});
+
+test('asked for by a machine that cannot get a pin, or given none, nothing is started', async () => {
+  const n = node({ resources: [] });
+  const old = await machine();
+  const begun = await old.setups.beginPve({ address: NODE, pin: n.pin, actor: ACTOR });
+  assert.ok(!begun.xosetup.can.includes('pve-holder'));
+  const p = await phone(begun, n.pin, { options: { holder: true } });
+  await old.setups.run({ job: begun.xosetup.job, sealed: p.sealed, actor: ACTOR });
+  const end = await settled(old.setups, begun.xosetup.job);
+  assert.equal(end.state, 'failed');
+  assert.match(end.text, /cannot ask the fleet for the pin/);
+  const refusing = await machine({ holderPin: async () => ({ ok: false, text: 'This setup has asked for a pin 3 times already.' }) });
+  const b2 = await refusing.setups.beginPve({ address: NODE, pin: n.pin, actor: ACTOR });
+  const q = await phone(b2, n.pin, { options: { holder: true } });
+  await refusing.setups.run({ job: b2.xosetup.job, sealed: q.sealed, actor: ACTOR });
+  const e2 = await settled(refusing.setups, b2.xosetup.job);
+  assert.match(e2.text, /gave no pin for the cluster’s own machine: This setup has asked for a pin 3 times already/);
+  assert.ok(!n.asked().some((l) => l.startsWith('systemd-run')), 'nothing was started on the node');
+});
+
+test('the holder options are checked, and the script reads its flags and writes the same cloud-init as Xen Orchestra’s', async () => {
+  const { pveOptionsOf, startCommand, holdersIn, holderJoinCommand, HOLDER_JOIN_FILE } = await import('../src/fleet/host/pve-setup.js');
+  const { UPGRADE_RUNCMD, JOIN_RUNCMD } = await import('../src/fleet/host/vm-image.js');
+  const { holderCloudConfig } = await import('../src/fleet/host/xo-holder.js');
+  assert.deepEqual(pveOptionsOf({ holder: true, holderAgain: true, holderSecret: 'f'.repeat(64), grants: { upgrades: true, reboot: false } }).options, { holder: true, holderAgain: true, holderSecret: 'f'.repeat(64), grants: { upgrades: true, reboot: false } });
+  for (const [bad, said] of /** @type {Array<[any, RegExp]>} */ ([
+    [{ holderAgain: true }, /only while it is asked for/],
+    [{ holderSecret: 'f'.repeat(64) }, /not a secret/],
+    [{ holder: true, holderSecret: 'zz' }, /not a secret/],
+    [{ holder: 'yes' }, /yes or no/],
+    [{ holder: true, grants: { upgrades: 'no' } }, /yes or no/],
+  ])) assert.match(pveOptionsOf(bad).problem ?? '', said, JSON.stringify(bad));
+  // The flags only with the file: the script refuses one without the other.
+  assert.ok(!startCommand(FLEET, null, { holder: true, holderAgain: true }).includes('--holder'));
+  assert.ok(startCommand(FLEET, null, { holder: true, holderAgain: true }, true).includes(` --holder-join ${HOLDER_JOIN_FILE} --holder-again --line-file `));
+  // ITS OWN, AND ONLY ITS OWN: outside the pool, tagged, not a template.
+  const res = JSON.stringify([
+    { type: 'qemu', vmid: 130, name: 'holder-0a0b0c', status: 'running', tags: 'fleetwright-holder' },
+    { type: 'qemu', vmid: 131, name: 'planted', status: 'running', tags: 'fleetwright-holder', pool: 'fleetwright' },
+    { type: 'qemu', vmid: 132, name: 'tpl', template: 1, tags: 'fleetwright-holder' },
+    { type: 'lxc', vmid: 133, name: 'ct', tags: 'fleetwright-holder' },
+  ]);
+  assert.deepEqual(holdersIn(res), [{ vmid: 130, name: 'holder-0a0b0c', running: true }]);
+  assert.deepEqual(holdersIn('not json'), []);
+  assert.throws(() => holderJoinCommand({ hostId: 'build', pin: '482913' }), /not a name/);
+  assert.throws(() => holderJoinCommand({ hostId: 'holder-0a0b0c', pin: '48291; reboot' }), /not an enrolment pin/);
+  assert.match(holderJoinCommand({ hostId: 'holder-0a0b0c', pin: '482913' }), /^umask 077; printf %s [A-Za-z0-9+/=]+ \| base64 -d >\/root\/\.fleetwright-holder-join$/);
+  // THE SCRIPT: its flags, its step, the line it says a removed machine with,
+  // and the same first-boot lines as a Xen Orchestra pool's own machine.
+  const script = readFileSync(new URL('../install/fleetwright-pve-setup', import.meta.url), 'utf8');
+  for (const flag of ['--holder-join', '--holder-again']) assert.ok(script.includes(`    ${flag})`), `the script does not read ${flag}`);
+  assert.match(script, /^step holder$/m);
+  assert.match(script, /printf 'fleetwright-holder-removed: %s\\n'/);
+  assert.match(script, /role FleetwrightHolder "VM\.Audit"/);
+  const heredoc = (/** @type {string} */ tag) => new RegExp(`<<'${tag}'\\n([\\s\\S]*?)\\n${tag}\\n`).exec(script)?.[1];
+  assert.equal(heredoc('UPGRADE'), UPGRADE_RUNCMD);
+  assert.equal(heredoc('JOIN'), JOIN_RUNCMD);
+  const xo = holderCloudConfig({ hostId: 'holder-0a0b0c', pin: '482913', coordinatorUrl: FLEET, address: NODE });
+  assert.ok(xo.includes(UPGRADE_RUNCMD) && xo.includes(JOIN_RUNCMD), 'Xen Orchestra’s holder boots with other lines than these');
+  assert.match(script, /printf '#cloud-config\\nhostname: %s\\nwrite_files:\\n  - path: \/run\/fleetwright\/join\.json\\n'/);
+  assert.ok(xo.startsWith('#cloud-config\nhostname: holder-0a0b0c\nwrite_files:\n  - path: /run/fleetwright/join.json\n    permissions: \'0600\'\n    owner: root:root\n    content: |\n'));
 });

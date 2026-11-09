@@ -299,7 +299,9 @@ Finding each first, so it is safe to run again:
 5. the machine images: Debian 13's cloud image unless more are chosen, each
    pinned and checked, booted once to install Fleetwright from apt, left
    unjoined and turned into a template, one for each (below);
-6. one line, `fleetwright-pve:1:…`: the address, the token, the pool and the
+6. when asked for, a machine of its own (below): a fleet host cloned from
+   the Debian image outside the pool, which joins by itself;
+7. one line, `fleetwright-pve:1:…`: the address, the token, the pool and the
    cluster's CA. A web interface given a certificate of somebody's own is
    trusted as a browser would trust it when a public CA signed it (ACME), or
    by that certificate's file when the file holds its own root; any other is
@@ -383,6 +385,44 @@ and no box ever offered it.
 The snippets the images boot with, the privileges and the image pins are
 written in the script, which has no Fleetwright to import them from, and in
 `pve-pools.js`; `test/pve-pools.test.js` holds the two equal.
+
+### A machine of its own
+
+Asked for after Proxmox shipped without one: *"No holder vm"*. The same as
+a Xen Orchestra pool's (`hypervisors.md`, "A machine of its own"): a
+permanent fleet host on the cluster, so the fleet reaches it while the
+phone and the laptop that set it up are asleep. The setup's step `holder`
+makes it, as root, because here root runs the setup:
+
+- **From the Debian image**, or any of the pool's when there is none,
+  cloned in full onto the fleet's storage, and named as the fleet named it
+  (`holder-` and six hex).
+- **Outside the pool**, which is the one place the fleet's token cannot
+  reach into: it can neither change the machine nor remove it. It can see
+  it, by `VM.Audit` on that machine alone (role `FleetwrightHolder`), so the
+  phone can say it is there and running. A machine in the pool with the
+  tag is anybody's who may tag the pool's, and is never taken for it.
+- **On the bridge with no fence**, because it must reach the node's API and
+  the fleet, and the fence holds a machine to the internet alone.
+- **It joins with a pin and a name the fleet gave**: a box running the
+  setup asks for them as a policy job's box does (`holder-pin`), and a
+  phone setting the node up itself asks the coordinator directly
+  (`POST /api/holders`). Either writes them root-only to
+  `/root/.fleetwright-holder-join`, which the script reads and removes,
+  with the secret the phone made for it to ask to join with
+  (`src/fleet/protocol/holder-join.js`) and what it may do from chat. The
+  first-boot lines are Xen Orchestra's holder's, word for word.
+- **The pin goes after boot.** Two hours on, a timer removes the snippet
+  that held it and takes the cloud-init drive off at the machine's next
+  restart, as Xen Orchestra destroyed its drive. The pin lasts ten minutes
+  and is spent once; this is the rest.
+- **It holds nothing until you approve it.** Your phone asks, once it has
+  joined, whether it may manage this cluster, and then it holds the
+  cluster's token beside the box that set it up, and is asked first.
+
+Running the setup again keeps the one there and starts it if it is off, and
+asks for no pin. **Make it again** removes it, disk and all, tells the fleet
+the name it had so the host is retired, and makes a new one.
 
 ### Where a cluster shows
 
