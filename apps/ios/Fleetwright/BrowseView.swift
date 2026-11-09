@@ -120,6 +120,12 @@ struct BrowseView: View {
                     .disabled(!model.showsPage)
             }
         }
+        // OPENED WHEN THE SCREEN IS, AND NOT BEFORE. A NavigationLink builds
+        // its destination every time the page holding it is drawn, so a model
+        // that opened its socket as it was made opened one for every draw of
+        // the machine's page, and two of those used up a person's pages.
+        // Back on this screen after another tab, it opens again.
+        .task { model.begin() }
         .onDisappear { model.stop() }
     }
 
@@ -216,6 +222,12 @@ final class BrowseModel {
         self.session = session
         self.start = start
         self.typed = start?.absoluteString ?? ""
+    }
+
+    /// Open the socket and the proxy, unless they are open. No I/O happens
+    /// before this: see the screen's `.task`.
+    func begin() {
+        guard tunnel == nil else { return }
         restart()
     }
 
@@ -234,6 +246,9 @@ final class BrowseModel {
         // THE OLD WEB VIEW POINTS AT THE OLD PROXY: nothing loads on it now,
         // and the new one is made when the new proxy exists (BrowseWeb).
         web = nil
+        // And no proxy until the new one listens, so the web view is never
+        // made with the new tunnel's password and the old tunnel's port.
+        proxy = nil
         let t = BrowseTunnel(host: host, session: session)
         t.onEnd = { [weak self] why in Task { @MainActor in self?.ended(why) } }
         t.onRefused = { [weak self] why in Task { @MainActor in self?.refused = why } }
@@ -259,6 +274,9 @@ final class BrowseModel {
     func stop() {
         tunnel?.close()
         tunnel = nil
+        web = nil
+        connected = false
+        showsPage = false
     }
 
     private func ended(_ why: String) {
@@ -334,9 +352,12 @@ private struct BrowseWeb: UIViewRepresentable {
     /// the old, with its history: that history's pages came through a
     /// socket that is gone.
     func updateUIView(_ holder: UIView, context: Context) {
-        guard let proxy = model.proxy, let credential = model.credential, context.coordinator.endpoint != proxy else { return }
+        // A NEW TUNNEL, NOT A NEW PORT: a listener can be given the port the
+        // last one had, so the web view is made again for each tunnel, which
+        // its password names.
+        guard let proxy = model.proxy, let credential = model.credential, context.coordinator.made != credential.password else { return }
         context.coordinator.web?.removeFromSuperview()
-        context.coordinator.endpoint = proxy
+        context.coordinator.made = credential.password
         let store = WKWebsiteDataStore.nonPersistent()
         var through = ProxyConfiguration(httpCONNECTProxy: proxy)
         through.applyCredential(username: credential.user, password: credential.password)
@@ -357,7 +378,8 @@ private struct BrowseWeb: UIViewRepresentable {
     final class Delegate: NSObject, WKNavigationDelegate {
         let model: BrowseModel
         weak var web: WKWebView?
-        var endpoint: NWEndpoint?
+        /// The tunnel the web view was made for, by its proxy password.
+        var made: String?
         var credential: (user: String, password: String)?
         init(model: BrowseModel) { self.model = model }
 
@@ -369,12 +391,14 @@ private struct BrowseWeb: UIViewRepresentable {
 
         /// THE PROXY'S NAME AND PASSWORD, if the web view is asked for them
         /// rather than sending them: only for this screen's own proxy.
-        func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
+                     completionHandler: @escaping @MainActor @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
             let space = challenge.protectionSpace
             if space.isProxy(), space.host == "127.0.0.1", let credential, challenge.previousFailureCount == 0 {
-                return (.useCredential, URLCredential(user: credential.user, password: credential.password, persistence: .forSession))
+                completionHandler(.useCredential, URLCredential(user: credential.user, password: credential.password, persistence: .forSession))
+                return
             }
-            return (.performDefaultHandling, nil)
+            completionHandler(.performDefaultHandling, nil)
         }
     }
 }

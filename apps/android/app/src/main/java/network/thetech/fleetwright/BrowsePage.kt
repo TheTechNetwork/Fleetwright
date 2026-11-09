@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
+import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
 import android.webkit.WebResourceError
@@ -53,6 +54,7 @@ import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executor
 
@@ -305,16 +307,20 @@ internal class BrowseBridge(
                     .addProxyRule("127.0.0.1:$port")
                     .removeImplicitRules()
                     .build()
+                // SET BEFORE THE CALL: a screen closed while the override is
+                // being applied still takes it off (stop()).
+                proxied = true
                 ProxyController.getInstance().setProxyOverride(config, onMain) {
                     if (tunnel !== t) return@setProxyOverride
-                    proxied = true
                     generation += 1
                     connected = true
                     line = null
                     BrowseWords.url(typed, opens?.hosts ?: emptyList())?.let { load(it) }
                 }
             } catch (e: Exception) {
-                if (tunnel === t) ended(e.message ?: BrowseWords.COULD_NOT_CONNECT)
+                t.close()
+                // A timeout's own message is Kotlin's, not a sentence.
+                if (tunnel === t) ended(if (e is TimeoutCancellationException) BrowseWords.COULD_NOT_CONNECT else e.message ?: BrowseWords.COULD_NOT_CONNECT)
             }
         }
     }
@@ -335,7 +341,15 @@ internal class BrowseBridge(
 
     private fun dropWeb() {
         web?.let { w ->
-            runCatching { w.stopLoading(); w.clearCache(true); w.clearHistory(); w.destroy() }
+            runCatching {
+                w.stopLoading()
+                w.clearCache(true)
+                w.clearHistory()
+                // Off its parent first: destroying an attached web view is a
+                // complaint in the log and can outlive the screen.
+                (w.parent as? ViewGroup)?.removeView(w)
+                w.destroy()
+            }
         }
         web = null
         canGoBack = false

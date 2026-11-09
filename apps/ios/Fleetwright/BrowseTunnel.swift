@@ -45,6 +45,9 @@ final class BrowseTunnel: @unchecked Sendable {
     private var opens: Opens?
     private var next = 1
     private var streams: [Int: Conn] = [:]
+    /// Every connection the web view has made that is not yet a stream: still
+    /// sending its head, or being told 407. Cancelled with the rest.
+    private var unjoined: [ObjectIdentifier: NWConnection] = [:]
     /// The name and password this screen's web view is given for the proxy.
     let proxyUser = "fleetwright"
     let proxyPassword: String = {
@@ -73,6 +76,14 @@ final class BrowseTunnel: @unchecked Sendable {
     init(host: String, session: String?) {
         self.host = host
         self.session = session
+    }
+
+    /// A tunnel nobody closed still lets go of its socket and its listener.
+    deinit {
+        listener?.cancel()
+        task?.cancel(with: .goingAway, reason: nil)
+        for c in streams.values { c.client.cancel() }
+        for c in unjoined.values { c.cancel() }
     }
 
     /// Open the socket and the proxy, and wait until the machine agrees.
@@ -159,7 +170,15 @@ final class BrowseTunnel: @unchecked Sendable {
             answer(c.client, status: "502 Bad Gateway", body: why)
         case "data":
             guard let c = streams[stream], let encoded = frame["data"] as? String, let bytes = Data(base64Encoded: encoded) else { return }
-            c.client.send(content: bytes, completion: .contentProcessed { _ in })
+            // HANDED ON, THEN ACKNOWLEDGED: the machine reads no further ahead
+            // of this phone than its window (docs/browse.md, "How fast").
+            c.client.send(content: bytes, completion: .contentProcessed { [weak self] error in
+                guard error == nil, let self else { return }
+                self.queue.async {
+                    guard self.streams[stream] === c else { return }
+                    self.toFleet(["op": "ack", "stream": stream, "bytes": bytes.count])
+                }
+            })
         case "end":
             guard let c = streams.removeValue(forKey: stream) else { return }
             c.client.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in c.client.cancel() })
@@ -216,6 +235,7 @@ final class BrowseTunnel: @unchecked Sendable {
             return
         }
         let c = Conn(connection)
+        unjoined[ObjectIdentifier(connection)] = connection
         connection.start(queue: queue)
         readHead(c)
     }
@@ -228,9 +248,15 @@ final class BrowseTunnel: @unchecked Sendable {
             self.queue.async {
                 if let data { c.head.append(data) }
                 guard let end = c.head.range(of: Data("\r\n\r\n".utf8)) else {
-                    if done || error != nil || c.head.count > 16384 { c.client.cancel() } else { self.readHead(c) }
+                    if done || error != nil || c.head.count > 16384 {
+                        self.unjoined.removeValue(forKey: ObjectIdentifier(c.client))
+                        c.client.cancel()
+                    } else {
+                        self.readHead(c)
+                    }
                     return
                 }
+                self.unjoined.removeValue(forKey: ObjectIdentifier(c.client))
                 let rest = Data(c.head[end.upperBound...])
                 let lines = String(decoding: c.head[..<end.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")
                 c.head = Data()
@@ -276,6 +302,14 @@ final class BrowseTunnel: @unchecked Sendable {
         c.stream = stream
         streams[stream] = c
         toFleet(["op": "connect", "stream": stream, "host": target.host, "port": target.port])
+        // NOT FOR EVER: a machine that never answers for a connection frees
+        // it after thirty seconds, as Android does.
+        queue.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self, self.streams[stream] === c, !c.joined else { return }
+            self.streams.removeValue(forKey: stream)
+            self.toFleet(["op": "end", "stream": stream])
+            self.answer(c.client, status: "504 Gateway Timeout", body: BrowseWords.couldNotConnect)
+        }
     }
 
     /// `host:port`, `[v6]:port`, or a host alone on the default port.
@@ -333,6 +367,8 @@ final class BrowseTunnel: @unchecked Sendable {
         if why == nil { toFleet(["op": "close"]) }
         for c in streams.values { c.client.cancel() }
         streams = [:]
+        for c in unjoined.values { c.cancel() }
+        unjoined = [:]
         listener?.cancel()
         task?.cancel(with: .goingAway, reason: nil)
         let text = why ?? BrowseWords.closed

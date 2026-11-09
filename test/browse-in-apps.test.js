@@ -118,3 +118,38 @@ test('both say the same things', () => {
   assert.match(raw(`${IOS}ReasonWords.swift`), /"browse\.opened": "Page through a machine"/);
   assert.match(raw(`${KT}ReasonWords.kt`), /"browse\.opened" to "Page through a machine"/);
 });
+
+// WHAT THE REVIEW BEFORE MERGING FOUND, held here so it stays found.
+test('both acknowledge what they hand the web view, so the machine reads no further ahead', () => {
+  assert.match(iTunnel, /c\.client\.send\(content: bytes, completion: \.contentProcessed \{[\s\S]{0,300}?"op": "ack", "stream": stream, "bytes": bytes\.count/);
+  assert.match(aTunnel, /val ok = runCatching \{ c\.write\(bytes\) \}\.isSuccess[\s\S]{0,200}?put\("op", "ack"\)\.put\("stream", stream\)\.put\("bytes", bytes\.size\)/);
+});
+
+test('iOS opens nothing until the screen is shown, and answers the proxy challenge by the delegate method WebKit calls', () => {
+  // A NavigationLink builds its destination on every draw of the page that
+  // holds it: a model that opened its socket as it was made opened one for
+  // every draw.
+  const init = iView.slice(iView.indexOf('init(settings: Settings, host: String, session: String?, start: URL?) {'), iView.indexOf('func begin()'));
+  assert.ok(!/restart\(\)|open\(settings/.test(init), 'BrowseModel opens a socket as it is made');
+  assert.match(iView, /\.task \{ model\.begin\(\) \}/);
+  assert.match(iView, /func begin\(\) \{\s*guard tunnel == nil else \{ return \}/);
+  assert.match(iView, /didReceive challenge: URLAuthenticationChallenge,\s*completionHandler: @escaping/);
+  // A web view per tunnel, not per port, and never the new password with the old port.
+  assert.match(iView, /context\.coordinator\.made != credential\.password/);
+  assert.match(iView, /web = nil[\s\S]{0,200}?proxy = nil[\s\S]{0,40}?let t = BrowseTunnel/);
+  assert.match(iTunnel, /deinit \{/);
+});
+
+test('Android writes each connection on its own thread, never on the socket reader', () => {
+  assert.match(aTunnel, /val writer: ExecutorService = Executors\.newSingleThreadExecutor/);
+  const listener = aTunnel.slice(aTunnel.indexOf('private inner class Listener'));
+  // Every write the listener makes is handed to a connection's writer.
+  for (const m of listener.matchAll(/c\.write\(/g)) {
+    const before = listener.slice(Math.max(0, /** @type {number} */ (m.index) - 400), m.index);
+    assert.match(before, /c\.writer\.execute \{/, 'a write on the reader thread');
+  }
+  // The refusal's 502 goes before the waiting connection is let go.
+  assert.match(listener, /answer\(c\.socket, "502 Bad Gateway", why\)\s*c\.answered\.countDown\(\)/);
+  // The override is marked before it is applied, so a quick close clears it.
+  assert.match(aPage, /proxied = true\s*ProxyController\.getInstance\(\)\.setProxyOverride/);
+});

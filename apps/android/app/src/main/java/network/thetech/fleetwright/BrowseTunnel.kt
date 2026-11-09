@@ -19,6 +19,8 @@ import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -74,7 +76,19 @@ internal class BrowseTunnel(private val host: String, private val session: Strin
         @Volatile var joined = false
         /** Let go once the machine has answered for this stream, either way. */
         val answered = CountDownLatch(1)
-        fun write(bytes: ByteArray) = synchronized(this) { out.write(bytes); out.flush() }
+        /**
+         * WRITES GO ON THIS CONNECTION'S OWN THREAD, in order. They used to be
+         * made on OkHttp's one reader thread, so a web view that stopped
+         * reading one connection (a paused video) blocked that thread, and
+         * with it every other connection on the page and the frame that
+         * would have closed it.
+         */
+        val writer: ExecutorService = Executors.newSingleThreadExecutor { r -> Thread(r, "browse-write").apply { isDaemon = true } }
+        fun write(bytes: ByteArray) { out.write(bytes); out.flush() }
+        fun shut() {
+            writer.shutdown()
+            runCatching { socket.close() }
+        }
     }
 
     /** Open the socket and the proxy, and wait until the machine agrees. Answers the proxy's port and what it opens for you. */
@@ -162,7 +176,9 @@ internal class BrowseTunnel(private val host: String, private val session: Strin
             // Refused (answered already), ended, or no answer in time.
             if (!c.joined || streams[stream] !== c) {
                 if (streams.remove(stream, c)) send(JSONObject().put("op", "end").put("stream", stream))
-                runCatching { socket.close() }
+                // A refusal's 502 is written on the connection's own thread;
+                // closing after it, there, keeps it from being cut off.
+                runCatching { c.writer.execute { c.shut() } }.onFailure { c.shut() }
                 return
             }
             pump(stream, c, input)
@@ -205,7 +221,7 @@ internal class BrowseTunnel(private val host: String, private val session: Strin
             }
         } catch (_: Exception) { /* closed */ }
         if (streams.remove(stream, c)) send(JSONObject().put("op", "end").put("stream", stream))
-        runCatching { c.socket.close() }
+        c.shut()
     }
 
     /** A short answer from the proxy itself, then closed. */
@@ -226,7 +242,7 @@ internal class BrowseTunnel(private val host: String, private val session: Strin
         if (finished) return
         finished = true
         if (why == null) runCatching { send(JSONObject().put("op", "close")) }
-        for (c in streams.values) runCatching { c.socket.close() }
+        for (c in streams.values) c.shut()
         streams.clear()
         runCatching { server?.close() }
         runCatching { ws?.close(1000, null) }
@@ -250,9 +266,7 @@ internal class BrowseTunnel(private val host: String, private val session: Strin
                 "open" -> opened.complete(Unit)
                 "connected" -> {
                     val c = streams[stream] ?: return
-                    runCatching {
-                        if (c.tunnel) c.write("HTTP/1.1 200 Connection established\r\n\r\n".toByteArray())
-                    }
+                    if (c.tunnel) runCatching { c.writer.execute { runCatching { c.write("HTTP/1.1 200 Connection established\r\n\r\n".toByteArray()) } } }
                     if (c.pending.isNotEmpty()) {
                         var at = 0
                         while (at < c.pending.size) {
@@ -268,21 +282,38 @@ internal class BrowseTunnel(private val host: String, private val session: Strin
                     val c = streams.remove(stream) ?: return
                     val why = frame.optString("text").ifBlank { BrowseWords.COULD_NOT_CONNECT }
                     onRefused?.invoke(why)
-                    c.answered.countDown()
-                    answer(c.socket, "502 Bad Gateway", why)
+                    // The 502 first, on the connection's own thread, and only
+                    // then is the waiting connection let go to close it.
+                    runCatching {
+                        c.writer.execute {
+                            answer(c.socket, "502 Bad Gateway", why)
+                            c.answered.countDown()
+                        }
+                    }.onFailure { c.answered.countDown() }
                 }
                 "data" -> {
                     val c = streams[stream] ?: return
                     val bytes = runCatching { Base64.getDecoder().decode(frame.optString("data")) }.getOrNull() ?: return
-                    runCatching { c.write(bytes) }.onFailure {
-                        if (streams.remove(stream, c)) send(JSONObject().put("op", "end").put("stream", stream))
+                    runCatching {
+                        c.writer.execute {
+                            // HANDED ON, THEN ACKNOWLEDGED: the machine reads no
+                            // further ahead of this phone than its window
+                            // (docs/browse.md, "How fast").
+                            val ok = runCatching { c.write(bytes) }.isSuccess
+                            if (ok && streams[stream] === c) {
+                                send(JSONObject().put("op", "ack").put("stream", stream).put("bytes", bytes.size))
+                            } else if (!ok && streams.remove(stream, c)) {
+                                send(JSONObject().put("op", "end").put("stream", stream))
+                                c.shut()
+                            }
+                        }
                     }
                 }
                 "end" -> {
                     val c = streams.remove(stream) ?: return
                     c.answered.countDown()
-                    runCatching { c.socket.shutdownOutput() }
-                    runCatching { c.socket.close() }
+                    // After whatever is still queued for it has been written.
+                    runCatching { c.writer.execute { c.shut() } }.onFailure { c.shut() }
                 }
                 "closed" -> finish(frame.optString("text").ifBlank { BrowseWords.CLOSED })
             }
