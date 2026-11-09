@@ -50,6 +50,11 @@ struct AddProxmoxView: View {
     @AppStorage("proxmox-options") private var optionsText = ""
     @State private var options = ProxmoxOptions()
     @State private var optionsOpen = false
+    /// WHAT THE NODE HAS TO CHOOSE FROM (ProxmoxSSH.choicesFind), read once
+    /// the node is signed in to; nil before, and the fields are typed in.
+    @State private var choices: ProxmoxSSH.Choices?
+    @State private var choicesBusy = false
+    @State private var choicesText = ""
     /// The key the node answered with, waiting on the person's word.
     @State private var offered: String?
     /// The key the person checked, which every connection holds the node to.
@@ -83,7 +88,7 @@ struct AddProxmoxView: View {
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
                     .disabled(since != nil || kept)
-                    .onChange(of: node) { _, _ in offered = nil; trusted = nil }
+                    .onChange(of: node) { _, _ in offered = nil; trusted = nil; choices = nil; choicesText = "" }
                 SecureField("Its root password", text: $password)
                     .disabled(since != nil || kept)
                 TextField("VM IDs, such as 9000-9099 (optional)", text: $vmids)
@@ -120,12 +125,42 @@ struct AddProxmoxView: View {
                         Text("Stable").tag("stable")
                         Text("Rolling").tag("rolling")
                     }
-                    TextField("Storage (found by itself when empty)", text: $options.storage)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Bridge (vmbr0 when empty)", text: $options.bridge)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    // PICKED FROM WHAT THE NODE HAS, once it is read; typed
+                    // in only when it could not be.
+                    if let c = choices, !c.storages.isEmpty {
+                        Picker("Storage", selection: $options.storage) {
+                            Text(ProxmoxWords.storageAuto).tag("")
+                            ForEach(c.storages, id: \.id) { Text(ProxmoxWords.storage($0)).tag($0.id) }
+                            if !options.storage.isEmpty && !c.storages.contains(where: { $0.id == options.storage }) {
+                                Text(options.storage).tag(options.storage)
+                            }
+                        }
+                    } else {
+                        TextField("Storage (found by itself when empty)", text: $options.storage)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    if let c = choices, !c.bridges.isEmpty {
+                        Picker("Bridge", selection: $options.bridge) {
+                            Text(ProxmoxWords.bridgeAuto).tag("")
+                            ForEach(c.bridges, id: \.name) { Text(ProxmoxWords.bridge($0)).tag($0.name) }
+                            if !options.bridge.isEmpty && !c.bridges.contains(where: { $0.name == options.bridge }) {
+                                Text(options.bridge).tag(options.bridge)
+                            }
+                        }
+                    } else {
+                        TextField("Bridge (vmbr0 when empty)", text: $options.bridge)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+                    if choices == nil {
+                        Button(choicesBusy ? ProxmoxWords.choicesReading : ProxmoxWords.choicesRead) { Task { await readChoices() } }
+                            .disabled(choicesBusy || nodeKey.isEmpty || password.isEmpty || since != nil)
+                            .frame(minHeight: 44)
+                        if !choicesText.isEmpty {
+                            Text(choicesText).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        }
+                    }
                     Picker("Access expires after", selection: $options.expireDays) {
                         ForEach(ProxmoxOptions.lifetimes, id: \.self) { Text("\($0) days").tag($0) }
                     }
@@ -313,6 +348,37 @@ struct AddProxmoxView: View {
         .onDisappear { password = "" }
     }
 
+    /// WHAT THE NODE HAS TO CHOOSE FROM, over the SSH the setup starts on:
+    /// its key checked as Start checks it, then one read-only command. A key
+    /// not checked before is offered below and asked again after.
+    @MainActor
+    private func readChoices() async {
+        choicesBusy = true
+        defer { choicesBusy = false }
+        choicesText = ""
+        do {
+            if trusted == nil {
+                let answered = try await ProxmoxSSH.hostKey(nodeKey)
+                guard known[nodeKey] == answered else {
+                    offered = answered
+                    choicesText = ProxmoxWords.choicesKey
+                    return
+                }
+                trusted = answered
+            }
+            guard let key = trusted else { return }
+            let (status, out) = try await ProxmoxSSH.run(nodeKey, fingerprint: key, password: password, command: ProxmoxSSH.choicesFind)
+            let read = ProxmoxSSH.choices(in: out)
+            if status == 0 && !(read.storages.isEmpty && read.bridges.isEmpty) {
+                choices = read
+            } else {
+                choicesText = ProxmoxWords.choicesNone
+            }
+        } catch {
+            choicesText = ProxmoxWords.choicesFailed(error.localizedDescription)
+        }
+    }
+
     /// PHONE FIRST: the node's key asked for, which is also whether this
     /// phone reaches it at all. A node it cannot reach goes to a machine that
     /// can. A key checked before goes straight on; any other key is shown to
@@ -477,6 +543,21 @@ enum ProxmoxWords {
     static let firewallHint = "Blocks traffic into the nodes except the web interface, SSH and cluster traffic."
     static let holderHint = "A machine on the cluster that stays up and manages it for your fleet, so it doesn’t depend on this phone or a laptop being awake. You approve it once it joins."
     static let edgeHint = "Filters what the cluster’s machines do for threats: the names they look up, and what its threat rules match. Needs about 4 GB free on the node while it’s built."
+    // WHAT THE NODE HAS TO CHOOSE FROM (ProxmoxSSH.choicesFind).
+    static let choicesRead = "List the node’s storage and bridges"
+    static let choicesReading = "Reading the node…"
+    static let choicesKey = "Check the node’s key below, then list them again."
+    static let choicesNone = "The node listed no storage or bridges. Type them in, or leave them empty."
+    static func choicesFailed(_ why: String) -> String { "Couldn’t read the node: \(why)" }
+    static let storageAuto = "Found by itself"
+    static let bridgeAuto = "vmbr0"
+    static func storage(_ s: ProxmoxSSH.Storage) -> String {
+        let free = s.free.map { " · " + ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) + " free" } ?? ""
+        return "\(s.id) · \(s.type)\(s.shared ? ", shared" : "")\(free)"
+    }
+    static func bridge(_ b: ProxmoxSSH.Bridge) -> String {
+        [b.name, b.address, b.comment].compactMap { $0 }.joined(separator: " · ")
+    }
     static let edgeBlock = "Drop what the threat rules match"
     static let edgeBlockHint = "Otherwise it logs it and lets it through."
     static let edgePair = "Two edge routers"

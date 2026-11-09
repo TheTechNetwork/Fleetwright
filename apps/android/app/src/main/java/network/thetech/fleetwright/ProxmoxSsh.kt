@@ -90,6 +90,42 @@ internal object ProxmoxSsh {
     /** The node's first address, which the line will carry with port 8006. */
     const val ADDRESS_FIND = "hostname -I | awk '{print \$1}'"
 
+    /**
+     * WHAT THE NODE HAS TO CHOOSE FROM: its disk storages and its bridges, as
+     * pve-setup.js's CHOICES_FIND asks, so the options are picked from a list
+     * rather than typed blind. test/pve-choices-in-apps.test.js holds it equal.
+     */
+    const val CHOICES_FIND = "n=\"\$(hostname)\"; printf 'storage: '; pvesh get \"/nodes/\$n/storage\" --content images --enabled 1 --output-format json; echo; printf 'bridges: '; pvesh get \"/nodes/\$n/network\" --type any_bridge --output-format json; echo"
+
+    data class Storage(val id: String, val type: String, val free: Long?, val shared: Boolean)
+    data class Bridge(val name: String, val address: String?, val comment: String?)
+    data class Choices(val storages: List<Storage> = emptyList(), val bridges: List<Bridge> = emptyList())
+
+    /** [CHOICES_FIND]'s answer, read as pve-setup.js's choicesOf reads it. */
+    fun choicesIn(out: String): Choices {
+        fun line(key: String): List<org.json.JSONObject> {
+            val row = out.lines().firstOrNull { it.startsWith("$key: ") }?.removePrefix("$key: ") ?: return emptyList()
+            val a = runCatching { org.json.JSONArray(row) }.getOrNull() ?: return emptyList()
+            return (0 until a.length()).mapNotNull { a.optJSONObject(it) }
+        }
+        fun number(o: org.json.JSONObject, k: String): Long? = if (o.has(k)) o.optString(k).toDoubleOrNull()?.toLong() else null
+        val storages = line("storage").mapNotNull { s ->
+            val id = s.optString("storage")
+            if (!ProxmoxOptions.STORAGE.matches(id) || (number(s, "active") ?: 1L) == 0L) null
+            else Storage(id, s.optString("type"), number(s, "avail"), number(s, "shared") == 1L)
+        }.sortedBy { it.id }
+        val bridges = line("bridges").mapNotNull { b ->
+            val name = b.optString("iface")
+            if (!ProxmoxOptions.BRIDGE.matches(name)) null
+            else Bridge(
+                name,
+                listOf(b.optString("cidr"), b.optString("address")).firstOrNull { it.isNotEmpty() },
+                b.optString("comments").trim().takeIf { it.isNotEmpty() }?.take(80),
+            )
+        }.sortedBy { it.name }
+        return Choices(storages, bridges)
+    }
+
     /** Its own machines in [HOLDER_FIND]'s answer: outside the pool, not templates, tagged `fleetwright-holder`. */
     fun holdersIn(out: String): List<String> {
         val all = runCatching { org.json.JSONArray(out.trim()) }.getOrNull() ?: return emptyList()

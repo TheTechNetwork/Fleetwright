@@ -63,6 +63,36 @@ enum ProxmoxSSH {
     /// The node's first address, which the line will carry with port 8006.
     static let addressFind = "hostname -I | awk '{print $1}'"
 
+    /// WHAT THE NODE HAS TO CHOOSE FROM: its disk storages and its bridges,
+    /// as pve-setup.js's CHOICES_FIND asks, so the options are picked from a
+    /// list rather than typed blind. test/pve-choices-in-apps.test.js holds it equal.
+    static let choicesFind = #"n="$(hostname)"; printf 'storage: '; pvesh get "/nodes/$n/storage" --content images --enabled 1 --output-format json; echo; printf 'bridges: '; pvesh get "/nodes/$n/network" --type any_bridge --output-format json; echo"#
+
+    struct Storage: Hashable { let id: String; let type: String; let free: Int64?; let shared: Bool }
+    struct Bridge: Hashable { let name: String; let address: String?; let comment: String? }
+    struct Choices: Equatable { var storages: [Storage] = []; var bridges: [Bridge] = [] }
+
+    /// choicesFind's answer, read as pve-setup.js's choicesOf reads it.
+    static func choices(in out: String) -> Choices {
+        func line(_ key: String) -> [[String: Any]] {
+            let row = out.split(separator: "\n").first { $0.hasPrefix("\(key): ") }.map { String($0.dropFirst(key.count + 2)) } ?? ""
+            return (try? JSONSerialization.jsonObject(with: Data(row.utf8)) as? [[String: Any]]) ?? []
+        }
+        func number(_ v: Any?) -> Int64? { (v as? NSNumber)?.int64Value ?? (v as? String).flatMap { Int64($0) } }
+        let storages = line("storage").compactMap { s -> Storage? in
+            guard let id = s["storage"] as? String, id.range(of: ProxmoxOptions.storagePattern, options: .regularExpression) != nil,
+                  number(s["active"]) ?? 1 != 0 else { return nil }
+            return Storage(id: id, type: s["type"] as? String ?? "", free: number(s["avail"]), shared: number(s["shared"]) == 1)
+        }.sorted { $0.id < $1.id }
+        let bridges = line("bridges").compactMap { b -> Bridge? in
+            guard let name = b["iface"] as? String, name.range(of: ProxmoxOptions.bridgePattern, options: .regularExpression) != nil else { return nil }
+            let address = [b["cidr"], b["address"]].compactMap { $0 as? String }.first { !$0.isEmpty }
+            let comment = (b["comments"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return Bridge(name: name, address: address, comment: comment?.isEmpty == false ? String(comment!.prefix(80)) : nil)
+        }.sorted { $0.name < $1.name }
+        return Choices(storages: storages, bridges: bridges)
+    }
+
     /// Its own machines in holderFind's answer: outside the pool, not
     /// templates, tagged `fleetwright-holder`.
     static func holders(in out: String) -> [String] {

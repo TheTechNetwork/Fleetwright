@@ -139,6 +139,17 @@ Opening the screen again follows a run it left.
 When the phone reaches the node, it does the rest itself, with no machine
 of the fleet in the path (`ProxmoxSSH.swift`, `ProxmoxSsh.kt`):
 
+**Storage and bridge are picked, not typed.** Asked for: *"Why not list
+networks and storage instead of asking blindly"*. Under the options, **List
+the node's storage and bridges** checks the node's key as Set it up does,
+signs in, and runs one read-only command (`pve-setup.js`, `CHOICES_FIND`):
+the storages on that node that hold disks and are enabled, with what is free
+and whether each is shared, and its bridges, with the node's address and
+comment on each. The two fields become lists, still starting at **Found by
+itself** and **vmbr0**, which is what leaving them empty always meant. A
+node that lists nothing, or cannot be read, keeps the fields to type in,
+and so does the route through a machine, where the phone never signs in.
+
 1. **The host key** is read and nothing is sent. The phone shows
    its fingerprint, as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`
    prints it on the node's console, and the person says it matches. It is
