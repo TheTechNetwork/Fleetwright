@@ -1,7 +1,7 @@
 {
   "name": "fleetwright",
   "version": "0.4.16",
-  "description": "Self-hosted Claude Code session manager, and the multi-host control plane around it \u2014 sandboxes, scheduling, and a phone that can reach any of it.",
+  "description": "Self-hosted Claude Code session manager, and the multi-host control plane around it — sandboxes, scheduling, and a phone that can reach any of it.",
   "type": "module",
   "private": true,
   "license": "MIT",
@@ -26,6 +26,7 @@
     "browse": "node scripts/browse.mjs",
     "nojs": "node scripts/nojs.mjs",
     "vnc": "node scripts/build-vnc.mjs",
+    "term": "node scripts/build-term.mjs",
     "verify": "./scripts/verify.sh"
   },
   "devDependencies": {
@@ -33,6 +34,8 @@
     "@modelcontextprotocol/client": "2.4.0",
     "@novnc/novnc": "1.7.0",
     "@types/node": "26.6.6",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "esbuild": "0.28.2",
     "js-yaml": "5.5.0",
     "playwright": "1.65.0",
@@ -47,10 +50,10 @@
   "cloudflare": {
     "bindings": {
       "FLEETWRIGHT_API_TOKEN": {
-        "description": "Break-glass admin credential, and a fresh deploy's first way in \u2014 until sign-in is configured, a coordinator without it refuses every request. Generate one: `openssl rand -hex 24`. It can stop every session and revoke every host; phones sign in and are issued credentials of their own."
+        "description": "Break-glass admin credential, and a fresh deploy's first way in — until sign-in is configured, a coordinator without it refuses every request. Generate one: `openssl rand -hex 24`. It can stop every session and revoke every host; phones sign in and are issued credentials of their own."
       },
       "FLEETWRIGHT_AUTH_ALLOW": {
-        "description": "Who may sign in: comma-separated full addresses or `@domain`, e.g. `you@gmail.com,@example.org`. Empty admits nobody, deliberately \u2014 leave this empty and no phone can sign in until you set it later with `wrangler secret put`. Sign-in also needs two public `[vars]` copied into worker/wrangler.toml \u2014 see [docs/coordinator-deploy.md](https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md)."
+        "description": "Who may sign in: comma-separated full addresses or `@domain`, e.g. `you@gmail.com,@example.org`. Empty admits nobody, deliberately — leave this empty and no phone can sign in until you set it later with `wrangler secret put`. Sign-in also needs two public `[vars]` copied into worker/wrangler.toml — see [docs/coordinator-deploy.md](https://github.com/TheTechNetwork/Fleetwright/blob/main/docs/coordinator-deploy.md)."
       }
     }
   }

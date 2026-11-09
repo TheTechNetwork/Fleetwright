@@ -583,7 +583,14 @@ test('the app flow is one tap on both phones, and the paste flow is not', () => 
   // bundled with the app and never goes to an address, so no provider's login
   // can ever be drawn in it. Every other file still may not have one.
   const consolePage = read('apps/android/app/src/main/java/network/thetech/fleetwright/ConsolePage.kt');
-  assert.ok(!/\bWebView\b/.test(code(android.replace(consolePage, ''))), 'Android must not draw it either');
+  // AND THE SSH TERMINAL (TerminalPage.kt), for the same reason: the page
+  // bundled with the app (assets/term.html) and nowhere else, asking for
+  // nothing; the key is the phone's and never reaches it.
+  const terminalPage = read('apps/android/app/src/main/java/network/thetech/fleetwright/TerminalPage.kt');
+  for (const page of [consolePage, terminalPage]) {
+    assert.match(code(page), /override fun shouldOverrideUrlLoading\(view: WebView, request: WebResourceRequest\) = true/);
+  }
+  assert.ok(!/\bWebView\b/.test(code(android.replace(consolePage, '').replace(terminalPage, ''))), 'Android must not draw it either');
   assert.match(code(consolePage), /shouldOverrideUrlLoading\(view: WebView, request: WebResourceRequest\) = true/);
   assert.ok(!/\bloadUrl\(/.test(code(consolePage)), 'the console web view goes to an address');
 

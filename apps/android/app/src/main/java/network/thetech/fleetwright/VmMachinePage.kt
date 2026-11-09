@@ -79,6 +79,8 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
     // of the pool this machine is on (XoHandoff), read once per address: the
     // console in the app is offered only then (C-2).
     var console by remember(name) { mutableStateOf(false) }
+    // The terminal in the app, open (TerminalPage).
+    var terminal by remember(name) { mutableStateOf(false) }
     // A POOL'S TOKEN OR A CLUSTER'S RECORD, kept on this phone: the console
     // opens in the app only then (C-2).
     val holdsHere = remember(machine?.address, machine?.onProxmox) {
@@ -126,6 +128,10 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
     LaunchedEffect(name) { load() }
 
     val onScreen = machine
+    if (terminal && onScreen?.ip != null) {
+        TerminalPage(settings, onScreen.name, onScreen.address, onScreen.ip) { terminal = false }
+        return
+    }
     if (console && onScreen != null && onScreen.onProxmox && onScreen.node != null && onScreen.vmid != null) {
         ConsolePage(settings, onScreen.address, onScreen.vm ?: onScreen.name, onScreen.name, proxmox = onScreen.node to onScreen.vmid) { console = false }
         return
@@ -228,6 +234,12 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                     // Its guest agent reports the address once it is up; the
                     // agent is mechanism, the boot is the news.
                     Hint("No address yet. It appears once the machine boots.")
+                }
+                // A TERMINAL IN THE APP, from home and from away (TerminalPage):
+                // for a running machine whose address its guest agent has said.
+                // The same as iOS.
+                if (m.state == "Running" && m.ip != null) {
+                    OpenRow(TerminalWords.OPEN) { terminal = true }
                 }
                 // IN THE APP where this phone holds the pool's token, for a machine
                 // that is running (a stopped one has no screen); Xen Orchestra's

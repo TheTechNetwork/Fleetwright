@@ -293,6 +293,34 @@ page gives the command, `ssh fleetwright@<address>`, once its guest agent has
 said the address. A machine on the uplink is reachable only from behind the
 edge router; for SSH from your own network, start it on one of yours.
 
+### SSH in the app
+
+Asked for: "if it's not on local network should be able to reach it somehow
+as well as ssh". **A running machine whose address its guest agent has said
+offers Open a terminal**, on both phones, on Xen Orchestra and Proxmox VE
+alike: a terminal in the app (xterm.js, the page `src/term/page.js` built by
+`scripts/build-term.mjs`), signed in as `fleetwright` over SSH.
+
+- **The phone's own key.** Each phone makes an Ed25519 key the first time
+  (`PhoneSSHKey.swift`, `SshTerminal.kt`), keeps it (the Keychain, this
+  device only; Android's encrypted secrets) and never hands it to the page.
+  Its public half goes in your vault as an item of its own,
+  `SSH_KEY_PHONE.<id>`, beside the keys you pasted: the vault gives nothing
+  back to a phone, so adding to the pasted list would mean replacing it. The
+  boxes take both (`isSshKeysItem`). Add it from the terminal when a machine
+  refuses the phone's key, or under You › SSH keys › This phone. **A machine
+  made after that takes it**; one already running keeps what it was made with.
+- **On the machine's network first, then from away.** The phone dials the
+  machine's address itself. When that does not answer, it goes through one of
+  your machines that holds the pool: the console tunnel names the machine
+  (`machine=vm-…`, `openapi.json`), and the box dials that machine's address,
+  port 22, only for a running machine made for the person asking
+  (`sshAddress`, `sshTarget`). The phone speaks SSH through those bytes, so
+  the box and the fleet carry SSH's ciphertext.
+- **The host key is held to the first one the machine showed**, by its name.
+  Each machine is made fresh under a name nobody had, so a different key later
+  is refused with nothing sent.
+
 **The network.** New session › Where offers the pool's networks the fleet may
 use besides the default, *Default (internet only)*. A network of yours puts the
 machine beside your own machines, which is what SSH from your laptop needs and

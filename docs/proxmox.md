@@ -578,5 +578,3 @@ it answers `notHere`, and an `unreachable` from either is kept.
   Orchestra's).
 - Machines kept ready (`vmStandby`), which have not been tried against a
   cluster.
-- SSH to a machine from away. On its own network the page gives the command
-  once the guest agent has said the address.

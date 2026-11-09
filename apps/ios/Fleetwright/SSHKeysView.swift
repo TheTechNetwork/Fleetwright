@@ -21,6 +21,8 @@ struct SSHKeysView: View {
     @State private var busy = false
     @State private var message = ""
     @State private var failed = false
+    /// Whether this phone's own key is in the vault: nil before the vault has said.
+    @State private var phoneKept: Bool?
 
     static let secretName = "SSH_AUTHORIZED_KEYS"
 
@@ -78,6 +80,22 @@ struct SSHKeysView: View {
                 Text("A machine made on your hypervisor after you keep them lets you in as fleetwright, with sudo: "
                      + "ssh fleetwright@ and its address, on its page under Machines. Machines already running keep what they were made with.")
             }
+            // THIS PHONE'S OWN KEY, for the terminal in the app
+            // (SSHTerminalView): made here, kept here, its public half in the
+            // vault as an item of its own, so the keys above stay as pasted.
+            Section {
+                if phoneKept == true {
+                    Text(TerminalWords.phoneKept).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                } else if phoneKept == false {
+                    Button(busy ? TerminalWords.adding : TerminalWords.addKey) { Task { await addPhoneKey() } }
+                        .disabled(busy)
+                        .frame(minHeight: 44)
+                }
+            } header: {
+                Text(TerminalWords.phoneHeader).fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+            } footer: {
+                Text(TerminalWords.phoneFooter)
+            }
         }
         .scrollContentBackground(.hidden)
         .background(Design.Palette.bg)
@@ -91,7 +109,22 @@ struct SSHKeysView: View {
         // A refusal is cannot tell, and leaves the line saying so.
         guard let contents = try? await vault.list(fleet) else { return }
         keptAt = contents.items.first { $0.name == "secret:\(Self.secretName)" }?.at
+        phoneKept = contents.items.contains { $0.name == "secret:\(PhoneSSHKey.itemName())" }
         answered = true
+    }
+
+    @MainActor
+    private func addPhoneKey() async {
+        busy = true
+        defer { busy = false }
+        do {
+            message = try await PhoneSSHKey.add(settings)
+            failed = false
+        } catch {
+            message = error.localizedDescription
+            failed = true
+        }
+        await load()
     }
 
     @MainActor
