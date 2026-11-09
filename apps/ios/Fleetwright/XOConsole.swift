@@ -14,7 +14,24 @@ import Network
 ///
 /// BYTES IN, BYTES OUT. Nothing here speaks VNC; noVNC does, in the page
 /// (src/vnc/page.js), and this carries its frames. Nothing is logged.
-final class XOConsole: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+/// What the console screen drives (VMConsoleView): Xen Orchestra's socket or
+/// Proxmox VE's (ProxmoxConsole). Bytes in, bytes out, and how it ended.
+protocol ConsoleSocket: AnyObject {
+    var onOpen: (@Sendable () -> Void)? { get set }
+    var onData: (@Sendable (Data) -> Void)? { get set }
+    var onEnd: (@Sendable (_ why: String, _ wrongCertificate: Bool) -> Void)? { get set }
+    /// A VNC password the page is to answer with, once known; Xen
+    /// Orchestra's console asks none.
+    var password: String? { get }
+    func open()
+    func send(_ data: Data)
+    func close()
+}
+
+final class XOConsole: NSObject, URLSessionWebSocketDelegate, ConsoleSocket, @unchecked Sendable {
+    /// Xen Orchestra's console asks for no VNC password: the token was its sign-in.
+    var password: String? { nil }
+
 
     private let request: URLRequest
     private let pin: String

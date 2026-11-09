@@ -84,6 +84,8 @@ enum ProxmoxThroughHandoff {
         }
         do {
             _ = try await PhoneVault(settings: settings).keepHypervisor(Fleet(settings: settings), address: record.address, record: record.json)
+            // KEPT HERE TOO, for the console in the app (ProxmoxKept).
+            ProxmoxKept.keep(record)
             forget(job: job)
             return .kept(record.address)
         } catch {

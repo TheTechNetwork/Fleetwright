@@ -24,7 +24,14 @@ struct VMConsoleView: View {
 
     init(address: String, vm: String, name: String, settings: Settings, away: Bool = false) {
         self.name = name
-        _model = State(initialValue: ConsoleModel(address: address, vm: vm, name: name, settings: settings, away: away))
+        _model = State(initialValue: ConsoleModel(address: address, target: .xo(vm: vm), name: name, settings: settings, away: away))
+    }
+
+    /// A Proxmox VE machine's screen, by node and number, opened with the
+    /// cluster's record this phone keeps (ProxmoxKept).
+    init(proxmox address: String, node: String, vmid: Int, name: String, settings: Settings) {
+        self.name = name
+        _model = State(initialValue: ConsoleModel(address: address, target: .proxmox(node: node, vmid: vmid), name: name, settings: settings))
     }
 
     var body: some View {
@@ -104,8 +111,16 @@ final class ConsoleModel {
     static let base = "https://console.fleetwright.invalid/"
 
     let address: String
-    let vm: String
+    let target: Target
     let name: String
+
+    /// Whose console: Xen Orchestra's by its VM id, or Proxmox VE's by node
+    /// and number.
+    enum Target {
+        case xo(vm: String)
+        case proxmox(node: String, vmid: Int)
+    }
+
     /// What the console is doing, said above it; nil once the screen shows.
     private(set) var line: String? = nil
     private(set) var troubled = false
@@ -113,7 +128,7 @@ final class ConsoleModel {
     private(set) var connected = false
 
     @ObservationIgnored weak var web: WKWebView?
-    @ObservationIgnored private var socket: XOConsole?
+    @ObservationIgnored private var socket: ConsoleSocket?
     @ObservationIgnored private var pageReady = false
     @ObservationIgnored private let settings: Settings
     /// Through one of your machines, from the first try (a page read away)
@@ -126,9 +141,9 @@ final class ConsoleModel {
     /// The machine carrying it from away, said above the screen.
     private(set) var via: String? = nil
 
-    init(address: String, vm: String, name: String, settings: Settings, away: Bool = false) {
+    init(address: String, target: Target, name: String, settings: Settings, away: Bool = false) {
         self.address = address
-        self.vm = vm
+        self.target = target
         self.name = name
         self.settings = settings
         self.away = away
@@ -192,37 +207,95 @@ final class ConsoleModel {
 
     private func open() {
         guard pageReady, socket == nil else { return }
-        // The record the pool page connects with: the token, and the pin it
-        // is only ever sent behind.
-        guard let raw = Keychain.get(XOSetupHandoff.tokenAccount(address)),
-              let record = Manage.record(raw, address: address), !record.plain, let pin = record.pin
-        else {
-            ended(Manage.Words.consoleShut)
-            return
+        // WHAT THE SOCKET IS OPENED WITH, behind the check it is only ever
+        // sent through: a Xen Orchestra pool's token and pin, or a Proxmox VE
+        // cluster's token and CA, as this phone keeps them.
+        switch target {
+        case let .xo(vm):
+            guard let raw = Keychain.get(XOSetupHandoff.tokenAccount(address)),
+                  let record = Manage.record(raw, address: address), !record.plain, let pin = record.pin
+            else {
+                ended(Manage.Words.consoleShut)
+                return
+            }
+            let make: (NWEndpoint?) -> ConsoleSocket? = { [address] proxy in XOConsole(address: address, vm: vm, token: record.token, pin: pin, proxy: proxy) }
+            guard away else {
+                connect(make(nil))
+                return
+            }
+            Task { @MainActor in
+                guard let proxy = await reach() else { return }
+                connect(make(proxy))
+            }
+        case let .proxmox(node, vmid):
+            guard let trust = ProxmoxKept.record(address) else {
+                ended(Manage.Words.consoleShut)
+                return
+            }
+            Task { @MainActor in await openProxmox(node: node, vmid: vmid, trust: trust) }
         }
-        guard away else {
-            connect(token: record.token, pin: pin, proxy: nil)
-            return
-        }
-        // FROM AWAY: the tunnel first, then the same socket through it.
+    }
+
+    /// FROM AWAY, a tunnel through one of your machines, said once it is
+    /// carrying; nil when it could not be opened, which has been said.
+    private func reach() async -> NWEndpoint? {
+        tunnel?.close()
         let tunnel = ConsoleTunnel(address: address)
         self.tunnel = tunnel
         tunnel.onEnd = { [weak self] why in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.tunnelEnded(why) } }
         }
         show(Manage.Words.consoleAwayOpening)
-        Task { @MainActor in
-            do {
-                let (proxy, host) = try await tunnel.open(settings: settings)
-                guard self.tunnel === tunnel else { return }
-                via = host
-                connect(token: record.token, pin: pin, proxy: proxy)
-            } catch {
-                guard self.tunnel === tunnel else { return }
-                self.tunnel = nil
-                ended(error.localizedDescription)
-            }
+        do {
+            let (proxy, host) = try await tunnel.open(settings: settings)
+            guard self.tunnel === tunnel else { return nil }
+            via = host
+            return proxy
+        } catch {
+            guard self.tunnel === tunnel else { return nil }
+            self.tunnel = nil
+            ended(error.localizedDescription)
+            return nil
         }
+    }
+
+    /// PROXMOX VE'S, IN TWO REQUESTS: the ticket, then the screen. From away
+    /// each takes a tunnel of its own, the ticket's closed before the screen's
+    /// opens, because a tunnel carries one connection. A node this phone
+    /// cannot reach is tried once through one of your machines.
+    private func openProxmox(node: String, vmid: Int, trust: ProxmoxKept.Trust) async {
+        var proxy: NWEndpoint? = nil
+        if away {
+            guard let p = await reach() else { return }
+            proxy = p
+        }
+        let handed: ProxmoxConsole.Handed
+        do {
+            handed = try await ProxmoxConsole.ticket(address: address, node: node, vmid: vmid, trust: trust, proxy: proxy)
+        } catch ProxmoxConsole.Refusal.wrongCertificate {
+            show(Manage.Words.wrongCertificate(address), troubled: true, retry: false)
+            return
+        } catch ProxmoxConsole.Refusal.unreachable(let why) {
+            if !away {
+                away = true
+                await openProxmox(node: node, vmid: vmid, trust: trust)
+            } else {
+                ended(Manage.Words.consoleRefused(why))
+            }
+            return
+        } catch {
+            ended(Manage.Words.consoleRefused(error.localizedDescription))
+            return
+        }
+        if away {
+            // The ticket's tunnel is done; the screen takes its own.
+            let spent = tunnel
+            tunnel = nil
+            spent?.close()
+            guard let p = await reach() else { return }
+            proxy = p
+        }
+        connect(ProxmoxConsole(address: address, node: node, vmid: vmid, trust: trust, handed: handed, proxy: proxy))
     }
 
     private func tunnelEnded(_ why: String) {
@@ -233,8 +306,8 @@ final class ConsoleModel {
         ended(why)
     }
 
-    private func connect(token: String, pin: String, proxy: NWEndpoint?) {
-        guard let socket = XOConsole(address: address, vm: vm, token: token, pin: pin, proxy: proxy) else {
+    private func connect(_ made: ConsoleSocket?) {
+        guard let socket = made else {
             ended(Manage.Words.consoleShut)
             return
         }
@@ -242,10 +315,13 @@ final class ConsoleModel {
         // IN ORDER, on the main queue: VNC is a stream, and a frame handed
         // over out of turn corrupts every one after it. A Task each would not
         // promise the order; the main queue does.
-        socket.onOpen = { [weak self] in
+        socket.onOpen = { [weak self, weak socket] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self?.reached = true
+                    // PROXMOX VE'S VNC TICKET, the password its console asks
+                    // for, handed to the page before it is told the socket is open.
+                    if let password = socket?.password { self?.call("fwConsole.password(\(Self.quoted(password)))") }
                     self?.call("fwConsole.opened()")
                 }
             }

@@ -34,8 +34,14 @@ final class ConsoleTunnel: @unchecked Sendable {
     /// The fleet or the machine ended it: said in their words.
     var onEnd: (@Sendable (String) -> Void)?
 
-    init(address: String) {
+    /// SSH to this machine of yours on the pool, in place of the pool's own
+    /// console (SSHTerminal): the machine carrying it connects to the
+    /// machine's address, port 22, and only for a running one made for you.
+    let machine: String?
+
+    init(address: String, machine: String? = nil) {
         self.address = address
+        self.machine = machine
     }
 
     /// Open the tunnel and the proxy, and wait until the machine has reached
@@ -49,7 +55,7 @@ final class ConsoleTunnel: @unchecked Sendable {
             throw FleetError.message("Refusing to send your credential over plain http. Use https:// for \(parts.host ?? "that address").")
         }
         parts.scheme = scheme == "https" ? "wss" : "ws"
-        parts.queryItems = [URLQueryItem(name: "address", value: address)]
+        parts.queryItems = [URLQueryItem(name: "address", value: address)] + (machine.map { [URLQueryItem(name: "machine", value: $0)] } ?? [])
         guard let url = parts.url else { throw FleetError.message("That fleet address is not a URL") }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(settings.credential)", forHTTPHeaderField: "authorization")

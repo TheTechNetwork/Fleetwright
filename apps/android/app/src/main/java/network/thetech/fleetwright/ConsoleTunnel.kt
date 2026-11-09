@@ -34,7 +34,11 @@ import java.util.concurrent.TimeUnit
  * pool's own host name, so the server name and the Host the upgrade names are
  * the pool's. The listener takes one connection, its own, and then closes.
  */
-internal class ConsoleTunnel(private val address: String) {
+internal class ConsoleTunnel(
+    private val address: String,
+    /** SSH to this machine of yours on the pool, in place of the pool's console (SshTerminal). */
+    private val machine: String? = null,
+) {
     /** What the fleet or the machine said when it ended, for the screen. */
     @Volatile var onEnd: ((String) -> Unit)? = null
 
@@ -57,7 +61,7 @@ internal class ConsoleTunnel(private val address: String) {
             throw IllegalStateException("Refusing to send your credential over plain http. Use https:// for ${uri.host}.")
         }
         val request = Request.Builder()
-            .url("$base/api/xoconsole/tunnel?address=${URLEncoder.encode(address, "UTF-8")}")
+            .url("$base/api/xoconsole/tunnel?address=${URLEncoder.encode(address, "UTF-8")}" + (machine?.let { "&machine=" + URLEncoder.encode(it, "UTF-8") } ?: ""))
             .header("authorization", "Bearer ${settings.credential}")
             .apply { if (settings.viewAsMember) header("x-fleetwright-view", "member") }
             .build()
@@ -77,6 +81,29 @@ internal class ConsoleTunnel(private val address: String) {
                 server.close()
             }
         }
+    }
+
+    /**
+     * The same tunnel, answered as a loopback port that takes one connection,
+     * for a client that dials itself (SshTerminal: sshj connects there).
+     */
+    suspend fun openPort(settings: Settings): Pair<Int, String> {
+        val (mine, hostId) = open(settings)
+        val server = withContext(Dispatchers.IO) { ServerSocket(0, 1, InetAddress.getLoopbackAddress()) }
+        Thread {
+            try {
+                val client = server.accept()
+                val a = Thread { runCatching { client.getInputStream().copyTo(mine.getOutputStream()) }; runCatching { mine.close() } }
+                val b = Thread { runCatching { mine.getInputStream().copyTo(client.getOutputStream()) }; runCatching { client.close() } }
+                a.isDaemon = true; b.isDaemon = true
+                a.start(); b.start()
+            } catch (_: Exception) {
+                runCatching { mine.close() }
+            } finally {
+                runCatching { server.close() }
+            }
+        }.apply { isDaemon = true; name = "ssh-tunnel" }.start()
+        return server.localPort to hostId
     }
 
     fun close() = finish(null)

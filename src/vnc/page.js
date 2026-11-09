@@ -13,7 +13,7 @@
 // The phone talks to it through two calls each way:
 //   page -> phone   { t: 'send', b: base64 } and { t: 'close' }, and what
 //                   the console is doing: { t: 'state', s, why? }
-//   phone -> page   window.fwConsole.opened(), .data(base64), .closed(why),
+//   phone -> page   window.fwConsole.password(p), .opened(), .data(base64), .closed(why),
 //                   .keyboard(), .type(text), .key(name), .ctrlAltDel()
 // Built into one HTML file for both apps by scripts/build-vnc.mjs.
 
@@ -71,6 +71,8 @@ const screen = /** @type {HTMLElement} */ (document.getElementById('screen'));
 const typing = /** @type {HTMLTextAreaElement} */ (document.getElementById('typing'));
 /** @type {any} */
 let rfb = null;
+/** The VNC password the phone was handed for this console, or none. */
+let password = '';
 
 function start() {
   rfb = new RFB(screen, /** @type {any} */ (channel), { shared: true });
@@ -81,8 +83,14 @@ function start() {
   rfb.addEventListener('disconnect', (/** @type {any} */ e) => post({ t: 'state', s: 'ended', clean: !!e.detail?.clean }));
   rfb.addEventListener('securityfailure', (/** @type {any} */ e) => post({ t: 'state', s: 'refused', why: String(e.detail?.reason ?? '') }));
   // Xen Orchestra's console asks for no VNC password: the token was its
-  // sign-in. One that does is not one this page can answer.
-  rfb.addEventListener('credentialsrequired', () => post({ t: 'state', s: 'refused', why: 'it asked for a VNC password' }));
+  // sign-in. PROXMOX VE'S ASKS FOR ITS VNC TICKET, the one-use password its
+  // `vncproxy` handed the phone with the port; the phone gives it to this page
+  // before opening (`fwConsole.password`). Any other ask is not one this page
+  // can answer.
+  rfb.addEventListener('credentialsrequired', () => {
+    if (password) rfb.sendCredentials({ password });
+    else post({ t: 'state', s: 'refused', why: 'it asked for a VNC password' });
+  });
 }
 
 // TYPING ON A PHONE. A touch screen has no keys to send until a text field
@@ -114,6 +122,10 @@ typing.addEventListener('input', () => {
 });
 
 /** @type {any} */ (window).fwConsole = {
+  /** @param {string} p */
+  password(p) {
+    password = typeof p === 'string' ? p : '';
+  },
   opened() {
     channel.readyState = 'open';
     channel.onopen?.({});

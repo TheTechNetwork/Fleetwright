@@ -537,7 +537,7 @@ export class Sidecar {
     // (xo-holder.js): its health says so, and the coordinator asks it first.
     // AND PROXMOX'S CLUSTERS beside Xen Orchestra's pools, behind one face
     // (pools.js, docs/proxmox.md).
-    this.pools = xoPools ?? (vaultKey ? new Pools({ xo: new XoPools({ log: this.log, holderFor, boxId: this.hostId }), pve: new PvePools({ log: this.log }) }) : null);
+    this.pools = xoPools ?? (vaultKey ? new Pools({ xo: new XoPools({ log: this.log, holderFor, boxId: this.hostId }), pve: new PvePools({ log: this.log, holderFor }) }) : null);
     /**
      * THE POOLS' EDGE ROUTERS, read with the key the person's vault keeps
      * beside a pool's token (edge-watch.js), for the pools that have one.
@@ -559,7 +559,7 @@ export class Sidecar {
     // the TLS the phone opened through it.
     this.tunnels = new ConsoleTunnels({
       send: (frame) => this.transport.send({ v: PROTOCOL_VERSION, kind: 'tunnel', hostId: this.hostId, ...frame }),
-      where: (owner, address) => this.pools?.consoleAddress?.(owner, address) ?? null,
+      where: (owner, address, machine) => this.pools?.consoleAddress?.(owner, address, machine) ?? null,
       log: this.log,
     });
     // A PHONE'S WEB VIEW, ITS CONNECTIONS LEAVING FROM HERE (browse.js): this

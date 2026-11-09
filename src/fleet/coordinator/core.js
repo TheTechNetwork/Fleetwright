@@ -298,6 +298,8 @@ export const EDGE_REPORT = Object.freeze({
  *   boxes: Array<{ hostId: string, reachable: boolean|null, problem: string|null }>,
  *   pools: string[], version: string|null, supported: boolean|null, fenced: boolean|null,
  *   images: number, machines: number,
+ *   holder: { name: string, running: boolean }|false|null,
+ *   edge: { running: boolean, blocks: boolean }|false|null,
  * }} HypervisorRow
  */
 
@@ -2154,7 +2156,7 @@ export class CoordinatorCore {
    *
    * @param {{ email?: string|null }|null} requester
    * @param {string|null} device
-   * @param {{ address?: unknown }} ask
+   * @param {{ address?: unknown, machine?: unknown }} ask
    * @param {{ send: (msg: Record<string, unknown>) => void, close: (code: number, reason: string) => void }} phone
    * @returns {{ ok: true, tunnel: string, hostId: string } | { ok: false, error: { code: string }, text: string }}
    */
@@ -2174,6 +2176,13 @@ export class CoordinatorCore {
     const address = typeof ask?.address === 'string' ? ask.address : '';
     if (address.length > 260 || !XO_ADDRESS_RE.test(address)) {
       return refuse({ ok: false, error: { code: 'bad_params' }, text: 'Say which pool: the address Xen Orchestra answers on.' });
+    }
+    // SSH TO A MACHINE OF THEIRS on that pool, when one is named
+    // (docs/hypervisors.md, "SSH in the app"): the same boxes, and the box
+    // checks the machine is this person's and running before it dials.
+    const machine = ask?.machine === undefined || ask?.machine === null || ask?.machine === '' ? null : String(ask.machine);
+    if (machine !== null && !/^vm-[0-9a-f]{12}$/.test(machine)) {
+      return refuse({ ok: false, error: { code: 'bad_params' }, text: 'Say which machine: its name, vm- and twelve hex digits.' });
     }
     /** @type {Array<{ host: any, reached: boolean }>} */
     const holders = [];
@@ -2200,9 +2209,9 @@ export class CoordinatorCore {
     // THE ONE THAT LAST REACHED THE POOL, as the page asks first.
     holders.sort((a, b) => Number(b.reached) - Number(a.reached) || a.host.hostId.localeCompare(b.host.hostId));
     const hostId = holders[0].host.hostId;
-    const started = this.tunnels.start({ owner, device, hostId, address, toPhone: phone.send, closePhone: phone.close });
+    const started = this.tunnels.start({ owner, device, hostId, address, machine, toPhone: phone.send, closePhone: phone.close });
     if (!started.ok) return refuse(started);
-    this.record({ event: 'console.away', actor: owner, hostId, text: `${owner} opened a console from away through ${hostId}` });
+    this.record({ event: 'console.away', actor: owner, hostId, text: machine ? `${owner} opened SSH to ${machine} from away through ${hostId}` : `${owner} opened a console from away through ${hostId}` });
     try {
       phone.send({ op: 'ready', tunnel: started.tunnel.id, hostId, maxBytes: TUNNEL_MAX_BYTES, ttlMs: TUNNEL_TTL_MS });
     } catch { /* the socket is going; its close ends the tunnel */ }
@@ -6812,28 +6821,61 @@ export class CoordinatorCore {
       answer({ ok: false, error: { code: 'too_many' }, text: `This setup has asked for a pin ${MAX_HOLDER_PINS} times already. Start it again.` });
       return;
     }
+    const address = typeof msg.address === 'string' && XO_ADDRESS_RE.test(msg.address) ? msg.address : '';
+    const minted = this.#mintHolder({ owner: rec.owner, address, job, by: hostId });
+    answer(minted.ok ? minted : { ok: false, error: { code: minted.code }, text: minted.text });
+  }
+
+  /**
+   * A PIN AND A NAME FOR A POOL'S OWN MACHINE, asked for by the person
+   * themselves, from the phone: a Proxmox VE node set up from the phone has
+   * no box running a job to ask for one (#onHolderPin), and the setup script
+   * clones the machine itself, as root, outside the fleet's pool.
+   * docs/proxmox.md, "A machine of its own".
+   *
+   * THE SAME PIN AND RESERVATION a box's job is given, for the person signed
+   * in and the address they name, and only a few at once each: the
+   * reservations are shared by the whole fleet (holder-joins.js), so one
+   * person asking over and over would leave no room for anybody else's.
+   *
+   * @param {{ email?: string|null }|null} requester @param {unknown} body
+   * @returns {{ status: number, body: any }}
+   */
+  holderPinFor(requester, body) {
+    const owner = String(requester?.email || '').toLowerCase();
+    if (!owner || !this.#hasLiveCredential(owner)) return { status: 403, body: { ok: false, error: { code: 'not_signed_in' }, text: 'Sign in first: a pool\u2019s own machine joins in your name.' } };
+    const address = String(/** @type {any} */ (body)?.address ?? '');
+    if (!XO_ADDRESS_RE.test(address)) return { status: 400, body: { ok: false, error: { code: 'bad_params' }, text: 'Name the address of the cluster the machine holds.' } };
+    if (this.holderJoins.forOwner(owner).filter((r) => !this.#holderJoined(r.hostId)).length >= MAX_HOLDER_PINS) {
+      return { status: 429, body: { ok: false, error: { code: 'too_many' }, text: `You have ${MAX_HOLDER_PINS} pool machines waiting to join already. Approve or decline those, or wait a day for them to lapse.` } };
+    }
+    const minted = this.#mintHolder({ owner, address, job: null, by: 'your phone' });
+    if (!minted.ok) return { status: minted.code === 'pins_full' ? 507 : 503, body: { ok: false, error: { code: minted.code }, text: minted.text } };
+    return { status: 200, body: minted };
+  }
+
+  /**
+   * The name, pin and day-long reservation both of the above give.
+   *
+   * @param {{ owner: string, address: string, job: string|null, by: string }} spec
+   * @returns {{ ok: true, pin: string, hostId: string, expiresAt: number, until?: number } | { ok: false, code: string, text: string }}
+   */
+  #mintHolder({ owner, address, job, by }) {
     let name = '';
     for (let tries = 0; tries < 20 && (!name || this.hostIds?.get(name) || this.registry.hosts.has(name)); tries++) {
       const bytes = globalThis.crypto.getRandomValues(new Uint8Array(3));
       name = `holder-${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
     }
-    if (this.hostIds?.get(name) || this.registry.hosts.has(name)) {
-      answer({ ok: false, error: { code: 'no_name' }, text: 'No free name was found for the machine. Try again.' });
-      return;
-    }
-    const pin = this.enrollment.mint({ purpose: 'host', label: `Holds a pool for ${rec.owner}`, actor: rec.owner, hostId: name });
-    if (!pin) {
-      answer({ ok: false, error: { code: 'pins_full' }, text: PINS_FULL });
-      return;
-    }
+    if (this.hostIds?.get(name) || this.registry.hosts.has(name)) return { ok: false, code: 'no_name', text: 'No free name was found for the machine. Try again.' };
+    const pin = this.enrollment.mint({ purpose: 'host', label: `Holds a pool for ${owner}`, actor: owner, hostId: name });
+    if (!pin) return { ok: false, code: 'pins_full', text: PINS_FULL };
     // AND THE NAME HELD FOR A DAY, so a machine whose first boot outlasts the
     // pin can still ask to join and be let in from the phone (holder-joins.js).
     // The pin stays for machines made from an image older than the asking.
-    const address = typeof msg.address === 'string' && XO_ADDRESS_RE.test(msg.address) ? msg.address : '';
-    const held = address ? this.holderJoins.reserve({ hostId: name, owner: rec.owner, address, job }) : null;
-    this.record({ event: 'holder.pin', actor: rec.owner, text: `${hostId} was given a pin for ${name}, the pool's own machine` });
+    const held = address ? this.holderJoins.reserve({ hostId: name, owner, address, job }) : null;
+    this.record({ event: 'holder.pin', actor: owner, text: `${by} was given a pin for ${name}, the pool's own machine` });
     this.onStateChanged?.();
-    answer({ ok: true, pin: pin.code, hostId: name, expiresAt: pin.expiresAt, ...(held ? { until: held.until } : {}) });
+    return { ok: true, pin: pin.code, hostId: name, expiresAt: pin.expiresAt, ...(held ? { until: held.until } : {}) };
   }
 
   /**
@@ -7637,7 +7679,7 @@ export class CoordinatorCore {
         const key = `${kind} ${address}`;
         let row = found.get(key);
         if (!row) {
-          row = { address, kind, boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, imageIds: new Set(), machineNames: new Set() };
+          row = { address, kind, boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, holder: null, edge: null, imageIds: new Set(), machineNames: new Set() };
           found.set(key, row);
         }
         row.boxes.push({ hostId: host.hostId, reachable: typeof e.reachable === 'boolean' ? e.reachable : null, problem: e.reachable === false ? text(e.problem, 200) : null });
@@ -7652,6 +7694,25 @@ export class CoordinatorCore {
         if (typeof e.fenced === 'boolean') row.fenced = row.fenced === true || e.fenced;
         for (const i of Array.isArray(e.images) ? e.images : []) if (typeof i?.id === 'string') row.imageIds.add(i.id);
         for (const m of Array.isArray(e.machines) ? e.machines : []) if (typeof m?.name === 'string') row.machineNames.add(m.name);
+        // ITS OWN MACHINE (docs/proxmox.md, "A machine of its own"): false
+        // only from a box that looked and saw none, null when none said, and
+        // running when any box saw it up.
+        if (Array.isArray(e.holders)) {
+          const h = e.holders.find((/** @type {any} */ x) => typeof x?.name === 'string' && x.name);
+          if (h) {
+            const was = row.holder || null;
+            row.holder = { name: text(h.name, 80) ?? '', running: Boolean(was?.running) || h.running === true };
+          } else row.holder ??= false;
+        }
+        // ITS EDGE ROUTER (docs/proxmox.md, "The edge router"), said the same
+        // way: false only from a box that looked, running when any saw it up.
+        if (Array.isArray(e.edges)) {
+          const r = e.edges.find((/** @type {any} */ x) => typeof x?.name === 'string');
+          if (r) {
+            const was = row.edge || null;
+            row.edge = { running: Boolean(was?.running) || r.running === true, blocks: Boolean(was?.blocks) || r.blocks === true };
+          } else row.edge ??= false;
+        }
       }
     }
     return [...found.values()]

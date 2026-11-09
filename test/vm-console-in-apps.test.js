@@ -31,8 +31,9 @@ test('both apps send the token only as the console cookie, behind the pin', () =
   assert.match(kt, /XoLink\.handshake\(address, pin, path, "token=\$token", via = via\)/);
   // The handshake checks the pin before the upgrade, with its cookie, is written.
   const link = read(`${KT}XoLink.kt`);
-  const shake = link.slice(link.indexOf('suspend fun handshake('), link.indexOf('private fun upgrade('));
-  assert.ok(shake.indexOf('ssl.startHandshake()') > 0 && shake.indexOf('upgrade(ssl, host, port, path, cookie)') > shake.indexOf('ssl.startHandshake()'));
+  const shake = link.slice(link.indexOf('suspend fun handshakeTrusting('), link.indexOf('private fun upgrade('));
+  assert.ok(shake.indexOf('ssl.startHandshake()') > 0 && shake.indexOf('upgrade(ssl, host, port, path, headers)') > shake.indexOf('ssl.startHandshake()'));
+  assert.match(link, /val trust = PinTrust\(pin\.lowercase\(\)\)\s*return handshakeTrusting\(address, trust, \{ trust\.mismatch \}, path, if \(cookie != null\) "Cookie: \$cookie\\r\\n" else "", timeoutMs, via\)/);
   // And the page never sees it: nothing hands the token to the web view.
   for (const f of [`${IOS}VMConsoleView.swift`, `${KT}ConsolePage.kt`]) {
     assert.ok(!/evaluate[jJ]ava[sS]cript\([^)]*token/.test(read(f)), `${f} hands the token to the page`);
@@ -71,4 +72,43 @@ test('both apps hand the screen to the page in the order it arrived', () => {
   // VNC is a stream: one frame out of turn corrupts every one after it.
   assert.match(read(`${IOS}VMConsoleView.swift`), /socket\.onData = \{ \[weak self\] data in[\s\S]{0,120}?DispatchQueue\.main\.async/);
   assert.match(read(`${KT}ConsolePage.kt`), /opened\.onData = \{ bytes ->[\s\S]{0,160}?main\.post \{ call\("fwConsole\.data/);
+});
+
+// PROXMOX VE'S CONSOLE IN BOTH APPS, from home and from away. Asked for:
+// "reaching the machine away from home: the Proxmox console first". The phone
+// keeps the cluster's record where it set the cluster up, opens TLS itself
+// held to the cluster's own CA (as the boxes trust it, pve-api.js), sends the
+// token only as Proxmox VE's Authorization header behind that check, and from
+// away takes one tunnel for the ticket and another for the screen, because a
+// tunnel carries one connection.
+test('both apps open a Proxmox VE console with the record they keep, behind the cluster’s CA, through two tunnels from away', () => {
+  const swift = read(`${IOS}ProxmoxConsole.swift`);
+  const kt = read(`${KT}ProxmoxConsole.kt`);
+  // The token goes in the Authorization header and nowhere else.
+  assert.equal((swift.match(/"PVEAPIToken=\\\(trust\.token\)", forHTTPHeaderField: "Authorization"/g) || []).length, 2);
+  assert.equal((kt.match(/Authorization: PVEAPIToken=\$\{trust\.token\}/g) || []).length, 2);
+  // The cluster's CA alone, with no name; a public certificate held to its name.
+  assert.match(swift, /SecTrustSetAnchorCertificates\(trust, anchors as CFArray\)\s*SecTrustSetAnchorCertificatesOnly\(trust, true\)/);
+  assert.match(swift, /SecPolicyCreateSSL\(true, \(name \?\? host\) as CFString\)/);
+  assert.match(kt, /if \(!onlyCa && !names\(/);
+  // Checked before a byte is written: the challenge on iOS, the handshake on Android.
+  assert.match(swift, /if trust\.accepts\(serverTrust, host: host\) \{\s*completionHandler\(\.useCredential/);
+  assert.ok(kt.indexOf('ssl.startHandshake()') < kt.indexOf('POST ${path(node, vmid)}/vncproxy'));
+  // The ticket is the VNC password, handed to the page before it is told the socket is open.
+  const iosView = read(`${IOS}VMConsoleView.swift`);
+  const ktPage = read(`${KT}ConsolePage.kt`);
+  assert.match(iosView, /if let password = socket\?\.password \{ self\?\.call\("fwConsole\.password\(\\\(Self\.quoted\(password\)\)\)"\) \}\s*self\?\.call\("fwConsole\.opened\(\)"\)/);
+  assert.match(ktPage, /call\("fwConsole\.password\(\$\{quoted\(handed\.ticket\)\}\)"\)\s*call\("fwConsole\.opened\(\)"\)/);
+  // From away: the ticket's tunnel is closed before the screen's is opened.
+  assert.match(iosView, /let spent = tunnel\s*tunnel = nil\s*spent\?\.close\(\)\s*guard let p = await reach\(\) else \{ return \}/);
+  assert.match(ktPage, /val spent = tunnel\s*tunnel = null\s*spent\?\.close\(\)\s*through = reach\(\) \?: return/);
+  // Kept where every route keeps it in the vault, and gone at sign-out.
+  for (const f of ['AddProxmoxView.swift', 'ProxmoxDirectHandoff.swift', 'ProxmoxThroughHandoff.swift']) {
+    assert.match(raw(`${IOS}${f}`), /keepHypervisor\([^\n]*record\.json\)\n\s*\/\/ KEPT HERE TOO[^\n]*\n\s*ProxmoxKept\.keep\(record\)/, f);
+  }
+  for (const f of ['ProxmoxSheet.kt', 'ProxmoxDirectHandoff.kt', 'ProxmoxThroughHandoff.kt']) {
+    assert.match(raw(`${KT}${f}`), /onSuccess = \{\n\s*\/\/ KEPT HERE TOO[^\n]*\n\s*ProxmoxKept\.keep\(settings, record\)/, f);
+  }
+  assert.match(read(`${IOS}Fleet.swift`), /ProxmoxThroughHandoff\.forgetAll\(\)\s*ProxmoxKept\.forgetAll\(\)/);
+  assert.match(read(`${KT}Fleet.kt`), /"secret\.proxmox-record\.",[\s\S]{0,200}"pveHeld"/);
 });

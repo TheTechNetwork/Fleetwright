@@ -54,11 +54,12 @@
 // twice (docs/hypervisors.md, "How a clone joins").
 
 import { createHash } from 'node:crypto';
-import { PveApi } from './pve-api.js';
+import { PveApi, PVE_PORT } from './pve-api.js';
+import { splitAddress } from './xo-ws.js';
 import { seal, claudeBindingFor } from '../seal.js';
 import { machineGrantsOf } from '../../core/grants.js';
 import { lookup } from 'node:dns/promises';
-import { HYPERVISOR_ITEM, MAX_MINUTES, SSH_KEYS_ITEM, sshKeys, groupPlace } from './xo-pools.js';
+import { HYPERVISOR_ITEM, MAX_MINUTES, isSshKeysItem, sshKeys, sshTarget, groupPlace } from './xo-pools.js';
 import { fleetHosts } from './edge-router.js';
 import { IMAGES, JOIN_RUNCMD } from './vm-image.js';
 
@@ -96,6 +97,15 @@ export const PVE_FENCE_GROUP = 'fleetwright-fence';
  */
 export const PVE_GROUP_ZONE = 'fwgrp';
 export const PVE_LAB_ZONE = 'fwlab';
+/**
+ * THE EDGE ROUTER'S LAN, a network of its own the setup makes when asked for
+ * one (install/fleetwright-pve-setup, step `edge`): a machine put on it
+ * reaches the world only through the router, which filters what it does.
+ */
+export const PVE_EDGE_ZONE = 'fwedge';
+/** The tag the setup gives the edge router, outside the pool, and the one beside it on a router that drops what the threat rules match. */
+export const PVE_EDGE_TAG = 'fleetwright-edge';
+export const PVE_EDGE_BLOCKS_TAG = 'fleetwright-edge-blocks';
 export const PVE_LAB_ALIAS = 'fleetwright-lab:';
 /** The per-machine ipset a closed lab's HTTPS may go to. */
 export const PVE_ALLOW_SET = 'fwallow';
@@ -117,6 +127,9 @@ export const PVE_ROLE_PRIVS = Object.freeze([
   // SSH to be offered: `agent/network-get-interfaces`, which Proxmox VE 9
   // allows with this and nothing wider (it replaced VM.Monitor). Read only.
   'VM.GuestAgent.Audit',
+  // A MACHINE'S SCREEN IN THE APP: `vncproxy` and `vncwebsocket`, which the
+  // phone calls with the token it keeps, on a machine in the pool alone.
+  'VM.Console',
 ]);
 export const PVE_STORAGE_PRIVS = Object.freeze(['Datastore.AllocateSpace', 'Datastore.Audit']);
 export const PVE_NET_PRIVS = Object.freeze(['SDN.Use', 'SDN.Audit']);
@@ -147,9 +160,9 @@ export const PVE_MIN_MAJOR = 9;
 const MAX_MACHINES = 200;
 
 /**
- * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', name?: string, grants?: any, vmids?: { from: number, to: number } }} PveRecord
+ * @typedef {{ address: string, token: string, pool: string, ca: string|null, trust: 'ca'|'public', name?: string, grants?: any, vmids?: { from: number, to: number }, edge?: { key: string, secret: string, pin: string } }} PveRecord
  * @typedef {{ id: string, name: string, key: string|null, os: string|null, node: string, vmid: number, pool: string|null, poolName: string|null, bridge: string|null }} PveImage
- * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string, lab?: 'open'|'closed', gateway?: string|null, taken?: boolean|null }} PveNetwork
+ * @typedef {{ id: string, name: string, pool: string|null, group: boolean, zone: string, lab?: 'open'|'closed', gateway?: string|null, taken?: boolean|null, edge?: boolean }} PveNetwork
  */
 
 const TOKEN_RE = /^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9._-]{1,64}![A-Za-z0-9._-]{1,64}=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -256,7 +269,24 @@ function checked(r, address) {
   const name = trust === 'public' && typeof r.name === 'string' ? r.name.toLowerCase() : null;
   const grants = machineGrantsOf(r.grants);
   const vmids = vmidsOf(r.vmids);
-  return { record: { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(name ? { name } : {}), ...(grants ? { grants } : {}), ...(vmids ? { vmids } : {}) }, problem: null };
+  const edge = edgeKeyOf(r.edge);
+  return { record: { address: r.address, token: r.token, pool: r.pool, ca, trust, ...(name ? { name } : {}), ...(grants ? { grants } : {}), ...(vmids ? { vmids } : {}), ...(edge ? { edge } : {}) }, problem: null };
+}
+
+/**
+ * THE EDGE ROUTER'S KEY, as the setup script made it and the line carried it
+ * (install/fleetwright-pve-setup, `watch_keep`): the key and secret in the
+ * shape OpenSSL's base64 of sixty bytes is, which holds neither `|` nor `:`,
+ * and the SHA-256 of the router's certificate, which edge-watch.js holds the
+ * connection to before the key is sent. Anything else is no key, and the
+ * cluster is still held: its router is then not read, which the phone says.
+ *
+ * @param {any} e @returns {{ key: string, secret: string, pin: string }|null}
+ */
+export function edgeKeyOf(e) {
+  const b64 = /^[A-Za-z0-9+/]{80}$/;
+  if (!e || typeof e !== 'object' || !b64.test(String(e.key)) || !b64.test(String(e.secret)) || !/^[0-9a-f]{64}$/.test(String(e.pin))) return null;
+  return { key: e.key, secret: e.secret, pin: e.pin };
 }
 
 /**
@@ -364,6 +394,9 @@ export function markText(m) {
   return `A temporary machine for ${m.for}, made by Fleetwright. It powers off by itself at its end and is then removed.\n${MARK}${line}`;
 }
 
+/** The tag the setup gives the cluster's own machine, outside the pool (install/fleetwright-pve-setup). */
+export const PVE_HOLDER_TAG = 'fleetwright-holder';
+
 /** Proxmox's tags, which it keeps as one string split on `;` (and `,` and spaces on older versions). */
 const tagsOf = (/** @type {any} */ v) => String(v?.tags || '').split(/[;,\s]+/).filter(Boolean);
 
@@ -382,6 +415,40 @@ const tagsOf = (/** @type {any} */ v) => String(v?.tags || '').split(/[;,\s]+/).
 async function poolVms(api, pool) {
   const all = await api.get('/cluster/resources', { type: 'vm' });
   return (Array.isArray(all) ? all : []).filter((m) => m?.type === 'qemu' && m.pool === pool);
+}
+
+/**
+ * THE EDGE ROUTER, as the setup made it (install/fleetwright-pve-setup, step
+ * `edge`), found as the cluster's own machine is: outside the pool, tagged,
+ * and seen only by the VM.Audit the setup gave on it.
+ *
+ * @param {any} api @param {string} pool
+ * @returns {Promise<Array<{ name: string, running: boolean, blocks: boolean }>>}
+ */
+async function edgeVms(api, pool) {
+  const all = await api.get('/cluster/resources', { type: 'vm' }).catch(() => []);
+  return (Array.isArray(all) ? all : [])
+    .filter((m) => m?.type === 'qemu' && (m.pool ?? '') !== pool && Number(m.template) !== 1 && tagsOf(m).includes(PVE_EDGE_TAG))
+    .map((m) => ({ name: String(m.name || '').slice(0, 80), running: m.status === 'running', blocks: tagsOf(m).includes(PVE_EDGE_BLOCKS_TAG) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * THE CLUSTER'S OWN MACHINE, as the setup made it (install/fleetwright-pve-setup,
+ * step `holder`): outside the pool, so the token can do nothing to it, and
+ * tagged. The token sees it only because the setup gave it VM.Audit on that
+ * machine alone; a VM in the pool with the tag is anybody's who may tag the
+ * pool's, so it is never taken for one.
+ *
+ * @param {any} api @param {string} pool
+ * @returns {Promise<Array<{ name: string, running: boolean, vmid: number, node: string }>>}
+ */
+async function holderVms(api, pool) {
+  const all = await api.get('/cluster/resources', { type: 'vm' }).catch(() => []);
+  return (Array.isArray(all) ? all : [])
+    .filter((m) => m?.type === 'qemu' && (m.pool ?? '') !== pool && Number(m.template) !== 1 && tagsOf(m).includes(PVE_HOLDER_TAG))
+    .map((m) => ({ name: String(m.name || '').slice(0, 80), running: m.status === 'running', vmid: Number(m.vmid), node: String(m.node || '') }))
+    .sort((a, b) => a.vmid - b.vmid);
 }
 
 /**
@@ -435,7 +502,7 @@ export function networksOf(perms, address, vnets = [], gateways = new Map()) {
     const m = /^\/sdn\/zones\/([A-Za-z0-9_-]{1,40})\/([A-Za-z0-9_.-]{1,40})$/.exec(path);
     if (!m || !privs?.['SDN.Use']) continue;
     const [, zone, name] = m;
-    const base = { id: pveIdOf(address, 'net', `${zone}/${name}`), name, pool: null, group: zone === PVE_GROUP_ZONE, zone };
+    const base = { id: pveIdOf(address, 'net', `${zone}/${name}`), name, pool: null, group: zone === PVE_GROUP_ZONE, zone, ...(zone === PVE_EDGE_ZONE ? { edge: true } : {}) };
     if (zone === PVE_LAB_ZONE) {
       const kind = alias.get(`${zone}/${name}`)?.startsWith(PVE_LAB_ALIAS) ? alias.get(`${zone}/${name}`)?.slice(PVE_LAB_ALIAS.length) : null;
       if (kind !== 'open' && kind !== 'closed') continue;
@@ -489,11 +556,18 @@ export class PvePools {
    *   now?: () => number,
    *   log?: { info: (m: string) => void, warn: (m: string) => void },
    *   sleep?: (ms: number) => Promise<void>,
+   *   holderFor?: string,
    *   resolve?: (host: string) => Promise<string[]>,
    * }} [opts]
    */
-  constructor({ api = (o) => new PveApi(o), now = () => Date.now(), log, sleep, resolve = async (h) => (await lookup(h, { all: true, family: 4 })).map((a) => a.address) } = {}) {
+  constructor({ api = (o) => new PveApi(o), now = () => Date.now(), log, sleep, holderFor = '', resolve = async (h) => (await lookup(h, { all: true, family: 4 })).map((a) => a.address) } = {}) {
     this.api = api;
+    /**
+     * The cluster this box holds as its own machine (the setup's `holder`
+     * step), from FLEETWRIGHT_HOLDER_FOR, as Xen Orchestra's (xo-pools.js):
+     * its entry says `holder`, and the coordinator asks it first.
+     */
+    this.holderFor = String(holderFor || '');
     /** IPv4 addresses for a name, for a closed lab's allow list. */
     this.resolve = resolve;
     /** The coordinator a machine was last made for, which a closed lab's list is kept to. */
@@ -517,6 +591,8 @@ export class PvePools {
     this.handing = new Set();
     /** Records passed over, and why, so each is said once. @type {Map<string, string>} */
     this.refused = new Map();
+    /** Whose each machine is, `<address> <name>` to the person it was made for. @type {Map<string, string>} */
+    this.machineOwners = new Map();
   }
 
   /** @param {PveRecord} record */
@@ -545,7 +621,7 @@ export class PvePools {
       if (!owner) continue;
       for (const i of Array.isArray(a?.items) ? a.items : []) {
         if (i?.name === 'claude' && typeof i.value === 'string' && CLAUDE_RE.test(i.value)) claude.set(owner, i.value);
-        if (i?.name === SSH_KEYS_ITEM) ssh.set(owner, sshKeys(i.value));
+        if (isSshKeysItem(i?.name)) ssh.set(owner, [...(ssh.get(owner) ?? []), ...sshKeys(i.value)].slice(0, 20));
         const record = pveRecord(String(i?.name || ''), i?.value);
         if (record) held.set(`${owner} ${record.address}`, { owner, record });
         const problem = record ? null : pveProblem(String(i?.name || ''), i?.value);
@@ -573,6 +649,69 @@ export class PvePools {
   hasImage(owner, template) {
     const who = String(owner || '').toLowerCase();
     return [...this.held.entries()].some(([k, h]) => h.owner === who && this.seen.get(k)?.images?.some((/** @type {any} */ i) => i.id === template));
+  }
+
+  /**
+   * WHERE A CONSOLE FROM AWAY DIALS, for a cluster this box holds for THIS
+   * person (console-tunnel.js): the node's address and port, and nothing for
+   * any other address or person, so a tunnel is never a way into this box's
+   * network to anywhere else. The phone opens TLS itself through the bytes,
+   * held to the cluster's CA, and signs in with the token it keeps; this box
+   * carries ciphertext. docs/proxmox.md, "A machine's page".
+   *
+   * @param {string} owner @param {string} address
+   * @returns {{ host: string, port: number }|null}
+   */
+  consoleAddress(owner, address) {
+    const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
+    if (!held) return null;
+    const { host, port } = splitAddress(String(held.record.address), PVE_PORT);
+    return Number.isInteger(port) && port > 0 && port < 65536 ? { host, port } : null;
+  }
+
+  /**
+   * WHERE SSH FROM AWAY DIALS: a running machine made for THIS person on a
+   * cluster this box holds for them, at the address its guest agent said,
+   * port 22. The same rule as Xen Orchestra's (xo-pools.js, sshTarget).
+   *
+   * @param {string} owner @param {string} address @param {string} name
+   */
+  sshAddress(owner, address, name) {
+    const held = this.held.get(`${String(owner || '').toLowerCase()} ${address}`);
+    return held ? sshTarget(this.seen, this.machineOwners, owner, address, name) : null;
+  }
+
+  /**
+   * WHERE THE CLUSTER'S EDGE ROUTER IS, for edge-watch.js: the WAN address
+   * its guest agent reports (the router's own os-qemu-guest-agent), on the
+   * interface whose MAC is net0's, which the setup put on the bridge. The
+   * setup gave the token VM.Audit and VM.GuestAgent.Audit on that machine
+   * alone. One router on Proxmox VE, under the name its syslog says. An
+   * empty map is asked and has none yet; null is could not ask.
+   *
+   * @param {string} key  `owner address`
+   * @returns {Promise<Map<string, string>|null>}
+   */
+  async edgeAddresses(key) {
+    const held = this.held.get(key);
+    if (!held) return null;
+    try {
+      const api = this.#client(held.record);
+      const all = await api.get('/cluster/resources', { type: 'vm' });
+      const edge = (Array.isArray(all) ? all : [])
+        .filter((m) => m?.type === 'qemu' && (m.pool ?? '') !== held.record.pool && Number(m.template) !== 1 && tagsOf(m).includes(PVE_EDGE_TAG))
+        .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || Number(a.vmid) - Number(b.vmid))[0];
+      /** @type {Map<string, string>} */
+      const out = new Map();
+      if (!edge || edge.status !== 'running') return out;
+      const base = `/nodes/${encodeURIComponent(String(edge.node))}/qemu/${Number(edge.vmid)}`;
+      const cfg = await api.get(`${base}/config`);
+      const ip = agentAddress(await api.get(`${base}/agent/network-get-interfaces`).catch(() => null), cfg?.net0);
+      if (ip) out.set(PVE_EDGE_TAG, ip);
+      return out;
+    } catch {
+      return null;
+    }
   }
 
   /** Whether this box holds a cluster of this person's at all. @param {string} owner */
@@ -661,6 +800,9 @@ export class PvePools {
           this.log.warn(`sidecar: could not remove ${v.name} from ${record.address}: ${/** @type {Error} */ (e).message}`);
         }
       }
+      // WHOSE IT IS, kept here alone: SSH from away reaches only a machine
+      // made for the person asking (sshAddress).
+      this.machineOwners.set(`${record.address} ${v.name}`, String(mark.for || '').toLowerCase());
       machines.push({
         name: String(v.name),
         vm: pveIdOf(record.address, 'vm', `${v.vmid}:${mark.made}`),
@@ -704,6 +846,13 @@ export class PvePools {
       // saw: a lab holds one machine at a time.
       networks: nets.map((n) => ({ ...n, pool: poolEntry.id, ...(n.lab ? { taken: machines.some((x) => x.lab?.name === n.name) } : {}) })),
       machines,
+      // THE CLUSTER'S OWN MACHINE, by name and whether it is up, for the
+      // phone to say it is there; and whether this box is it.
+      holders: (await holderVms(api, record.pool)).map(({ name, running }) => ({ pool: poolEntry.id, name, running })),
+      // THE EDGE ROUTER (docs/proxmox.md, "The edge router"): whether it is
+      // up, and whether it drops what the threat rules match.
+      edges: (await edgeVms(api, record.pool)).map((e) => ({ pool: poolEntry.id, ...e })),
+      ...(this.holderFor && this.holderFor === record.address ? { holder: true } : {}),
       fenced,
       supported,
       wide: wideOf(perms, record.pool),
@@ -742,6 +891,10 @@ export class PvePools {
     if (labNet && !labNet.gateway) return { ok: false, text: `${labNet.name} has no gateway this box could read, so a machine there would have no names. It was not made; run the setup again.` };
     const chosen = network && !lab ? seen.networks.find((/** @type {any} */ n) => n.id === network && !n.group && !n.lab) : null;
     if (network && !lab && !chosen) return { ok: false, text: 'That network is not one this box saw on your cluster, so the machine was not made.' };
+    // BEHIND THE EDGE ROUTER by default, while one is up: its LAN is the way
+    // out, so what the machine does is filtered for threats. Still behind
+    // the cluster's firewall too, which holds it to the internet.
+    const uplink = !chosen && !labNet && (seen.edges ?? []).some((/** @type {any} */ e) => e.running) ? seen.networks.find((/** @type {any} */ n) => n.edge) ?? null : null;
     // A GROUP NETWORK, as well as its own: only one of the cluster's.
     const groupNet = group ? seen.networks.find((/** @type {any} */ n) => n.id === group && n.group) : null;
     if (group && !groupNet) return { ok: false, text: 'That is not a group network this box saw on your cluster, so the machine was not made.' };
@@ -749,7 +902,9 @@ export class PvePools {
     // datacenter's firewall off reaches everything that bridge does. Made on a
     // network the person chose, it reaches what they chose; made by default,
     // it would reach their network without their having said so.
-    if (!chosen && seen.fenced !== true) {
+    // Behind the edge router it reaches nothing private either way: the
+    // router's own rules hold it to the internet (docs/hypervisors.md).
+    if (!chosen && !uplink && seen.fenced !== true) {
       return {
         ok: false,
         text: seen.fenced === false
@@ -800,7 +955,7 @@ export class PvePools {
           return { ok: false, unreachable: true, text: `${record.address} could not be reached from here: ${/** @type {Error} */ (e).message}` };
         }
         try {
-          await api.waitTask(await api.post(`${src}/clone`, { newid: next, name, pool: record.pool, description: markText({ for: who, until, made, from: image.id, on: labNet?.name ?? chosen?.name ?? image.bridge, grp: groupNet?.name ?? null, gip: joined?.address ?? null, lab: labNet?.name ?? null }) }), { sleep: this.sleep });
+          await api.waitTask(await api.post(`${src}/clone`, { newid: next, name, pool: record.pool, description: markText({ for: who, until, made, from: image.id, on: labNet?.name ?? chosen?.name ?? uplink?.name ?? image.bridge, grp: groupNet?.name ?? null, gip: joined?.address ?? null, lab: labNet?.name ?? null }) }), { sleep: this.sleep });
           vmid = next;
         } catch (e) {
           lastError = e;
@@ -823,7 +978,7 @@ export class PvePools {
         smbios1,
         ciuser: 'fleetwright',
         ...(keys.length ? { sshkeys: encodeURIComponent(keys.join('\n')) } : {}),
-        net0: net0On(cfg.net0, labNet?.name ?? chosen?.name ?? null),
+        net0: net0On(cfg.net0, labNet?.name ?? chosen?.name ?? uplink?.name ?? null),
         // ON THE GROUP NETWORK TOO, at its own address: Proxmox's cloud-init
         // writes it, so it is set before anything inside listens.
         ...(joined && groupNet ? { net1: `virtio=${joined.mac},bridge=${groupNet.name},firewall=1`, ipconfig1: `ip=${joined.address}/16` } : {}),
@@ -850,7 +1005,7 @@ export class PvePools {
           `Making ${name} from ${image.name} on ${record.address}` +
           (labNet
             ? `, in ${labNet.name}: ${closed ? 'it reaches the fleet and Claude and nothing else' : 'it reaches the internet and nothing private'}`
-            : chosen ? `, on ${chosen.name}` : ', behind the cluster’s firewall: it reaches the internet and nothing private') +
+            : chosen ? `, on ${chosen.name}` : uplink ? ', behind the edge router: it reaches the internet and nothing private, and what it does is filtered for threats' : ', behind the cluster’s firewall: it reaches the internet and nothing private') +
           `${joined && groupNet ? `, with the others on ${groupNet.name} at ${joined.address}` : ''}. ` +
           `It joins the fleet as your temporary machine in a minute or two, for ${life} minutes${claude ? '' : ', and has no Claude login of yours to run on: keep one in your vault'}.`,
       };

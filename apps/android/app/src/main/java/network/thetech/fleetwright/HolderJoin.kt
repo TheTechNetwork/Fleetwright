@@ -87,6 +87,9 @@ internal object HolderJoin {
     private const val SEALED = "2:"
     const val KEPT_PER_ADDRESS = 4
 
+    /** Where a secret for a Proxmox VE cluster's own machine is kept: under no address, because the setup has not said yet which address its line carries. No address has a space in it. */
+    const val PROXMOX_SETUP = "proxmox setup"
+
     /** One name the fleet holds for a pool's own machine, and the requests made under it. */
     data class Waiting(val hostId: String, val address: String, val madeAt: Long, val until: Long, val requests: List<Request>)
 
@@ -331,13 +334,18 @@ internal object HolderJoin {
      */
     suspend fun admit(context: Context, settings: Settings, waiting: Waiting, quietly: Boolean): Outcome {
         if (waiting.requests.isEmpty()) return Outcome.Unsaid
+        // A PROXMOX VE CLUSTER'S OWN MACHINE is made before this phone knows
+        // the address its line will carry (docs/proxmox.md), so its secret is
+        // kept under PROXMOX_SETUP and tried for any request: the proof says
+        // which, if any, it made.
+        val pending = secrets(settings, PROXMOX_SETUP)
         val secrets = if (quietly) {
             val quiet = secrets(settings, waiting.address)
             // Only secrets from before: a tap opens them, this does not.
             if (quiet.isEmpty() && made(settings, waiting.address)) return Outcome.Unsaid
-            quiet
+            quiet + pending
         } else {
-            unlock(context, settings, waiting, reason(waiting.hostId, waiting.address)) ?: return Outcome.Unsaid
+            (unlock(context, settings, waiting, reason(waiting.hostId, waiting.address)) ?: return Outcome.Unsaid) + pending
         }
         if (secrets.isEmpty()) return Outcome.Refused(notThisPhone(waiting.hostId))
         val (request, value) = proven(waiting, secrets.map { it.value }) ?: return Outcome.Refused(notProven(waiting.hostId))
@@ -346,7 +354,7 @@ internal object HolderJoin {
             return Outcome.Refused(it.message ?: "Your fleet refused ${waiting.hostId}.")
         }
         if (!answer.ok) return Outcome.Refused(answer.text.ifBlank { "Your fleet refused ${waiting.hostId}." })
-        secrets.firstOrNull { it.value == value }?.let { spent(settings, waiting.address, it) }
+        secrets.firstOrNull { it.value == value }?.let { spent(settings, if (it in pending) PROXMOX_SETUP else waiting.address, it) }
         // The vault's reason is not in the sentence: the card says the result
         // and the one action, and the machine's page is where approving
         // happens and where the reason shows.

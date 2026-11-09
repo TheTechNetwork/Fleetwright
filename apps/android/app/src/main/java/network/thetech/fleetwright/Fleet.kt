@@ -2270,9 +2270,19 @@ class Fleet(
         val fenced: Boolean?,
         val images: Int?,
         val machines: Int?,
+        /** ITS OWN MACHINE (docs/proxmox.md): null is no box said, never none. */
+        val holder: OwnMachine? = null,
+        /** ITS EDGE ROUTER (docs/proxmox.md): null is no box said, never none. */
+        val edge: EdgeRouter? = null,
     ) {
         val onProxmox: Boolean get() = kind == "proxmox"
     }
+
+    /** A box looked and saw none ([name] null), or the machine and whether it is up. */
+    data class OwnMachine(val name: String?, val running: Boolean)
+
+    /** A box looked and saw none ([there] false), or the router, whether it is up, and whether it drops. */
+    data class EdgeRouter(val there: Boolean, val running: Boolean, val blocks: Boolean)
 
     /** What one box holding a hypervisor last saw: null is it has not looked yet, never no. */
     data class HypervisorBox(val hostId: String, val reachable: Boolean?, val problem: String?)
@@ -2302,6 +2312,20 @@ class Fleet(
                     fenced = flag(o, "fenced"),
                     images = count(o, "images"),
                     machines = count(o, "machines"),
+                    edge = o.opt("edge").let { e ->
+                        when {
+                            e == false -> EdgeRouter(false, false, false)
+                            e is JSONObject -> EdgeRouter(true, e.optBoolean("running", false), e.optBoolean("blocks", false))
+                            else -> null
+                        }
+                    },
+                    holder = o.opt("holder").let { h ->
+                        when {
+                            h == false -> OwnMachine(null, false)
+                            h is JSONObject && h.optString("name").isNotBlank() -> OwnMachine(h.optString("name"), h.optBoolean("running", false))
+                            else -> null
+                        }
+                    },
                 )
             }
         }
@@ -2595,6 +2619,23 @@ class Fleet(
             // A FAILED REQUEST IS NOT NOBODY WAITING: it fails, and Machines keeps what it had.
             val list = get("/api/holders").optJSONArray("holders") ?: JSONArray()
             (0 until list.length()).mapNotNull { i -> list.optJSONObject(i)?.let(HolderJoin::waitingFrom) }
+        }
+    }
+
+    /**
+     * A PIN AND A NAME for a Proxmox VE cluster's own machine this phone's own
+     * setup of the node is about to make, reserved for [address], the one its
+     * line will carry (docs/proxmox.md, "A machine of its own").
+     */
+    suspend fun holderPin(address: String): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = post("/api/holders", JSONObject().put("address", address))
+            val pin = json.optString("pin", "")
+            val hostId = json.optString("hostId", "")
+            if (!json.optBoolean("ok", false) || pin.isEmpty() || hostId.isEmpty()) {
+                throw IllegalStateException(json.optString("text", "").ifBlank { "Your fleet gave no pin for the cluster’s own machine. Update it, or set the cluster up without one." })
+            }
+            pin to hostId
         }
     }
 
@@ -3949,8 +3990,9 @@ class Settings(context: Context) {
         val prefixes = listOf(
             "secret.hypervisor.", "secret.xosetup-reply.", "secret.pvesetup-reply.",
             "secret.pvedirect-password.", "secret.pvedirect-line.", "xoSaved.", "holderSecrets.",
+            "secret.proxmox-record.", "secret.ssh-phone-key", "secret.ssh-host-keys",
         )
-        val whole = setOf("xoHeld", "xoPending", "pveDirectPending", "pvePending", "xoVia", "xoLooked")
+        val whole = setOf("xoHeld", "xoPending", "pveDirectPending", "pvePending", "xoVia", "xoLooked", "pveHeld")
         val gone = prefs.all.keys.filter { k -> k in whole || prefixes.any { k.startsWith(it) } }
         prefs.edit().apply { gone.forEach { remove(it) } }.apply()
     }
@@ -3963,6 +4005,15 @@ class Settings(context: Context) {
     var xoHeld: String
         get() = prefs.getString("xoHeld", "") ?: ""
         set(value) = prefs.edit().apply { if (value.isEmpty()) remove("xoHeld") else putString("xoHeld", value) }.apply()
+
+    /**
+     * The Proxmox VE addresses this phone keeps the cluster's record for, as
+     * ProxmoxKept writes them: a JSON array of strings. Not a secret: the
+     * record is kept apart, encrypted.
+     */
+    var pveHeld: String
+        get() = prefs.getString("pveHeld", "") ?: ""
+        set(value) = prefs.edit().apply { if (value.isEmpty()) remove("pveHeld") else putString("pveHeld", value) }.apply()
 
     /** The hypervisor setups still owed a token, as XoHandoff writes them. Not a secret. */
     var xoPending: String

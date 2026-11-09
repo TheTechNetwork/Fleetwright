@@ -668,7 +668,13 @@ machine of the fleet, through the coordinator.
   in the memory of the boxes they approved for the pool. Until G14 it was in
   the routers' `xenStoreData`, which every user signed in to that Xen
   Orchestra reads. A compromised coordinator sees none of it: the key reaches
-  the phone sealed, and the vault keeps it sealed.
+  the phone sealed, and the vault keeps it sealed. **On Proxmox VE**
+  (`docs/proxmox.md`, "Watching it") the same key, with the same privileges
+  and the same pinned certificate, is made on the node by its setup and kept
+  in `/etc/pve/priv`, which only root reads; it reaches the phone in the
+  setup's line beside the cluster's token, which is held to the same care,
+  and the boxes from the vault. The cluster's token gains `VM.Audit` and
+  `VM.GuestAgent.Audit` on the router alone, to find its address.
 - **A pool's page from away** (`xolook`, `xoact`, `docs/manage.md`, "From
   away"). A box that holds a person's pool token reads the page for their
   phone and seals it to a key the phone made for that one look, so the

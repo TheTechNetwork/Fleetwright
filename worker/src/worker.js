@@ -2214,6 +2214,22 @@ const OPENAPI = JSON.stringify({
                           },
                           "machines": {
                             "type": "integer"
+                          },
+                          "holder": {
+                            "description": "Its own machine, `{ name, running }` (docs/proxmox.md, \u201cA machine of its own\u201d): false when a box looked and saw none, null when no box said, as a Xen Orchestra entry\u2019s boxes do not.",
+                            "type": [
+                              "object",
+                              "boolean",
+                              "null"
+                            ]
+                          },
+                          "edge": {
+                            "description": "Its edge router, `{ running, blocks }` (docs/proxmox.md, \u201cThe edge router\u201d): false when a box looked and saw none, null when no box said.",
+                            "type": [
+                              "object",
+                              "boolean",
+                              "null"
+                            ]
                           }
                         }
                       }
@@ -3426,6 +3442,51 @@ const OPENAPI = JSON.stringify({
             "description": "not signed in as a person"
           }
         }
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "A pin for a pool\u2019s own machine you are about to make",
+        "description": "`{ address }`, the cluster it holds. For a phone setting up a Proxmox VE node itself, which runs no job a box could ask with: the same single-use pin, name and day-long reservation a setup job is given (`holder-pin`). The setup script clones the machine as root, outside the fleet\u2019s pool, booted to join with this. A few waiting at once each. See docs/proxmox.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "address"
+                ],
+                "properties": {
+                  "address": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`{ pin, hostId, expiresAt, until }`"
+          },
+          "400": {
+            "description": "no address, or not one"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not signed in as a person"
+          },
+          "429": {
+            "description": "`too_many`: as many as one may have waiting already"
+          },
+          "507": {
+            "description": "`pins_full`"
+          }
+        }
       }
     },
     "/api/holders/{hostId}/approve": {
@@ -4096,6 +4157,16 @@ const OPENAPI = JSON.stringify({
             "description": "Where the pool's Xen Orchestra answers, as this phone keeps the pool.",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "machine",
+            "in": "query",
+            "required": false,
+            "description": "SSH to this machine of yours on the pool (`vm-` and twelve hex digits) instead of the pool's console: the machine carrying it connects to the machine's address, port 22, only for a running machine made for you. See docs/hypervisors.md, \"SSH in the app\".",
+            "schema": {
+              "type": "string",
+              "pattern": "^vm-[0-9a-f]{12}$"
             }
           }
         ],

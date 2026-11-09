@@ -583,13 +583,20 @@ test('the app flow is one tap on both phones, and the paste flow is not', () => 
   // bundled with the app and never goes to an address, so no provider's login
   // can ever be drawn in it. Every other file still may not have one.
   const consolePage = read('apps/android/app/src/main/java/network/thetech/fleetwright/ConsolePage.kt');
+  // AND THE SSH TERMINAL (TerminalPage.kt), for the same reason: the page
+  // bundled with the app (assets/term.html) and nowhere else, asking for
+  // nothing; the key is the phone's and never reaches it.
+  const terminalPage = read('apps/android/app/src/main/java/network/thetech/fleetwright/TerminalPage.kt');
+  for (const page of [consolePage, terminalPage]) {
+    assert.match(code(page), /override fun shouldOverrideUrlLoading\(view: WebView, request: WebResourceRequest\) = true/);
+  }
   // AND THE PAGE THROUGH A MACHINE (BrowsePage.kt, docs/browse.md), which
   // does go to addresses: it is a browser for pages on a person's own
   // machines and sessions, opened from those pages and never by a sign-in.
   // It holds the rule's purpose by never being reached from one: it names no
   // authorization page and no sign-in flow, and no sign-in flow names it.
   const browsePage = read('apps/android/app/src/main/java/network/thetech/fleetwright/BrowsePage.kt');
-  assert.ok(!/\bWebView\b/.test(code(android.replace(consolePage, '').replace(browsePage, ''))), 'Android must not draw it either');
+  assert.ok(!/\bWebView\b/.test(code(android.replace(consolePage, '').replace(terminalPage, '').replace(browsePage, ''))), 'Android must not draw it either');
   assert.ok(!/authorize|oauth|WebAuth|CustomTabs/i.test(code(browsePage)), 'the browse page is reached from a sign-in');
   for (const f of ['WebAuth.kt', 'CredentialsSheet.kt']) {
     assert.ok(!/BrowsePage|BrowseBridge/.test(code(read(`apps/android/app/src/main/java/network/thetech/fleetwright/${f}`))), `${f} opens the browse page`);

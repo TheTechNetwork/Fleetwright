@@ -102,7 +102,7 @@ async function standIn({ cert, firewall = true, perms = null, version = '9.0.3' 
       // reading of them passed here and saw nothing on a real node.
       if (p === '/pools/fleetwright') return ok({ members: [...state.vms.values()].map((v) => ({ type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, status: v.status })) });
       if (p === '/cluster/resources') {
-        const vms = [...state.vms.values()].map((v) => ({ id: `qemu/${v.vmid}`, type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, tags: v.tags, status: v.status, pool: 'fleetwright' }));
+        const vms = [...state.vms.values()].map((v) => ({ id: `qemu/${v.vmid}`, type: 'qemu', vmid: v.vmid, node: v.node, name: v.name, template: v.template, tags: v.tags, status: v.status, ...(v.pool === null ? {} : { pool: v.pool ?? 'fleetwright' }) }));
         return ok(params.type === 'vm' || !params.type ? [...vms, { id: 'qemu/999', type: 'qemu', vmid: 999, node: 'pve1', name: 'someone-elses', template: 1, tags: 'fleetwright-image', status: 'stopped' }] : []);
       }
       if (p === '/cluster/firewall/options') return ok({ enable: state.firewall ? 1 : 0 });
@@ -567,9 +567,9 @@ test('a token that can do more than the fleet needs is reported, by path and pri
   const wide = wideOf({
     '/pool/fleetwright': { 'VM.Allocate': 1, 'VM.Clone': 1 },
     '/': { 'Sys.Audit': 1, 'Permissions.Modify': 1, 'Sys.Modify': 1 },
-    '/vms/104': { 'VM.Console': 1 },
+    '/vms/104': { 'VM.Migrate': 1 },
   }, 'fleetwright');
-  assert.deepEqual(wide, [{ path: '/', privs: ['Permissions.Modify', 'Sys.Modify'] }, { path: '/vms/104', privs: ['VM.Console'] }]);
+  assert.deepEqual(wide, [{ path: '/', privs: ['Permissions.Modify', 'Sys.Modify'] }, { path: '/vms/104', privs: ['VM.Migrate'] }]);
 });
 
 test('Proxmox records go to the Proxmox driver and out of the hub’s bundle, and its images are made there', { skip }, async () => {
@@ -744,4 +744,99 @@ test('a machine’s address is its guest agent’s IPv4 on net0, and nothing els
   assert.equal(agentAddress({ result: [nic('bc:24:11:00:00:09', ['10.200.0.5'])] }, net0), null);
   assert.equal(agentAddress({ result: [nic('bc:24:11:00:00:07', ['fe80::1'])] }, net0), null);
   assert.equal(agentAddress(answer, 'bridge=vmbr0'), null);
+});
+
+// A CONSOLE FROM AWAY dials a node this box holds for THAT person, and no
+// other address: a tunnel is never a way into the box's network. The phone
+// opens TLS through it, held to the cluster's CA, and signs in with its own
+// copy of the token; the box carries ciphertext.
+test('a console from away reaches only a cluster this box holds for that person', async () => {
+  const { Pools } = await import('../src/fleet/host/pools.js');
+  const { XoPools } = await import('../src/fleet/host/xo-pools.js');
+  const certs = certificates();
+  const pools = new Pools({ xo: new XoPools({}), pve: new PvePools(fast) });
+  pools.adopt(vaultWith(recordFor('10.69.10.10:8006', certs.ca)));
+  assert.deepEqual(pools.consoleAddress(OWNER, '10.69.10.10:8006'), { host: '10.69.10.10', port: 8006 });
+  assert.equal(pools.consoleAddress('sam@example.com', '10.69.10.10:8006'), null, 'another person’s console through this box');
+  assert.equal(pools.consoleAddress(OWNER, '10.69.10.11:8006'), null, 'an address this box holds nothing at');
+  assert.equal(pools.consoleAddress(OWNER, '10.69.10.10:22'), null, 'another port at the node');
+});
+
+// WHERE SSH FROM AWAY GOES: a running machine made for the person asking, at
+// the address a look saw, port 22, and nothing for anybody else's machine,
+// one not running or one with no address yet. A phone's own key is a second
+// item beside the pasted list, and a machine takes both.
+test('SSH from away reaches only the asker’s running machine, and a phone’s key joins the pasted ones', async () => {
+  const { sshTarget, isSshKeysItem, SSH_PHONE_KEY_PREFIX } = await import('../src/fleet/host/xo-pools.js');
+  const seen = new Map([[`${OWNER} pve.lan:8006`, { address: 'pve.lan:8006', owner: OWNER, machines: [
+    { name: 'vm-aaaaaaaaaaaa', state: 'Running', ip: '10.69.10.57' },
+    { name: 'vm-bbbbbbbbbbbb', state: 'Running', ip: '10.69.10.58' },
+    { name: 'vm-cccccccccccc', state: 'Halted', ip: '10.69.10.59' },
+    { name: 'vm-dddddddddddd', state: 'Running', ip: null },
+  ] }]]);
+  const owners = new Map([['pve.lan:8006 vm-aaaaaaaaaaaa', OWNER], ['pve.lan:8006 vm-bbbbbbbbbbbb', 'sam@example.com'], ['pve.lan:8006 vm-cccccccccccc', OWNER], ['pve.lan:8006 vm-dddddddddddd', OWNER]]);
+  assert.deepEqual(sshTarget(seen, owners, OWNER, 'pve.lan:8006', 'vm-aaaaaaaaaaaa'), { host: '10.69.10.57', port: 22 });
+  for (const name of ['vm-bbbbbbbbbbbb', 'vm-cccccccccccc', 'vm-dddddddddddd', 'vm-eeeeeeeeeeee']) assert.equal(sshTarget(seen, owners, OWNER, 'pve.lan:8006', name), null, name);
+  assert.equal(sshTarget(seen, owners, OWNER, 'other.lan:8006', 'vm-aaaaaaaaaaaa'), null);
+  assert.equal(isSshKeysItem('secret:SSH_AUTHORIZED_KEYS'), true);
+  assert.equal(isSshKeysItem(`${SSH_PHONE_KEY_PREFIX}iphone-1a2b`), true);
+  assert.equal(isSshKeysItem(`${SSH_PHONE_KEY_PREFIX}../x`), false);
+  assert.equal(isSshKeysItem('secret:GITHUB_TOKEN'), false);
+});
+
+
+// THE CLUSTER'S OWN MACHINE, as the setup made it: outside the pool, which
+// is the one thing the token cannot reach into, and tagged. One in the pool
+// with the tag is anybody's who may tag the pool's machines.
+test('the look says the cluster’s own machine, and the box that is it says so', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf });
+  try {
+    pve.state.vms.set(150, { vmid: 150, node: 'pve1', name: 'holder-0a0b0c', template: 0, tags: 'fleetwright-holder', status: 'running', pool: null, config: {} });
+    pve.state.vms.set(151, { vmid: 151, node: 'pve1', name: 'planted', template: 0, tags: 'fleetwright-holder', status: 'running', config: {} });
+    const pools = new PvePools({ now: () => NOW, ...fast });
+    pools.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    await pools.refresh();
+    const [seen] = pools.report();
+    assert.deepEqual(seen.holders.map((/** @type {any} */ h) => [h.name, h.running]), [['holder-0a0b0c', true]]);
+    assert.equal(seen.holder, undefined, 'only the box that is the cluster’s own machine says it is');
+    const it = new PvePools({ now: () => NOW, holderFor: pve.address, ...fast });
+    it.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    await it.refresh();
+    assert.equal(it.report()[0].holder, true);
+  } finally {
+    await pve.close();
+  }
+});
+
+// BEHIND THE EDGE ROUTER, while one is up (docs/proxmox.md, "The edge
+// router"): a machine made on the default network goes on the router's LAN,
+// whose rules hold it to the internet, so it is made there even with the
+// datacenter's firewall off.
+test('a machine goes behind the edge router while one is up, and the look says it is there', { skip }, async () => {
+  const certs = certificates();
+  const pve = await standIn({ cert: certs.leaf, firewall: false });
+  try {
+    pve.state.perms['/sdn/zones/fwedge/fwedge'] = { 'SDN.Use': 1, 'SDN.Audit': 1 };
+    pve.state.vnets.push({ vnet: 'fwedge', zone: 'fwedge', alias: 'fleetwright-edge-uplink' });
+    pve.state.vms.set(160, { vmid: 160, node: 'pve1', name: 'fleetwright-edge', template: 0, tags: 'fleetwright-edge;fleetwright-edge-blocks', status: 'running', pool: null, config: {} });
+    const pools = new PvePools({ now: () => NOW, ...fast });
+    pools.adopt(vaultWith(recordFor(pve.address, certs.ca)));
+    await pools.refresh();
+    const [seen] = pools.report();
+    assert.deepEqual(seen.edges.map((/** @type {any} */ e) => [e.name, e.running, e.blocks]), [['fleetwright-edge', true, true]]);
+    assert.equal(seen.networks.find((/** @type {any} */ n) => n.name === 'fwedge')?.edge, true);
+    const r = await pools.make({ owner: OWNER, template: seen.images[0].id, ticket: TICKET, minutes: 90, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(r.ok, true, r.text);
+    assert.match(r.text, /behind the edge router/);
+    assert.match(pve.state.vms.get(200).config.net0, /bridge=fwedge/);
+    assert.match(pve.state.vms.get(200).config.net0, /firewall=1/, 'still behind the cluster’s firewall too');
+    // A ROUTER THAT IS OFF is no way out: the machine is not put behind it.
+    pve.state.vms.get(160).status = 'stopped';
+    await pools.refresh();
+    const off = await pools.make({ owner: OWNER, template: pools.report()[0].images[0].id, ticket: `fwt_0123456789ac_${'c'.repeat(48)}`, minutes: 90, coordinatorUrl: 'https://fleet.example.com' });
+    assert.equal(off.ok, false, 'with the firewall off and no router up, nothing is made by default');
+  } finally {
+    await pve.close();
+  }
 });

@@ -113,6 +113,10 @@ fun MachinesScreen(
     var proxmoxAt by rememberSaveable { mutableStateOf("") }
     // Opened from a cluster's page to turn its datacenter firewall on.
     var proxmoxFirewall by rememberSaveable { mutableStateOf(false) }
+    /** The setup opened from a cluster's page to make its own machine: "make", "again", or "" for neither. */
+    var proxmoxOwn by rememberSaveable { mutableStateOf("") }
+    /** The setup opened from a cluster's page for its edge router: "make", "again", "again-block", or "" for neither. */
+    var proxmoxEdge by rememberSaveable { mutableStateOf("") }
     var hypervisorJob by rememberSaveable { mutableStateOf<String?>(null) }
     // A pool whose policy is being changed, by address. Saveable for the same
     // reason; the job itself starts over after a rotation (HypervisorSheet).
@@ -222,8 +226,10 @@ fun MachinesScreen(
             held = held,
             onOpenPool = { listingHypervisors = false; managing = it },
             onAddXo = { listingHypervisors = false; hypervisorJob = null; hypervisorAt = it; addingHypervisor = true },
-            onAddProxmox = { listingHypervisors = false; proxmoxAt = it; proxmoxFirewall = false; addingProxmox = true },
-            onTurnOnFirewall = { listingHypervisors = false; proxmoxAt = it; proxmoxFirewall = true; addingProxmox = true },
+            onAddProxmox = { listingHypervisors = false; proxmoxAt = it; proxmoxFirewall = false; proxmoxOwn = ""; addingProxmox = true },
+            onTurnOnFirewall = { listingHypervisors = false; proxmoxAt = it; proxmoxFirewall = true; proxmoxOwn = ""; addingProxmox = true },
+            onMakeOwn = { node, again -> listingHypervisors = false; proxmoxAt = node; proxmoxFirewall = false; proxmoxEdge = ""; proxmoxOwn = if (again) "again" else "make"; addingProxmox = true },
+            onMakeEdge = { node, again, blocks -> listingHypervisors = false; proxmoxAt = node; proxmoxFirewall = false; proxmoxOwn = ""; proxmoxEdge = if (!again) "make" else if (blocks) "again-block" else "again"; addingProxmox = true },
             onDismiss = { listingHypervisors = false },
         )
     }
@@ -231,8 +237,16 @@ fun MachinesScreen(
         ProxmoxSheet(
             settings,
             startNode = proxmoxAt,
-            startOptions = if (proxmoxFirewall) ProxmoxOptions(firewall = true) else null,
-            onDismiss = { addingProxmox = false; proxmoxAt = ""; proxmoxFirewall = false },
+            startOptions = when {
+                proxmoxFirewall -> ProxmoxOptions(firewall = true)
+                proxmoxOwn == "again" -> ProxmoxOptions(holder = true, holderAgain = true)
+                proxmoxOwn == "make" -> ProxmoxOptions(holder = true)
+                proxmoxEdge == "make" -> ProxmoxOptions(edge = true)
+                proxmoxEdge == "again" -> ProxmoxOptions(edge = true, edgeAgain = true)
+                proxmoxEdge == "again-block" -> ProxmoxOptions(edge = true, edgeBlock = true, edgeAgain = true)
+                else -> null
+            },
+            onDismiss = { addingProxmox = false; proxmoxAt = ""; proxmoxFirewall = false; proxmoxOwn = ""; proxmoxEdge = "" },
         )
     }
     if (addingHypervisor) {

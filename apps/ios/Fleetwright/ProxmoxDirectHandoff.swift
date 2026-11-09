@@ -107,6 +107,8 @@ enum ProxmoxDirectHandoff {
     private static func keep(_ record: ProxmoxLine.Record, address: String, settings: Settings) async -> Outcome? {
         do {
             _ = try await PhoneVault(settings: settings).keepHypervisor(Fleet(settings: settings), address: record.address, record: record.json)
+            // KEPT HERE TOO, for the console in the app (ProxmoxKept).
+            ProxmoxKept.keep(record)
             forget(address: address)
             return .kept(record.address)
         } catch {

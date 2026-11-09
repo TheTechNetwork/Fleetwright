@@ -57,6 +57,10 @@ internal fun HypervisorsScreen(
     onAddProxmox: (String) -> Unit,
     /** The same setup with the datacenter firewall already on, for a cluster where it is off. */
     onTurnOnFirewall: (String) -> Unit,
+    /** The same setup making the cluster its own machine, or making it again ([again]). */
+    onMakeOwn: (String, Boolean) -> Unit = { node, _ -> onAddProxmox(node) },
+    /** The same setup making the cluster an edge router, or making it again ([again]) the way it is ([blocks]). */
+    onMakeEdge: (String, Boolean, Boolean) -> Unit = { node, _, _ -> onAddProxmox(node) },
     onDismiss: () -> Unit,
 ) {
     var fleet by remember { mutableStateOf<List<Fleet.Hypervisor>?>(null) }
@@ -129,6 +133,8 @@ internal fun HypervisorsScreen(
             row,
             onSetUpAgain = { open = null; onAddProxmox(HypervisorAddress.node(row.address)) },
             onTurnOnFirewall = { open = null; onTurnOnFirewall(HypervisorAddress.node(row.address)) },
+            onMakeOwn = { again -> open = null; onMakeOwn(HypervisorAddress.node(row.address), again) },
+            onMakeEdge = { again, blocks -> open = null; onMakeEdge(HypervisorAddress.node(row.address), again, blocks) },
             onDismiss = { open = null },
         )
         return
@@ -248,7 +254,7 @@ private fun ChoiceRow(title: String, line: String, onClick: () -> Unit) {
  * evidence under it.
  */
 @Composable
-private fun HypervisorPage(row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnOnFirewall: () -> Unit, onDismiss: () -> Unit) {
+private fun HypervisorPage(row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnOnFirewall: () -> Unit, onMakeOwn: (Boolean) -> Unit, onMakeEdge: (Boolean, Boolean) -> Unit, onDismiss: () -> Unit) {
     FullScreen(title = row.address, onDismiss = onDismiss) {
         Text(HypervisorWords.answer(row.fleet), style = Design.Style.body, color = Design.Palette.ink.now)
         SectionHead("Machines")
@@ -281,6 +287,44 @@ private fun HypervisorPage(row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnO
                 facts.forEach { Text(it, style = Design.Style.body, color = Design.Palette.ink.now) }
             }
         }
+        // ITS EDGE ROUTER (docs/proxmox.md): there, or the setup that makes
+        // one. Unsaid by an older box, so nothing is drawn. Same as iOS.
+        val edge = row.fleet?.edge
+        if (row.proxmox && edge != null) {
+            SectionHead(HypervisorWords.EDGE_HEADER)
+            if (edge.there) {
+                Text(
+                    HypervisorWords.edgeThere(edge.running, edge.blocks),
+                    style = Design.Style.body,
+                    color = if (edge.running) Design.Palette.ink.now else Design.Palette.attention.now,
+                )
+            } else {
+                Text(HypervisorWords.EDGE_NONE, style = Design.Style.body, color = Design.Palette.inkDim.now)
+            }
+            Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
+                OpenRow(if (edge.there) HypervisorWords.MAKE_EDGE_AGAIN else HypervisorWords.MAKE_EDGE, onClick = { onMakeEdge(edge.there, edge.blocks) })
+            }
+            if (edge.there) Hint(HypervisorWords.MAKE_EDGE_AGAIN_FOOTER)
+        }
+        // ITS OWN MACHINE (docs/proxmox.md): there, or the setup that makes
+        // one. Unsaid by an older box, so nothing is drawn. Same as iOS.
+        val own = row.fleet?.holder
+        if (row.proxmox && own != null) {
+            SectionHead(HypervisorWords.OWN_HEADER)
+            if (own.name != null) {
+                Text(
+                    HypervisorWords.ownThere(own.name, own.running),
+                    style = Design.Style.body,
+                    color = if (own.running) Design.Palette.ink.now else Design.Palette.attention.now,
+                )
+            } else {
+                Text(HypervisorWords.OWN_NONE, style = Design.Style.body, color = Design.Palette.inkDim.now)
+            }
+            Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
+                OpenRow(if (own.name != null) HypervisorWords.MAKE_OWN_AGAIN else HypervisorWords.MAKE_OWN, onClick = { onMakeOwn(own.name != null) })
+            }
+            if (own.name != null) Hint(HypervisorWords.MAKE_OWN_AGAIN_FOOTER)
+        }
         if (row.proxmox) {
             Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
                 // THE FIREWALL, where it is off: the same setup, with the
@@ -311,6 +355,20 @@ object HypervisorWords {
     const val NO_BOX = "None yet"
     const val TURN_ON_FIREWALL = "Turn on the datacenter firewall"
     const val AGAIN_FOOTER = "Keeps what it made; the old access stops working."
+    // ITS OWN MACHINE, the same words on iOS (HypervisorsView.swift).
+    const val OWN_HEADER = "Its own machine"
+    const val OWN_NONE = "None. Your machines with its access manage it while they’re on."
+    const val MAKE_OWN = "Make its own machine"
+    const val MAKE_OWN_AGAIN = "Make it again"
+    const val MAKE_OWN_AGAIN_FOOTER = "Replaces it with a fresh one. Its disk is erased."
+    const val EDGE_HEADER = "Its edge router"
+    const val EDGE_NONE = "None. Its machines are behind the cluster’s firewall alone."
+    const val MAKE_EDGE = "Make the edge router"
+    const val MAKE_EDGE_AGAIN = "Make it again"
+    const val MAKE_EDGE_AGAIN_FOOTER = "Builds a fresh one. Machines have no internet access while it starts."
+    fun edgeThere(running: Boolean, blocks: Boolean): String =
+        if (running) (if (blocks) "Running, dropping what its threat rules match" else "Running, logging what its threat rules match") else "Off. Setting it up again starts it."
+    fun ownThere(name: String, running: Boolean): String = if (running) "$name, running" else "$name, off. Setting it up again starts it."
     const val XO_ELSEWHERE = "Its page opens on the phone that set it up."
     const val XO_CHOICE = "A pool of XCP-ng hosts, through Xen Orchestra."
     const val PVE_CHOICE = "A Proxmox VE 9 node or cluster, set up over SSH."

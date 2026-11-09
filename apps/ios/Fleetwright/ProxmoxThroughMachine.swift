@@ -71,6 +71,8 @@ struct ProxmoxThroughMachineView: View {
         let hostId: String
         let address: String
         let key: String
+        /// It can make the cluster a machine of its own (`pve-holder`).
+        var holder = false
     }
 
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -420,7 +422,7 @@ struct ProxmoxThroughMachineView: View {
                 refuse("The key \(machine) answered with did not come from that machine, so the root password was not sent.")
                 return
             }
-            begun = Begun(job: begunJob, hostId: machine, address: target, key: jobKey)
+            begun = Begun(job: begunJob, hostId: machine, address: target, key: jobKey, holder: setup.can?.contains("pve-holder") == true)
             switch await vaultApproval(of: machine, key: hostKey) {
             case .approved:
                 await send()
@@ -453,12 +455,24 @@ struct ProxmoxThroughMachineView: View {
         // THE KEY THE LINE COMES BACK TO OUTLIVES THIS SCREEN: kept in the
         // Keychain under the job until the line is in the vault.
         let back = ProxmoxThroughHandoff.newKey(job: begun.job, address: begun.address)
+        // ITS OWN MACHINE, only where the machine running the setup can ask
+        // for its pin; with a secret it asks to join with, kept here
+        // (HolderJoin), so this phone approves it once it does.
+        var sent = options.payload
+        if sent["holder"] != nil {
+            if begun.holder, let secret = HolderJoin.newSecret(for: HolderJoin.proxmoxSetup) {
+                sent["holderSecret"] = secret
+            } else if !begun.holder {
+                sent["holder"] = nil
+                sent["holderAgain"] = nil
+            }
+        }
         let sealed: [String: String]
         do {
             sealed = try Seal.seal(
                 to: begun.key,
                 aad: Seal.pvesetupAAD(job: begun.job, address: begun.address),
-                payload: ["v": 1, "purpose": "pve", "root": ["password": rootPassword], "reply": back.publicKey, "vmids": vmids, "options": options.payload]
+                payload: ["v": 1, "purpose": "pve", "root": ["password": rootPassword], "reply": back.publicKey, "vmids": vmids, "options": sent]
             )
         } catch {
             ProxmoxThroughHandoff.forget(job: begun.job)
