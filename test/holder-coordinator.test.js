@@ -218,3 +218,19 @@ test('the hypervisors list says each cluster’s own machine, and none only from
   box('saw-up', [{ pool: 'p', name: 'holder-0a0b0c', running: true }]);
   assert.deepEqual(row().holder, { name: 'holder-0a0b0c', running: true }, 'up when any box saw it up');
 });
+
+test('the hypervisors list says each cluster’s edge router, and none only from a box that looked', () => {
+  const core = new CoordinatorCore({});
+  /** @param {string} hostId @param {any} edges */
+  const box = (hostId, edges) => {
+    core.registry.connect(hostId, () => {});
+    core.registry.recordHealth(hostId, { hub: { reachable: true }, protocol: 9, maxSessions: 5, running: 0, free: 5, labels: [], xo: [{ address: '10.69.10.10:8006', owner: ELI, kind: 'proxmox', reachable: true, pools: [], images: [], networks: [], machines: [], ...(edges === undefined ? {} : { edges }) }] });
+  };
+  const row = () => core.hypervisorsFor({ email: ELI })[0];
+  box('old', undefined);
+  assert.equal(row().edge, null);
+  box('looked', []);
+  assert.equal(row().edge, false);
+  box('saw', [{ pool: 'p', name: 'fleetwright-edge', running: true, blocks: true }]);
+  assert.deepEqual(row().edge, { running: true, blocks: true });
+});

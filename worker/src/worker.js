@@ -2184,6 +2184,14 @@ const OPENAPI = JSON.stringify({
                               "boolean",
                               "null"
                             ]
+                          },
+                          "edge": {
+                            "description": "Its edge router, `{ running, blocks }` (docs/proxmox.md, \u201cThe edge router\u201d): false when a box looked and saw none, null when no box said.",
+                            "type": [
+                              "object",
+                              "boolean",
+                              "null"
+                            ]
                           }
                         }
                       }
