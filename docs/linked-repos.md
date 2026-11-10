@@ -97,8 +97,15 @@ One commit, on `fleetwright/<host>/<session>-<when it started>`:
 | `README.md` | what this is, what is in it and what is not, and why | never |
 | `session.json` | name, title, brief, host, who started it, when, why this push, and `workspace`: the commit, branch and remote the patch applies to | never |
 | `pane.txt` | the console's scrollback, the part #314 is about | the session was not running |
-| `transcript.jsonl` | the conversation | before its first turn, or over 6MB. On a sandboxed box it is read out of the session's own volume, which also holds its Claude credential: read-only, no network, and only the one file named for the conversation's uuid, never a link |
-| `workspace.patch` | what changed in the workspace, as a binary patch: against `HEAD` for a checkout, every file for a directory that is not one | over 6MB: left out and said to be, never cut, because half a patch does not apply |
+| `transcript/000.jsonl`, `001.jsonl`, … | the conversation, in pieces of at most 5MB cut between lines, so each is JSONL and `cat transcript/*.jsonl` is the whole of it | before its first turn, or over 64MB. On a sandboxed box it is read out of the session's own volume, which also holds its Claude credential: read-only, no network, and only the one file named for the conversation's uuid, never a link |
+| `workspace.patch`, or `workspace.patch.000`, `.001`, … over 5MB | what changed in the workspace, as a binary patch: against `HEAD` for a checkout, every file for a directory that is not one. Pieces join with `cat workspace.patch.* > workspace.patch` | over 50MB: left out and said to be, never cut, because half a patch does not apply. Earlier commits on the branch keep what fit then |
+
+**Pieces, and why.** One file goes to GitHub as base64 inside JSON, held in
+memory twice, so no request carries more than 5MB; bigger files are cut into
+pieces of that size. Every push also works out each piece's git id and sends
+only the ones the branch's last commit does not already hold. A transcript only
+grows at its end, so a long conversation costs one new piece per push rather
+than the whole of it, and an idle session's checkpoint sends nothing.
 
 `git checkout <workspace.commit>` and then `git apply --binary workspace.patch` puts
 the workspace back; the commit is in `session.json`, and the README names it.
@@ -189,8 +196,9 @@ They come back, type the name, and Check and link says what is still missing.
 - **A runner killed hard** loses what happened since its last checkpoint, at
   most ten minutes. GitHub gives a cancelled job's steps a few seconds and a
   job that ran out of time none.
-- **A workspace over 6MB of changes** is not in the archive. The console and
-  the record still are.
+- **A workspace over 50MB of changes, or a conversation over 64MB,** is left
+  out of the push that finds it so, and the README says which. The console,
+  the record and the earlier commits on the branch still are.
 - **What is in the workspace goes into the archive**, a `.env` included. It is
   the person's own private repository, which is why private is the one thing
   the role refuses to compromise on.

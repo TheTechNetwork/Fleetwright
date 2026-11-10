@@ -16,7 +16,8 @@
 //   README.md          what this is, what is in it and what is not, in words
 //   session.json       the record: name, title, brief, host, who, when, why now
 //   pane.txt           the console's scrollback — the part #314 is about
-//   transcript.jsonl   the conversation. An unsandboxed session's (a
+//   transcript/NNN.jsonl  the conversation, in PIECE_BYTES pieces cut
+//                      between lines. An unsandboxed session's (a
 //                      runner's) is the file its hook named; a sandboxed one's
 //                      is read out of its own volume, read-only, one file by
 //                      its uuid and nothing else (sandboxTranscript) — that
@@ -26,7 +27,11 @@
 //   workspace.patch    what changed in /work — against HEAD when it is a git
 //                      checkout, every file when it is not — as a binary
 //                      patch, so `git apply` puts it back. session.json says
-//                      which commit, branch and remote it applies to
+//                      which commit, branch and remote it applies to. Over a
+//                      piece it is workspace.patch.NNN, joined with `cat`
+//
+// Pieces the branch already holds are not sent again (pushArchive), so a
+// growing transcript costs its new last piece, not the whole of it.
 //
 // WHEN, and the three answer different ways of losing the work:
 //
@@ -64,6 +69,7 @@
 // on a command line where `ps` could read it.
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, openSync, readSync, fstatSync, closeSync } from 'node:fs';
 import { request } from 'node:http';
 
@@ -83,14 +89,56 @@ export const ARCHIVE_EVERY_MS = 10 * 60_000;
 export const PANE_LINES = 20_000;
 
 /**
- * The most of any one file a commit carries. GitHub takes a blob up to 100MB
- * through this API, but the request is the blob in base64 inside JSON, held in
- * memory twice; six megabytes of patch is a very large change and still a
- * request a small box can make. A file over it is left out and SAID to be in
- * README.md, never truncated: half a patch does not apply, and a truncated
- * transcript reads as a conversation that ended.
+ * The most of one PIECE a request carries. A file goes to GitHub as base64
+ * inside JSON, held in memory twice, so one request is kept to what a small
+ * box can make; a file bigger than this is cut into pieces of it that join
+ * back with `cat`, each its own blob. GitHub itself takes a blob up to 100MB.
  */
-export const MAX_FILE_BYTES = 6 * 1024 * 1024;
+export const PIECE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The most of each a commit carries, in pieces. Over it the file is left out
+ * and SAID to be in README.md, never truncated: half a patch does not apply,
+ * and a truncated transcript reads as a conversation that ended. The earlier
+ * commits on the branch keep what fit then.
+ */
+export const MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
+export const MAX_PATCH_BYTES = 50 * 1024 * 1024;
+
+const MB = (/** @type {number} */ b) => `${Math.round(b / 1048576)}MB`;
+
+/**
+ * Cut `bytes` into pieces of at most `size`. With `atLines`, only after a
+ * newline, so each piece of a JSONL file is JSONL — and, because a transcript
+ * only grows at its end, every piece but the last is the same bytes on every
+ * push, which pushArchive then does not upload again. A line longer than a
+ * piece is a piece of its own, longer than the rest.
+ *
+ * @param {Buffer} bytes @param {number} size @param {{ atLines?: boolean }} [opts]
+ * @returns {Buffer[]}
+ */
+export function piecesOf(bytes, size, { atLines = false } = {}) {
+  /** @type {Buffer[]} */
+  const out = [];
+  let start = 0;
+  while (start < bytes.length) {
+    let end = Math.min(start + size, bytes.length);
+    if (atLines && end < bytes.length) {
+      const nl = bytes.lastIndexOf(10, end - 1);
+      if (nl >= start) end = nl + 1;
+      else {
+        const next = bytes.indexOf(10, end);
+        end = next === -1 ? bytes.length : next + 1;
+      }
+    }
+    out.push(bytes.subarray(start, end));
+    start = end;
+  }
+  return out;
+}
+
+/** A piece's name: three digits, so `cat` in name order is the file. */
+const nth = (/** @type {number} */ i) => String(i).padStart(3, '0');
 
 /** Bounds on the parts that run something: a patch, and each GitHub call. */
 const PATCH_TIMEOUT_MS = 120_000;
@@ -193,7 +241,7 @@ function capture(bin, args, { timeout, cap }) {
  * @returns {Promise<{ ok: true, patch: Buffer, tooBig: boolean, base?: WorkspaceBase|null } | { ok: false, why: string }>}
  */
 export async function workspacePatch(cfg, rec) {
-  const cap = MAX_FILE_BYTES;
+  const cap = MAX_PATCH_BYTES;
   // The base line rides ahead of the patch, outside the script's `head -c`,
   // and is at most about 700 bytes; it gets room of its own, so the patch is
   // still measured against the whole limit and never cut.
@@ -289,10 +337,10 @@ export async function sandboxTranscript(cfg, rec) {
     '-v', `${claude}:/dest:ro`,
     '--network', 'none',
     sessionImage(cfg),
-    'sh', '-c', TRANSCRIPT_SCRIPT, 'sh', rec.uuid, String(MAX_FILE_BYTES),
-  ], { timeout: PATCH_TIMEOUT_MS, cap: MAX_FILE_BYTES });
+    'sh', '-c', TRANSCRIPT_SCRIPT, 'sh', rec.uuid, String(MAX_TRANSCRIPT_BYTES),
+  ], { timeout: PATCH_TIMEOUT_MS, cap: MAX_TRANSCRIPT_BYTES });
   if (r.status !== 0) return { ok: false, why: `it could not be read (${(r.stderr || `exit ${r.status}`).trim().slice(0, 160)})` };
-  if (r.stdout.length > MAX_FILE_BYTES) return { ok: false, why: `it is over the ${MAX_FILE_BYTES / 1048576}MB an archive carries` };
+  if (r.stdout.length > MAX_TRANSCRIPT_BYTES) return { ok: false, why: `it is over the ${MB(MAX_TRANSCRIPT_BYTES)} an archive carries` };
   return { ok: true, bytes: r.stdout };
 }
 
@@ -312,7 +360,7 @@ export async function collectTranscript(cfg, rec) {
 /**
  * The transcript, when this box can read it: the file the session's own hook
  * named (cleanTranscriptPath keeps only a path on this box). Read whole or not
- * at all, for the reason MAX_FILE_BYTES gives.
+ * at all, for the reason MAX_TRANSCRIPT_BYTES gives.
  *
  * @param {string|null|undefined} file
  * @returns {{ ok: true, bytes: Buffer } | { ok: false, why: string }}
@@ -323,7 +371,7 @@ export function readTranscript(file) {
   try {
     fd = openSync(file, 'r');
     const size = fstatSync(fd).size;
-    if (size > MAX_FILE_BYTES) return { ok: false, why: `it is ${Math.round(size / 1048576)}MB, over the ${MAX_FILE_BYTES / 1048576}MB an archive carries` };
+    if (size > MAX_TRANSCRIPT_BYTES) return { ok: false, why: `it is ${MB(size)}, over the ${MB(MAX_TRANSCRIPT_BYTES)} an archive carries` };
     const bytes = Buffer.alloc(size);
     readSync(fd, bytes, 0, size, 0);
     return { ok: true, bytes };
@@ -372,19 +420,29 @@ export function archiveFiles({ rec, host, reason, at, pane, transcript, patch })
     missing.push('- the console: the session was not running, so there was no pane to read');
   }
   if (transcript.ok) {
-    files['transcript.jsonl'] = transcript.bytes;
-    here.push('- `transcript.jsonl` — the conversation, as Claude Code wrote it');
+    // ALWAYS IN PIECES, one or many, so the layout does not change the day a
+    // conversation passes PIECE_BYTES.
+    const pieces = piecesOf(transcript.bytes, PIECE_BYTES, { atLines: true });
+    pieces.forEach((b, i) => { files[`transcript/${nth(i)}.jsonl`] = b; });
+    here.push(pieces.length > 1
+      ? `- \`transcript/\` — the conversation, as Claude Code wrote it, in ${pieces.length} pieces cut between lines; \`cat transcript/*.jsonl\` is the whole of it`
+      : '- `transcript/000.jsonl` — the conversation, as Claude Code wrote it. A long one is in more pieces; `cat transcript/*.jsonl` is the whole of it');
   } else {
     missing.push(`- the transcript: ${transcript.why}`);
   }
   const base = patch.ok ? patch.base ?? null : null;
   if (patch.ok && !patch.tooBig && patch.patch.length) {
-    files['workspace.patch'] = patch.patch;
+    // ONE FILE WHEN IT FITS, the common case; pieces that `cat` joins when
+    // it does not. A patch is not read line by line, so it is cut anywhere.
+    const pieces = piecesOf(patch.patch, PIECE_BYTES);
+    const names = pieces.length > 1 ? pieces.map((_, i) => `workspace.patch.${nth(i)}`) : ['workspace.patch'];
+    pieces.forEach((b, i) => { files[names[i]] = b; });
+    const join = pieces.length > 1 ? `\`cat workspace.patch.* > workspace.patch\` (${pieces.length} pieces), then ` : '';
     here.push(base?.commit
-      ? `- \`workspace.patch\` — what changed in the workspace; \`git checkout ${base.commit}\`${base.remote ? ` in a clone of ${base.remote}` : ''}, then \`git apply --binary workspace.patch\`, puts it back`
-      : '- `workspace.patch` — what changed in the workspace, every file of it: it was not a git checkout, so `git apply --binary workspace.patch` in an empty directory puts it back');
+      ? `- \`${pieces.length > 1 ? 'workspace.patch.*' : 'workspace.patch'}\` — what changed in the workspace; ${join}\`git checkout ${base.commit}\`${base.remote ? ` in a clone of ${base.remote}` : ''} and \`git apply --binary workspace.patch\` puts it back`
+      : `- \`${pieces.length > 1 ? 'workspace.patch.*' : 'workspace.patch'}\` — what changed in the workspace, every file of it: it was not a git checkout, so ${join}\`git apply --binary workspace.patch\` in an empty directory puts it back`);
   } else if (patch.ok && patch.tooBig) {
-    missing.push(`- the workspace: its changes are over the ${MAX_FILE_BYTES / 1048576}MB an archive carries, so none of them are here rather than half`);
+    missing.push(`- the workspace: its changes are over the ${MB(MAX_PATCH_BYTES)} an archive carries, so none of them are here rather than half. The earlier commits on this branch have what fit then`);
   } else if (patch.ok) {
     here.push('- no workspace patch — nothing in the workspace had changed');
   } else {
@@ -434,6 +492,16 @@ const REASONS = /** @type {Record<string, string>} */ ({
   shutdown: 'as its machine was shutting down',
   asked: 'because somebody asked',
 });
+
+/**
+ * The id git gives a file's contents: SHA-1 of "blob <length>\0" and the
+ * bytes, which is what GitHub names the blob it would make of them.
+ *
+ * @param {Buffer} bytes
+ */
+export function gitBlobId(bytes) {
+  return createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+}
 
 /**
  * Push one commit of `files` to `branch` in `repo`, with `token`, refusing a
@@ -488,10 +556,28 @@ export async function pushArchive({ repo, branch, files, message, token, fetchIm
     // 3. THE FILES. An EMPTY repository refuses a blob (409) — GitHub's API
     // cannot write into a repository with no commits — so it gets one first: a
     // README on its default branch saying what the branches are.
+    // WHAT THE BRANCH ALREADY HOLDS, by content. A piece whose git id is in
+    // the last commit's tree is not sent again: a long transcript is a new
+    // last piece each push, not the whole conversation, and an idle session's
+    // checkpoint uploads nothing at all. Cannot-tell (a failed or truncated
+    // listing) only means uploading what might have been reused.
+    /** @type {Set<string>} */
+    const held = new Set();
+    if (parentTree) {
+      const listed = await call('GET', `/git/trees/${parentTree}?recursive=1`);
+      for (const e of Array.isArray(listed.body?.tree) ? listed.body.tree : []) {
+        if (e?.type === 'blob' && typeof e.sha === 'string') held.add(e.sha);
+      }
+    }
     /** @type {Array<{ path: string, mode: string, type: string, sha: string }>} */
     const tree = [];
     let seeded = false;
     for (const [path, bytes] of Object.entries(files)) {
+      const id = gitBlobId(bytes);
+      if (held.has(id)) {
+        tree.push({ path, mode: '100644', type: 'blob', sha: id });
+        continue;
+      }
       let blob = await call('POST', '/git/blobs', { content: bytes.toString('base64'), encoding: 'base64' });
       if (blob.res.status === 409 && !seeded) {
         seeded = true;

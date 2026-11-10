@@ -17,7 +17,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, statSync, utimesS
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { pushArchive, workspacePatch, archiveFiles, archiveSession, branchFor, MAX_FILE_BYTES,
+import { pushArchive, workspacePatch, archiveFiles, archiveSession, branchFor, MAX_PATCH_BYTES, PIECE_BYTES, piecesOf, gitBlobId,
   splitBase, TRANSCRIPT_SCRIPT, ArchivePacer, updateIndex, indexLine } from '../src/core/archive.js';
 import { symlinkSync, mkdirSync } from 'node:fs';
 import { Registry } from '../src/core/registry.js';
@@ -39,6 +39,7 @@ const sha = (/** @type {string} */ s) => createHash('sha1').update(s).digest('he
 function github({ private: priv = true, empty = false } = {}) {
   /** @type {Record<string, string>} */ const refs = {};
   /** @type {Record<string, { tree: string, parents: string[] }>} */ const commits = {};
+  /** @type {Record<string, any[]>} */ const trees = {};
   /** @type {Array<{ method: string, path: string, body: any }>} */ const calls = [];
   let isEmpty = empty;
   const impl = /** @type {any} */ (async (/** @type {string} */ url, /** @type {any} */ init = {}) => {
@@ -48,8 +49,16 @@ function github({ private: priv = true, empty = false } = {}) {
     calls.push({ method, path: p, body });
     if (method === 'GET' && p === '') return json(200, { full_name: 'eli/work', private: priv });
     if (method === 'PUT' && p === '/contents/README.md') { isEmpty = false; return json(201, {}); }
-    if (method === 'POST' && p === '/git/blobs') return isEmpty ? json(409, { message: 'Git Repository is empty.' }) : json(201, { sha: sha(body.content) });
-    if (method === 'POST' && p === '/git/trees') return json(201, { sha: sha(JSON.stringify(body.tree)) });
+    if (method === 'POST' && p === '/git/blobs') return isEmpty ? json(409, { message: 'Git Repository is empty.' }) : json(201, { sha: gitBlobId(Buffer.from(body.content, 'base64')) });
+    if (method === 'POST' && p === '/git/trees') {
+      const t = sha(JSON.stringify(body.tree));
+      trees[t] = body.tree;
+      return json(201, { sha: t });
+    }
+    if (method === 'GET' && p.startsWith('/git/trees/')) {
+      const t = trees[p.split('/').pop() || ''];
+      return t ? json(200, { tree: t.map((/** @type {any} */ e) => ({ ...e })), truncated: false }) : json(404, {});
+    }
     if (method === 'POST' && p === '/git/commits') {
       const c = sha(JSON.stringify(body));
       commits[c] = { tree: body.tree, parents: body.parents };
@@ -275,7 +284,7 @@ test('a workspace that is not a checkout is archived whole, and one too big is l
   assert.ok(r.ok && !r.tooBig);
   assert.match(r.ok ? r.patch.toString() : '', /\+result/);
 
-  writeFileSync(path.join(dir, 'huge.bin'), Buffer.alloc(MAX_FILE_BYTES, 7));
+  writeFileSync(path.join(dir, 'huge.bin'), Buffer.alloc(MAX_PATCH_BYTES, 7));
   const big = await workspacePatch(unsandboxed, /** @type {any} */ ({ name: 'job', cwd: dir }));
   assert.ok(big.ok && big.tooBig);
   const readme = archiveFiles({
@@ -284,7 +293,7 @@ test('a workspace that is not a checkout is archived whole, and one too big is l
     transcript: { ok: false, why: 'this box cannot read it' },
     patch: big,
   })['README.md'].toString();
-  assert.match(readme, /## Not in it, and why[\s\S]*the workspace: its changes are over the 6MB an archive carries/);
+  assert.match(readme, /## Not in it, and why[\s\S]*the workspace: its changes are over the 50MB an archive carries/);
   assert.match(readme, /the transcript: this box cannot read it/);
 });
 
@@ -397,4 +406,68 @@ test('a turn ending is what tells the archive, and only a turn ending', async (t
   sm.onPause = () => { throw new Error('boom'); };
   sm.recordEvent({ name: 'job', event: 'UserPromptSubmit' });
   assert.equal(sm.recordEvent({ name: 'job', event: 'Stop' }).ok, true);
+});
+
+// --- big files ---------------------------------------------------------------
+
+test('a file is cut into pieces that join back, a transcript only between its lines', () => {
+  const bytes = Buffer.from('aaaa\nbb\ncccccc\nd\n');
+  const lines = piecesOf(bytes, 8, { atLines: true });
+  assert.deepEqual(lines.map(String), ['aaaa\nbb\n', 'cccccc\n', 'd\n']);
+  assert.equal(Buffer.concat(lines).toString(), bytes.toString());
+  // A line longer than a piece is a piece of its own, never split.
+  assert.deepEqual(piecesOf(Buffer.from('x\n' + 'y'.repeat(20) + '\nz\n'), 8, { atLines: true }).map(String), ['x\n', `${'y'.repeat(20)}\n`, 'z\n']);
+  // A patch is cut anywhere.
+  assert.deepEqual(piecesOf(Buffer.from('0123456789'), 4).map(String), ['0123', '4567', '89']);
+  assert.deepEqual(piecesOf(Buffer.alloc(0), 4), []);
+  // Growing at the end changes only the last piece, which is what lets a push skip the rest.
+  const before = piecesOf(Buffer.from('aaaa\nbb\ncccccc\n'), 8, { atLines: true });
+  const after = piecesOf(Buffer.from('aaaa\nbb\ncccccc\nmore\n'), 8, { atLines: true });
+  assert.deepEqual(after.slice(0, before.length - 1).map(String), before.slice(0, -1).map(String));
+});
+
+test('a long conversation and a big patch are archived in pieces, and the README says how to join them', () => {
+  const line = `${JSON.stringify({ type: 'assistant', text: 'x'.repeat(1000) })}\n`;
+  const transcript = Buffer.from(line.repeat(Math.ceil((PIECE_BYTES * 2.5) / line.length)));
+  const patch = Buffer.alloc(PIECE_BYTES + 10, 'p');
+  const files = archiveFiles({
+    rec: /** @type {any} */ ({ name: 'job', status: 'running', createdAt: 0 }), host: 'deb14', reason: 'stop', at: 0, pane: 'p',
+    transcript: { ok: true, bytes: transcript },
+    patch: { ok: true, patch, tooBig: false, base: { commit: 'a'.repeat(40), branch: 'main', remote: null } },
+  });
+  const pieces = Object.keys(files).filter((n) => n.startsWith('transcript/')).sort();
+  assert.deepEqual(pieces, ['transcript/000.jsonl', 'transcript/001.jsonl', 'transcript/002.jsonl']);
+  assert.ok(pieces.every((n) => files[n].length <= PIECE_BYTES));
+  assert.ok(pieces.every((n) => files[n].toString().endsWith('\n')), 'every piece ends on a line');
+  assert.equal(Buffer.concat(pieces.map((n) => files[n])).equals(transcript), true);
+  assert.deepEqual(Object.keys(files).filter((n) => n.startsWith('workspace.patch')).sort(), ['workspace.patch.000', 'workspace.patch.001']);
+  assert.equal(Buffer.concat([files['workspace.patch.000'], files['workspace.patch.001']]).equals(patch), true);
+  const readme = files['README.md'].toString();
+  assert.match(readme, /in 3 pieces cut between lines; `cat transcript\/\*\.jsonl` is the whole of it/);
+  assert.match(readme, /`cat workspace\.patch\.\* > workspace\.patch` \(2 pieces\), then `git checkout a{40}`/);
+  // A small patch is still the one file it always was.
+  const small = archiveFiles({
+    rec: /** @type {any} */ ({ name: 'job', status: 'running', createdAt: 0 }), host: 'deb14', reason: 'stop', at: 0, pane: 'p',
+    transcript: { ok: true, bytes: Buffer.from(line) },
+    patch: { ok: true, patch: Buffer.from('diff\n'), tooBig: false, base: null },
+  });
+  assert.ok(small['workspace.patch'] && small['transcript/000.jsonl']);
+});
+
+test('a push sends only the pieces the branch does not already hold', async () => {
+  const gh = github();
+  const piece = (/** @type {string} */ c) => Buffer.from(`${c.repeat(100)}\n`);
+  const first = { 'transcript/000.jsonl': piece('a'), 'transcript/001.jsonl': piece('b'), 'README.md': Buffer.from('# job\n') };
+  assert.equal((await pushArchive({ repo: 'eli/work', branch: BRANCH, files: first, message: 'm', token: 't', fetchImpl: gh.impl })).ok, true);
+  const uploads = () => gh.calls.filter((c) => c.method === 'POST' && c.path === '/git/blobs').length;
+  assert.equal(uploads(), 3);
+  // The conversation grew: one new last piece, everything else held.
+  const second = { ...first, 'transcript/001.jsonl': piece('c'), 'transcript/002.jsonl': piece('d') };
+  const r = await pushArchive({ repo: 'eli/work', branch: BRANCH, files: second, message: 'm', token: 't', fetchImpl: gh.impl });
+  assert.ok(r.ok && !r.unchanged);
+  assert.equal(uploads(), 5, 'only the two new pieces were sent');
+  // Nothing new: nothing sent, and no commit.
+  const third = await pushArchive({ repo: 'eli/work', branch: BRANCH, files: second, message: 'm', token: 't', fetchImpl: gh.impl });
+  assert.ok(third.ok && third.unchanged);
+  assert.equal(uploads(), 5);
 });
