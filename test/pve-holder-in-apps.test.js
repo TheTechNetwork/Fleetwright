@@ -196,3 +196,38 @@ test('both phones offer two edge routers with the box’s flag and key, and keep
     assert.ok(IOS_PAGE.includes(`"${words}"`) && ANDROID_PAGE.includes(`"${words}"`), words);
   }
 });
+
+test('both phones let a cluster’s machines take updates and reboots from chat, in a Xen Orchestra pool’s words', () => {
+  // Asked for: "no way to allow updates and reboots for proxmox vms those exist in xen".
+  const XO_IOS = read('apps/ios/Fleetwright/AddHypervisorView.swift');
+  for (const [s, k] of [['grantsHeader', 'GRANTS_HEADER'], ['grantsUpdates', 'GRANTS_UPDATES'], ['grantsUpdatesHint', 'GRANTS_UPDATES_HINT'], ['grantsReboot', 'GRANTS_REBOOT'], ['grantsRebootHint', 'GRANTS_REBOOT_HINT'], ['grantsFooter', 'GRANTS_FOOTER']]) {
+    const ios = new RegExp(`static let ${s} = "([^"]*)"`).exec(IOS_ADD)?.[1];
+    assert.ok(ios, `iOS has no ${s}`);
+    assert.equal(new RegExp(`const val ${k} = "([^"]*)"`).exec(ANDROID_SHEET)?.[1], ios, `${s} differs`);
+    assert.ok(ios.length <= 100);
+  }
+  // The same words a pool's policy uses for the same two answers.
+  for (const w of ['Update their system from the app', 'Sessions keep running while it updates.', 'Reboot from the app', 'A reboot ends every session on that machine.']) assert.ok(XO_IOS.includes(w), w);
+  // To the script as the box sends it (pve-setup.js grantsArg), both or nothing.
+  assert.equal(pveSetup.optionArgs({ grants: { upgrades: true, reboot: false } }), ' --grants upgrades');
+  assert.ok(IOS_ADD.includes('if let g = grantsArg { a += " --grants \\(g)" }'));
+  assert.ok(ANDROID_SHEET.includes('grantsArg?.let { a.append(" --grants $it") }'));
+  assert.ok(IOS_ADD.includes('if let u = machineUpdates, let r = machineReboot { p["grants"] = ["upgrades": u, "reboot": r] }'));
+  assert.ok(ANDROID_SHEET.includes('if (u != null && r != null) p.put("grants", JSONObject().put("upgrades", u).put("reboot", r))'));
+  for (const [src, who] of [[IOS_ADD, 'iOS'], [ANDROID_SHEET, 'Android']]) {
+    for (const arg of ['"upgrades,reboot"', '"upgrades"', '"reboot"', '"none"']) assert.ok(src.includes(arg), `${who} has no ${arg}`);
+  }
+});
+
+test('a cluster’s own machine is made again from its own page, as a pool’s is', () => {
+  // Asked for: "the make it again from the holder page on xen doesnt exist on holder on proxmox".
+  const host = read('apps/ios/Fleetwright/HostView.swift');
+  assert.match(host, /if holder, let holds, !holdsHere, holdsProxmox, settings\.showsAdmin \{/);
+  assert.match(host, /AddProxmoxView\(settings: settings, startNode: HypervisorAddress\.node\(holds\), startOptions: ProxmoxOptions\(holder: true, holderAgain: true\)\)/);
+  assert.match(host, /\$0\.address == a && \$0\.kind == "proxmox"/);
+  const machines = read(`${A}/MachinesScreen.kt`);
+  assert.match(machines, /if \(h\?\.holder == true && holds != null && !holdsHere && holdsProxmox && admin == true\) \{/);
+  assert.match(machines, /OpenRow\(HOLDER_AGAIN_TITLE\) \{ onMakeProxmoxAgain\(HypervisorAddress\.node\(holds\)\) \}/);
+  assert.match(machines, /onMakeProxmoxAgain = \{ node -> showing = null; proxmoxAt = node;[^}]*proxmoxOwn = "again"; addingProxmox = true \}/);
+  assert.match(machines, /it\.address == a && it\.kind == "proxmox"/);
+});

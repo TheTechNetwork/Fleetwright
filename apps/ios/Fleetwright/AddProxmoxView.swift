@@ -187,6 +187,25 @@ struct AddProxmoxView: View {
                         Toggle(HypervisorWords.makeOwnAgain, isOn: Binding(get: { options.holderAgain == true }, set: { options.holderAgain = $0 ? true : nil }))
                         Text(HypervisorWords.makeOwnAgainFooter).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
+                    // WHAT ITS MACHINES MAY DO FROM CHAT, in a Xen Orchestra
+                    // pool's words (XOPolicy): updates and reboot, put in the
+                    // line every box reads, and in its own machine. Asked for:
+                    // "no way to allow updates and reboots for proxmox vms
+                    // those exist in xen".
+                    Text(ProxmoxWords.grantsHeader).fleetType(.bodyStrong).foregroundStyle(Design.Palette.ink)
+                    Toggle(isOn: Binding(get: { options.machineUpdates == true }, set: { options.setGrants(updates: $0) })) {
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            Text(ProxmoxWords.grantsUpdates)
+                            Text(ProxmoxWords.grantsUpdatesHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        }
+                    }
+                    Toggle(isOn: Binding(get: { options.machineReboot == true }, set: { options.setGrants(reboot: $0) })) {
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            Text(ProxmoxWords.grantsReboot)
+                            Text(ProxmoxWords.grantsRebootHint).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        }
+                    }
+                    Text(ProxmoxWords.grantsFooter).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     if options.wantsHolder && options.image == "none" {
                         Text(ProxmoxWords.holderNeedsImage).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
@@ -561,6 +580,14 @@ enum ProxmoxWords {
     static let edgeBlock = "Drop what the threat rules match"
     static let edgeBlockHint = "Otherwise it logs it and lets it through."
     static let edgePair = "Two edge routers"
+    // WHAT ITS MACHINES MAY DO FROM CHAT, a Xen Orchestra pool's words
+    // (AddHypervisorView, machineGrantsSection; XOPolicy.machineGrantsFooter).
+    static let grantsHeader = "Machines made here"
+    static let grantsUpdates = "Update their system from the app"
+    static let grantsUpdatesHint = "Sessions keep running while it updates."
+    static let grantsReboot = "Reboot from the app"
+    static let grantsRebootHint = "A reboot ends every session on that machine."
+    static let grantsFooter = "Applies to new VMs and its own machine when made. Existing ones keep their setting."
     static let edgePairHint = "One carries the machines while the other restarts or updates."
     static let holderNeedsImage = "It’s made from the cluster’s Debian image, so one has to be there already."
 }
@@ -598,8 +625,29 @@ struct ProxmoxOptions: Codable, Equatable {
     var edgeAgain: Bool? = nil
     /// TWO OF THEM, sharing the gateway (docs/proxmox.md, "Two of them").
     var edgePair: Bool? = nil
+    /// WHAT ITS MACHINES MAY DO FROM CHAT (src/core/grants.js): nil is
+    /// unsaid, and each machine keeps its image's answer, as every run did
+    /// before there was a choice. Both are set together, the way the script
+    /// takes them (`--grants`).
+    var machineUpdates: Bool? = nil
+    var machineReboot: Bool? = nil
 
     var wantsEdge: Bool { edge ?? true }
+
+    /// One answer changed, and the other said too, so both go to the script.
+    mutating func setGrants(updates: Bool? = nil, reboot: Bool? = nil) {
+        machineUpdates = updates ?? machineUpdates ?? false
+        machineReboot = reboot ?? machineReboot ?? false
+    }
+
+    /// The script's `--grants`, when both were said: pve-setup.js grantsArg.
+    var grantsArg: String? {
+        guard let u = machineUpdates, let r = machineReboot else { return nil }
+        if u && r { return "upgrades,reboot" }
+        if u { return "upgrades" }
+        if r { return "reboot" }
+        return "none"
+    }
 
     /// Every system the setup can build, in its own order: the catalogue
     /// Xen Orchestra pools build from too (src/fleet/host/vm-image.js, IMAGES).
@@ -662,6 +710,7 @@ struct ProxmoxOptions: Codable, Equatable {
         if wantsEdge { a += edgeBlock == true ? " --edge-block" : " --edge" }
         if wantsEdge && edgeAgain == true { a += " --edge-again" }
         if wantsEdge && edgePair == true { a += " --edge-pair" }
+        if let g = grantsArg { a += " --grants \(g)" }
         return a
     }
 
@@ -692,6 +741,7 @@ struct ProxmoxOptions: Codable, Equatable {
             p["holder"] = true
             if holderAgain == true { p["holderAgain"] = true }
         }
+        if let u = machineUpdates, let r = machineReboot { p["grants"] = ["upgrades": u, "reboot": r] }
         return p
     }
 

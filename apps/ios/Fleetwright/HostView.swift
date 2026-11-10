@@ -81,6 +81,11 @@ struct HostView: View {
     @State private var reasonCode: String?
     @State private var holder = false
     @State private var holds: String?
+    /// WHETHER WHAT IT HOLDS IS A PROXMOX VE CLUSTER, as the fleet's list of
+    /// hypervisors says (`kind`). Its own machine is made again by the
+    /// cluster's setup run again over SSH, which needs no token on this phone,
+    /// so it is offered where the Xen Orchestra one is not.
+    @State private var holdsProxmox = false
     @State private var busy = false
     @State private var result = ""
     @State private var channel: String?
@@ -159,6 +164,29 @@ struct HostView: View {
                 Section {
                     NavigationLink {
                         AddHypervisorView(settings: settings, policyFor: holds, makeHolderAgain: true)
+                    } label: {
+                        VStack(alignment: .leading, spacing: Design.Space.hair) {
+                            Text(holderAgainTitle).fleetType(.body)
+                            Text(holderAgainLine).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        }
+                        .frame(minHeight: 44)
+                    }
+                } header: {
+                    sectionHead(holds)
+                }
+                .listRowBackground(Design.Palette.card)
+            }
+
+            // A PROXMOX VE CLUSTER'S OWN MACHINE, made again the way the
+            // cluster's page does it: its setup, run again over SSH with the
+            // machine of its own made again, which needs the node's sign-in
+            // and no token on this phone. Asked for: "the make it again from
+            // the holder page on xen doesnt exist on holder on proxmox". The
+            // admin's, as on Xen Orchestra.
+            if holder, let holds, !holdsHere, holdsProxmox, settings.showsAdmin {
+                Section {
+                    NavigationLink {
+                        AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(holds), startOptions: ProxmoxOptions(holder: true, holderAgain: true))
                     } label: {
                         VStack(alignment: .leading, spacing: Design.Space.hair) {
                             Text(holderAgainTitle).fleetType(.body)
@@ -296,6 +324,9 @@ struct HostView: View {
             reasonCode = initialReasonCode
             holder = initialHolder
             holds = initialHolds
+            if initialHolder, let a = initialHolds, !holdsHere, settings.showsAdmin {
+                holdsProxmox = (try? await fleet.hypervisors())?.contains { $0.address == a && $0.kind == "proxmox" } ?? false
+            }
             channel = initialHealth?.channel
             channelPinned = initialHealth?.channelPinned ?? false
             sandbox = initialHealth?.sandbox
