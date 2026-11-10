@@ -13,7 +13,7 @@ moment of linking.
 
 | role | visibility | what it is for | what a link does |
 |---|---|---|---|
-| **archive** | **private**, refused otherwise | where a session goes before its container or its machine does | every session you start is pushed there, on a branch of its own, before it stops and every ten minutes while it runs |
+| **archive** | **private**, refused otherwise | where a session goes before its container or its machine does | every session you start is pushed there, on a branch of its own: before it stops, each time it comes back to its prompt (at most once a minute), and every ten minutes while it runs |
 | **runners** | **public**, refused otherwise | where your temporary machines start: Actions minutes are free only for a public repository | the runner repository [runner-central.md](./runner-central.md#your-own-runner-repository) already describes, reached from the same list |
 | **templates** | either | skills, presets, configs and workflows | stored, checked and shown; a session reads it when asked. Nothing in it runs or is typed into a session by itself ([below](#templates-and-the-bound-that-did-not-move)) |
 
@@ -95,13 +95,14 @@ One commit, on `fleetwright/<host>/<session>-<when it started>`:
 | file | what | when it is missing |
 |---|---|---|
 | `README.md` | what this is, what is in it and what is not, and why | never |
-| `session.json` | name, title, brief, host, who started it, when, and why this push | never |
+| `session.json` | name, title, brief, host, who started it, when, why this push, and `workspace`: the commit, branch and remote the patch applies to | never |
 | `pane.txt` | the console's scrollback, the part #314 is about | the session was not running |
-| `transcript.jsonl` | the conversation | on a sandboxed box: it is in the session's own volume beside its Claude credential, which nothing here mounts, and `resume` reads it there anyway. A runner's is archived |
+| `transcript.jsonl` | the conversation | before its first turn, or over 6MB. On a sandboxed box it is read out of the session's own volume, which also holds its Claude credential: read-only, no network, and only the one file named for the conversation's uuid, never a link |
 | `workspace.patch` | what changed in the workspace, as a binary patch: against `HEAD` for a checkout, every file for a directory that is not one | over 6MB: left out and said to be, never cut, because half a patch does not apply |
 
-`git apply workspace.patch` in a checkout of the same commit puts the
-workspace back. The patch is made **without writing into the session's
+`git checkout <workspace.commit>` and then `git apply --binary workspace.patch` puts
+the workspace back; the commit is in `session.json`, and the README names it.
+A remote with a token in its URL is written without the token. The patch is made **without writing into the session's
 repository**: untracked files are diffed against `/dev/null` with
 `--no-index`, and the tracked diff runs against a copy of the index, because a
 diff refreshes the index it reads. On a sandboxed box it runs in a container
@@ -113,9 +114,18 @@ does.
 | | why |
 |---|---|
 | before `stop`, `forget` and `purge` | the container is about to go. The stop waits up to 150 seconds for the push and goes ahead whatever it says; the reply carries both |
+| each time it comes back to its prompt | a turn just ended, so the transcript has something new. At most once a minute: turns that end inside the minute are pushed together when it is up |
 | every ten minutes while it runs | a runner is killed when its job ends and nothing gets to run first; a checkpoint ten minutes old is the bound on what it can take with it. A checkpoint that would commit the tree the branch already holds commits nothing |
 | when a runner's hub is told to stop | best effort, for twenty seconds, before the job takes the machine. A permanent box's sessions outlive a hub restart, so it pushes nothing then |
 | `/archive <name>` on the box | now |
+
+### The index
+
+The default branch carries `INDEX.md`: one line per session that has ended,
+newest first, with its title, host and a link to its branch. A session that is
+resumed and ends again has its line replaced. Only the line goes there, never
+the session's files: every branch has the same names at its top, and a default
+branch that took them all would grow by every transcript.
 
 Each session's page on both phones says where it is archived and how the last
 push went, in the host's sentence, and before the first push says that nothing

@@ -25,7 +25,7 @@ import { vaultEnvFor, vaultExpiryFor, vaultHolder } from './core/vault-store.js'
 import { loadEnvFile } from './core/env-file.js';
 import { sessionSecret } from './core/secret-store.js';
 import { HttpAdapter } from './adapters/http.js';
-import { archiveRunning, ARCHIVE_EVERY_MS } from './core/archive.js';
+import { archiveRunning, archiveSession, ArchivePacer, ARCHIVE_EVERY_MS } from './core/archive.js';
 import { onRunner } from './core/runner-login.js';
 import { DEFAULT_CEILING } from './core/capacity.js';
 
@@ -317,6 +317,13 @@ export async function main() {
   // the bound on what a runner can take with it. A pass that would commit
   // what the branch already holds commits nothing. See src/core/archive.js.
   setInterval(() => void archiveRunning({ cfg, registry }), ARCHIVE_EVERY_MS).unref?.();
+  // AND EACH TIME ONE COMES BACK TO ITS PROMPT, at most once a minute, so the
+  // archive is the conversation as of the last answer rather than as of the
+  // last ten minutes. A session with no archive costs a registry read.
+  const pacer = new ArchivePacer({ push: (name) => archiveSession({ cfg, registry, name, reason: 'pause' }) });
+  sessions.onPause = (name) => {
+    if (registry.get(name)?.archive) pacer.poke(name);
+  };
 
   // The bin, on an hour.
   //
