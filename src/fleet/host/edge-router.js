@@ -139,16 +139,16 @@ export const OPNSENSE_IMAGE = Object.freeze({
  */
 export const EDGE_IMAGE = Object.freeze({
   // renovate: datasource=github-releases depName=edge-image packageName=TheTechNetwork/Fleetwright
-  build: '26.7.8_1-20261031-17',
+  build: '26.7.8_2-20261110-20',
   /** The build everything below was copied from. */
-  checked: '26.7.8_1-20261031-17',
+  checked: '26.7.8_2-20261110-20',
   /** The OPNsense release it is, and the version of its core package it was updated to. */
   release: '26.7',
-  version: '26.7.8_1',
-  url: 'https://github.com/TheTechNetwork/Fleetwright/releases/download/edge-image/26.7.8_1-20261031-17/fleetwright-edge-26.7-26.7.8_1-amd64.img.zst',
+  version: '26.7.8_2',
+  url: 'https://github.com/TheTechNetwork/Fleetwright/releases/download/edge-image/26.7.8_2-20261110-20/fleetwright-edge-26.7-26.7.8_2-amd64.img.zst',
   /** As the release's SHA256SUMS lists it, and as downloaded. */
-  sha256: '3d82c2192015d683f7d0c6cab5c22a5bc761e2e98b7498a45b9960f425dda5fa',
-  compressedSize: 423882241,
+  sha256: '837c04a57a3e76896137d08da8c7d5ad94bad629721ba655f870441817590568',
+  compressedSize: 424643075,
   rawSize: 3221225472,
   /** /usr/local/etc/config.xml, as the image carries it, and its SHA-256. */
   config: Object.freeze({ offset: 712876032, length: 5234, sha256: '1e81cde6bebe59e0aa769bd6b187f2247bd1155cddb52253ca1f2a17c51fe2e5' }),
@@ -156,20 +156,22 @@ export const EDGE_IMAGE = Object.freeze({
   grow: Object.freeze({
     room: 32768,
     inode: 6523,
-    data: Object.freeze({ offset: 32014336, length: 32768 }),
+    data: Object.freeze({ offset: 31588352, length: 32768 }),
     edits: Object.freeze([
-      { offset: 66552, was: '1c51000000000000', becomes: '1b51000000000000', what: 'superblock: free blocks' },
-      { offset: 66568, was: 'df0d000000000000', becomes: 'e10d000000000000', what: 'superblock: free fragments' },
-      { offset: 131100, was: '59', becomes: '58', what: 'cylinder group 0' },
-      { offset: 147545, was: 'ff', becomes: '00', what: 'cylinder group 0' },
-      { offset: 162026, was: 'fe', becomes: 'fc', what: 'cylinder group 0' },
+      { offset: 66552, was: 'f750000000000000', becomes: 'f650000000000000', what: 'superblock: free blocks' },
+      { offset: 66568, was: '260d000000000000', becomes: '280d000000000000', what: 'superblock: free fragments' },
+      { offset: 131100, was: '3f', becomes: '3e', what: 'cylinder group 0' },
+      { offset: 147532, was: 'ff', becomes: '00', what: 'cylinder group 0' },
+      { offset: 161896, was: '07', becomes: '06', what: 'cylinder group 0' },
+      { offset: 162024, was: '10', becomes: '00', what: 'cylinder group 0' },
       { offset: 1833744, was: '72140000000000001000000000000000', becomes: '00800000000000004000000000000000', what: 'inode 6523: size and sectors' },
-      { offset: 1833840, was: 'daa7020000000000', becomes: '881e000000000000', what: 'inode 6523: first block' },
-      { offset: 31555584, was: 'a613000059030000fab3000056010000', becomes: 'a613000058030000fab3000056010000', what: 'summary of cylinder group 0' },
-      { offset: 31555600, was: '1e0000008101000086de0100da000000', becomes: '1e0000008101000086de0100dc000000', what: 'summary of cylinder group 1' },
+      { offset: 1833840, was: 'daa7020000000000', becomes: '201e000000000000', what: 'inode 6523: first block' },
+      { offset: 31555584, was: 'a61300003f030000f3b3000060010000', becomes: 'a61300003e030000f3b3000060010000', what: 'summary of cylinder group 0' },
+      { offset: 31555600, was: '20000000810100007ede0100da000000', becomes: '20000000810100007ede0100dc000000', what: 'summary of cylinder group 1' },
       { offset: 502399012, was: 'da', becomes: 'dc', what: 'cylinder group 1' },
-      { offset: 502399036, was: '10', becomes: '11', what: 'cylinder group 1' },
-      { offset: 502420899, was: '00', becomes: '0c', what: 'cylinder group 1' },
+      { offset: 502399036, was: '11', becomes: '10', what: 'cylinder group 1' },
+      { offset: 502399044, was: '07', becomes: '08', what: 'cylinder group 1' },
+      { offset: 502420899, was: 'b0', becomes: 'bc', what: 'cylinder group 1' },
     ]),
   }),
 });
