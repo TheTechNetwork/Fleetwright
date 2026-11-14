@@ -118,7 +118,7 @@ export const UBUNTU_2604_IMAGE = Object.freeze({
   label: 'Ubuntu',
   algorithm: /** @type {'sha256'} */ ('sha256'),
   // renovate: datasource=custom.ubuntu-cloud depName=resolute
-  build: 'release-20261016',
+  build: 'release-20261108',
   url: 'https://cloud-images.ubuntu.com/releases/resolute/release-20261016/ubuntu-26.04-server-cloudimg-amd64.img',
   sha256: '5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7eb5',
   compressedSize: 859090944,
