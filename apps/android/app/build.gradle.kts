@@ -356,9 +356,9 @@ dependencies {
   // here makes Gradle resolve every one to this version, and Renovate moves
   // them as one group ("bouncycastle" in renovate.json).
   implementation("com.hierynomus:sshj:0.41.2")
-  implementation("org.bouncycastle:bcprov-jdk18on:1.86")
-  implementation("org.bouncycastle:bcpkix-jdk18on:1.86")
-  implementation("org.bouncycastle:bcutil-jdk18on:1.86")
+  implementation("org.bouncycastle:bcprov-jdk18on:1.87")
+  implementation("org.bouncycastle:bcpkix-jdk18on:1.87")
+  implementation("org.bouncycastle:bcutil-jdk18on:1.87")
 
   // FIREBASE CLOUD MESSAGING IS ABOVE NOW, and this said the opposite until
   // somebody went looking for why an app with no google-services.json crashes
