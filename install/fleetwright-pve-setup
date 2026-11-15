@@ -102,7 +102,7 @@ EDGE_CONFIG_BLOCK_B_SHA=984c7796f975e6e63bf293000d962831024d636351e8b6fe9b7539ac
 EDGE_LABS_SUMS_SHA=fd28ed58a7d6c453995e9cf8ad422c53c1e2626b70c700df211b59ff0a2e9237
 pinned() {
   case "$1" in
-    debian-13) OS="Debian 13" URL=https://cloud.debian.org/images/cloud/trixie/20261103-2651/debian-13-genericcloud-amd64-20261103-2651.qcow2 SUM=sha512:d25999de0770d4cde1be72c299ba3ad94eac7ea8fd4d18f8cc86c69df69337e2e8a91d64465a9bfd8f2a78c566fcbcb0842eacc91c09efdef72d719d9f13b535 ;;
+    debian-13) OS="Debian 13" URL=https://cloud.debian.org/images/cloud/trixie/20261111-2659/debian-13-genericcloud-amd64-20261111-2659.qcow2 SUM=sha512:3247873136ba09b060fab45e9c115239f81c1d401fce00b8fa9b872013f7135d6a40b12462ab5ac03b9fa4ed5955dd0e8d1c900109a939ad7a0a4dafe7dea47b ;;
     ubuntu-24.04) OS="Ubuntu 24.04 LTS" URL=https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-amd64.img SUM=sha256:04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94 ;;
     ubuntu-26.04) OS="Ubuntu 26.04 LTS" URL=https://cloud-images.ubuntu.com/releases/resolute/release-20261016/ubuntu-26.04-server-cloudimg-amd64.img SUM=sha256:5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7eb5 ;;
     *) return 1 ;;
