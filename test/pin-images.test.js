@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import { DEBIAN_IMAGE, UBUNTU_2404_IMAGE, UBUNTU_2604_IMAGE } from '../src/fleet/host/vm-image.js';
 import { EDGE_IMAGE, OPNSENSE_IMAGE } from '../src/fleet/host/edge-router.js';
 import { PINNED, SOAK_MS, addressFor, digestFor, qcow2VirtualSize, soakLeft, writeImagePin, writeScriptPin } from '../scripts/pin-images.mjs';
-import { RELEASES, checkManifestDigest, pinFrom, renderEdgeImage, tagFor, writeEdgeImagePin } from '../scripts/pin-edge-image.mjs';
+import { RELEASES, checkManifestDigest, pinFrom, renderEdgeImage, tagFor, writeEdgeImagePin, writeEdgeScriptPin } from '../scripts/pin-edge-image.mjs';
 
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const config = JSON.parse(read('renovate.json'));
@@ -187,6 +187,24 @@ test('the script writes the whole EDGE_IMAGE block, and nothing else', () => {
   assert.ok(out.includes("what: 'the inode\\'s first block'"), 'a quote in what the manifest says is not escaped');
   assert.ok(out.includes(`url: '${OPNSENSE_IMAGE.url}'`), 'the OPNsense pin is left as it was');
   assert.throws(() => writeEdgeImagePin('nothing here', pin), /not where this script expects it/);
+});
+
+test('the script writes the same pin into the Proxmox VE setup script, and refuses one missing a line', () => {
+  const script = read('install/fleetwright-pve-setup');
+  // As committed, the setup script already says what EDGE_IMAGE says.
+  assert.equal(writeEdgeScriptPin(script, EDGE_IMAGE), script);
+  const pin = pinFrom(MANIFEST, SUMS, { build: '26.7.9-20261201-3', release: '26.7' });
+  const out = writeEdgeScriptPin(script, pin);
+  const line = (/** @type {string} */ name) => new RegExp(`^${name}="?([^"\\n]*)"?$`, 'm').exec(out)?.[1];
+  assert.equal(line('EDGE_URL'), pin.url);
+  assert.equal(line('EDGE_SUM'), pin.sha256);
+  assert.equal(Number(line('EDGE_PACKED')), pin.compressedSize);
+  assert.equal(Number(line('EDGE_DATA')), pin.grow.data.offset);
+  assert.equal(line('EDGE_EDITS'), pin.grow.edits.map((e) => `${e.offset}:${e.was}:${e.becomes}`).join(' '));
+  // Only the EDGE_* image lines move; the configurations' pins stay.
+  const others = (/** @type {string} */ s) => s.split('\n').filter((l) => !/^EDGE_(URL|SUM|PACKED|RAW|ROOM|DATA|EDITS)=/.test(l));
+  assert.deepEqual(others(out), others(script));
+  assert.throws(() => writeEdgeScriptPin(script.replace(/^EDGE_DATA=.*\n/m, ''), pin), /no EDGE_DATA line/);
 });
 
 test('the script puts the new build where the old one was, and refuses an address that names none', () => {

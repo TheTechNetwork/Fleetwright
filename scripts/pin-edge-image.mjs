@@ -16,6 +16,12 @@
 // would write (test/pin-images.test.js holds the file to that). Nothing else
 // in the file is touched.
 //
+// THE PROXMOX VE SETUP SCRIPT CARRIES THE SAME PIN, as its EDGE_* lines,
+// because it has no Fleetwright to import it from (test/pve-edge.test.js
+// holds the two equal). Both are written together, and a branch already
+// pinned here is still made to agree there: the edge-image branch for
+// 26.7.9_1 was pinned before this script wrote the setup script at all.
+//
 // THE SOAK IS RENOVATE'S HERE. The cloud images' pin (pin-images.mjs) checks
 // the three days twice because their listings carry no dates and their
 // datasources read a day out of each build's name. A GitHub release carries
@@ -35,6 +41,7 @@ import { pathToFileURL } from 'node:url';
 import { digestFor } from './pin-images.mjs';
 
 const SOURCE = new URL('../src/fleet/host/edge-router.js', import.meta.url);
+const PVE_SCRIPT = new URL('../install/fleetwright-pve-setup', import.meta.url);
 
 /** Where a release's assets are, before `<tag>/<name>`. */
 export const RELEASES = 'https://github.com/TheTechNetwork/Fleetwright/releases/download/';
@@ -163,6 +170,31 @@ export function writeEdgeImagePin(source, pin) {
   return source.slice(0, start) + renderEdgeImage(pin) + source.slice(end + '\n});'.length);
 }
 
+/**
+ * The Proxmox VE setup script with its EDGE_* lines written for `pin` and
+ * nothing else changed. Refuses a script missing any of them, rather than
+ * leave one on the old build.
+ *
+ * @param {string} script @param {Pick<EdgeImagePin, 'url' | 'sha256' | 'compressedSize' | 'rawSize' | 'grow'>} pin
+ */
+export function writeEdgeScriptPin(script, { url, sha256, compressedSize, rawSize, grow }) {
+  const lines = {
+    EDGE_URL: url,
+    EDGE_SUM: sha256,
+    EDGE_PACKED: String(compressedSize),
+    EDGE_RAW: String(rawSize),
+    EDGE_ROOM: String(grow.room),
+    EDGE_DATA: String(grow.data.offset),
+    EDGE_EDITS: `"${grow.edits.map((e) => `${e.offset}:${e.was}:${e.becomes}`).join(' ')}"`,
+  };
+  for (const [name, value] of Object.entries(lines)) {
+    const re = new RegExp(`^${name}=.*$`, 'm');
+    if (!re.test(script)) throw new Error(`install/fleetwright-pve-setup has no ${name} line`);
+    script = script.replace(re, () => `${name}=${value}`);
+  }
+  return script;
+}
+
 /** @param {string} url @param {RequestInit} [init] */
 async function get(url, init) {
   const res = await fetch(url, { redirect: 'follow', ...init });
@@ -174,7 +206,14 @@ async function main() {
   const { EDGE_IMAGE, OPNSENSE_IMAGE } = await import('../src/fleet/host/edge-router.js');
   const { build } = EDGE_IMAGE;
   if (EDGE_IMAGE.checked === build && EDGE_IMAGE.url.includes(`/${tagFor(build)}/`)) {
-    console.log(`${tagFor(build)}: already pinned`);
+    const script = readFileSync(PVE_SCRIPT, 'utf8');
+    const synced = writeEdgeScriptPin(script, EDGE_IMAGE);
+    if (synced === script) {
+      console.log(`${tagFor(build)}: already pinned`);
+    } else {
+      writeFileSync(PVE_SCRIPT, synced);
+      console.log(`${tagFor(build)}: already pinned; install/fleetwright-pve-setup written to agree`);
+    }
     return;
   }
   const at = `${RELEASES}${tagFor(build)}/`;
@@ -184,7 +223,9 @@ async function main() {
   const pin = pinFrom(JSON.parse(manifest.toString('utf8')), sums, { build, release: OPNSENSE_IMAGE.release });
   const length = Number((await get(pin.url, { method: 'HEAD' })).headers.get('content-length'));
   if (length !== pin.compressedSize) throw new Error(`${pin.url} is ${length || 'of no stated'} bytes and the manifest says ${pin.compressedSize}, so it was not pinned`);
+  const script = writeEdgeScriptPin(readFileSync(PVE_SCRIPT, 'utf8'), pin);
   writeFileSync(SOURCE, writeEdgeImagePin(readFileSync(SOURCE, 'utf8'), pin));
+  writeFileSync(PVE_SCRIPT, script);
   console.log(`${tagFor(build)}: OPNsense ${pin.version}, ${pin.compressedSize} bytes, sha256 ${pin.sha256.slice(0, 16)}…, a ${pin.rawSize}-byte disk, the configuration at ${pin.config.offset} and its room at ${pin.grow.data.offset} (${pin.grow.edits.length} edits)\n  ${pin.url}`);
 }
 
