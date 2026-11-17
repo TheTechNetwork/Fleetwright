@@ -119,9 +119,9 @@ export const UBUNTU_2604_IMAGE = Object.freeze({
   algorithm: /** @type {'sha256'} */ ('sha256'),
   // renovate: datasource=custom.ubuntu-cloud depName=resolute
   build: 'release-20261108',
-  url: 'https://cloud-images.ubuntu.com/releases/resolute/release-20261016/ubuntu-26.04-server-cloudimg-amd64.img',
-  sha256: '5645d0318ad21f643ebb1ac4567514620e9893380b07b0201fda163baa5b7eb5',
-  compressedSize: 859090944,
+  url: 'https://cloud-images.ubuntu.com/releases/resolute/release-20261108/ubuntu-26.04-server-cloudimg-amd64.img',
+  sha256: '7b90593f5532b49b7e3fe3d2743f0d1f0d822e5b07cebcd8e00c0df8069ecab9',
+  compressedSize: 861563904,
   rawSize: 3758096384,
 });
 
