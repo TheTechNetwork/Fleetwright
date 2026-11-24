@@ -2045,6 +2045,18 @@ struct Fleet {
             let topBlocked: [Refused]?
             let heardAt: Double?
             let problem: String?
+            /// Bytes of memory the hypervisor gives it, and the bytes the machine reading it would build it with (EDGE.memory in edge-router.js). Nil is not read, or a machine from before it said either, and nil is cannot tell.
+            let memory: Double?
+            let needs: Double?
+
+            /// IT HAS LESS MEMORY THAN IT NEEDS, which it crashes with: the
+            /// one thing its page offers a fix for. Only when both numbers
+            /// were read. Either one missing is cannot tell, which is never
+            /// short and never fine (C-5), so nothing is drawn for it.
+            var short: Bool {
+                guard let memory, let needs else { return false }
+                return memory < needs
+            }
         }
 
         struct Refused: Codable, Hashable {

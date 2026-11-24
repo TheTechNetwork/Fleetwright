@@ -195,6 +195,7 @@ struct HypervisorPageView: View {
             if let card = edgeCard {
                 card
                     .fleetRow()
+                edgeShort
             }
             machines
             ownMachine
@@ -270,6 +271,35 @@ struct HypervisorPageView: View {
     private var asksEdges: Bool {
         if row.proxmox, case .none? = row.fleet?.edge { return false }
         return true
+    }
+
+    /// A ROUTER SHORT OF MEMORY, said directly under the card (EdgeShortPrompt).
+    /// The button is drawn where this page already offers to make the
+    /// router again, a cluster that says its router is there, and goes to
+    /// that same setup with the same options (`edgeAgain`). A Xen Orchestra
+    /// pool read from here is one this phone has no token for, so there is
+    /// nothing a button could send: the sentence alone (C-2).
+    @ViewBuilder
+    private var edgeShort: some View {
+        let short = edges?.routers.filter { $0.short } ?? []
+        if !short.isEmpty {
+            if row.proxmox, case let .there(_, blocks, pair)? = row.fleet?.edge {
+                EdgeShortPrompt(short: short, offers: true) {
+                    edgeAgain(blocks: blocks, pair: pair)
+                }
+                .fleetRow()
+            } else {
+                EdgeShortPrompt(short: short, offers: false) { EmptyView() }
+                    .fleetRow()
+            }
+        }
+    }
+
+    /// The setup that makes the cluster's edge router again as it is,
+    /// dropping or not, one or two of them: where Make the edge router again
+    /// goes, and the one button under a router short of memory.
+    private func edgeAgain(blocks: Bool, pair: Bool) -> AddProxmoxView {
+        AddProxmoxView(settings: settings, startNode: HypervisorAddress.node(row.address), startOptions: ProxmoxOptions(edge: true, edgeBlock: blocks ? true : nil, edgeAgain: true, edgePair: pair ? true : nil))
     }
 
     private func loadEdges() async {
@@ -367,7 +397,7 @@ struct HypervisorPageView: View {
                 switch edge {
                 case let .there(_, blocks, pair):
                     action(HypervisorWords.makeEdgeAgain, HypervisorWords.makeEdgeAgainFooter, "shield.lefthalf.filled") {
-                        AddProxmoxView(settings: settings, startNode: node, startOptions: ProxmoxOptions(edge: true, edgeBlock: blocks ? true : nil, edgeAgain: true, edgePair: pair ? true : nil))
+                        edgeAgain(blocks: blocks, pair: pair)
                     }
                 case .none:
                     action(HypervisorWords.makeEdge, nil, "shield.lefthalf.filled") {

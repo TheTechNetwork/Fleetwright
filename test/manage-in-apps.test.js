@@ -281,7 +281,7 @@ test('Android: notifications are applied in the order they arrived', () => {
 });
 
 test('Android: the page is under Machines, on the row that names the pool, and says when it was last looked at', () => {
-  assert.match(KT_MACHINES, /PoolPage\(settings, pool, admin, onChangePolicy = \{ policyFor = address \}, onDismiss = \{ managing = null \}, onReconnect = \{ reconnectVia = null; reconnectFor = address \}, onAddWatchdog = \{ watchdogFor = address \}\)/);
+  assert.match(KT_MACHINES, /PoolPage\(settings, pool, admin, onChangePolicy = \{ policyFor = address \}, onDismiss = \{ managing = null \}, onReconnect = \{ reconnectVia = null; reconnectFor = address \}, onAddWatchdog = \{ watchdogFor = address \}, onFixEdge = \{ fixEdgeFor = address \}\)/);
   // Machines → Hypervisors → the pool: the list closes and the page opens.
   assert.match(KT_MACHINES, /onOpenPool = \{ listingHypervisors = false; managing = it \}/);
   assert.match(KT_HYPERVISORS, /Manage\.lastLooked\(settings, row\.address\)\?\.let \{ HypervisorWords\.updated\(relative\(it\)\.toString\(\)\) \} \?: HypervisorWords\.NEVER_OPENED/);
@@ -438,4 +438,167 @@ test('a quiet router is said as quiet, and a count not read as not read, in the 
     const names = rows.indexOf('Manage.Words.edgeNames(');
     assert.ok(wayOut > 0 && names > wayOut, `${who}: the way out is drawn before the names`);
   }
+});
+
+// AN EDGE ROUTER WITH LESS MEMORY THAN IT NEEDS, and the one button that
+// rebuilds it. Reported from a running pool: "fleetwright-edge needs at least
+// 4GB of ram otherwise it crashes"; and then, since a router already there
+// was only rebuilt on the next Apply, "prompt users to one click fix". The
+// box says how much each router has and needs (edge-watch.js, `memory` and
+// `needs`); these four hold what the phones do with the two numbers.
+
+const KT_FLEET = read(`${KT_DIR}/Fleet.kt`);
+const KT_SHEET = read(`${KT_DIR}/HypervisorSheet.kt`);
+const IOS_FLEET = read('apps/ios/Fleetwright/Fleet.swift');
+const IOS_POLICY = read('apps/ios/Fleetwright/AddHypervisorView.swift');
+
+/**
+ * A sentence as a person reads it, with `{}` wherever the phone puts a value
+ * in: Swift's `\(…)`, which nests, and Kotlin's `${…}` and `$name`.
+ *
+ * @param {string} literal
+ */
+function withHoles(literal) {
+  let out = '';
+  for (let i = 0; i < literal.length; i += 1) {
+    if (literal.startsWith('\\(', i)) {
+      let depth = 1;
+      i += 2;
+      while (i < literal.length && depth > 0) {
+        if (literal[i] === '(') depth += 1;
+        if (literal[i] === ')') depth -= 1;
+        i += 1;
+      }
+      i -= 1;
+      out += '{}';
+    } else if (literal.startsWith('${', i)) {
+      i = literal.indexOf('}', i);
+      out += '{}';
+    } else if (literal[i] === '$' && /\w/.test(literal[i + 1] ?? '')) {
+      while (/\w/.test(literal[i + 1] ?? '')) i += 1;
+      out += '{}';
+    } else {
+      out += literal[i];
+    }
+  }
+  return out;
+}
+
+test('both phones say a router short of memory in the same words, and what the rebuild costs once', () => {
+  const ios = bare(IOS_MODEL);
+  const kt = bare(KT_MODEL);
+  const iosShort = /static func edgeShort\(_ name: String, memory: Double, needs: Double\) -> String \{\s*"([^\n]*)"\s*\}/.exec(ios)?.[1];
+  const ktShort = /fun edgeShort\(name: String, memory: Long, needs: Long\) =\s*"([^\n]*)"/.exec(kt)?.[1];
+  const iosFix = /static func edgeFix\(needs: Double\) -> String \{ "([^\n]*)" \}/.exec(ios)?.[1];
+  const ktFix = /fun edgeFix\(needs: Long\) = "([^\n]*)"/.exec(kt)?.[1];
+  assert.ok(iosShort && ktShort && iosFix && ktFix, 'both phones have the sentence and the button');
+  // The router by name, what it has, what it needs, and why that matters.
+  assert.equal(withHoles(iosShort), '{} has {} of memory and needs {}. It crashes with less.');
+  assert.equal(withHoles(ktShort), withHoles(iosShort));
+  // The button is named for what it does, and with how much.
+  assert.equal(withHoles(iosFix), 'Rebuild it with {}');
+  assert.equal(withHoles(ktFix), withHoles(iosFix));
+  // Every size through the one formatter the table holds both phones to
+  // (`bytes` in manage.json), so 2 GiB and 4 GiB are those words on both.
+  for (const [literal, sizes, who] of [[iosShort, 2, 'iOS'], [iosFix, 1, 'iOS'], [ktShort, 2, 'Android'], [ktFix, 1, 'Android']]) {
+    assert.equal((literal.match(/Manage\.bytes\(/g) ?? []).length, sizes, `${who}: ${literal}`);
+  }
+  // WHAT IT COSTS is the line a rebuild already had, drawn from where it is
+  // kept: written once on each phone, so the two places cannot drift apart.
+  const cost = 'Builds a fresh one. Machines have no internet access while it starts.';
+  assert.equal(IOS.split(`"${cost}"`).length - 1, 1, 'iOS writes the cost once');
+  assert.equal(ANDROID.split(`"${cost}"`).length - 1, 1, 'Android writes the cost once');
+  assert.match(bare(IOS_SCREEN), /Text\(Manage\.Words\.edgeFix\(needs: needs\)\)[\s\S]{0,160}?Text\(HypervisorWords\.makeEdgeAgainFooter\)/, 'iOS: the cost under the button');
+  assert.match(bare(KT_SCREEN), /Text\(Manage\.Words\.edgeFix\(needs\)\)\s*\}\s*Text\(HypervisorWords\.MAKE_EDGE_AGAIN_FOOTER,/, 'Android: the cost under the button');
+});
+
+test('a router is short only when both numbers were read, and a missing one draws nothing', () => {
+  // C-5. `memory` is null when the hypervisor did not give it, and `needs`
+  // from a box before it said: either way cannot tell, and cannot tell is
+  // never short. A default of zero for either would call every router short.
+  assert.match(bare(IOS_FLEET), /let memory: Double\?\s*let needs: Double\?\s*var short: Bool \{\s*guard let memory, let needs else \{ return false \}\s*return memory < needs\s*\}/);
+  const kt = bare(KT_FLEET);
+  assert.match(kt, /val short: Boolean get\(\) = memory != null && needs != null && memory < needs/);
+  assert.match(kt, /memory = r\.num\("memory"\)\?\.toLong\(\),\s*needs = r\.num\("needs"\)\?\.toLong\(\),/, 'Android reads both as absent or a number, never as zero');
+  // The sentence under the card is drawn for the short ones and no other,
+  // and not at all while there are none.
+  const ios = bare(IOS_SCREEN);
+  const iosCluster = bare(IOS_HYPERVISORS);
+  for (const [page, who] of [[ios, 'a pool’s page'], [iosCluster, 'a cluster’s page']]) {
+    assert.match(page, /let short = edges\?\.routers\.filter \{ \$0\.short \} \?\? \[\]\s*if !short\.isEmpty \{/, `iOS, ${who}`);
+  }
+  const ktScreen = bare(KT_SCREEN);
+  assert.match(ktScreen, /val short = e\?\.routers\?\.filter \{ it\.short \} \?: emptyList\(\)\s*if \(short\.isEmpty\(\)\) return/);
+  // And on the router's own page it is the first thing under its name.
+  assert.match(ios, /Text\(r\.name\)\s*\.fleetType\(\.bodyStrong\)\s*\.foregroundStyle\(Design\.Palette\.ink\)\s*if r\.short, let memory = r\.memory, let needs = r\.needs \{\s*Text\(Manage\.Words\.edgeShort\(r\.name, memory: memory, needs: needs\)\)\s*\.fleetType\(\.label\)\s*\.foregroundStyle\(Design\.Palette\.attention\)/);
+  assert.match(ktScreen, /Text\(r\.name, style = Design\.Style\.bodyStrong, color = Design\.Palette\.ink\.now\)\s*val memory = r\.memory\s*val needs = r\.needs\s*if \(r\.short && memory != null && needs != null\) Text\(Manage\.Words\.edgeShort\(r\.name, memory, needs\), style = Design\.Style\.label, color = Design\.Palette\.attention\.now\)/);
+});
+
+test('the rebuild button is drawn only for somebody who can use it', () => {
+  // C-2. The sentence is for everybody who sees the card; the button is for
+  // whoever the page can send somewhere that works.
+  const ios = bare(IOS_SCREEN);
+  const iosCluster = bare(IOS_HYPERVISORS);
+  // Directly under the card, on both pages that draw it.
+  assert.match(ios, /edgeCard\s*\.fleetRow\(\)\s*edgeShort\s*\}/);
+  assert.match(iosCluster, /if let card = edgeCard \{\s*card\s*\.fleetRow\(\)\s*edgeShort\s*\}/);
+  // The prompt draws its button only when the page offers one.
+  assert.match(ios, /if offers, let needs = short\.compactMap\(\{ \$0\.needs \}\)\.max\(\) \{\s*NavigationLink \{\s*fix\(\)\s*\} label: \{\s*Text\(Manage\.Words\.edgeFix\(needs: needs\)\)\s*\.fleetType\(\.body\)\s*\.frame\(minHeight: 44, alignment: \.leading\)/);
+  // A POOL THIS PHONE HOLDS: behind the condition the policy row is behind,
+  // and into that same screen, for that pool.
+  assert.match(ios, /EdgeShortPrompt\(short: short, offers: settings\.showsAdmin\) \{\s*AddHypervisorView\(settings: settings, policyFor: pool\.address, fixEdge: true\)/);
+  assert.match(ios, /if settings\.showsAdmin \{\s*NavigationLink \{\s*AddHypervisorView\(settings: settings, policyFor: pool\.address\)/);
+  // A CLUSTER THAT SAYS ITS ROUTER IS THERE: where Make the edge router
+  // again is, and to the very setup that row opens.
+  assert.match(iosCluster, /if row\.proxmox, case let \.there\(_, blocks, pair\)\? = row\.fleet\?\.edge \{\s*EdgeShortPrompt\(short: short, offers: true\) \{\s*edgeAgain\(blocks: blocks, pair: pair\)\s*\}/);
+  assert.match(iosCluster, /action\(HypervisorWords\.makeEdgeAgain, HypervisorWords\.makeEdgeAgainFooter, "shield\.lefthalf\.filled"\) \{\s*edgeAgain\(blocks: blocks, pair: pair\)\s*\}/);
+  assert.match(iosCluster, /func edgeAgain\(blocks: Bool, pair: Bool\) -> AddProxmoxView \{\s*AddProxmoxView\(settings: settings, startNode: HypervisorAddress\.node\(row\.address\), startOptions: ProxmoxOptions\(edge: true, edgeBlock: blocks \? true : nil, edgeAgain: true, edgePair: pair \? true : nil\)\)/);
+  // ANYWHERE ELSE, the sentence alone: a pool this phone holds no token for.
+  assert.match(iosCluster, /\} else \{\s*EdgeShortPrompt\(short: short, offers: false\) \{ EmptyView\(\) \}/);
+  // And those three are every place iOS draws it.
+  const iosDrawn = [...bare(IOS).matchAll(/EdgeShortPrompt\(short: short, offers: ([^)]*)\)/g)].map((m) => m[1]).sort();
+  assert.deepEqual(iosDrawn, ['false', 'settings.showsAdmin', 'true']);
+
+  const kt = bare(KT_SCREEN);
+  const ktCluster = bare(KT_HYPERVISORS);
+  assert.match(kt, /if \(onFix != null && needs != null\) \{\s*OutlinedButton\(onClick = onFix, modifier = Modifier\.heightIn\(min = 48\.dp\)\) \{\s*Text\(Manage\.Words\.edgeFix\(needs\)\)/);
+  // The pool's page: under the card, for an admin, as the policy row is.
+  assert.match(kt, /\{ showingEdges = true \}\s*if \(edgesAsked && edgesKnown\) EdgeShortPrompt\(edges, onFix = if \(admin == true\) onFixEdge else null\)/);
+  assert.match(kt, /if \(admin == true\) \{[\s\S]{0,200}?OpenRow\(Manage\.Words\.changePolicy\)/);
+  assert.match(bare(KT_MACHINES), /fixEdgeFor\?\.let \{ pool ->\s*key\("fix-edge\/\$pool"\) \{\s*HypervisorSheet\(settings, policyFor = pool, fixEdge = true, onDismiss = \{ fixEdgeFor = null \}\)/);
+  // The cluster's page: under the card, where the row that makes it again
+  // is, through the callback that row uses and as the router is now.
+  assert.match(ktCluster, /EdgeCard\(edges, empty = ""\) \{ showingEdge = true \}\s*\}\s*EdgeShortPrompt\(edges, onFix = if \(row\.proxmox && edge != null && edge\.there\) \(\{ onMakeEdge\(true, edge\.blocks, edge\.pair\) \}\) else null\)/);
+  assert.match(ktCluster, /if \(edge\.there\) HypervisorWords\.MAKE_EDGE_AGAIN_FOOTER else null,\s*\) \{ onMakeEdge\(edge\.there, edge\.blocks, edge\.pair\) \}/);
+  // And those two are every place Android draws it.
+  const ktDrawn = (bare(ANDROID).match(/(?<!fun )EdgeShortPrompt\(/g) ?? []).length;
+  assert.equal(ktDrawn, 2);
+});
+
+test('the rebuild goes by itself only with a router there, its switch on and nothing to refuse, and otherwise opens the form with why', () => {
+  // "One click": the tap on the pool's page and the sign-in are the asking.
+  // The choice is the pool as it stands, since the box rebuilds a short
+  // router on any Apply, so nothing is switched on for it, and Apply's own
+  // function sends it. When it cannot go, the form, with one line on why.
+  const ios = bare(IOS_POLICY);
+  const kt = bare(KT_SHEET);
+  assert.match(ios, /\} else if fixEdge \{\s*if choice\.edge, choice\.problem\(in: opened\) == nil, opened\.edge\(on: choice\.egress\) != nil \{\s*straightThrough = true\s*await applyPolicy\(opened, job: job\)\s*\} else \{\s*result = straightRefusal\(opened\)\s*failed = false\s*\}/, 'iOS');
+  assert.match(kt, /\} else if \(policy && fixEdge && c != null\) \{\s*if \(c\.edge && XoPolicy\.edgeOn\(opened, c\.egress\) != null && XoPolicy\.problem\(opened, c\) == null\) \{\s*straight = true\s*applyChoice\(r\.xosetup\)\s*\} else \{\s*straightNote = straightRefusal\(/, 'Android');
+  // It changes nothing in the choice: no line that reads it writes one.
+  assert.doesNotMatch(ios, /fixEdge[^\n]*choice\.\w+ = /);
+  assert.doesNotMatch(kt, /fixEdge[^\n]*\.copy\(/);
+  // Why not, in the same words: the machine cannot build a router at all,
+  // or found none where it looked, or would refuse the choice as it stands.
+  for (const why of [
+    'needs an update to do this. Choose below instead.',
+    ' found no edge router on ',
+    '’s uplink. Choose below.',
+    'Not done by itself: ',
+  ]) {
+    assert.ok(ios.includes(why), `iOS says why not: ${why}`);
+    assert.ok(kt.includes(why), `Android says why not: ${why}`);
+  }
+  // Android's refusal is told which errand it is refusing, so a router's
+  // rebuild is never answered in the words for the pool's own machine.
+  assert.match(kt, /straightNote = straightRefusal\([^\n]*fixEdge = true, canEdge = canEdge\)/);
 });

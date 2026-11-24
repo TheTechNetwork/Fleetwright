@@ -329,6 +329,14 @@ private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain:
         } else if (edges?.routers?.isNotEmpty() == true) {
             EdgeCard(edges, empty = "") { showingEdge = true }
         }
+        // A ROUTER SHORT OF MEMORY, said directly under the card
+        // (EdgeShortPrompt). The button is drawn where this page already
+        // offers to make the router again, a cluster that says its router is
+        // there, and goes to that same setup with the same options. A Xen
+        // Orchestra pool read from here is one this phone has no token for,
+        // so there is nothing a button could send: the sentence alone (C-2).
+        // Same as iOS.
+        EdgeShortPrompt(edges, onFix = if (row.proxmox && edge != null && edge.there) ({ onMakeEdge(true, edge.blocks, edge.pair) }) else null)
         // THE MACHINES THAT CHECKED IT, one card each, under their heading as
         // a pool's hosts are: the name, the one word beside it, and the
         // machine's own words on why under Details.

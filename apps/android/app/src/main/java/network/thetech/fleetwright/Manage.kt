@@ -858,6 +858,23 @@ internal object Manage {
         /** The names the lists blocked most, each with how often. */
         fun edgeRefused(names: List<Pair<String, Int>>) = "Blocked most: " + names.joinToString(", ") { "${it.first} (${it.second})" }
         const val edgeNotListening = "Router logs not received: another program has the port."
+        /**
+         * A ROUTER WITH LESS MEMORY THAN IT NEEDS, one sentence per router,
+         * under the card and first on its own page. Reported from a running
+         * pool: "fleetwright-edge needs at least 4GB of ram otherwise it
+         * crashes". Both sizes are the ones read, in bytes, said the way a
+         * VM's memory is on these pages ([bytes]). The same words as iOS.
+         */
+        fun edgeShort(name: String, memory: Long, needs: Long) =
+            "$name has ${Manage.bytes(memory)} of memory and needs ${Manage.bytes(needs)}. It crashes with less."
+        /**
+         * THE ONE BUTTON UNDER IT, named for what it does and with what
+         * (asked for: "prompt users to one click fix"). For a pair where
+         * both are short it is still one, with the larger of what they need.
+         * What it costs is the line a rebuild already has
+         * (HypervisorWords.MAKE_EDGE_AGAIN_FOOTER), not a second copy here.
+         */
+        fun edgeFix(needs: Long) = "Rebuild it with ${Manage.bytes(needs)}"
         /** The methods could not be read: unknown, which is not none (C-5). */
         const val methodsUnknown = "Couldn’t read which actions this Xen Orchestra offers."
         const val nothingOffered = "Nothing can be done to it in this state."
