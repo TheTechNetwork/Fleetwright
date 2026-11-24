@@ -938,7 +938,7 @@ That was the design, and it is not what was built. Asked instead: *"why
 per-lab OPNsense when we can do one with proper routing and rules"*. The edge
 router already exists, already stands between every machine and everything
 private, and is already configured unattended from the source. A router per
-lab would cost each lab a second VM (2 GiB, and minutes of FreeBSD booting
+lab would cost each lab a second VM (4 GiB, and minutes of FreeBSD booting
 before the session's machine had a network at all), a template of its own,
 and a bootstrap API key that some machine on the lab's network has to be
 trusted with. One router with an interface per lab gives the same isolation
@@ -1303,7 +1303,7 @@ out, a machine that can build it offers *Build the edge router on it*
 
 1. Makes `fleetwright-uplink`, a private network in the pool with no
    interface of its own, and adds it to what the fleet may use.
-2. Builds `fleetwright-edge`, an OPNsense 26.7 VM: 2 vCPUs, 2 GiB and a
+2. Builds `fleetwright-edge`, an OPNsense 26.7 VM: 2 vCPUs, 4 GiB and a
    3 GiB disk on the storage chosen, its WAN (`xn0`) on the way out and its
    LAN (`xn1`) on the uplink at 10.254.0.1/24. Its rules, in order:
    - labs may ask the edge for names (DNS);
@@ -1325,7 +1325,20 @@ out, a machine that can build it offers *Build the edge router on it*
    it if it was stopped, and says the WAN address Xen Orchestra has for it,
    or that Xen Orchestra does not know it, which is not the same as it having
    none. Nothing is rebuilt, unless it is from before the edge updated
-   itself (below).
+   itself (below) or has less memory than it needs.
+
+**4 GiB, because 2 was not enough.** The edge was first built with 2 GiB,
+and one in use crashed: *"fleetwright-edge needs at least 4GB of ram
+otherwise it crashes"* (24 November 2026). What ran it out of memory was not
+measured, so 4 GiB is the floor that was reported and not a figure worked out
+from the rules it loads. An edge with less is **rebuilt once**, on the next
+Apply, the way one from before it updated itself is: machines behind it keep
+their way out while the new one is built, and have none while it starts. One
+whose memory Xen Orchestra does not give is not known to be short and is
+left as it is. A pool needs that much memory free on a host for the new one
+to start beside the old; if it has not, the build says so and the old router
+is left running. The phones' line for a pool with no edge says the same size
+(`test/xo-saved-in-apps.test.js` holds it to `EDGE.memory`).
 
 ### It keeps itself up to date
 

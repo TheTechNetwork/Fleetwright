@@ -461,6 +461,11 @@ files, logging, or dropping inline.
   beside the script and pinned in it. The script writes the configuration
   into the image with the same edits the boxes make on Xen Orchestra, each
   byte checked against what must be there before it is replaced.
+- **With 4 GiB, as a Xen Orchestra pool's has** (`hypervisors.md`, "4 GiB,
+  because 2 was not enough"; a test holds the script's `EDGE_MEM` to the
+  boxes' `EDGE.memory`). One made with 2 crashed in use. A router there with
+  less is **made again once** the next time the setup's `edge` step runs,
+  and the step says why; one whose memory Proxmox does not give is kept.
 - **For virtio**: its WAN `vtnet0` on the setup's bridge, its LAN `vtnet1` on
   `fwedge`, a network of its own with no address of the node's on it, and
   QEMU's guest agent, so Proxmox shows its addresses.
