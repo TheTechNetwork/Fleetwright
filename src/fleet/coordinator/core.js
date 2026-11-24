@@ -4906,13 +4906,29 @@ export class CoordinatorCore {
     }
     recent.push(now);
     this.claudeAsks.set(key, recent);
-    const r = await this.minter.vault('device', { sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct }, email }).then(
+    // `admin` is read by the minter at one moment only: when nobody
+    // administers the organization there yet and the first admin files
+    // themselves (minter/org.js). It can give nothing after that.
+    const r = await this.minter.vault('device', { sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct }, email, admin: Boolean(requester?.admin) }).then(
       (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
       (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
     );
     // WHAT CHANGED, in the minter's own words, which never carry a value.
     this.record({ event: r.ok ? 'vault.changed' : 'vault.refused', actor: email, text: `${email}: ${String(r.text || '').slice(0, 200)}` });
     if (r.ok && r.changed === true) this.#vaultChanged();
+    // A CUSTODIAN CHANGED SOMEBODY'S VAULT, and the minter says whom to tell
+    // (docs/members.md). Their own phones only. The minter keeps the same
+    // line beside the vault, where its owner reads it whatever happens here.
+    const notify = r.ok ? r.notify : null;
+    const owner = String(notify?.email || '').toLowerCase();
+    if (owner && owner !== email && typeof notify.text === 'string') {
+      const said = oneLine(notify.text, 240);
+      this.record({ event: 'vault.custody', actor: owner, text: `${owner}: ${said}` });
+      const own = this.#devicesOf(owner).filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === owner);
+      if (this.push && own.length) {
+        await this.push.send(own, { title: 'A manager changed your vault', body: `${said} You › Credentials lists what your managers changed, and turns it off.`, data: { event: 'vault.custody', kind: 'vault-custody', name: '', hostId: '', url: '' } }).catch(() => {});
+      }
+    }
     return r.ok
       ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
       : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') };
@@ -4944,6 +4960,27 @@ export class CoordinatorCore {
   #claudeCheckedAt = 0;
 
   /**
+   * Whose phones hear about a Claude sign-in: the person's own and the
+   * admins', as it always was, or for an agent member each custodian's own.
+   *
+   * @param {string} email  the person, or the member's principal
+   * @param {string|null} member
+   * @param {unknown} tell  the member's custodians, as the minter listed them
+   */
+  #whoToTell(email, member, tell) {
+    if (!member) {
+      const devices = this.#devicesOf(email);
+      const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
+      return { own, admins: devices.filter((d) => !own.includes(d)), whose: email };
+    }
+    const custodians = (Array.isArray(tell) ? tell : []).slice(0, 64).map((a) => String(a).toLowerCase());
+    const seen = new Set();
+    const theirs = custodians.flatMap((a) => this.#devicesOf(a).filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === a))
+      .filter((d) => !seen.has(d) && seen.add(d));
+    return { own: [], admins: theirs, whose: this.org.get(member)?.name ?? member };
+  }
+
+  /**
    * Ask the minter after every kept Claude sign-in, and tell each person whose
    * sign-in Anthropic has ended, on their phones. Called from the alarm
    * (fleet-do.js), at most every CLAUDE_CHECK_MS.
@@ -4973,8 +5010,11 @@ export class CoordinatorCore {
     if (!r?.ok || !Array.isArray(r.ended)) return 0;
     let told = 0;
     for (const e of r.ended.slice(0, 100)) {
-      const email = String(e?.email || '').trim().toLowerCase();
-      if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
+      // A MEMBER'S SIGN-IN has no address: it is told to its custodians,
+      // as the minter lists them (`tell`), under the member's name.
+      const member = typeof e?.member === 'string' && MEMBER_ID_RE.test(e.member) ? e.member : null;
+      const email = member ? `member:${member}` : String(e?.email || '').trim().toLowerCase();
+      if (!member && !/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
       const at = Number(e.at);
       const hhmm = (/** @type {number} */ t) => new Date(t).toISOString().slice(11, 16);
       const when = Number.isFinite(at) ? ` at ${hhmm(at)} UTC` : '';
@@ -4997,15 +5037,13 @@ export class CoordinatorCore {
       this.record({ event: 'claude.ended', actor: email, text: `${email}: ${cause} (${String(e.why || '').slice(0, 160)})` });
       told += 1;
       if (!this.push) continue;
-      const devices = this.#devicesOf(email);
-      const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
-      const admins = devices.filter((d) => !own.includes(d));
+      const { own, admins, whose } = this.#whoToTell(email, member, e.tell);
       const body = `${cause} Sessions cannot start with it. Sign in to Claude again from your phone or the signing page.`;
       const data = { event: 'claude.ended', kind: 'claude-ended', name: '', hostId: '', url: '' };
       const said = kind === 'outside' ? 'was ended' : 'stopped working';
       try {
         if (own.length) await this.push.send(own, { title: `Your Claude sign-in ${said}`, body, data });
-        if (admins.length) await this.push.send(admins, { title: `${email}’s Claude sign-in ${said}`, body: body.replace('from your phone', 'from their phone'), data });
+        if (admins.length) await this.push.send(admins, { title: `${whose}’s Claude sign-in ${said}`, body: member ? body.replace('Sign in to Claude again', 'Sign it in to Claude again') : body.replace('from your phone', 'from their phone'), data });
       } catch { /* recorded above; a phone not told is no reason to stop telling the next */ }
     }
     // REFUSED AT THE USAGE ADDRESS (claude-login.js, checkClaude): renewing
@@ -5014,8 +5052,11 @@ export class CoordinatorCore {
     // what was seen: where it was refused, with what, and whether renewing
     // was tried. What would mend it is not known, so it is not promised.
     for (const e of (Array.isArray(r.refused) ? r.refused : []).slice(0, 100)) {
-      const email = String(e?.email || '').trim().toLowerCase();
-      if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
+      // A MEMBER'S SIGN-IN has no address: it is told to its custodians,
+      // as the minter lists them (`tell`), under the member's name.
+      const member = typeof e?.member === 'string' && MEMBER_ID_RE.test(e.member) ? e.member : null;
+      const email = member ? `member:${member}` : String(e?.email || '').trim().toLowerCase();
+      if (!member && !/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
       const at = Number(e.at);
       const when = Number.isFinite(at) ? ` at ${new Date(at).toISOString().slice(11, 16)} UTC` : '';
       const status = e.status === 403 ? 403 : e.status === 401 ? 401 : null;
@@ -5025,14 +5066,12 @@ export class CoordinatorCore {
       this.record({ event: 'claude.refused', actor: email, text: `${email}: ${cause}` });
       told += 1;
       if (!this.push) continue;
-      const devices = this.#devicesOf(email);
-      const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
-      const admins = devices.filter((d) => !own.includes(d));
+      const { own, admins, whose } = this.#whoToTell(email, member, e.tell);
       const body = `${cause} Signing in to Claude again from your phone or the signing page may mend it.`;
       const data = { event: 'claude.refused', kind: 'claude-ended', name: '', hostId: '', url: '' };
       try {
         if (own.length) await this.push.send(own, { title: 'Claude refused your sign-in’s access token', body, data });
-        if (admins.length) await this.push.send(admins, { title: `Claude refused ${email}’s access token`, body: body.replace('from your phone', 'from their phone'), data });
+        if (admins.length) await this.push.send(admins, { title: `Claude refused ${whose}’s access token`, body: member ? body.replace('Signing in to Claude again', 'Signing it in to Claude again') : body.replace('from your phone', 'from their phone'), data });
       } catch { /* recorded above */ }
     }
     return told;
