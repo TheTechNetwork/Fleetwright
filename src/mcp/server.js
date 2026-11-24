@@ -130,6 +130,58 @@ export function backAtPrompt(session) {
 }
 
 /**
+ * The VM images this person can start a machine from, as `fleet_status`
+ * prints them under the hosts.
+ *
+ * `provision` for platform `vm` or `lab` asks for a `template` "as status
+ * lists it", and status never listed one: the coordinator's snapshot has
+ * carried `vmImages` since the first pool, and only the phones drew it. An
+ * agent asked to make a Proxmox VE machine had the image on the cluster, the
+ * box holding the token, the tool to make it, and no way to learn the one id
+ * the tool needs. Asked for as "fix the bug then", after exactly that.
+ *
+ * NULL IS "COULD NOT TELL" (C-5), said as such: an older coordinator, or a
+ * snapshot that did not arrive. An empty list is an answer, and says why.
+ *
+ * Each line carries the id `template` takes, and under it the ids `network`
+ * and `group` take, because those are the next things the same call asks for.
+ * Names are the person's and held to one line; ids are the coordinator's.
+ *
+ * @param {any[]|null} images
+ */
+function describeVmImages(images) {
+  if (!Array.isArray(images)) {
+    return 'VM images: could not ask the coordinator which images you can start a VM from.';
+  }
+  if (!images.length) {
+    return (
+      'VM images: none. No connected box holds a hypervisor token of yours that offers one, ' +
+      'so fleet_provision cannot make a vm or lab machine for you yet.'
+    );
+  }
+  const lines = ['VM images (fleet_provision platform `vm`, `template` = the id):'];
+  for (const i of images) {
+    if (!i || typeof i.template !== 'string') continue;
+    const kind = i.kind === 'proxmox' ? 'Proxmox VE' : i.kind === 'xo' ? 'Xen Orchestra' : 'hypervisor';
+    const where = [kind, i.address ? oneLine(String(i.address), 120) : null, i.poolName ? `pool ${oneLine(String(i.poolName), 60)}` : null]
+      .filter(Boolean)
+      .join(', ');
+    const by = Array.isArray(i.hosts) && i.hosts.length ? ` — made by ${i.hosts.map((/** @type {any} */ h) => oneLine(String(h), 64)).join(', ')}` : '';
+    lines.push(`- ${oneLine(String(i.name || 'unnamed image'), 80)}: template ${i.template} (${where})${by}`);
+    const named = (/** @type {any[]} */ list) => list.map((n) => `${oneLine(String(n.name || n.id), 60)} (${n.id})`).join(', ');
+    if (Array.isArray(i.networks) && i.networks.length) lines.push(`    networks: ${named(i.networks)}`);
+    if (Array.isArray(i.groups) && i.groups.length) lines.push(`    groups: ${named(i.groups)}`);
+    if (Array.isArray(i.labs) && i.labs.length) {
+      lines.push(
+        `    labs (platform \`lab\`, \`network\` = the id): ` +
+          i.labs.map((/** @type {any} */ l) => `${oneLine(String(l.name || l.id), 60)} (${l.id}, ${l.free ? 'free' : 'in use'})`).join(', '),
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
  * The session record out of a `status` reply.
  *
  * THE REPLY HAS NEVER HAD A `session` KEY. Both callers read
@@ -683,6 +735,8 @@ export class McpServer {
       'macos-26 or macos-15, and only xcode-27 has Xcode 27 and the iPhone Duo simulator. An -xlarge image is',
       'the same on GitHub\u2019s larger machine, billed by the minute; it is refused unless the person allowed',
       'larger machines for their runner repository, and the refusal says how.',
+      'A machine from the person\u2019s own hypervisor is platform `vm`: fleet_status with no name lists the',
+      'VM images they can start one from, each with the id `template` takes.',
       '',
       'Watching one that is actually working:',
       '  1. fleet_start with a `task` (or a `profile`), naming a host or a tag for a kind of machine',
@@ -945,6 +999,12 @@ export class McpServer {
       if (here) return here;
     }
 
+    // ASKED NOW, ANSWERED BELOW: the fleet-wide status also ends with the
+    // person's VM images (describeVmImages), and that request goes out beside
+    // the fan-out rather than after it, so it costs no wait of its own.
+    // #vmImages never rejects; it answers null when it cannot say.
+    const vmImages = tool.verb === 'status' && !params.name ? this.#vmImages() : null;
+
     /** @type {any} */
     let reply;
     try {
@@ -1035,6 +1095,14 @@ export class McpServer {
     if (reply?.ok !== false && (tool.verb === 'status' || tool.verb === 'peek')) {
       const still = describeStillness(sessionFrom(reply, String(params.name || '')));
       if (still) reply = { ...reply, text: `${reply?.text ?? ''}\n\n${still}` };
+    }
+
+    // AND THE VM IMAGES, on the fleet-wide answer only: the one id `provision`
+    // for a vm needs and nothing else printed (describeVmImages). Asked of the
+    // coordinator rather than the hosts, because hosts do not know whose pools
+    // are whose and the snapshot does; started above, beside the fan-out.
+    if (vmImages && reply?.ok !== false) {
+      reply = { ...reply, text: `${reply?.text ?? ''}\n\n${describeVmImages(await vmImages)}` };
     }
 
     const failed = reply?.ok === false;
@@ -1130,6 +1198,25 @@ export class McpServer {
       throw new Error('this credential was refused — it may have been revoked from the app');
     }
     return await res.json();
+  }
+
+  /**
+   * The VM images this credential's person can start a machine from, from the
+   * coordinator's own snapshot (`/api/hosts`, core.js vmImagesFor), the same
+   * list New session › Where draws on the phones. Null when it cannot say:
+   * the route refused, an older coordinator without the field, or no answer.
+   *
+   * @returns {Promise<any[]|null>}
+   */
+  async #vmImages() {
+    try {
+      const res = await this.fetch(`${this.coordinator}/api/hosts`, { headers: { authorization: `Bearer ${this.credential}` } });
+      if (res?.status !== 200) return null;
+      const body = /** @type {any} */ (await res.json());
+      return Array.isArray(body?.vmImages) ? body.vmImages : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
