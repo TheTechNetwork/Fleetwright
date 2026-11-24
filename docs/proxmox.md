@@ -466,6 +466,9 @@ files, logging, or dropping inline.
   boxes' `EDGE.memory`). One made with 2 crashed in use. A router there with
   less is **made again once** the next time the setup's `edge` step runs,
   and the step says why; one whose memory Proxmox does not give is kept.
+  The cluster's page says when its router is short and offers *Rebuild it
+  with 4 GiB*, which opens this setup with *Make the edge router again*
+  already on (`hypervisors.md`, "The phone says so, and offers the fix").
 - **For virtio**: its WAN `vtnet0` on the setup's bridge, its LAN `vtnet1` on
   `fwedge`, a network of its own with no address of the node's on it, and
   QEMU's guest agent, so Proxmox shows its addresses.
