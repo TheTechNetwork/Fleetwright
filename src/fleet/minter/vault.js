@@ -70,7 +70,7 @@
 // NEVER THROWS. Every refusal is a code and a sentence.
 
 import { API_PROVIDERS, API_KEY_ITEMS } from '../protocol/engines.js';
-import { SANDBOX_PROVIDER_NAMES, sandboxProviderOf, sandboxRecord } from '../protocol/sandboxes.js';
+import { SANDBOX_PROVIDER_NAMES, sandboxProviderOf, sandboxDepositProblem } from '../protocol/sandboxes.js';
 import { SEAL_KEY_RE, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, atRestAad, vaultAtRestAad, seal, open } from '../seal.js';
 import { verify, sign, signingInput } from '../crypto.js';
 import { githubUser } from '../../core/repo-tokens.js';
@@ -742,9 +742,10 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       return refuse('bad_value', 'That is not a GitHub Copilot token: one is a single run of letters, digits, hyphens and underscores.');
     }
     if (kind === 'sandbox') {
-      const record = sandboxRecord(name, value);
-      if (!record) return refuse('bad_value', 'That is not a sandbox provider’s record: it is the provider’s API key and the templates to offer, each an id and a name.');
-      if (!record.templates.length) return refuse('bad_value', 'A sandbox provider is kept with at least one template to offer. A machine is made from a template, and only you know which of your account’s are built to join the fleet.');
+      // WHAT IS KEPT IS WHAT WAS SENT, or it is refused saying which part is
+      // not right. A box reads a record leniently; a deposit is not.
+      const problem = sandboxDepositProblem(name, value);
+      if (problem) return refuse('bad_value', problem);
     }
     if (kind === 'hypervisor' && !isHypervisorRecord(name, value)) {
       return refuse('bad_value', 'That is not the token record a hypervisor’s setup hands back, for that address.');

@@ -135,7 +135,9 @@ account, which is why the item is handed only to boxes approved for the
 vault that ask for it (`accepts` names `sandboxes`), held there in memory
 only, and never reported. The templates are listed by the person because
 the provider's list is every template on the account and only some are
-built to enrol.
+built to enrol. A deposit is kept whole or refused saying which part is
+not right: a template id the provider could not have, more than twelve, a
+name past sixty characters, or a key that is not one.
 
 ### A template that enrols
 
@@ -160,8 +162,11 @@ timeout, which the phone shows as a machine that never joined.
   coordinator's address in its environment, a timeout of the minutes asked,
   and metadata naming the fleet's machine and its owner. Sent with an
   idempotency key made from the ticket, so a retry does not make two.
-- **Extend** and **end**: the provider's timeout and delete. Restart and
-  resize are refused in words: a sandbox has neither. A box that also holds
+- **Extend** and **end**: the provider's timeout and delete. More time
+  sets the end to that many minutes from now, which is how the provider
+  counts it, where a hypervisor's machine has minutes added; the phones say
+  "from now". Restart and resize are refused in words: a sandbox has
+  neither. A box that also holds
   a pool of the same person's asks the provider even while that pool is out
   of reach, so a rented machine can always be ended.
 - **Gone when the provider says so.** A machine that enrolled and is no
@@ -198,9 +203,10 @@ reports it.
 - **Both phones**: API keys under a member's Credentials, offered for the
   providers its engines name; the OpenCode model field accepts the new
   prefixes and says what each bills to; Approvals' settings gain the
-  switch; Machines offers "Add a sandbox provider" with its key and
-  templates, and a sandbox template among the images, marked as a rented
-  machine that ends on a timer.
+  switch; Hypervisors, under Machines, offers "Add a sandbox provider" with
+  its key and templates; a sandbox template is among the images, marked as
+  a rented machine that ends on a timer; and a rented machine's page offers
+  more time and end, and nothing a sandbox does not have.
 - **The signing page**: the same two items.
 
 ## What it does not stop

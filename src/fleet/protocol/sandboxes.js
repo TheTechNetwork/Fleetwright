@@ -60,3 +60,44 @@ export function sandboxRecord(name, value) {
     .map((/** @type {any} */ t) => ({ id: t.id, name: typeof t.name === 'string' && t.name.trim() ? t.name.trim().slice(0, 60) : t.id }));
   return { provider, key: read.key, templates };
 }
+
+/**
+ * Why a deposit is not a record a vault keeps, as a sentence, or null when
+ * it is one. `sandboxRecord` reads leniently, which is right for a box
+ * reading what a vault already checked: it leaves out a template whose id
+ * does not read as one and stops at a dozen. A vault that kept such a
+ * deposit and answered "Kept" would have dropped part of what a person
+ * typed without a word (C-5), so what is deposited is held to this first.
+ *
+ * @param {string} name @param {unknown} value
+ * @returns {string|null}
+ */
+export function sandboxDepositProblem(name, value) {
+  const not = 'That is not a sandbox provider’s record: it is the provider’s API key and the templates to offer, each an id and a name.';
+  if (!sandboxProviderOf(name) || typeof value !== 'string') return not;
+  /** @type {any} */
+  let read;
+  try {
+    read = JSON.parse(value);
+  } catch {
+    return not;
+  }
+  if (!read || typeof read !== 'object' || Array.isArray(read)) return not;
+  if (typeof read.key !== 'string' || !KEY_RE.test(read.key)) {
+    return 'That is not a provider’s API key: one is a single run of 16 or more letters, digits and punctuation, with no spaces. Paste the key alone.';
+  }
+  const listed = Array.isArray(read.templates) ? read.templates : [];
+  if (!listed.length) {
+    return 'A sandbox provider is kept with at least one template to offer. A machine is made from a template, and only you know which of your account’s are built to join the fleet.';
+  }
+  if (listed.length > MAX_SANDBOX_TEMPLATES) return `A sandbox provider is kept with at most ${MAX_SANDBOX_TEMPLATES} templates, and that is ${listed.length}.`;
+  for (const t of listed) {
+    const id = t && typeof t === 'object' ? t.id : undefined;
+    if (typeof id !== 'string' || !TEMPLATE_RE.test(id)) {
+      return `${typeof id === 'string' && id ? `“${id.slice(0, 40)}”` : 'One of those'} is not a template’s id: one is letters, digits, dots, hyphens and underscores, at most 64, as the provider names it.`;
+    }
+    if (t.name !== undefined && (typeof t.name !== 'string' || t.name.trim().length > 60)) return `The name for ${id} is too long: a template’s name is at most 60 characters.`;
+  }
+  if (new Set(listed.map((/** @type {any} */ t) => t.id)).size !== listed.length) return 'A template is listed twice. Each is offered once.';
+  return null;
+}

@@ -2157,6 +2157,16 @@ test('a sandbox provider’s key is kept with the templates to offer, never read
   const none = await m.phone({ op: 'put', name: 'sandbox:e2b', value: record([]) });
   assert.equal(none.error?.code, 'bad_value');
   assert.match(none.text, /kept with at least one template to offer/);
+  // WHAT IS KEPT IS WHAT WAS SENT. A template the vault would have to leave
+  // out, a list it would have to cut, or a key that is not one, is refused
+  // saying which, and never answered with "Kept".
+  const said = async (/** @type {string} */ value) => (await m.phone({ op: 'put', name: 'sandbox:e2b', value })).text;
+  assert.match(await said(record([...linux, { id: 'has space', name: 'x' }])), /^“has space” is not a template’s id/);
+  assert.match(await said(record(Array.from({ length: 13 }, (_, i) => ({ id: `t${i}`, name: `T${i}` })))), /at most 12 templates, and that is 13/);
+  assert.match(await said(record([{ id: 'fleetwright-linux', name: 'n'.repeat(61) }])), /name for fleetwright-linux is too long/);
+  assert.match(await said(record([...linux, ...linux])), /listed twice/);
+  assert.match(await said(JSON.stringify({ key: 'short', templates: linux })), /^That is not a provider’s API key/);
+  assert.ok(!(await m.phone({ op: 'list' })).answer.items.some((/** @type {any} */ i) => i.name === 'sandbox:e2b'), 'none of those was kept');
 
   const kept = await m.phone({ op: 'put', name: 'sandbox:e2b', value: record(linux) });
   assert.equal(kept.ok, true, kept.text);
