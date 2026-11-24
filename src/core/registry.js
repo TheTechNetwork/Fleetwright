@@ -36,6 +36,10 @@ import { log } from '../log.js';
  * @property {string|null} [startedBy]   who asked for a member's session, as `fleet:<address>`
  * @property {string|null} [taskId]      the fleet's task this session is work on, when it is (docs/tasks.md)
  * @property {string|null} [taskBranch]  the branch that task's sessions are told
+ * @property {Array<{ engine: string, model?: string }>|null} [engines]  the member's engines, in order, when the start named them (docs/engines.md)
+ * @property {number} [engineAt]  which of them this session's pane is on
+ * @property {Array<{ at: number, from: string, to: string, reason: string }>} [engineLog]  each time one engine handed on to the next, the last eight
+ * @property {(import('../fleet/protocol/engines.js').TurnEnded & { at: number })|null} [turn]  how its last turn ended
  * @property {string|null} [secret]        the NAME of the secret it was granted at start, never its value — the credential broker reads it to scope a runtime fetch to what was granted
  * @property {boolean|null} [boxSecrets]   whether this box's own named secrets may answer that fetch, as the coordinator decided from who administers the box (protocol v14); null when nobody said, which for a fleet session is no (secret-store.js boxSecretsServed)
  * @property {string|null} [account]       whose Claude account was seeded: an email, or "shared"
@@ -177,6 +181,11 @@ export class Registry {
           // FIRST upsert may carry: this branch builds the record from a list,
           // and a field left off it is dropped on a fresh start without a word.
           archive: patch.archive ?? null,
+          // The member's engines and which one the pane is on, when the
+          // start named them (docs/engines.md). Named here for the reason
+          // `archive` is: dropped on a fresh start, the session would read
+          // as one that names no engines, and nothing would be handed on.
+          ...(patch.engines ? { engines: patch.engines, engineAt: patch.engineAt ?? 0 } : {}),
           account: patch.account ?? null,
           detail: patch.detail ?? null,
           rcUrl: patch.rcUrl ?? null,

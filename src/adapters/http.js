@@ -22,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 
 import { cleanText, TITLE_MAX, BRIEF_MAX, TASK_MAX } from '../core/text.js';
+import { boxEngines } from '../core/engine-box.js';
+import { ENGINES_PARAM_RE } from '../fleet/protocol/engines.js';
 import { MAX_WRITE_BYTES } from '../core/files.js';
 import { dispatch, parse, canonicalCommand } from './commands.js';
 import { sidecarMayRun } from '../core/sidecar-scope.js';
@@ -300,6 +302,9 @@ export class HttpAdapter {
       return json(res, 200, {
         host: this.cfg.hostname,
         workdir: this.cfg.workdir,
+        // The engines this box runs, Claude Code first (engine-box.js): what
+        // the coordinator cuts a member's list to before it sends a start.
+        engines: boxEngines(this.cfg),
         maxSessions: room.limit,
         free: room.free,
         capacity: { ceiling: room.ceiling, bound: room.bound, why: room.why },
@@ -630,6 +635,10 @@ export class HttpAdapter {
         // set both from a start its asker signed.
         ['taskId', /^t[1-9][0-9]{0,8}$/],
         ['taskBranch', /^task\/t[1-9][0-9]{0,8}(?:-[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)?$/],
+        // THE MEMBER'S ENGINES, in order (docs/engines.md), as the one line a
+        // start carries. Read into a list, and each choice checked, where it
+        // is used (commands.js).
+        ['memberEngines', ENGINES_PARAM_RE],
       ])) {
         if (body[field] === undefined || body[field] === null) continue;
         if (typeof body[field] !== 'string' || !re.test(body[field])) {

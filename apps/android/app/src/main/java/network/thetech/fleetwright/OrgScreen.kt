@@ -498,6 +498,10 @@ private fun MemberPage(
             Text(it, style = Design.Style.body, color = Design.Palette.ink.now)
         }
         if (member.workTypes.isNotEmpty()) MemberFact("Work types", member.workTypes.joinToString(", "))
+        // WHAT RUNS IT, in the order to try: "Claude Code, then Codex
+        // (gpt-5.1-codex)". Nothing is drawn for a record with no engines,
+        // from a fleet older than them.
+        if (member.engines.isNotEmpty()) MemberFact("Engines", engineListWords(member.engines))
         member.tag?.takeIf { it.isNotBlank() }?.let { MemberFact("Machine tag", it) }
 
         // WHAT ITS SESSIONS OPEN WITH. Read here and changed under Edit; in a
@@ -725,7 +729,9 @@ private fun MemberForm(
     var about by remember { mutableStateOf(existing?.description.orEmpty()) }
     var workTypes by remember { mutableStateOf(existing?.workTypes.orEmpty().joinToString(", ")) }
     var instructions by remember { mutableStateOf(existing?.instructions.orEmpty()) }
-    var model by remember { mutableStateOf(existing?.model.orEmpty()) }
+    // What runs it, in the order to try (docs/engines.md). Never empty: a
+    // new member starts on Claude Code, as one that names none does.
+    var engines by remember { mutableStateOf(existing?.engines.orEmpty().ifEmpty { listOf(EngineChoice(ENGINE_DEFAULT)) }) }
     var tag by remember { mutableStateOf(existing?.tag.orEmpty()) }
     var budget by remember { mutableStateOf(existing?.budgetUsdMonth?.let { memberBudgetText(it) }.orEmpty()) }
     var managers by remember { mutableStateOf(existing?.managers.orEmpty().joinToString(", ")) }
@@ -825,16 +831,13 @@ private fun MemberForm(
         )
         Hint("Its sessions open with these, before the task.")
 
+        // WHAT RUNS IT, as an ordered list (MemberEnginesEditor): the one
+        // model field this had could name Claude Code's model and nothing
+        // else.
+        SectionHead("Engines")
+        MemberEnginesEditor(engines) { engines = it }
+
         SectionHead("Where it runs")
-        OutlinedTextField(
-            value = model,
-            onValueChange = { model = it.trim() },
-            label = { Text("Model") },
-            placeholder = { Text("Optional") },
-            singleLine = true,
-            keyboardOptions = plain,
-            modifier = Modifier.fillMaxWidth(),
-        )
         OutlinedTextField(
             value = tag,
             onValueChange = { tag = it.trim() },
@@ -872,8 +875,10 @@ private fun MemberForm(
             Hint("Fleet addresses that manage this member beside the tree, separated by commas. At most 4.")
         }
 
+        // Not sent with no engine, or with an OpenCode that names no model:
+        // the line under Engines says what is missing.
         OutlinedButton(
-            enabled = !busy && name.isNotBlank() && role.isNotBlank(),
+            enabled = !busy && name.isNotBlank() && role.isNotBlank() && memberEnginesToSend(engines).list != null,
             onClick = {
                 scope.launch {
                     busy = true
@@ -881,6 +886,12 @@ private fun MemberForm(
                     val id = existing?.id ?: memberSlug(name)
                     val budgetText = budget.trim()
                     val amount = budgetText.toDoubleOrNull()
+                    // THE LIST, IN ITS ORDER, and never an empty one or an
+                    // OpenCode with no model, whatever pressed Save. The
+                    // rest of the rules are your fleet's, and its refusal
+                    // is the sentence under the button.
+                    val sending = memberEnginesToSend(engines)
+                    val engineList = sending.list
                     when {
                         id.isEmpty() -> result = "Give the member a name with a letter or a digit in it."
                         // A new member whose id is taken would overwrite that
@@ -889,6 +900,7 @@ private fun MemberForm(
                         creating && roster.any { it.id == id } -> result = "$id is already a member. Choose another name."
                         budgetText.isNotEmpty() && (amount == null || amount < 0) ->
                             result = "The monthly budget is a number of dollars, or empty."
+                        engineList == null -> result = sending.problem ?: "A member has at least one engine."
                         else -> {
                             val fields = JSONObject()
                                 .put("name", name.trim())
@@ -904,9 +916,7 @@ private fun MemberForm(
                             if (kind == "person") {
                                 fields.put("email", if (isAdmin || creating) email.trim().lowercase() else existing?.email.orEmpty())
                             }
-                            val engine = JSONObject().put("engine", "claude-code")
-                            if (model.isNotBlank()) engine.put("model", model.trim())
-                            fields.put("engines", JSONArray().put(engine))
+                            fields.put("engines", engineList)
                             val placement = JSONObject()
                             if (tag.isNotBlank()) placement.put("tag", tag.trim())
                             fields.put("hosts", placement)

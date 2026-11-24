@@ -59,6 +59,7 @@
 import { answerCredentialRequest, CREDENTIAL_PATH } from './credential-broker.js';
 import { answerSecretRequest } from './secret-store.js';
 import { SESSION_EVENTS, cleanDetail, cleanContext, cleanSpent } from './activity.js';
+import { cleanTurn } from '../fleet/protocol/engines.js';
 import { createServer as createHttpServer } from 'node:http';
 import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
@@ -79,6 +80,13 @@ export const SESSION_EVENT_PATH = '/internal/session-event';
  * scoped by the grant and never seeded into the container. See
  * src/core/secret-store.js and docs/trust.md. */
 export const SECRET_PATH = '/internal/secret';
+/**
+ * Where an engine's runner asks for the sign-in its engine runs on, and
+ * hands a renewed one back (docs/engines.md, "Credentials"). The same
+ * authority as the two above: the session is whichever socket this arrived
+ * on, and the answer is that session's member's and nobody else's.
+ */
+export const ENGINE_CREDENTIAL_PATH = '/internal/engine-credential';
 
 /** Where the session's directory appears INSIDE the container, and the socket
  * in it. Fixed, because the session does not know (and must not need to know)
@@ -157,6 +165,10 @@ export function isValidSessionName(name) {
  *   owns this session, READ AT THE MOMENT OF THE REQUEST. That timing is the
  *   feature — see credential-broker.js. Absent means the broker is off and the
  *   route answers 404, which is what an older or non-sandboxed host does.
+ * @property {((name: string, kind: string, value: string|null) => { ok: true, kind: string, value?: string } | { ok: false, error: string, message: string })} [engineCredential]
+ *   An engine's sign-in for its runner in this session, and a renewed one
+ *   handed back (engine-box.js, answerEngineCredential). Absent, the route
+ *   answers 404.
  * @property {((name: string, provider: string) => number|null)} [expiryFor]
  *   When this session owner's token for a provider runs out, as far as the
  *   host can tell. Optional: absent means the check is skipped, which is what
@@ -175,7 +187,7 @@ export function isValidSessionName(name) {
 
 export class HookSocketServer {
   /** @param {HookSocketOptions} opts */
-  constructor({ dir, userns = 'host', onSessionStart, secretsFor, expiryFor, namedSecretFor, onSessionEvent, logger }) {
+  constructor({ dir, userns = 'host', onSessionStart, secretsFor, expiryFor, namedSecretFor, onSessionEvent, engineCredential, logger }) {
     this.dir = dir;
     this.unmapped = userns === 'nomap';
     this.onSessionStart = onSessionStart;
@@ -183,6 +195,7 @@ export class HookSocketServer {
     this.expiryFor = expiryFor || null;
     this.namedSecretFor = namedSecretFor || null;
     this.onSessionEvent = onSessionEvent || null;
+    this.engineCredential = engineCredential || null;
     this.log = logger || { info: () => {}, warn: () => {} };
     /** @type {Map<string, import('node:http').Server>} */
     this.servers = new Map();
@@ -319,6 +332,7 @@ export class HookSocketServer {
     if (route === CREDENTIAL_PATH) return this.#credential(name, req, res);
     if (route === SECRET_PATH) return this.#secret(name, req, res);
     if (route === SESSION_EVENT_PATH) return this.#event(name, req, res);
+    if (route === ENGINE_CREDENTIAL_PATH) return this.#engineCredential(name, req, res);
     if (route !== HOOK_PATH) {
       return json(res, 404, { ok: false, error: 'not found' });
     }
@@ -397,6 +411,9 @@ export class HookSocketServer {
       at: Date.now(),
       context: cleanContext(body.context),
       spent: cleanSpent(body.spent),
+      // How an engine's turn ended, when the runner says (TurnEnded). Held
+      // to a type and a bound here, where it crosses from the session.
+      ...(event === 'TurnEnded' ? { turn: cleanTurn(body.turn) } : {}),
     });
     const answer = result ?? { ok: true };
     return json(res, answer.ok === false ? 400 : 200, answer);
@@ -479,6 +496,34 @@ export class HookSocketServer {
     } else {
       this.log.info(`secret-broker: refused ${requested.slice(0, 40) || '(none)'} for ${name} — ${answer.error}`);
     }
+    return json(res, answer.ok ? 200 : 404, answer);
+  }
+
+  /**
+   * An engine's sign-in, for the runner in this session, and a renewed one
+   * handed back.
+   *
+   * With `kind` alone it answers the item; with `value` too it keeps what
+   * the engine rewrote. Whether this session may have that kind at all (its
+   * member names an engine that runs on it) is the resolver's to say, on the
+   * session's own record, and a session can no more ask for another
+   * member's than it can ask on another session's socket.
+   *
+   * LOGGED BY KIND, NEVER BY VALUE, as every grant here is.
+   *
+   * @param {string} name
+   * @param {import('node:http').IncomingMessage} req
+   * @param {import('node:http').ServerResponse} res
+   */
+  async #engineCredential(name, req, res) {
+    if (!this.engineCredential) return json(res, 404, { ok: false, error: 'not found' });
+    if (req.method !== 'POST') return json(res, 405, { ok: false, error: 'POST only' });
+    const body = await readJson(req);
+    if (body === null) return json(res, 400, { ok: false, error: 'body too large or not JSON' });
+    const kind = String(body.kind || '');
+    const keeping = typeof body.value === 'string';
+    const answer = this.engineCredential(name, kind, keeping ? body.value : null);
+    this.log.info(`engine-credential: ${answer.ok ? (keeping ? 'kept a renewed' : 'served') : 'refused'} ${kind.slice(0, 20) || '(none)'} ${keeping ? 'from' : 'for'} ${name}${answer.ok ? '' : ` — ${answer.error}`}`);
     return json(res, answer.ok ? 200 : 404, answer);
   }
 }

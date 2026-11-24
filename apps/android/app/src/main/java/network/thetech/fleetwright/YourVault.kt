@@ -54,6 +54,11 @@ import kotlinx.coroutines.launch
  * compare, because a member has no machine page of its own to do it from.
  * [onListed] is told what the vault answered each time it is listed, so the
  * screen around this can draw what else the answer carries without asking twice.
+ *
+ * THE SIGN-INS OTHER ENGINES RUN ON (docs/engines.md) are two rows of their
+ * own under the kept ones: the Codex sign-in and the GitHub Copilot token,
+ * each offered only when an engine of whoever this vault belongs to runs on
+ * it, or when it is already kept and can be forgotten ([EngineSignInRow]).
  */
 @Composable
 internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListed: (PhoneVault.Contents) -> Unit = {}) {
@@ -73,6 +78,13 @@ internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListe
     var approving by remember { mutableStateOf<Fleet.Host?>(null) }
     // The member every request here is for, by id, or null for this person's own vault.
     val whose = member?.id
+    // For this person's own vault, the engines their own member names, as the
+    // organization lists them. Empty until that is known, and for somebody
+    // with no member, and then only a kept sign-in has a row.
+    var ownEngines by remember { mutableStateOf(listOf<EngineChoice>()) }
+    // The engines of whoever this vault belongs to: the member it is pointed
+    // at, or this person's own member.
+    val whoseEngines = member?.engines ?: ownEngines
 
     suspend fun reload() {
         val fleet = Fleet(settings)
@@ -86,6 +98,32 @@ internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListe
                 result = it.message ?: "Your credentials did not load."
             }
         boxes = fleet.enrolledHosts().filter { !it.revoked && !it.ephemeral }
+        // WHOSE ENGINES, for this person's own vault: the vault says which
+        // member is theirs, and the organization says what that member runs
+        // on. Asked only when the vault named one. A failure leaves the
+        // list as it was, and a kept sign-in still has its row.
+        val own = contents?.custody?.member
+        if (member == null && own != null) {
+            fleet.members().onSuccess { org ->
+                ownEngines = org.members.orEmpty().firstOrNull { it.id == own }?.engines.orEmpty()
+            }
+        }
+    }
+
+    /**
+     * Keep an engine's sign-in from what was pasted, say what the vault
+     * said, and show the vault as it is now. True when it was taken, which
+     * is when the row empties its field.
+     */
+    suspend fun keepEngine(name: String, pasted: String): Boolean {
+        busy = true
+        result = ""
+        val r = vault.keepEngineSignIn(Fleet(settings), name, pasted, whose)
+        failed = r.isFailure
+        result = r.getOrElse { it.message ?: "That did not work." }
+        if (r.isSuccess) reload()
+        busy = false
+        return r.isSuccess
     }
 
     /** Run one change, say what it did, then show the vault as it is now. */
@@ -162,7 +200,11 @@ internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListe
             // FORGET ASKS FIRST. It was one tap, beside the button people come
             // here to press, and it took the Claude login out from under every
             // runner without a word.
-            kept.items.forEach { item ->
+            //
+            // THE TWO AN ENGINE RUNS ON have rows of their own below, with a
+            // paste field and where a Codex sign-in is held, so they are left
+            // out of this list and not drawn twice.
+            kept.items.filter { it.name !in ENGINE_VAULT_ITEMS }.forEach { item ->
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -188,6 +230,15 @@ internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListe
                         modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Forget ${PhoneVault.label(item.name)}" },
                     ) { Text("Forget") }
                 }
+            }
+            engineItemsOffered(whoseEngines, kept.items.map { it.name }).forEach { name ->
+                EngineSignInRow(
+                    name = name,
+                    item = kept.items.firstOrNull { it.name == name },
+                    busy = busy,
+                    keep = { pasted -> keepEngine(name, pasted) },
+                    forget = { forgetting = name },
+                )
             }
         }
 

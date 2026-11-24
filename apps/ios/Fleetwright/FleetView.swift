@@ -863,6 +863,10 @@ private struct SessionRow: View {
                     // thing on every row and mean nothing.
                     Text("· \(account)")
                 }
+                // WHICH ENGINE, only when it is not Claude Code: on a fleet
+                // that runs nothing else this would be the same word on
+                // every row.
+                if let engine = session.engineOnRow { Text("· \(engine)") }
                 // How full its window is, when the host read it. A count,
                 // not a bar: the window's size is not something the host
                 // knows, and a bar needs one.

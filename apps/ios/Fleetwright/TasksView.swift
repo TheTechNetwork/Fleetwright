@@ -485,6 +485,16 @@ struct TaskView: View {
                     .foregroundStyle(Design.Palette.ink)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // WHY IT STOPPED, when its engine said and the turn did not
+            // simply end (docs/engines.md): at a limit with no engine left,
+            // say, which is why the task has not come back.
+            if let stopped = lock.stopped,
+               let why = engineTurnWords(engine: stopped.engine, reason: stopped.reason, resetsAt: stopped.resetsAt) {
+                Text(why)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         } header: {
             taskSectionHead("Session")
         }
@@ -1334,6 +1344,9 @@ func taskHandoffWords(_ handoff: Fleet.OrgTask.Handoff, _ roster: [Fleet.Member]
     case "reopened": return "Reopened\(note)"
     case "cancelled": return "Cancelled\(note)"
     case "delegated": return "Delegated \(handoff.task ?? "a task") to \(to)"
+    // Its session moved to the member's next engine: here `from` and `to`
+    // are engines and the note is why the first one stopped.
+    case "engine": return engineMoveWords(from: handoff.from, to: handoff.to, reason: handoff.note)
     default: return handoff.kind ?? "A change with no name"
     }
 }

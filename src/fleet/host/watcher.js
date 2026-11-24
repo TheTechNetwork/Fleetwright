@@ -23,6 +23,7 @@ import { DECIDE_P_AWAITING } from '../../core/decide-questions.js';
 import { isRemoteControlOnline, extractRcUrl } from './pane.js';
 import { readPrompt, promptId, describePrompt, answerActions } from './prompt.js';
 import { RESULT_FILE, MAX_RESULT, TASK_ID_RE, firstBytes } from '../protocol/tasks.js';
+import { ENGINES, cleanTurn } from '../protocol/engines.js';
 
 const DEFAULT_INTERVAL_MS = 20_000;
 
@@ -288,7 +289,7 @@ export class SessionWatcher {
      * arrives there, not one every tick until somebody looks.
      * `awaitingSince` is when it started waiting on a person, kept for as long
      * as it goes on waiting — see awaitingSince() for why it is a floor.
-     * @type {Map<string, { status: string, awaiting: boolean, rcUrl: string|null, ready?: boolean, worked?: boolean, readyAt?: number|null, awaitingSince?: number|null }>}
+     * @type {Map<string, { status: string, awaiting: boolean, rcUrl: string|null, ready?: boolean, worked?: boolean, readyAt?: number|null, awaitingSince?: number|null, engineAt?: number }>}
      */
     this.seen = new Map();
     /** @type {any} */
@@ -464,7 +465,11 @@ export class SessionWatcher {
         // coordinator can decide whose "done" is worth a phone buzzing —
         // a job somebody handed over is; a turn in a conversation they are
         // driving by hand is not.
-        if (running && ready && !awaiting && before.worked && !before.ready) {
+        // NOT WHILE IT IS BEING HANDED TO ITS NEXT ENGINE (docs/engines.md):
+        // an engine that stopped at its limit is at its prompt for the
+        // moment it takes the hub to start the next one, and that is not
+        // the session coming back.
+        if (running && ready && !awaiting && before.worked && !before.ready && !session.handingOn) {
           this.#fire(quiet, {
             event: 'session.ready',
             name,
@@ -477,8 +482,26 @@ export class SessionWatcher {
             // the task's id alone, and nothing is made up from the pane.
             ...taskOf(session),
             ...(taskOf(session).taskId && !quiet ? await this.#result(name) : {}),
+            // HOW ITS TURN ENDED, when an engine said (TurnEnded): a session
+            // that stopped at a limit with nothing to hand on to is back at
+            // its prompt too, and this is what tells the two apart.
+            ...turnOf(session),
           });
           readyAt = Date.now();
+        }
+      }
+
+      // ON ANOTHER ENGINE THAN LAST TIME (docs/engines.md, "At a limit"): the
+      // hub handed the session from one of its member's engines to the next.
+      // Said once, when the record's place in the list moves.
+      const engineAt = Number.isInteger(session.engineAt) ? session.engineAt : 0;
+      if (before && Number.isInteger(before.engineAt) && engineAt !== before.engineAt && Array.isArray(session.engines)) {
+        const from = String(session.engines[Number(before.engineAt)]?.engine ?? '');
+        const to = String(session.engines[engineAt]?.engine ?? '');
+        if (Object.hasOwn(ENGINES, from) && Object.hasOwn(ENGINES, to)) {
+          const last = Array.isArray(session.engineLog) ? session.engineLog[session.engineLog.length - 1] : null;
+          const reason = last?.from === from ? String(last.reason) : session.turn?.engine === from ? String(session.turn.reason) : '';
+          this.#fire(quiet, { event: 'session.engine', name, text: `moved from ${from} to ${to}`, from, to, ...(reason ? { reason } : {}), ...taskOf(session) });
         }
       }
 
@@ -512,7 +535,7 @@ export class SessionWatcher {
         const seen = before?.awaiting && before.awaitingSince ? before.awaitingSince : Date.now();
         awaitingSince = Number.isFinite(told) && told > 0 ? Math.min(told, seen) : seen;
       }
-      this.seen.set(name, { status: session.status, awaiting, rcUrl, ready: running && ready, worked, readyAt, awaitingSince });
+      this.seen.set(name, { status: session.status, awaiting, rcUrl, ready: running && ready, worked, readyAt, awaitingSince, engineAt });
     }
 
     // A session the hub has forgotten is gone; keeping it would mean it fires
@@ -887,6 +910,18 @@ export class SessionWatcher {
  */
 function taskOf(session) {
   return typeof session?.taskId === 'string' && TASK_ID_RE.test(session.taskId) ? { taskId: session.taskId } : {};
+}
+
+/**
+ * How a session's last turn ended, as its box's record has it, held again
+ * to the shape a TurnEnded has.
+ *
+ * @param {any} session
+ * @returns {{ turn?: import('../protocol/engines.js').TurnEnded }}
+ */
+function turnOf(session) {
+  const turn = cleanTurn(session?.turn);
+  return turn ? { turn } : {};
 }
 
 /** @param {any} session */

@@ -10,6 +10,7 @@ import { LoginFlow } from './core/login.js';
 import { ensureWorkdirTrusted, markOnboardingComplete, approveApiKey } from './core/trust.js';
 import { tmuxAvailable } from './core/tmux.js';
 import { HookSocketServer } from './core/hook-socket.js';
+import { answerEngineCredential } from './core/engine-box.js';
 import { renewAllCredentials } from './core/keepalive.js';
 import { UsageMonitor } from './core/usage.js';
 import { ensureApiToken, ensureSidecarToken } from './core/api-token.js';
@@ -164,6 +165,9 @@ export async function main() {
           // record says the box's secrets are its starter's to have, then the
           // owner's vault.
           namedSecretFor: (name, requested) => sessionSecret(cfg, registry.get(name), requested),
+          // An engine's sign-in, for its runner in that session and nobody
+          // else, and a renewed one handed back (engine-box.js).
+          engineCredential: (name, kind, value) => answerEngineCredential(cfg, registry.get(name), kind, value),
           logger: log,
         })
       : null;

@@ -237,6 +237,12 @@ fun SessionSheet(
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     ) { Text("Task $taskId") }
                 }
+                // THE ENGINE IT IS ON, of the ones its member names: which
+                // one, each move to the next with why, and how its last turn
+                // ended (docs/engines.md). Only for a session whose machine
+                // named its engines. One that named none is Claude Code, as
+                // before, and gets no heading: nothing is not "no engine".
+                SessionEngineLines(session)
 
                 val prompt = session.prompt
                 // Read once into a local: `session` is delegated state, so the

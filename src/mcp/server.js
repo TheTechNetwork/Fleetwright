@@ -25,6 +25,7 @@ import { describeRunnerAuth } from '../core/runner-auth-words.js';
 import { oneLine, LABEL_RE } from '../core/text.js';
 import { hostReported, rcLink } from '../fleet/coordinator/core.js';
 import { packetWords, RESULT_FILE } from '../fleet/protocol/tasks.js';
+import { ENGINES, checkEngines, decodeEngines, enginesWords } from '../fleet/protocol/engines.js';
 
 /**
  * MCP revisions this server understands, newest first.
@@ -311,6 +312,13 @@ function describeHealth(h) {
   if (Array.isArray(h.labels)) {
     const tags = h.labels.filter((/** @type {unknown} */ l) => typeof l === 'string' && LABEL_RE.test(l));
     lines.push(`tags: ${tags.length ? tags.join(', ') : 'none'}`);
+  }
+  // THE ENGINES IT RUNS (docs/engines.md). A machine from before engines
+  // says nothing, which is Claude Code alone, and is printed as nothing
+  // rather than as a list nobody sent.
+  if (Array.isArray(h.engines)) {
+    const runs = h.engines.filter((/** @type {unknown} */ e) => typeof e === 'string' && Object.hasOwn(ENGINES, e));
+    if (runs.length) lines.push(`engines: ${runs.join(', ')}`);
   }
   // WHETHER A SESSION CAN ACTUALLY RUN — and `loggedIn` is not that fact.
   //
@@ -1552,6 +1560,12 @@ export class McpServer {
         `${oneLine(String(m.name), 80)}, ${oneLine(String(m.role), 60)} (${m.kind === 'agent' ? 'agent' : 'person'})`,
         Array.isArray(m.workTypes) && m.workTypes.length ? `takes ${m.workTypes.map((/** @type {unknown} */ w) => oneLine(String(w), 40)).join(', ')}` : null,
         m.hosts?.tag ? `runs on ${oneLine(String(m.hosts.tag), 40)}` : null,
+        // WHAT RUNS IT, in the order tried (docs/engines.md), when that is
+        // more than Claude Code with no model named.
+        (() => {
+          const listed = checkEngines(m.engines);
+          return listed.ok && !(listed.engines.length === 1 && listed.engines[0].engine === 'claude-code' && !listed.engines[0].model) ? `engines: ${enginesWords(listed.engines)}` : null;
+        })(),
         m.description ? oneLine(String(m.description), 300) : null,
       ].filter(Boolean);
       return `${'  '.repeat(depth(m))}- ${m.id}: ${bits.join('; ')}`;
@@ -1594,7 +1608,18 @@ export class McpServer {
       if (params[field] !== undefined) next[field] = params[field];
     }
     if (params.reportsTo !== undefined) next.reportsTo = params.reportsTo === '' ? null : params.reportsTo;
-    if (params.model !== undefined) next.engines = [{ engine: 'claude-code', ...(params.model ? { model: params.model } : {}) }];
+    // THE ENGINES, in order (docs/engines.md): each `engine` or
+    // `engine=model`, the shape fleet_members prints them back in. `model`
+    // alone is the older way to name Claude Code's model, and still does.
+    if (params.engines !== undefined) {
+      const read = decodeEngines(Array.isArray(params.engines) ? params.engines.map(String).join(',') : String(params.engines));
+      if (!read.ok) return this.#text(read.text, true);
+      next.engines = read.engines;
+    } else if (params.model !== undefined) {
+      /** @type {Array<{ engine: string, model?: string }>} */
+      const prior = Array.isArray(next.engines) && next.engines.length ? /** @type {any} */ (next.engines) : [{ engine: 'claude-code' }];
+      next.engines = prior.map((e) => (e.engine === 'claude-code' ? { engine: 'claude-code', ...(params.model ? { model: String(params.model) } : {}) } : e));
+    }
     if (params.tag !== undefined) next.hosts = params.tag ? { tag: params.tag } : {};
     const saved = await this.#org('PUT', at, next);
     if ('failed' in saved) return saved.failed;

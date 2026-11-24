@@ -301,6 +301,88 @@ cat > "$t"
 }
 
 /**
+ * Where the workspace's git checkout is, and what it says: for the note a
+ * box writes when one engine hands on to the next (engine-box.js).
+ *
+ * The top of the workspace, or one directory down, which is where a session
+ * that cloned something put it. With `branch`, the checkout that is on that
+ * branch is the one; without, the first found. Read-only, with no network,
+ * like every read here.
+ *
+ * Kept as text so a test runs the same script against a directory.
+ */
+export const CHECKOUT_FACTS_SCRIPT = `
+want="$2"
+found=""
+for d in "$t" "$t"/*/; do
+  d="\${d%/}"
+  [ -d "$d/.git" ] || continue
+  b=$(git -c safe.directory='*' -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null) || continue
+  if [ -z "$want" ] || [ "$b" = "$want" ]; then found="$d"; break; fi
+done
+[ -n "$found" ] || exit 7
+if [ "$found" = "$t" ]; then echo "."; else basename "$found"; fi
+git -c safe.directory='*' -C "$found" rev-parse --abbrev-ref HEAD
+echo "@@status"
+git -c safe.directory='*' -C "$found" status --short 2>/dev/null | head -n 40
+echo "@@log"
+git -c safe.directory='*' -C "$found" log -5 --oneline 2>/dev/null
+`;
+
+/**
+ * Write the handoff note into a checkout and commit that file alone, when
+ * the checkout is on the branch named. \`$1\` is where the checkout is, \`$2\`
+ * the branch, and the note arrives on stdin.
+ *
+ * NOT PUSHED, and no hook of the repository's runs: this is the box writing
+ * one file it composed, in a container with no network, and a pre-commit
+ * hook is the session's code.
+ */
+export const COMMIT_HANDOFF_SCRIPT = `
+[ -d "$t/.git" ] || { echo "not a checkout" >&2; exit 4; }
+[ "$(git -c safe.directory='*' -C "$t" rev-parse --abbrev-ref HEAD 2>/dev/null)" = "$2" ] || { echo "not on that branch" >&2; exit 4; }
+cat > "$t/HANDOFF.md" || exit 4
+git -c safe.directory='*' -C "$t" add -- HANDOFF.md || exit 4
+git -c safe.directory='*' -c core.hooksPath=/dev/null -c user.name=Fleetwright -c user.email=fleetwright@localhost -C "$t" commit -q --no-verify -m "Handoff note: one engine stopped and the next continues" -- HANDOFF.md
+`;
+
+/**
+ * What the facts script printed, as fields. Null when it found no checkout.
+ *
+ * @param {string} out
+ * @returns {{ where: string, branch: string, status: string, log: string }|null}
+ */
+export function readCheckoutFacts(out) {
+  const lines = String(out ?? '').split('\n');
+  const s = lines.indexOf('@@status');
+  const l = lines.indexOf('@@log');
+  if (s !== 2 || l < s || !lines[0] || !lines[1]) return null;
+  return { where: lines[0].trim(), branch: lines[1].trim(), status: lines.slice(s + 1, l).join('\n'), log: lines.slice(l + 1).join('\n').trimEnd() };
+}
+
+/**
+ * @param {import('../config.js').Config} cfg @param {string} name @param {string|null} [branch]
+ * @returns {{ where: string, branch: string, status: string, log: string }|null}
+ */
+export function checkoutFacts(cfg, name, branch = null) {
+  if (!cfg.sandbox) return null;
+  const r = run(cfg, name, CHECKOUT_FACTS_SCRIPT, ['.', branch ?? '']);
+  return r.status === 0 ? readCheckoutFacts(r.stdout) : null;
+}
+
+/**
+ * @param {import('../config.js').Config} cfg @param {string} name
+ * @param {string} where  the checkout, as checkoutFacts named it
+ * @param {string} branch @param {string} note
+ * @returns {{ ok: boolean, text: string }}
+ */
+export function commitHandoff(cfg, name, where, branch, note) {
+  if (!cfg.sandbox) return { ok: false, text: 'not a contained session' };
+  const r = run(cfg, name, COMMIT_HANDOFF_SCRIPT, [where, branch], { write: true, stdin: note });
+  return r.status === 0 ? { ok: true, text: `Committed HANDOFF.md on ${branch}.` } : { ok: false, text: refusalFor(r, 'HANDOFF.md') };
+}
+
+/**
  * Copy a file or directory within the workspace.
  *
  * BOTH ENDS ARE CONFINED. The destination goes through the same resolution as

@@ -135,6 +135,11 @@ struct PhoneGitHubSignIn: View {
 /// rows, with every request naming that member, for one of its custodians.
 /// Its machines are approved from here, one page each with the key to
 /// compare, because a member has no machine page of its own to do it from.
+///
+/// THE SIGN-INS OTHER ENGINES RUN ON (docs/engines.md) are two rows of their
+/// own under the kept ones: the Codex sign-in and the GitHub Copilot token,
+/// each offered only when an engine of whoever this vault belongs to runs on
+/// it, or when it is already kept and can be forgotten (EngineSignInRow).
 struct YourVault: View {
     let settings: Settings
     /// The member whose vault this is, or nil for this person's own.
@@ -151,11 +156,18 @@ struct YourVault: View {
     @State private var failed = false
     /// The item a Forget is waiting on, until the dialog is answered.
     @State private var forgetting: String?
+    /// For this person's own vault, the engines their own member names, as
+    /// the organization lists them. Empty until that is known, and for
+    /// somebody with no member, and then only a kept sign-in has a row.
+    @State private var ownEngines: [EngineChoice] = []
 
     private var vault: PhoneVault { PhoneVault(settings: settings) }
     private var fleet: Fleet { Fleet(settings: settings) }
     /// The member every request here is for, by id, or nil for this person's own vault.
     private var whose: String? { member?.id }
+    /// The engines of whoever this vault belongs to: the member it is
+    /// pointed at, or this person's own member.
+    private var whoseEngines: [EngineChoice] { member?.engineChoices ?? ownEngines }
 
     /// The fingerprints of boxes still in this fleet, worked out here from
     /// their keys, never the ones the fleet lists beside them.
@@ -230,7 +242,11 @@ struct YourVault: View {
             // FORGET ASKS FIRST. It was one tap, beside the button people come
             // here to press, and it took the Claude login out from under every
             // runner without a word.
-            ForEach(kept.items, id: \.name) { item in
+            //
+            // THE TWO AN ENGINE RUNS ON have rows of their own below, with a
+            // paste field and where a Codex sign-in is held, so they are
+            // left out of this list and not drawn twice.
+            ForEach(kept.items.filter { !engineVaultItems.contains($0.name) }, id: \.name) { item in
                 HStack(spacing: Design.Space.insideTight) {
                     Text(PhoneVault.label(item.name))
                         .fleetType(.body)
@@ -252,6 +268,15 @@ struct YourVault: View {
                 }
                 .frame(minHeight: 44)
                 .buttonStyle(.borderless)
+            }
+            ForEach(engineItemsOffered(engines: whoseEngines, kept: kept.items.map(\.name)), id: \.self) { name in
+                EngineSignInRow(
+                    name: name,
+                    item: kept.items.first { $0.name == name },
+                    busy: busy,
+                    keep: { pasted in await keepEngine(name, pasted) },
+                    forget: { forgetting = name }
+                )
             }
         } else {
             Text("Loading your credentials…")
@@ -364,6 +389,33 @@ struct YourVault: View {
         if let got = try? await fleet.enrolledHosts() {
             boxes = got.filter { !$0.isRevoked && $0.ephemeral != true }
         }
+        // WHOSE ENGINES, for this person's own vault: the vault says which
+        // member is theirs, and the organization says what that member runs
+        // on. Asked only when the vault named one. A failure leaves the
+        // list as it was, and a kept sign-in still has its row.
+        if member == nil, let own = contents?.custody?.member, let org = try? await fleet.members() {
+            ownEngines = org.members?.first { $0.id == own }?.engineChoices ?? []
+        }
+    }
+
+    /// Keep an engine's sign-in from what was pasted, say what the vault
+    /// said, and show the vault as it is now. True when it was taken, which
+    /// is when the row empties its field.
+    @MainActor
+    private func keepEngine(_ name: String, _ pasted: String) async -> Bool {
+        busy = true
+        result = ""
+        defer { busy = false }
+        do {
+            result = try await vault.keepEngineSignIn(fleet, name: name, value: pasted, for: whose)
+            failed = false
+        } catch {
+            failed = true
+            result = error.localizedDescription
+            return false
+        }
+        await reload()
+        return true
     }
 
     /// Run one change, say what it did, then show the vault as it is now. A

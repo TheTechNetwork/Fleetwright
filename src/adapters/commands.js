@@ -60,6 +60,7 @@
  * @property {string} [startedBy]   who asked for a member's session, as `fleet:<address>`
  * @property {string} [taskId]      the fleet's task a start is work on, when it is (docs/tasks.md)
  * @property {string} [taskBranch]  and the branch that task's sessions are told
+ * @property {string} [memberEngines]  the member's engines, in order, as the one line a start carries (docs/engines.md)
  * @property {string} [ticket]     a coordinator-minted dispatch ticket, for
  *   `/provision`. A credential, so it travels as a field rather than on the
  *   command line — see src/core/redact.js for why that distinction exists
@@ -112,6 +113,7 @@
  * @property {any} [check]                what a stored token can do, when asked
  */
 
+import { decodeEngines } from '../fleet/protocol/engines.js';
 import { roomOf } from '../core/capacity.js';
 import { describe } from '../core/login.js';
 import { seal, SEAL_KEY_RE, SETUP_TOKEN_AAD } from '../fleet/seal.js';
@@ -962,11 +964,20 @@ export const COMMANDS = {
       // the command line. A title is prose with spaces in it, and putting prose
       // into a line that is then split is the same mistake `answer` taking an
       // ordinal exists to avoid — it looks bounded and is not.
+      // THE MEMBER'S ENGINES (docs/engines.md), read from the one line the
+      // fleet sent and held to the rules a member's own list is.
+      let engines = null;
+      if (typeof ctx.memberEngines === 'string') {
+        const read = decodeEngines(ctx.memberEngines);
+        if (!read.ok) return { ok: false, text: `The engines this start names do not read: ${read.text}` };
+        engines = read.engines;
+      }
       const r = await ctx.sessions.start({
         name,
         cwd,
         actor: ctx.actor,
         skipPermissions,
+        engines,
         title: ctx.title ?? null,
         brief: ctx.brief ?? null,
         // Typed as `--profile=x`, or supplied as a field by the fleet. The

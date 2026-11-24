@@ -41,6 +41,7 @@ import { OrgMembers } from './org-members.js';
 import { MEMBER_ID_RE, composeFirstMessage } from '../protocol/members.js';
 import { OrgTasks } from './org-tasks.js';
 import { TASK_ID_RE, TASK_STATES, MAX_RESULT, lockTask, startFor, composeTaskMessage, firstBytes } from '../protocol/tasks.js';
+import { ENGINES, cleanTurn, encodeEngines, enginesOn, enginesWords, isPlainDefault, turnWords } from '../protocol/engines.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
 import { VmStandby, MAX_READY, PENDING_MS } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
@@ -144,6 +145,11 @@ const MEMBER_PROTOCOL = 19;
  * report a result.
  */
 const TASK_PROTOCOL = 20;
+/**
+ * The protocol a box must speak to be told a member's engines (intents.js,
+ * v21). An older one runs Claude Code and nothing else.
+ */
+const ENGINES_PROTOCOL = 21;
 /**
  * How long a task's lock is kept for a start whose box never answered. Past
  * it the start is taken not to have happened; a session that did start is
@@ -1228,8 +1234,23 @@ export class CoordinatorCore {
       // never the result, which is read below and kept on the task. The feed
       // is read by more people than may see a task.
       ...(typeof msg.taskId === 'string' && TASK_ID_RE.test(msg.taskId) ? { taskId: msg.taskId } : {}),
+      // HOW ITS TURN ENDED (v21, docs/engines.md), held to a TurnEnded's own
+      // shape; and for a session that moved to another of its member's
+      // engines, from which to which and why. Engine names and one of eight
+      // reasons: nothing a box can write a sentence of its own into.
+      ...(cleanTurn(msg.turn) ? { turn: cleanTurn(msg.turn) } : {}),
+      ...(type === 'session.engine' && Object.hasOwn(ENGINES, String(msg.from)) && Object.hasOwn(ENGINES, String(msg.to))
+        ? { from: String(msg.from), to: String(msg.to), reason: cleanTurn({ engine: msg.from, reason: msg.reason })?.reason ?? null }
+        : {}),
       at: this.now(),
     };
+    if (event.event === 'session.engine') {
+      // Not about one of its member's engines: not an event at all.
+      if (!event.from) return;
+      const why = event.reason ? turnWords({ engine: event.from, reason: /** @type {any} */ (event.reason), detail: null, model: null, usage: null, resetsAt: null }) : '';
+      event.text = `${why ? `${why} ` : ''}Continuing on ${ENGINES[/** @type {keyof typeof ENGINES} */ (event.to)].says}, from a handoff note in the workspace.`;
+      if (event.taskId && this.tasks.onEngine(hostId, event.name, { task: event.taskId, from: event.from, to: String(event.to), reason: event.reason ?? '' })) this.onStateChanged?.();
+    }
     if (event.taskId) this.#onTaskSession(hostId, event, msg.result);
     // A TEMPORARY MACHINE THAT HAS FINISHED IS COSTING MONEY, and that is the
     // one sentence its owner needs more than "done". The host cannot know it
@@ -4035,7 +4056,7 @@ export class CoordinatorCore {
 
   /**
    * Route one intent and return the reply.
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, internal?: boolean, setupRouted?: boolean, device?: string|null,
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, memberEngines?: Array<{ engine: string, model?: string }>|null, memberSays?: string, internal?: boolean, setupRouted?: boolean, device?: string|null,
    *   sig?: string, kid?: string, issuedAt?: number, signedOver?: { id?: string, actor: string, host: string, params: Record<string, unknown> }, delegation?: unknown, fromApp?: boolean }} spec
    *   `delegation`, what the asking person signed for a request that will reach
    *   a box unsigned (a placed one, or a start held for a runner): kept, and
@@ -4243,6 +4264,7 @@ export class CoordinatorCore {
       delete params.memberName;
       delete params.memberRole;
       delete params.memberBrief;
+      delete params.memberEngines;
       if (params.member !== undefined) {
         // NOT PUSHED TO THE STARTER'S ARCHIVE: that push is made with the
         // starter's own GitHub sign-in on the box (archive.js), and a box
@@ -4253,6 +4275,10 @@ export class CoordinatorCore {
         params.memberName = as.member.name;
         params.memberRole = as.member.role;
         if (as.member.instructions) params.memberBrief = as.member.instructions;
+        // WHAT RUNS IT is the member's list, cut to what the machine runs
+        // once a machine is chosen (#enginesFor, below). Beside the spec
+        // until then, so it is never read off what a caller sent.
+        spec = { ...spec, memberEngines: as.member.engines ?? null, memberSays: as.member.name };
         // WHERE THE MEMBER RUNS, when the person did not say where.
         if (!spec.preferHost && !spec.preferLabels && as.member.hosts?.tag) spec = { ...spec, preferLabels: as.member.hosts.tag };
       }
@@ -4576,6 +4602,15 @@ export class CoordinatorCore {
       };
     }
     if ((spec.verb === 'start' || spec.verb === 'resume') && placement.host) spec = this.#boxSecrets(spec, placement.host);
+    // THE MEMBER'S ENGINES, cut to what this machine runs (docs/engines.md).
+    /** @type {string} */
+    let enginesNote = '';
+    if (spec.verb === 'start' && Array.isArray(spec.memberEngines) && placement.host) {
+      const cut = this.#enginesFor(spec, placement.host);
+      if (cut.ok === false) return cut;
+      spec = cut.spec;
+      enginesNote = cut.note;
+    }
     const outdated = placement.host ? this.#cannotCarry(placement.host, spec) : null;
     if (outdated) return outdated;
 
@@ -4637,7 +4672,10 @@ export class CoordinatorCore {
         // nothing a pane said is kept anywhere to show.
         return withArchiveNote({ ...answer, health: { ...health, decide: { enabled: Boolean(this.decide), ...this.decideLimits.snapshot() } } }, spec, entry);
       }
-      return withArchiveNote(answer, spec, placement.host);
+      // SAID, when an engine the member names was left out on this machine:
+      // the session started, on fewer engines than the record promises.
+      const said = enginesNote && answer?.ok !== false ? { ...answer, text: `${answer?.text ? `${answer.text}\n` : ''}${enginesNote}` } : answer;
+      return withArchiveNote(said, spec, placement.host);
     } catch (e) {
       return { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
     }
@@ -5912,7 +5950,7 @@ export class CoordinatorCore {
           return { text: kept.text, truncated: kept.cut || /** @type {any} */ (result).truncated === true };
         })()
       : null;
-    const changed = this.tasks.onSession(hostId, event.name, { event: event.event, task: String(event.taskId), result: said });
+    const changed = this.tasks.onSession(hostId, event.name, { event: event.event, task: String(event.taskId), result: said, turn: /** @type {any} */ (event).turn ?? null });
     if (!changed) return;
     this.onStateChanged?.();
     const task = changed.task;
@@ -5923,8 +5961,58 @@ export class CoordinatorCore {
     } else if (changed.released) {
       this.record({ event: 'task.released', actor: task.createdBy, name: event.name, hostId, text: `${task.id} “${oneLine(task.title, 80)}” is open again: its session ended with no result` });
     } else if (event.event === 'session.ready') {
-      event.text = `is back at its prompt and wrote no result for ${task.id}`;
+      // WHY, when its engine said (docs/engines.md): a session that stopped
+      // at a limit with no engine left to hand on to reads the same as one
+      // that simply stopped, unless this says so.
+      const turn = /** @type {any} */ (event).turn;
+      event.text = `is back at its prompt and wrote no result for ${task.id}${turn && turn.reason !== 'done' ? `: ${turnWords(turn)}` : ''}`;
     }
+  }
+
+  /**
+   * A member's engines, for one machine: the list in the member's order,
+   * less what the machine does not run, as the parameter a start carries.
+   *
+   *  - A box older than 21 runs Claude Code and nothing else. A member
+   *    whose list is exactly that is sent as before, with no parameter. Any
+   *    other list is refused for that box: dropped, it would run the session
+   *    on Claude whatever the member says.
+   *  - Nothing left is a refusal that names both lists.
+   *  - Something left out is said in the reply.
+   *
+   * @param {any} spec  a start with `memberEngines` beside it
+   * @param {any} host
+   * @returns {{ ok: true, spec: any, note: string } | { ok: false, error: { code: string }, text: string }}
+   */
+  #enginesFor(spec, host) {
+    /** @type {Array<{ engine: string, model?: string }>} */
+    const engines = spec.memberEngines;
+    const who = spec.memberSays || spec.params?.member;
+    const speaks = Number(host?.health?.protocol);
+    if (!(Number.isInteger(speaks) && speaks >= ENGINES_PROTOCOL)) {
+      if (isPlainDefault(engines)) return { ok: true, spec, note: '' };
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text:
+          `${host?.hostId} is too old to run ${who} as its record says — it speaks protocol ` +
+          `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${ENGINES_PROTOCOL}. ${who} runs on ${enginesWords(engines)}, ` +
+          `and that machine would run it on Claude Code with no model named, whatever the record says. Update it, or pick another machine.`,
+      };
+    }
+    const { kept, dropped, runs } = enginesOn(engines, host?.health?.engines);
+    if (!kept.length) {
+      return {
+        ok: false,
+        error: { code: 'no_engine' },
+        text: `${who} runs on ${enginesWords(engines)}, and ${host?.hostId} runs ${runs.join(', ')}. Start it on a machine that runs one of its engines, or add one this machine runs to its record.`,
+      };
+    }
+    return {
+      ok: true,
+      spec: { ...spec, params: { ...spec.params, memberEngines: encodeEngines(kept) } },
+      note: dropped.length ? `${host?.hostId} does not run ${dropped.map((e) => e.engine).join(' or ')}, so ${who} has ${kept.length === 1 ? 'no engine to fall back to' : 'fewer engines to fall back to'} there: ${enginesWords(kept)}.` : '',
+    };
   }
 
   /**
@@ -9638,6 +9726,10 @@ const NOTIFIABLE = new Set([
   // further is going to happen without them.
   'session.restarted',
   'session.stuck',
+  // ONE OF A MEMBER'S ENGINES STOPPED AND THE NEXT TOOK OVER (docs/engines.md).
+  // Said, for the reason a restart is: a session that quietly changes what
+  // is running it is one nobody can explain afterwards.
+  'session.engine',
 ]);
 
 /**

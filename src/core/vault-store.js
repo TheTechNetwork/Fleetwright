@@ -122,7 +122,8 @@ export function vaultHolder(cfg, actor) {
 }
 
 /**
- * @typedef {{ value: string, expiresAt: number|null, signIn?: boolean, login?: Record<string, unknown>, account?: Record<string, unknown> }} HeldItem
+ * @typedef {{ value: string, expiresAt: number|null, signIn?: boolean, login?: Record<string, unknown>, account?: Record<string, unknown>, deposit?: string }} HeldItem
+ *   `deposit` is the text the vault last sent for a Codex sign-in, kept beside the copy this box's Codex renewed
  * @typedef {{ at: number, login: string, items: Record<string, HeldItem>, problems: string[] }} Held
  */
 
@@ -152,9 +153,18 @@ function accountText(account) {
   return `${JSON.stringify(out)}\n`;
 }
 
+/**
+ * The vault items an engine runs on (docs/engines.md, "Credentials"): a
+ * Codex sign-in as the text of its `auth.json`, a GitHub Copilot token.
+ * Kept in the member's held record like any item, and read from there by
+ * the session's socket when an engine's runner asks.
+ */
+export const ENGINE_ITEMS = Object.freeze(['codex', 'copilot']);
+
 /** @param {string} name */
 function knownItem(name) {
   if (name === 'claude') return true;
+  if (ENGINE_ITEMS.includes(name)) return true;
   if (Object.hasOwn(PROVIDERS, name)) return true;
   return name.startsWith('secret:') && SECRET_NAME_RE.test(name.slice('secret:'.length));
 }
@@ -205,6 +215,15 @@ export function applyVault(cfg, bundle) {
       if (!knownItem(name) || !value || value.length > 16_384) continue;
       const expiresAt = Number.isFinite(Number(i?.expiresAt)) && i.expiresAt !== null ? Number(i.expiresAt) : null;
       items[name] = { value, expiresAt };
+      // A CODEX SIGN-IN RENEWS ITSELF ON THIS BOX, and the renewed file is
+      // the one that works (keepEngineItem). So what the vault sends is
+      // taken only when it is a new deposit, told by its own text: the same
+      // deposit as last time leaves this box's renewed copy alone.
+      if (name === 'codex') {
+        const mine = heldFor(cfg, email)?.items?.codex;
+        if (mine && mine.deposit === value && typeof mine.value === 'string') items[name] = { value: mine.value, expiresAt, deposit: value };
+        else items[name].deposit = value;
+      }
       // A SIGN-IN, which only a vault that renews it gives with an expiry.
       if (name === 'claude' && expiresAt !== null && i?.login && typeof i.login === 'object') {
         items[name].signIn = true;
@@ -393,6 +412,47 @@ export function vaultClaudeFile(cfg, email) {
   if (!who) return null;
   const file = path.join(vaultDir(cfg), `${who}.claude`);
   return existsSync(file) ? file : null;
+}
+
+/**
+ * The sign-in an engine runs on, from one account's vault, or null when the
+ * vault gave this box none.
+ *
+ * @param {{ stateDir: string }} cfg @param {string|null} email @param {string} kind  one of ENGINE_ITEMS
+ */
+export function vaultEngineItem(cfg, email, kind) {
+  if (!ENGINE_ITEMS.includes(kind)) return null;
+  return heldFor(cfg, email)?.items?.[kind]?.value ?? null;
+}
+
+/**
+ * Keep the sign-in an engine renewed, in place of the one this box held.
+ *
+ * Only over an item the vault already gave this box for that account: a
+ * session cannot use this to plant a sign-in where there was none. Only a
+ * Codex sign-in, which is the one kind that renews itself, and only text
+ * that still reads as one. What a session can do with it is spoil its own
+ * member's sign-in on this box, which it could do by using it badly.
+ *
+ * @param {{ stateDir: string }} cfg @param {string|null} email @param {string} kind @param {string} value
+ * @returns {boolean} whether it was kept
+ */
+export function keepEngineItem(cfg, email, kind, value) {
+  const who = normaliseEmail(email);
+  if (kind !== 'codex' || !who || typeof value !== 'string' || value.length > 16_384) return false;
+  try {
+    const read = JSON.parse(value);
+    if (!read || typeof read !== 'object' || typeof read.tokens?.refresh_token !== 'string') return false;
+  } catch {
+    return false;
+  }
+  const held = heldFor(cfg, who);
+  const item = held?.items?.codex;
+  if (!held || !item) return false;
+  if (item.value === value) return true;
+  held.items.codex = { ...item, value };
+  writePrivate(path.join(vaultDir(cfg), `${who}.json`), `${JSON.stringify(held)}\n`);
+  return true;
 }
 
 /**

@@ -15,7 +15,8 @@ that member's instructions, and goes where that member runs.
 
 This is step 2 of the organization work. Tasks above sessions, delegation,
 engines other than Claude Code, routing and budgets are later steps
-([ROADMAP.md](../ROADMAP.md)); `budgetUsdMonth` is stored here and enforced by
+([tasks.md](./tasks.md), [engines.md](./engines.md),
+[ROADMAP.md](../ROADMAP.md)); `budgetUsdMonth` is stored here and enforced by
 nothing yet.
 
 ## A member
@@ -33,7 +34,7 @@ nothing yet.
 | `description` | what this member is for | at most 300 characters |
 | `workTypes` | the kinds of work it takes | at most 12, each a short slug |
 | `instructions` | markdown the member's sessions open with | at most 4 KiB |
-| `engines` | what runs it, in order | exactly one this step: `{ engine: "claude-code", model? }` |
+| `engines` | what runs it, in the order to try | up to three, each once: `claude-code`, `codex`, `opencode`, each with a `model?` ([engines.md](./engines.md)) |
 | `hosts` | where it runs: `{ tag? }` | a host tag |
 | `budgetUsdMonth` | a monthly budget | stored, not enforced |
 | `createdBy`, `createdAt`, `updatedAt` | who made it, and when | set by the coordinator |
@@ -209,9 +210,10 @@ name.
 it asks after people's, and an ended sign-in is told to each of the member's
 custodians.
 
-**Later kinds.** A vault item's name still decides its kind (`itemKind`). The
-kinds a later engine needs are reserved by name in `FUTURE_ITEM_KINDS`
-(`codex`, `copilot`, `apikey:`): none is kept yet, and each is refused with a
+**Later kinds.** A vault item's name still decides its kind (`itemKind`).
+`codex` and `copilot`, the sign-ins the engines beside Claude Code run on,
+are kept since step 4 ([engines.md](./engines.md), "Credentials"). `apikey:`
+is still reserved by name in `FUTURE_ITEM_KINDS`: it is refused with a
 sentence that says it is not kept yet and not that it is unknown.
 
 ## Starting as a member

@@ -377,6 +377,13 @@ struct HostView: View {
                     .foregroundStyle(whoCanStartIsFault(accounts, runnerAuth: health?.runnerAuth, runner: runner, holder: holder)
                                      ? Design.Palette.attention : Design.Palette.inkDim)
             }
+            // WHAT IT RUNS (docs/engines.md): "Runs: Claude Code, Codex". A
+            // machine that says nothing about engines runs Claude Code
+            // alone and is said to; one that has reported nothing at all
+            // gets no line.
+            if let runs = machineRunsLine(health) {
+                Text(runs).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+            }
             if let version = health?.version?.head, !version.isEmpty {
                 Text(version).fleetType(.labelMono).foregroundStyle(Design.Palette.inkDim)
             }

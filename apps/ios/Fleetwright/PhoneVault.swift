@@ -26,6 +26,11 @@ struct PhoneVault {
         /// needs, or `token`, a setup-token that runs sessions only. Nil for
         /// anything else, and from a minter from before it said.
         var kind: String? = nil
+        /// For a Codex sign-in, the machine that holds it, by the name its
+        /// approval has. A Codex sign-in is given to one machine and no
+        /// other, so nil on a kept one is "no machine has asked for it yet"
+        /// (docs/engines.md, "Credentials"). Nil for anything else.
+        var heldBy: String? = nil
     }
 
     struct Grant: Hashable {
@@ -167,7 +172,8 @@ struct PhoneVault {
     func list(_ fleet: Fleet, for member: String? = nil) async throws -> Contents {
         let answer = try await ask(fleet, op: "list", extra: Self.aimed([:], at: member)).answer
         let items = (answer["items"] as? [[String: Any]] ?? []).map {
-            Item(name: $0["name"] as? String ?? "", at: ($0["at"] as? NSNumber)?.doubleValue ?? 0, kind: $0["kind"] as? String)
+            Item(name: $0["name"] as? String ?? "", at: ($0["at"] as? NSNumber)?.doubleValue ?? 0, kind: $0["kind"] as? String,
+                 heldBy: $0["heldBy"] as? String)
         }
         let grants = (answer["grants"] as? [[String: Any]] ?? []).map {
             Grant(key: $0["key"] as? String ?? "", fingerprint: $0["fingerprint"] as? String ?? "",
@@ -213,6 +219,19 @@ struct PhoneVault {
             extra["value"] = value
         }
         return try await ask(fleet, op: "put", extra: Self.aimed(extra, at: member)).text
+    }
+
+    /// Keep the sign-in an engine other than Claude Code runs on
+    /// (docs/engines.md, "Credentials"): `codex`, the whole text of the
+    /// `auth.json` that `codex login` writes, or `copilot`, one GitHub
+    /// Copilot token. Kept the way a named secret is, under its own name,
+    /// and the vault checks what it is: its refusal is a sentence, shown as
+    /// it came. A Codex file is sent as it was pasted, never trimmed here,
+    /// because the vault reads it whole.
+    func keepEngineSignIn(_ fleet: Fleet, name: String, value: String, for member: String? = nil) async throws -> String {
+        guard engineVaultItems.contains(name) else { throw FleetError.message("\(name) is not an engine's sign-in.") }
+        guard !value.isBlank else { throw FleetError.message("Nothing to keep yet.") }
+        return try await ask(fleet, op: "put", extra: Self.aimed(["name": name, "value": value], at: member)).text
     }
 
     /// Keep a hypervisor's token in the fleet: the record setup handed this
@@ -387,6 +406,8 @@ struct PhoneVault {
             return "Your sessions stop using it. Getting it back means adding it again."
         case "github", "cloudflare":
             return "Machines you approved stop being given it. Getting it back means signing in again."
+        case "codex", "copilot":
+            return "Machines you approved stop being given it. Getting it back means pasting it again."
         default:
             return "Machines you approved stop being given it. Getting it back means typing it in again."
         }
@@ -422,6 +443,8 @@ struct PhoneVault {
         case "claude": return "Claude"
         case "github": return "GitHub"
         case "cloudflare": return "Cloudflare"
+        case "codex": return "Codex sign-in"
+        case "copilot": return "GitHub Copilot token"
         default: return name.hasPrefix("secret:") ? String(name.dropFirst("secret:".count)) : name
         }
     }

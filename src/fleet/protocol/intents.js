@@ -57,6 +57,7 @@ import { SEAL_KEY_RE } from '../seal.js';
 import { delegationShape } from './intent-signature.js';
 import { MEMBER_ID_RE, MAX_INSTRUCTIONS } from './members.js';
 import { TASK_ID_RE, TASK_BRANCH_RE, TASK_REPO_RE } from './tasks.js';
+import { ENGINES_PARAM_RE } from './engines.js';
 
 /** A device's P-256 signature over an intent as WebCrypto makes one: r || s, 64 bytes, base64url (intent-signature.js). */
 export const SIG_RE = /^[A-Za-z0-9_-]{86}$/;
@@ -503,8 +504,16 @@ export const PVESETUP_STEPS = Object.freeze([
 // handed one: it would run the session, never say which task it was for and
 // never report a result, so the task's lock would end with nothing and the
 // task would never come back. The coordinator refuses rather than send it.
+//
+// v21, 24 Nov 2026: A MEMBER'S ENGINES. `start` takes `memberEngines`: the
+// member's engines in the order to try them, cut by the coordinator to the
+// ones this box says it runs (docs/engines.md). The box starts the first,
+// and at a limit hands the session to the next. An older host runs Claude
+// Code and nothing else, so it is sent a member whose list is Claude Code
+// alone with no model, exactly as before, and refused any other: dropped,
+// the parameter would leave the session on Claude whatever the member says.
 /** @type {number} */
-export const PROTOCOL_VERSION = 20;
+export const PROTOCOL_VERSION = 21;
 
 /**
  * The GitHub images each runner platform may run on, newest first, and the
@@ -1012,6 +1021,15 @@ export const VERBS = Object.freeze({
       memberBrief: {
         type: 'raw', required: false, max: MAX_INSTRUCTIONS, since: 19, setBy: 'fleet',
         describe: 'Set by the fleet from the member’s instructions; anything sent here is replaced.',
+      },
+      // WHAT RUNS IT (v21, docs/engines.md): the member's engines, in order,
+      // less the ones this box does not run. The coordinator's record, like
+      // the instructions, and it chooses no account: every engine runs on
+      // the member's own vault item of its kind and on nothing else.
+      memberEngines: {
+        type: 'text', required: false, max: 300, pattern: ENGINES_PARAM_RE, since: 21, setBy: 'fleet',
+        shapeName: 'engines, in order, like claude-code,codex=gpt-5.1-codex',
+        describe: 'Set by the fleet from the member’s engines and what the machine runs; anything sent here is replaced.',
       },
       // WHICH TASK THIS SESSION IS WORK ON (v20, docs/tasks.md). SIGNED, all
       // three, with the words in `task` and the assignee in `member`: the

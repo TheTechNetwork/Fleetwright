@@ -126,6 +126,7 @@ enum ReasonWords {
         "runner.started": "Runner started",
         "runner.token": "Runner token",
         "runner.token-refused": "Runner token refused",
+        "session.engine": "Moved to another engine",
         "task.released": "Task released",
         "task.returned": "Task came back",
         "test": "Test notification",

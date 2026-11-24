@@ -113,6 +113,18 @@ RUN printf '#!/bin/sh\nexec node /usr/local/lib/fleetwright-session-hook.mjs "$@
     && chmod +x /usr/local/bin/fleetwright-session-hook \
     && ln -s fleetwright-session-hook /usr/local/bin/agent-session-hook
 
+# The engine runner: what a session's pane runs when its member's engine is
+# not Claude Code (docs/engines.md). On the same socket as the hook above,
+# which is where it reports how a turn ended and asks for the engine's
+# sign-in. One file with no imports of the release's, for the reason the
+# hook is one: this image is built from this directory alone.
+#
+# It is here on every image and runs nothing by being here. The engines
+# themselves are not: see WITH_ENGINES below.
+COPY engine.mjs /usr/local/lib/fleetwright-engine.mjs
+RUN printf '#!/bin/sh\nexec node /usr/local/lib/fleetwright-engine.mjs "$@"\n' > /usr/local/bin/fleetwright-engine \
+    && chmod +x /usr/local/bin/fleetwright-engine
+
 # The credential broker's client, on the same socket and for the same reason.
 # Tokens are no longer written into this image's environment — a session ASKS,
 # and gets whatever is current rather than whatever was current when it started.
@@ -167,6 +179,29 @@ RUN if [ "$WITH_CHROMIUM" = "1" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \
         chromium fonts-liberation fonts-noto-color-emoji \
       && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# THE OTHER ENGINES ARE A VARIANT TOO, and for the same reason the browser
+# is: nobody pays for a capability they do not use. A box that runs Codex or
+# OpenCode builds this image with them and says so
+# (FLEETWRIGHT_ENGINES=codex,opencode in its environment); every other box
+# keeps the minimal image, reports Claude Code alone, and is never sent a
+# session on anything else (docs/engines.md, "What a machine reports").
+#
+#    podman build --build-arg WITH_ENGINES=1 -t fleetwright-session:engines -f sandbox/Containerfile sandbox/
+#
+# Pinned for the reason Claude Code is. 0.171.0 and 1.19.6 are the versions
+# the adapters were written against: the app-server bindings Codex generates
+# for itself, and the OpenCode that the step 1 probe ran.
+#
+# renovate: datasource=npm depName=@openai/codex
+ARG CODEX_VERSION=0.171.0
+# renovate: datasource=npm depName=opencode-ai
+ARG OPENCODE_VERSION=1.19.6
+ARG WITH_ENGINES=0
+RUN if [ "$WITH_ENGINES" = "1" ]; then \
+      npm install -g "@openai/codex@${CODEX_VERSION}" "opencode-ai@${OPENCODE_VERSION}" \
+      && npm cache clean --force; \
     fi
 
 # WHERE PLAYWRIGHT AND PUPPETEER LOOK. Both will otherwise download their own

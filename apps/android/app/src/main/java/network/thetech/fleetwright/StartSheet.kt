@@ -532,6 +532,15 @@ fun StartSheet(
                                 "Runs on ${chosen.name}'s sign-ins, on a machine its custodians approved.",
                                 style = MaterialTheme.typography.bodySmall,
                             )
+                            // WHEN A MACHINE IS CHOSEN THAT DOES NOT RUN THE
+                            // MEMBER'S FIRST ENGINE, which engines the
+                            // session will have there (engineStartNote).
+                            // Said before the start and never a block: your
+                            // fleet decides, and its own sentence is what
+                            // comes back.
+                            offeredHosts.firstOrNull { it.hostId == host }?.let { machine -> engineStartNote(chosen, machine) }?.let { note ->
+                                Text(note, style = MaterialTheme.typography.bodySmall, color = Design.Palette.attention.now)
+                            }
                         }
                     }
                 }

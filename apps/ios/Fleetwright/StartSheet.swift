@@ -238,6 +238,26 @@ struct StartSheet: View {
         }
     }
 
+    /// Under As, for the member chosen: whose sign-ins it runs on, and, when
+    /// a machine is chosen that does not run the member's first engine,
+    /// which engines the session will have there (engineStartNote). Said
+    /// before the start and never a block: your fleet decides, and its own
+    /// sentence is what comes back.
+    @ViewBuilder private func asFooter(_ chosen: Fleet.Member) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            Text("Runs on \(chosen.name)'s sign-ins, on a machine its custodians approved.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+            if let machine = offeredHosts.first(where: { $0.hostId == host }),
+               let note = engineStartNote(member: chosen, host: machine) {
+                Text(note)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     /// The operating system when a new machine is chosen, else nil: "vm" for
     /// one from your hypervisor.
     private var chosenPlatform: String? {
@@ -517,9 +537,7 @@ struct StartSheet: View {
                         Text("As").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
                     } footer: {
                         if let chosen = asChoices.first(where: { $0.id == chosenMember }) {
-                            Text("Runs on \(chosen.name)'s sign-ins, on a machine its custodians approved.")
-                                .fleetType(.label)
-                                .foregroundStyle(Design.Palette.inkDim)
+                            asFooter(chosen)
                         }
                     }
                 }

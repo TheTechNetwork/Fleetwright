@@ -31,6 +31,9 @@ import { Profiles } from './profiles.js';
 import { boxSecretsFor } from './secret-store.js';
 import { readSessionLogs } from './logs.js';
 import { phaseFor, advancePhases } from './activity.js';
+import { DEFAULT_ENGINE, HANDS_ON, turnFromHook, turnWords } from '../fleet/protocol/engines.js';
+import { boxEngines, nextEngine, handoffNote, continuationMessage, HANDOFF_FILE, HANDOFF_TAIL } from './engine-box.js';
+import { writeFile, checkoutFacts, commitHandoff } from './files.js';
 import { SOCKET_FILE } from './hook-socket.js';
 import { ContextReader, cleanTranscriptPath } from './context-usage.js';
 import { SpentReader } from './spent.js';
@@ -90,6 +93,13 @@ export class SessionManager {
     // question about today.
     /** @type {Map<string, import('./activity.js').Activity>} */
     this.activity = new Map();
+    // What each session with more than one engine was first asked, so the
+    // engine that takes over can be told it (handOn). Runtime state and
+    // never a record: the words of a task are kept nowhere on this box.
+    /** @type {Map<string, string>} */
+    this.firstMessages = new Map();
+    /** Sessions being handed from one engine to the next right now. @type {Set<string>} */
+    this.handingOn = new Set();
     // How full an UNSANDBOXED session's window is, read off the transcript the
     // SessionStart hook named, when the file has changed since the last ask. A
     // sandboxed session's transcript is in a volume this process cannot read;
@@ -271,6 +281,10 @@ export class SessionManager {
       return {
         ...rec,
         activity,
+        // BEING HANDED FROM ONE ENGINE TO THE NEXT right now (handOn): its
+        // pane is between two processes, and the watcher must not read that
+        // as a session that came back to its prompt, or as one that ended.
+        ...(this.handingOn.has(rec.name) ? { handingOn: true } : {}),
         // HOW FULL ITS WINDOW IS, from whichever reader can see the transcript:
         // the hook inside a sandbox, or this process for a session on the
         // box. Null is CANNOT TELL — not running, no assistant turn yet, no
@@ -346,7 +360,7 @@ export class SessionManager {
 
   /**
    * Start a brand-new session.
-   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null, task?: string|null, archive?: string|null, boxSecrets?: boolean|null }} opts
+   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null, task?: string|null, archive?: string|null, boxSecrets?: boolean|null, engines?: Array<{ engine: string, model?: string }>|null }} opts
    *   `task` is the session's first message in words (protocol v7); either it or `profile`
    *   skipPermissions overrides FLEETWRIGHT_SKIP_PERMISSIONS for this session
    *   only, and is remembered so every later resume runs the same way.
@@ -364,8 +378,17 @@ export class SessionManager {
    *   administers the box (protocol v14). See boxSecretsFor below.
    * @returns {Promise<Result>}
    */
-  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null, task = null, archive = null, boxSecrets = null } = {}) {
+  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null, task = null, archive = null, boxSecrets = null, engines = null } = {}) {
     this.reconcile();
+    // THE MEMBER'S ENGINES, in order (docs/engines.md). Held to what this box
+    // runs, here as well as at the coordinator: the coordinator cut the list
+    // to this box's own report, and a box does not start an engine on
+    // anybody's word that it has one.
+    if (engines) {
+      const runs = boxEngines(this.cfg);
+      const missing = engines.filter((e) => !runs.includes(e.engine)).map((e) => e.engine);
+      if (missing.length) return { ok: false, message: `This machine does not run ${missing.join(' or ')}. It runs ${runs.join(', ')}.` };
+    }
 
     if (name && !isValidName(name)) return { ok: false, message: nameError(name) };
     if (name === this.cfg.loginSessionName) {
@@ -503,6 +526,7 @@ export class SessionManager {
       // on the record. See src/core/archive.js.
       archive,
       boxSecrets: boxSecretsFor(actor, boxSecrets),
+      engines,
     });
   }
 
@@ -583,10 +607,22 @@ export class SessionManager {
   }
 
   /**
-   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null, tasked?: boolean, archive?: string|null, boxSecrets?: boolean|null }} opts
+   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null, tasked?: boolean, archive?: string|null, boxSecrets?: boolean|null, engines?: Array<{ engine: string, model?: string }>|null, engineAt?: number, handedOn?: boolean }} opts
+   *   `engines` and `engineAt` are the member's engines and which one this pane runs (docs/engines.md);
+   *   `handedOn` is a launch that takes over from an engine that stopped
    * @returns {Promise<Result>}
    */
-  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null, tasked = false, archive = null, boxSecrets = null }) {
+  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null, tasked = false, archive = null, boxSecrets = null, engines = null, engineAt = 0, handedOn = false }) {
+    // WHICH ENGINE THIS PANE RUNS (docs/engines.md): the one the launch
+    // names, or the one the record is on for a resume, or Claude Code for a
+    // session that names none.
+    const listed = engines ?? this.registry.get(name)?.engines ?? null;
+    const at = engines ? engineAt : (this.registry.get(name)?.engineAt ?? 0);
+    const engine = listed?.[at] ?? null;
+    const runsClaude = !engine || engine.engine === DEFAULT_ENGINE;
+    // What the session was first asked, kept in memory for as long as a
+    // later engine might have to be told it. Never on the record.
+    if (listed && listed.length > 1 && prompt && !handedOn) this.firstMessages.set(name, prompt);
     // Whose Claude account got seeded, when THIS start created the volumes.
     // Stays null on resume and on non-sandboxed sessions: null on the record
     // means "whatever was already there".
@@ -639,6 +675,9 @@ export class SessionManager {
       const volumes = await ensureSandboxVolumes(this.cfg, name, actor, {
         account: known?.account ?? null,
         createdBy: known?.createdBy ?? null,
+        // An engine that is not Claude Code needs no Claude sign-in, and one
+        // handed on to Claude Code is given one now (podman.js).
+        claude: runsClaude ? (handedOn ? 'seed' : true) : false,
       });
       if (!volumes.ok) {
         this.registry.upsert(name, { status: 'error', detail: volumes.message ?? 'sandbox setup failed', cwd, ...creator });
@@ -686,6 +725,7 @@ export class SessionManager {
         configDir,
         runnerAuth,
         remoteControl: noLink ? false : null,
+        engine,
         // Whose download cache this session shares (claude.js cacheVolumeFor).
         owner,
         // And which network it joins: its owner's, nobody else's (G9).
@@ -741,6 +781,9 @@ export class SessionManager {
         // created the volumes — a resume keeps the account it began with, and
         // null on the record means "whatever was there already".
         ...(typeof seededAccount === 'string' ? { account: seededAccount } : {}),
+        // The member's engines and which one this pane is on, when the start
+        // named them. A resume keeps what the record has.
+        ...(engines ? { engines, engineAt: at } : {}),
         detail: `${verb}`,
         stoppedAt: null,
         ...creator,
@@ -1044,6 +1087,9 @@ export class SessionManager {
       return { ok: false, message: `Could not stop "${name}": ${detail}` };
     }
     this.#newLife(name);
+    // The words a later engine would have been handed are for a session
+    // that is running. A resume is Claude Code's own conversation again.
+    this.firstMessages.delete(name);
     // ASKED FOR, so nothing of the container is kept: a stop has always
     // discarded the console output, and says so below.
     if (this.cfg.sandbox) stopSandboxContainer(this.cfg, name);
@@ -1211,6 +1257,7 @@ export class SessionManager {
       }
     }
 
+    this.firstMessages.delete(name);
     const had = this.registry.remove(name) || this.registry.dropBinned(name);
     return had
       ? { ok: true, message: `Deleted "${name}" for good. Its conversation cannot be resumed.${volumes}` }
@@ -1331,11 +1378,30 @@ export class SessionManager {
    *
    * @param {{ name: string, event: string, detail?: string|null, at?: number,
    *   context?: import('./context-usage.js').ContextUsage|null,
-   *   spent?: import('./spent.js').Spent|null }} e
+   *   spent?: import('./spent.js').Spent|null,
+   *   turn?: import('../fleet/protocol/engines.js').TurnEnded|null }} e
+   *   `turn` is how an engine's turn ended, from its runner (TurnEnded)
    * @returns {{ ok: boolean, message?: string, phase?: string|null }}
    */
-  recordEvent({ name, event, detail = null, at = Date.now(), context = null, spent = null }) {
+  recordEvent({ name, event, detail = null, at = Date.now(), context = null, spent = null, turn = null }) {
     if (!isValidName(name)) return { ok: false, message: nameError(name) };
+    // ONE WAY A TURN ENDS, whichever engine it was (docs/engines.md). The
+    // runner says so itself; Claude Code's two hooks are read as the same
+    // thing. Kept on the record, so why a session stopped is still there
+    // after this process is not, and a turn that ended on a limit is looked
+    // at for whether the member's next engine takes over.
+    const ended = event === 'TurnEnded' ? turn : this.#onClaude(name) ? turnFromHook(event, detail) : null;
+    if (event === 'TurnEnded' && !ended) return { ok: false, message: 'That is not how a turn ends.' };
+    if (ended) {
+      const rec = this.registry.get(name);
+      // The runner names its own engine, and the record says which engine
+      // this pane is. A turn reported for any other is not this session's.
+      const on = rec?.engines?.[rec.engineAt ?? 0]?.engine ?? DEFAULT_ENGINE;
+      if (rec && ended.engine === on) {
+        this.registry.upsert(name, { turn: { ...ended, at } });
+        if (HANDS_ON.includes(ended.reason)) void this.handOn(name, ended).catch((e) => log.warn(`engines: ${name} could not be handed on`, e));
+      }
+    }
     if (spent) {
       const rec = this.registry.get(name);
       if (rec && JSON.stringify(rec.spent ?? null) !== JSON.stringify(spent)) this.registry.upsert(name, { spent });
@@ -1366,6 +1432,91 @@ export class SessionManager {
     // are the ones worth a line.
     if (phase !== 'working') log.info(`hook: ${name} ${event}${detail ? ` ${detail}` : ''} → ${phase}`);
     return { ok: true, phase };
+  }
+
+  /** Is this session's pane Claude Code's own? A session that names no engines is. @param {string} name */
+  #onClaude(name) {
+    const rec = this.registry.get(name);
+    return (rec?.engines?.[rec.engineAt ?? 0]?.engine ?? DEFAULT_ENGINE) === DEFAULT_ENGINE;
+  }
+
+  /**
+   * One engine could not go on, and the member names another this box runs:
+   * write down where things stand, and start the next one in the same
+   * session (docs/engines.md, "At a limit").
+   *
+   * THE SESSION STAYS THE SESSION. Same name, same workspace, same socket,
+   * same task: only the pane's process changes, and the record says which
+   * engine it is on now and why the last one stopped.
+   *
+   * ONCE PER ENDING. Two reports of the same turn, or a second engine
+   * failing its checks while the first handoff is still starting, must not
+   * start two panes: `handingOn` holds the name until the launch is over.
+   *
+   * @param {string} name
+   * @param {import('../fleet/protocol/engines.js').TurnEnded} turn
+   * @returns {Promise<Result|null>} null when nothing was handed on
+   */
+  async handOn(name, turn) {
+    const rec = this.registry.get(name);
+    if (!rec?.engines || rec.status !== 'running' || this.handingOn.has(name)) return null;
+    const from = rec.engineAt ?? 0;
+    const to = nextEngine(rec, turn, boxEngines(this.cfg));
+    if (to < 0) {
+      if (HANDS_ON.includes(turn.reason)) log.info(`engines: ${name} stopped on ${turn.engine} (${turn.reason}) and its member names no engine after it that this box runs`);
+      return null;
+    }
+    this.handingOn.add(name);
+    try {
+      const next = rec.engines[to];
+      const first = this.firstMessages.get(name) ?? null;
+      // What the pane says now, before it is gone.
+      const pane = this.peek(name, 80);
+      const checkout = checkoutFacts(this.cfg, name, rec.taskBranch ?? null) ?? checkoutFacts(this.cfg, name, null);
+      const note = handoffNote({ turn, next, taskId: rec.taskId ?? null, taskBranch: rec.taskBranch ?? null, firstMessage: first, checkout, pane: pane ? pane.slice(-HANDOFF_TAIL * 2) : null, at: Date.now() });
+      const wrote = writeFile(this.cfg, name, HANDOFF_FILE, note, rec);
+      if (!wrote.ok) log.warn(`engines: ${name}: could not write ${HANDOFF_FILE}: ${wrote.text}`);
+      // ON THE TASK'S OWN BRANCH, AND ONLY THERE, it is also committed, as
+      // that one file. A checkout on any other branch is somebody's work in
+      // a place this was not told about.
+      let committed = false;
+      if (checkout && rec.taskBranch && checkout.branch === rec.taskBranch) {
+        const c = commitHandoff(this.cfg, name, checkout.where, rec.taskBranch, note);
+        committed = c.ok;
+        if (!c.ok) log.warn(`engines: ${name}: ${HANDOFF_FILE} was written and not committed: ${c.text}`);
+      }
+
+      // In flight from here, so the pass that marks a session with no pane
+      // as ended leaves this one alone until the next engine's pane is up.
+      this.inFlight.add(name);
+      if (hasSession(name)) killSession(name);
+      if (this.cfg.sandbox) stopSandboxContainer(this.cfg, name);
+      const log_ = [...(rec.engineLog ?? []), { at: Date.now(), from: turn.engine, to: next.engine, reason: turn.reason }].slice(-8);
+      const launched = await this.#launch({
+        name,
+        cwd: rec.cwd,
+        actor: rec.createdBy ?? null,
+        resumeUuid: null,
+        verb: `handed on from ${turn.engine}`,
+        skipPermissions: rec.skipPermissions ?? null,
+        prompt: continuationMessage(first, turn.engine),
+        engines: rec.engines,
+        engineAt: to,
+        handedOn: true,
+      });
+      if (launched.ok) {
+        this.registry.upsert(name, { engineLog: log_ });
+        log.info(`engines: ${name} handed on from ${turn.engine} to ${next.engine} (${turn.reason})${committed ? `, ${HANDOFF_FILE} committed` : ''}`);
+      } else {
+        // The next engine did not start. The record says the session is on
+        // the engine that stopped, which is true, and why.
+        this.registry.upsert(name, { engineAt: from, detail: `${turnWords(turn)} ${next.engine} could not be started: ${launched.message}`.slice(0, 300) });
+      }
+      return launched;
+    } finally {
+      this.handingOn.delete(name);
+      this.inFlight.delete(name);
+    }
   }
 
   /**
