@@ -237,8 +237,9 @@ there is not a second one inside the first.
 **Not on a box that keeps its sessions behind an egress allowlist.** A
 machine dials the fleet itself, and its sessions reach what it reaches, so a
 container made there would be one that is not behind the list. Such a box
-refuses to make one and says why. Putting a machine behind the list is not
-built.
+refuses to make one and says why, and it neither builds the machine image
+nor offers it: an image there would be a button for something every press of
+is refused. Putting a machine behind the list is not built.
 
 It is a temporary machine like any other, so the rules for one hold with no
 new code: **it holds its owner's sign-in only**, a member is never started
@@ -318,8 +319,10 @@ behind the hub's token like every route there.
   from standard input. So it is in no command line, where every user of
   the box could read it, and in no environment, which Podman keeps a record
   of. The machine then starts with only the coordinator's address.
-- **Extend** adds minutes to its end, as on a hypervisor, and never further
-  off than the longest a machine is made for. **End** stops it and removes
+- **Extend** adds minutes to its end, as on a hypervisor, and never past
+  the longest a machine lives counted from when it was made, so asking
+  again and again does not keep one, and its place on the box, for ever. At
+  that limit more time is refused in words. **End** stops it and removes
   it with its volume. Both are its owner's alone: to anybody else the
   machine is not there.
 - **Its timer is the box's.** The hub looks once a minute while it has a

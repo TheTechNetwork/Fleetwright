@@ -53,6 +53,15 @@ export const MACHINE_LABEL = 'fleetwright.machine';
 const IMAGE_LABEL = 'fleetwright.machine-image';
 /** What the image's one image is called on a screen. */
 export const MACHINE_IMAGE_NAME = 'Linux, with the fleet';
+
+/**
+ * Why a box behind an egress allowlist makes no machines, said wherever one
+ * is asked after: the refusal, and the image's own state, so the image is
+ * neither built nor offered on a box where every request for one would be
+ * refused. It was built and offered there, and then refused, which is a
+ * button for something that does not exist.
+ */
+const BEHIND_ALLOWLIST = 'This machine keeps its sessions behind an egress allowlist, and a machine made on it would not be behind one. So none is made here.';
 /** What of a release a host runs from. Whichever of these a box has is copied in. */
 const RELEASE_PARTS = Object.freeze(['package.json', 'openapi.json', 'bin', 'lib', 'src', 'node_modules']);
 
@@ -254,6 +263,7 @@ export class Machines {
    * @returns {Promise<{ ready: boolean, building: boolean, problem: string|null }>}
    */
   async imageState() {
+    if (this.cfg.sandboxEgress === 'allowlist') return { ready: false, building: false, problem: BEHIND_ALLOWLIST };
     const image = machineImage(this.cfg);
     if (this.ready !== image) this.ready = (await podmanAsync(this.cfg, ['image', 'inspect', image], { timeout: 30_000 })).status === 0 ? image : null;
     if (this.ready === image) return { ready: true, building: false, problem: null };
@@ -271,7 +281,7 @@ export class Machines {
    */
   async prepare() {
     const state = await this.imageState();
-    if (state.ready || state.building) return state;
+    if (state.ready || state.building || this.cfg.sandboxEgress === 'allowlist') return state;
     const image = machineImage(this.cfg);
     if (this.failed?.image === image && this.now() - this.failed.at < 30 * 60_000) return state;
     void this.ensureImage().catch(() => {});
@@ -370,8 +380,6 @@ export class Machines {
     }
     const ends = this.#ends();
     const now = this.now();
-    /** @type {Record<string, { until: number }>} */
-    const kept = {};
     const machines = [];
     for (const c of all) {
       // WHEN IT ENDS: what this box last wrote, or what it was made with.
@@ -384,10 +392,18 @@ export class Machines {
         log.info(`machines: ended ${c.name} (${until !== null && until <= now ? 'its time was up' : 'its container had stopped'})`);
         continue;
       }
-      if (until !== null) kept[c.name] = { until };
       machines.push({ name: c.name, owner: c.owner, state: c.state === 'running' ? 'Running' : c.state === 'paused' ? 'Paused' : 'Starting', until, madeAt: c.madeAt });
     }
-    if (JSON.stringify(kept) !== JSON.stringify(ends)) this.#keep(kept);
+    // WHAT IS WRITTEN BACK IS ONLY WHAT IS GONE, read again now. A removal
+    // above is awaited, and this runs beside the one-at-a-time turn (the
+    // minute's timer, and anybody asking for the list), so writing the end
+    // times as they were read at the top put back an end somebody had just
+    // extended: they were told two more hours, and the machine went in ten
+    // minutes with its disk.
+    const live = new Set(machines.map((m) => m.name));
+    const fresh = this.#ends();
+    const still = Object.fromEntries(Object.entries(fresh).filter(([n]) => live.has(n)));
+    if (Object.keys(still).length !== Object.keys(fresh).length) this.#keep(still);
     const image = await (prepare ? this.prepare() : this.imageState());
     return { ok: true, max: this.max, image: { name: MACHINE_IMAGE_NAME, ...image }, machines };
   }
@@ -416,7 +432,7 @@ export class Machines {
     // A BOX THAT KEEPS ITS SESSIONS BEHIND AN ALLOWLIST would be making a
     // container that is not behind it: a machine dials the fleet itself, and
     // its sessions reach what it reaches. Refused, not quietly let out.
-    if (cfg.sandboxEgress === 'allowlist') return { ok: false, text: 'This machine keeps its sessions behind an egress allowlist, and a machine made on it would not be behind one. So none is made here.' };
+    if (cfg.sandboxEgress === 'allowlist') return { ok: false, text: BEHIND_ALLOWLIST };
     const name = `vm-${m[1]}`;
     const life = Math.max(MACHINE_MIN_MINUTES, Math.min(MACHINE_MAX_MINUTES, Number(minutes) || DEFAULT_MINUTES));
     const listed = await this.list();
@@ -516,9 +532,16 @@ export class Machines {
     }
     if (action === 'extend') {
       const more = Math.max(MACHINE_MIN_MINUTES, Math.min(MACHINE_MAX_MINUTES, Number(minutes) || DEFAULT_MINUTES));
-      // From when it would have ended, as on a hypervisor, and never further
-      // off than the longest a machine is made for.
-      const until = Math.min(this.now() + MACHINE_MAX_MINUTES * 60_000, Math.max(found.until ?? 0, this.now()) + more * 60_000);
+      // From when it would have ended, as on a hypervisor, and NEVER PAST
+      // THE LONGEST A MACHINE LIVES, COUNTED FROM WHEN IT WAS MADE. It was
+      // counted from now, so asking again every few hours kept a machine for
+      // ever, and with a box's few places taken that way the next person was
+      // refused one. The hypervisor's driver has always counted from the
+      // making (xo-pools.js), and this said "as on a hypervisor".
+      if (!found.madeAt) return { ok: false, text: `${name} does not say when it was made, so it cannot be given longer.` };
+      const was = found.until ?? 0;
+      const until = Math.min(found.madeAt + MACHINE_MAX_MINUTES * 60_000, Math.max(was, this.now()) + more * 60_000);
+      if (until <= was) return { ok: false, text: `${name} already runs to the longest a machine can, ${MACHINE_MAX_MINUTES} minutes from when it was made.` };
       this.#keep({ ...this.#ends(), [found.name]: { until } });
       return { ok: true, minutes: more, until, text: `${name} now ends ${Math.max(1, Math.round((until - this.now()) / 60_000))} minutes from now.` };
     }

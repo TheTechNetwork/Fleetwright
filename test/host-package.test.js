@@ -87,6 +87,22 @@ test('the bundle runs with no dependencies present, from an unrelated cwd', () =
   }
 });
 
+test('nothing in the bundle finds a file by climbing two directories from itself', () => {
+  // In a checkout a module sits in src/<dir>/, and `../../x` beside it is the
+  // root. In a release every module is lib/fleetwright.mjs, one directory
+  // down, and the same expression is the directory ABOVE the release. That
+  // is how every session in a machine made on a box was given a
+  // SessionStart hook naming /opt/fleetwright/bin/fleetwright, a file that
+  // is not there (direct-config.js). Paths come from INSTALL_ROOT
+  // (resources.js), which knows both shapes. Read from the built bundle,
+  // because that is the only place the mistake exists.
+  const r = release();
+  for (const bundle of readdirSync(path.join(r, 'lib')).filter((f) => f.endsWith('.mjs'))) {
+    const climbs = readFileSync(path.join(r, 'lib', bundle), 'utf8').match(/new URL\(\s*["'`]\.\.\/\.\.\/[^"'`]*["'`]\s*,\s*import\.meta\.url/g) ?? [];
+    assert.deepEqual(climbs, [], `${bundle} looks above the release`);
+  }
+});
+
 test('the manifest says what a host needs before it commits to the update', () => {
   release();
   const m = JSON.parse(readFileSync(path.join(ROOT, 'dist/manifest.json'), 'utf8'));

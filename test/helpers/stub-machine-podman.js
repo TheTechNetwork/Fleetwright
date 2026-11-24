@@ -83,7 +83,12 @@ const main = async () => {
     write(s);
     return done(0, 'c0ffee\\n');
   }
-  if (args[0] === 'rm') { s.containers = s.containers.filter((c) => c.name !== args[2]); write(s); return done(0); }
+  if (args[0] === 'rm') {
+    // ONE SLOW REMOVAL, once (slowRmOnceMs): how a test holds a look at the
+    // machines open while something else changes one.
+    if (s.slowRmOnceMs) { const ms = s.slowRmOnceMs; s.slowRmOnceMs = 0; write(s); await new Promise((r) => setTimeout(r, ms)); s = read(); }
+    s.containers = s.containers.filter((c) => c.name !== args[2]); write(s); return done(0);
+  }
   if (args[0] === 'volume' && args[1] === 'rm') { s.volumes = s.volumes.filter((v) => v !== args[3]); write(s); return done(0); }
   return done(0);
 };

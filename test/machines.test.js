@@ -205,6 +205,7 @@ test('an operator’s own image is used as named and never built over', async (t
 
 test('a machine ends when its time is up, by the box’s own clock, and more time moves that', async (t) => {
   const { podman, cfg, clock, machines } = await box(t);
+  const made = clock.now;
   await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 10 });
   const listed = async (/** @type {Machines} */ m = machines) => {
     const r = await m.list();
@@ -218,13 +219,51 @@ test('a machine ends when its time is up, by the box’s own clock, and more tim
   clock.now += 20 * 60_000;
   const restarted = new Machines(cfg, { now: () => clock.now });
   assert.deepEqual(await listed(restarted), [[VM, ELI, 'Running', clock.now + 20 * 60_000]], 'past its label, and still running');
-  // Never further off than the longest a machine is made for.
+  // NEVER PAST THE LONGEST A MACHINE LIVES, COUNTED FROM WHEN IT WAS MADE,
+  // as on a hypervisor. Counted from now, asking again every few hours kept
+  // one for ever, and its place on the box with it.
   const far = await machines.control({ owner: ELI, name: VM, action: 'extend', minutes: 9999 });
-  assert.equal(far.until, clock.now + MACHINE_MAX_MINUTES * 60_000);
+  assert.equal(far.until, made + MACHINE_MAX_MINUTES * 60_000);
+  clock.now += 5 * 60 * 60_000;
+  const again = await machines.control({ owner: ELI, name: VM, action: 'extend', minutes: 9999 });
+  assert.equal(again.ok, false);
+  assert.match(again.text, new RegExp(`already runs to the longest a machine can, ${MACHINE_MAX_MINUTES} minutes from when it was made`));
   // ITS TIME UP: the next look removes the container and its disk.
-  clock.now += MACHINE_MAX_MINUTES * 60_000 + 1;
+  clock.now = made + MACHINE_MAX_MINUTES * 60_000 + 1;
   assert.deepEqual(await listed(), []);
   assert.deepEqual([podman.state().containers, podman.state().volumes], [[], []]);
+});
+
+test('more time given while another machine is being cleared away is kept, and the machine does not go at its old end', async (t) => {
+  const { podman, clock, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 5 });
+  await machines.make({ owner: SAM, ticket: ticket('b'.repeat(12)), coordinator: FLEET, minutes: 10 });
+  const B = 'vm-bbbbbbbbbbbb';
+  // Eli's is over. The minute's look starts clearing it away, and that
+  // takes a while; Sam asks for two more hours in the middle of it.
+  clock.now += 6 * 60_000;
+  podman.set({ slowRmOnceMs: 400 });
+  const look = machines.list();
+  await new Promise((r) => setTimeout(r, 100));
+  const more = await machines.control({ owner: SAM, name: B, action: 'extend', minutes: 120 });
+  assert.equal(more.ok, true, more.text);
+  await look;
+  // The look wrote the end times back as it had read them, before the two
+  // hours: Sam was told 124 minutes and the machine went in four, with its disk.
+  clock.now += 5 * 60_000;
+  const after = await machines.list();
+  assert.deepEqual(after.ok && after.machines.map((m) => [m.name, m.until]), [[B, more.until]]);
+});
+
+test('a box behind an egress allowlist neither builds the machine image nor offers it', async (t) => {
+  // It refuses every machine (above), so an image there is a button for
+  // something that does not exist: built, offered, and then refused.
+  const { podman, machines } = await box(t, { sandboxEgress: 'allowlist' }, { built: false });
+  const seen = await machines.list({ prepare: true });
+  assert.equal(seen.ok, true);
+  assert.deepEqual(seen.ok && [seen.image.ready, seen.image.building], [false, false]);
+  assert.match(String(seen.ok && seen.image.problem), /behind an egress allowlist/);
+  assert.equal(podman.calls().some((a) => a[0] === 'build' || a[0] === 'pull'), false);
 });
 
 test('a machine the hub has no note of ends by its label, and one that stopped by itself is cleared away', async (t) => {
