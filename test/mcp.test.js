@@ -1045,3 +1045,44 @@ test('fleet_member changes the fields it is given and keeps the rest, and passes
   // And `fleet_start` offers the member to start as.
   assert.ok('member' in (toolsFor().find((t) => t.name === 'fleet_start')?.inputSchema.properties ?? {}));
 });
+
+test('fleet_status lists the VM images fleet_provision takes, with their ids', async () => {
+  // `provision` for a vm asks for a `template` "as status lists it", and status
+  // listed none: the coordinator's snapshot carried `vmImages` and only the
+  // phones drew it, so an agent could not make a VM from an image that was
+  // there. Fails on the code before this by the id never appearing.
+  const template = '0b5c7e1a-1f2d-8a3b-9c4d-5e6f7a8b9c0d';
+  const cases = [
+    {
+      hosts: { status: 200, body: { ok: true, vmImages: [{ template, name: 'Fleetwright Debian 13', kind: 'proxmox', address: '10.69.10.10:8006', hosts: ['holder-1'], networks: [], groups: [], labs: [] }] } },
+      expect: new RegExp(`Fleetwright Debian 13: template ${template} \\(Proxmox VE, 10\\.69\\.10\\.10:8006\\)`),
+    },
+    { hosts: { status: 200, body: { ok: true, vmImages: [] } }, expect: /VM images: none\./ },
+    // C-5: an older coordinator without the field is "could not tell", never "none".
+    { hosts: { status: 200, body: { ok: true } }, expect: /could not ask the coordinator/ },
+    { hosts: { status: 404, body: {} }, expect: /could not ask the coordinator/ },
+  ];
+  for (const c of cases) {
+    /** @type {string[]} */
+    const asked = [];
+    const { server, written } = serverWith(undefined, {
+      fetch: async (/** @type {string} */ url) => {
+        asked.push(url.endsWith('/api/hosts') ? 'images' : 'fleet');
+        return url.endsWith('/api/hosts')
+          ? { status: c.hosts.status, json: async () => c.hosts.body }
+          : { status: 200, json: async () => ({ ok: true, text: 'box-1 said: “fleetwright on box-1 0/4 sessions running”' }) };
+      },
+    });
+    await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_status', arguments: {} }));
+    const text = written[0].result.content[0].text;
+    assert.match(text, /box-1 said/);
+    assert.match(text, c.expect);
+    // Asked beside the fan-out, not after it: the image list adds no wait of
+    // its own to every fleet-wide status.
+    assert.equal(asked[0], 'images');
+  }
+  // A session's own status is about that session, and carries no image list.
+  const { server, written } = serverWith({ ok: true, text: 'one session' });
+  await server.handleLine(rpc(2, 'tools/call', { name: 'fleet_status', arguments: { name: 'mine' } }));
+  assert.doesNotMatch(written[0].result.content[0].text, /VM images/);
+});
