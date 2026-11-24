@@ -1080,6 +1080,11 @@ test('fleet_status lists the VM images fleet_provision takes, with their ids', a
       hosts: { status: 200, body: { ok: true, vmImages: [{ template, name: 'Linux, with the fleet', kind: 'sandbox', provider: 'E2B', address: 'e2b', hosts: ['deb132'], networks: [], groups: [], labs: [] }] } },
       expect: new RegExp(`Linux, with the fleet: template ${template} \\(sandbox provider E2B, a rented machine that ends on a timer\\) — made by deb132`),
     },
+    // One on a box of the person's own is not rented, and is said by the box's name.
+    {
+      hosts: { status: 200, body: { ok: true, vmImages: [{ template, name: 'Linux, with the fleet', kind: 'sandbox', own: true, provider: 'deb132', address: 'own:deb132', hosts: ['deb132'], networks: [], groups: [], labs: [] }] } },
+      expect: new RegExp(`Linux, with the fleet: template ${template} \\(on deb132, one of your own machines: a container there that ends on a timer\\) — made by deb132`),
+    },
     { hosts: { status: 200, body: { ok: true, vmImages: [] } }, expect: /VM images: none\./ },
     // C-5: an older coordinator without the field is "could not tell", never "none".
     { hosts: { status: 200, body: { ok: true } }, expect: /could not ask the coordinator/ },

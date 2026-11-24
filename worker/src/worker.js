@@ -1696,9 +1696,10 @@ const OPENAPI = JSON.stringify({
                             "type": "string",
                             "enum": [
                               "xo",
-                              "proxmox"
+                              "proxmox",
+                              "sandbox"
                             ],
-                            "description": "which hypervisor the image is on: `xo` for Xen Orchestra, `proxmox` for Proxmox VE. Absent from an older coordinator, which means `xo`."
+                            "description": "where it is: `xo` for Xen Orchestra, `proxmox` for Proxmox VE, `sandbox` for a place that is not a hypervisor (a sandbox provider\u2019s cloud, or with `own` a box of your own). Absent from an older coordinator, which means `xo`."
                           },
                           "hosts": {
                             "type": "array",
@@ -1759,6 +1760,17 @@ const OPENAPI = JSON.stringify({
                                 }
                               }
                             }
+                          },
+                          "provider": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "for `sandbox`, whose it is, as the box says it: a provider\u2019s name (`E2B`), or with `own` the name of the box the machine is on. Null on a hypervisor."
+                          },
+                          "own": {
+                            "type": "boolean",
+                            "description": "true for a `sandbox` place that is a box of your own: a container that box runs, with no key and nobody else\u2019s cloud. It has no network, lab, restart, resize or console of its own; those need a hypervisor. False for a provider\u2019s and for a hypervisor. Absent from an older coordinator, which means false."
                           }
                         }
                       }
@@ -2129,6 +2141,26 @@ const OPENAPI = JSON.stringify({
                           "standby": {
                             "type": "boolean",
                             "description": "kept ready and not yet taken by a session"
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "xo",
+                              "proxmox",
+                              "sandbox"
+                            ],
+                            "description": "where it is: `xo` for Xen Orchestra, `proxmox` for Proxmox VE, `sandbox` for a place that is not a hypervisor (a sandbox provider\u2019s cloud, or with `own` a box of your own). Absent from an older coordinator, which means `xo`."
+                          },
+                          "provider": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "for `sandbox`, whose it is, as the box says it: a provider\u2019s name (`E2B`), or with `own` the name of the box the machine is on. Null on a hypervisor."
+                          },
+                          "own": {
+                            "type": "boolean",
+                            "description": "true for a `sandbox` place that is a box of your own: a container that box runs, with no key and nobody else\u2019s cloud. It has no network, lab, restart, resize or console of its own; those need a hypervisor. False for a provider\u2019s and for a hypervisor. Absent from an older coordinator, which means false."
                           }
                         }
                       }
@@ -2151,8 +2183,10 @@ const OPENAPI = JSON.stringify({
                             "type": "string",
                             "enum": [
                               "xo",
-                              "proxmox"
-                            ]
+                              "proxmox",
+                              "sandbox"
+                            ],
+                            "description": "where it is: `xo` for Xen Orchestra, `proxmox` for Proxmox VE, `sandbox` for a place that is not a hypervisor (a sandbox provider\u2019s cloud, or with `own` a box of your own). Absent from an older coordinator, which means `xo`."
                           },
                           "boxes": {
                             "type": "array",
@@ -2178,7 +2212,7 @@ const OPENAPI = JSON.stringify({
                                     "string",
                                     "null"
                                   ],
-                                  "description": "why it could not reach it, for a Proxmox VE cluster, in the box's words"
+                                  "description": "why it could not reach it, for a Proxmox VE cluster, in the box's words; or, for a box of your own (`own`), why that box offers no image yet while it is reached: it is building its machine image, or the build failed"
                                 }
                               }
                             }
@@ -2230,6 +2264,17 @@ const OPENAPI = JSON.stringify({
                               "boolean",
                               "null"
                             ]
+                          },
+                          "provider": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "for `sandbox`, whose it is, as the box says it: a provider\u2019s name (`E2B`), or with `own` the name of the box the machine is on. Null on a hypervisor."
+                          },
+                          "own": {
+                            "type": "boolean",
+                            "description": "true for a `sandbox` place that is a box of your own: a container that box runs, with no key and nobody else\u2019s cloud. It has no network, lab, restart, resize or console of its own; those need a hypervisor. False for a provider\u2019s and for a hypervisor. Absent from an older coordinator, which means false."
                           }
                         }
                       }

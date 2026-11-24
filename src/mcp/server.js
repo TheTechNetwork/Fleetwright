@@ -250,10 +250,14 @@ function describeVmImages(images) {
     // A SANDBOX PROVIDER'S TEMPLATE IS SAID AS ONE, with whose cloud it is:
     // a machine from it is rented, ends on the provider's timer, and is on
     // no network of the person's (docs/api-engines.md).
+    // ONE ON A BOX OF THE PERSON'S OWN IS NOT RENTED and is said apart: a
+    // container on that box, with no network, restart or resize of its own.
     const kind =
-      i.kind === 'sandbox'
-        ? `sandbox provider ${oneLine(String(i.provider || 'not named'), 24)}, a rented machine that ends on a timer`
-        : i.kind === 'proxmox'
+      i.kind === 'sandbox' && i.own === true
+        ? `on ${oneLine(String(i.provider || 'one of your machines'), 24)}, one of your own machines: a container there that ends on a timer`
+        : i.kind === 'sandbox'
+          ? `sandbox provider ${oneLine(String(i.provider || 'not named'), 24)}, a rented machine that ends on a timer`
+          : i.kind === 'proxmox'
           ? 'Proxmox VE'
           : i.kind === 'xo'
             ? 'Xen Orchestra'
@@ -847,7 +851,9 @@ export class McpServer {
       'A machine from the person\u2019s own hypervisor is platform `vm`: fleet_status with no name lists the',
       'VM images they can start one from, each with the id `template` takes. A template from a sandbox',
       'provider is listed there too and made the same way: a rented machine on the provider\u2019s cloud,',
-      'which ends on a timer and is on no network of the person\u2019s.',
+      'which ends on a timer and is on no network of the person\u2019s. So is one on a box of the person\u2019s',
+      'own, where its operator turned that on: a container on that box, with no key and nobody else\u2019s cloud.',
+      'Neither has a network, a lab, a restart or a resize: those need a hypervisor.',
       '',
       'Watching one that is actually working:',
       '  1. fleet_start with a `task` (or a `profile`), naming a host or a tag for a kind of machine',

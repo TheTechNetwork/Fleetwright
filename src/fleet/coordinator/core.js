@@ -329,7 +329,7 @@ export const EDGE_REPORT = Object.freeze({
 
 /**
  * @typedef {{
- *   address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null,
+ *   address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, own: boolean,
  *   boxes: Array<{ hostId: string, reachable: boolean|null, problem: string|null }>,
  *   pools: string[], version: string|null, supported: boolean|null, fenced: boolean|null,
  *   images: number, machines: number,
@@ -8527,6 +8527,9 @@ export class CoordinatorCore {
             // WHOSE CLOUD, for a machine from a sandbox provider: its page
             // says so, and offers neither a console nor a restart.
             provider: placeProvider(e),
+            // OR A BOX OF THE PERSON'S OWN (docs/api-engines.md, part
+            // three), named in `provider`: its page must not call it rented.
+            own: placeOwn(e),
             node: /** @type {any} */ (e).kind === 'proxmox' && typeof m.node === 'string' && /^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$/.test(m.node) ? m.node : null,
             vmid: /** @type {any} */ (e).kind === 'proxmox' && Number.isInteger(m.vmid) && m.vmid >= 100 && m.vmid <= 999_999_999 ? m.vmid : null,
             hosts: [host.hostId],
@@ -8778,12 +8781,12 @@ export class CoordinatorCore {
    * holding their pools' tokens reported (health `xo`, src/fleet/host/xo-pools.js).
    *
    * @param {{ email?: string|null, admin?: boolean }|null} requester
-   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>}
+   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, own: boolean, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>}
    */
   vmImagesFor(requester) {
     const email = String(requester?.email || '').toLowerCase();
     if (!email) return [];
-    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>} */
+    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, own: boolean, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>} */
     const found = new Map();
     for (const h of this.#vmHolders(email, null)) {
       for (const entry of h.entries) {
@@ -8809,6 +8812,7 @@ export class CoordinatorCore {
             address: entry.address,
             kind: entry.kind,
             provider: entry.provider,
+            own: entry.own,
             hosts: [h.host.hostId],
             // THE NETWORKS IT CAN GO ON besides the uplink: the pool's, that
             // the fleet may use, for "reachable from my network".
@@ -8859,10 +8863,13 @@ export class CoordinatorCore {
         const key = `${kind} ${address}`;
         let row = found.get(key);
         if (!row) {
-          row = { address, kind, provider: placeProvider(e), boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, holder: null, edge: null, imageIds: new Set(), machineNames: new Set() };
+          row = { address, kind, provider: placeProvider(e), own: placeOwn(e), boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, holder: null, edge: null, imageIds: new Set(), machineNames: new Set() };
           found.set(key, row);
         }
-        row.boxes.push({ hostId: host.hostId, reachable: typeof e.reachable === 'boolean' ? e.reachable : null, problem: e.reachable === false ? text(e.problem, 200) : null });
+        // WHY NOT, where a box said: one that could not reach the place, or a
+        // box of the person's own that has no image to offer yet (it is
+        // building one, or the build failed), which it can be while reached.
+        row.boxes.push({ hostId: host.hostId, reachable: typeof e.reachable === 'boolean' ? e.reachable : null, problem: e.reachable === false || placeOwn(e) ? text(e.problem, 200) : null });
         for (const p of Array.isArray(e.pools) ? e.pools.slice(0, 32) : []) {
           const name = text(p?.name ?? p?.name_label, 80);
           if (name && !row.pools.includes(name)) row.pools.push(name);
@@ -9006,7 +9013,7 @@ export class CoordinatorCore {
    * not reach it rather than that nobody holds it.
    *
    * @param {string} email @param {string|null} template @param {{ unreached?: boolean }} [opts]
-   * @returns {Array<{ host: any, entries: Array<{ address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, networks: Array<{ id: string, name: string, pool: string|null, group: boolean, lab: 'open'|'closed'|null, taken: boolean|null, perPerson: number|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
+   * @returns {Array<{ host: any, entries: Array<{ address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, own: boolean, networks: Array<{ id: string, name: string, pool: string|null, group: boolean, lab: 'open'|'closed'|null, taken: boolean|null, perPerson: number|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
    */
   #vmHolders(email, template, { unreached = false } = {}) {
     /** @type {Array<{ host: any, entries: any[] }>} */
@@ -9022,6 +9029,7 @@ export class CoordinatorCore {
           // Xen Orchestra's, which is every entry from before Proxmox.
           kind: placeKind(e),
           provider: placeProvider(e),
+          own: placeOwn(e),
           networks: (Array.isArray(e.networks) ? e.networks : [])
             .filter((/** @type {any} */ n) => XO_UUID_RE.test(String(n?.id)))
             .map((/** @type {any} */ n) => ({
@@ -10368,7 +10376,8 @@ const DEPLOY_TITLES = Object.freeze({ running: 'Installing Xen Orchestra', done:
 export function imageWhere(kind, provider = null) {
   // A SANDBOX PROVIDER IS NAMED, because "on a sandbox provider" would not
   // say whose cloud the machine is on, and that is the thing to know about
-  // a rented machine (docs/api-engines.md).
+  // a rented machine (docs/api-engines.md). A box of the person's own is
+  // named the same way, by its own name, which is where the machine is.
   if (kind === 'sandbox') return provider || 'a sandbox provider';
   return kind === 'proxmox' ? 'Proxmox' : 'XCP-ng';
 }
@@ -10395,6 +10404,22 @@ export function placeKind(e) {
  */
 export function placeProvider(e) {
   return placeKind(e) === 'sandbox' && typeof e?.provider === 'string' && e.provider.trim() ? e.provider.trim().slice(0, 24) : null;
+}
+
+/**
+ * Whether a sandbox entry is a box of the person's own and not a provider's
+ * cloud (src/fleet/host/own-pools.js; docs/api-engines.md, "A machine on a
+ * box of your own"). The same seam and the same kind, so that everything a
+ * sandbox place already does holds for it; this one word is what stops a
+ * phone calling a container on the person's own box rented, or saying
+ * somebody else can read it. Only `true` is true: an entry that says
+ * nothing is a provider's, as every sandbox entry was before this.
+ *
+ * @param {any} e
+ * @returns {boolean}
+ */
+export function placeOwn(e) {
+  return placeKind(e) === 'sandbox' && e?.own === true;
 }
 
 const PVE_TITLES = Object.freeze({ running: 'Setting up Proxmox VE', done: 'Proxmox VE set up', failed: 'Proxmox VE was not set up', cancelled: 'Setting up Proxmox VE cancelled' });
