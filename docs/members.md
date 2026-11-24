@@ -16,8 +16,8 @@ that member's instructions, and goes where that member runs.
 This is step 2 of the organization work. Tasks above sessions, delegation,
 engines other than Claude Code, routing and budgets are later steps
 ([tasks.md](./tasks.md), [engines.md](./engines.md),
-[ROADMAP.md](../ROADMAP.md)); `budgetUsdMonth` is stored here and enforced by
-nothing yet.
+[routing.md](./routing.md), [budgets.md](./budgets.md),
+[ROADMAP.md](../ROADMAP.md)).
 
 ## A member
 
@@ -36,7 +36,7 @@ nothing yet.
 | `instructions` | markdown the member's sessions open with | at most 4 KiB |
 | `engines` | what runs it, in the order to try | up to three, each once: `claude-code`, `codex`, `opencode`, each with a `model?` ([engines.md](./engines.md)) |
 | `hosts` | where it runs: `{ tag? }` | a host tag |
-| `budgetUsdMonth` | a monthly budget | stored, not enforced |
+| `budgetUsdMonth` | a monthly budget, in dollars at API prices | counted against, and enforced when an admin turns that on ([budgets.md](./budgets.md)) |
 | `createdBy`, `createdAt`, `updatedAt` | who made it, and when | set by the coordinator |
 
 **No credential is ever in a record or a file.** A member's sign-ins are in

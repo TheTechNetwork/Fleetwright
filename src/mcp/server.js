@@ -135,6 +135,7 @@ export function backAtPrompt(session) {
 /** What an older coordinator, with no tasks, is said to be. */
 const NO_TASKS = 'This coordinator does not keep tasks yet, so there are none to list, make or hand on.';
 
+const NO_BUDGETS = 'This coordinator does not count what members spend yet, and asks for no approvals.';
 const NO_ROUTING = 'This coordinator does not route tasks yet: a task goes to the member it is given to and to nobody else.';
 
 /**
@@ -1052,6 +1053,9 @@ export class McpServer {
     if (tool.name === 'fleet_tasks') return await this.#tasks(params);
     if (tool.name === 'fleet_task') return await this.#task(params);
     if (tool.name === 'fleet_delegate') return await this.#delegate(params);
+    // WHAT MEMBERS HAVE SPENT, AND THE APPROVALS A START WAITS ON (docs/budgets.md). Read only.
+    if (tool.name === 'fleet_budgets') return await this.#budgets();
+    if (tool.name === 'fleet_approvals') return await this.#approvals();
     // WHICH MEMBER A TASK GOES TO (docs/routing.md).
     if (tool.name === 'fleet_routing') return await this.#routing();
     if (tool.name === 'fleet_set_routing') return await this.#setRouting(params);
@@ -1598,6 +1602,38 @@ export class McpServer {
       }
       await this.sleep(Math.min(5000, Math.max(1000, deadline - this.now())));
     }
+  }
+
+  /** What each member has spent against its budget, and what a budget does here (docs/budgets.md). */
+  async #budgets() {
+    const got = await this.#org('GET', '/api/budgets', undefined, NO_BUDGETS);
+    if ('failed' in got) return got.failed;
+    if (got.body?.ok !== true || !Array.isArray(got.body.members)) return this.#text(String(got.body?.text || NO_BUDGETS), got.body?.ok === false);
+    const s = got.body.settings ?? {};
+    const at = { off: 'Budgets are counted and stop nothing on this fleet.', ask: 'A start past a member’s budget waits for approval.', refuse: 'A start past a member’s budget is refused until the month turns or the budget is raised.' }[String(s.budgets)] ?? `Budgets: ${s.budgets}.`;
+    const lines = [
+      at,
+      s.dangerous === true ? 'A member start that skips permission prompts waits for approval.' : 'A member start that skips permission prompts is not asked about.',
+      Array.isArray(s.workTypes) && s.workTypes.length ? `A start on a task of these kinds waits for approval: ${s.workTypes.join(', ')}.` : 'No kind of work needs approval.',
+      '',
+      ...(got.body.members.length
+        ? got.body.members.map((/** @type {any} */ m) => `${m.member}${m.over ? ' [over budget]' : ''}: ${m.words}${m.budgetUsdMonth === null || m.budgetUsdMonth === undefined ? ' It has no budget.' : ''}`)
+        : ['There is no member whose spending you may see.']),
+    ];
+    return this.#text(lines.join('\n'));
+  }
+
+  /** The approvals this person asked for or may answer. Never answers one. */
+  async #approvals() {
+    const got = await this.#org('GET', '/api/approvals', undefined, NO_BUDGETS);
+    if ('failed' in got) return got.failed;
+    if (got.body?.ok !== true || !Array.isArray(got.body.approvals)) return this.#text(String(got.body?.text || NO_BUDGETS), got.body?.ok === false);
+    if (!got.body.approvals.length) return this.#text('No approval is waiting on you, and you have asked for none.');
+    return this.#text([
+      ...got.body.approvals.map((/** @type {any} */ a) => `${a.words}${a.state === 'waiting' ? (a.mayAnswer ? ' You manage this member, so it is yours to answer, in the app.' : ' It waits on somebody who manages this member.') : ''}`),
+      '',
+      'An approval is answered by a person in the app, not from here.',
+    ].join('\n'));
   }
 
   /** The fleet's routing, as an agent needs it to predict where a task will go (docs/routing.md). */

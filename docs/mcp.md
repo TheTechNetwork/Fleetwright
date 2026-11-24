@@ -109,6 +109,14 @@ order it decides in. `fleet_set_routing` changes it, for a fleet admin.
 leaves the choice to routing and starts whoever it chose; when it chose
 nobody, nothing is started and the reply says why.
 
+`fleet_budgets` and `fleet_approvals` read ([budgets.md](./budgets.md)): what
+each member has spent this month against its budget, what the fleet does at
+a budget, and the approvals asked for or waiting. **Neither answers an
+approval, and no tool changes what needs one.** An approval exists so that a
+person looks, so the answer is given in the app. A `fleet_start` that needs
+approval comes back refused, with the approval's id and who can give it, and
+goes through when sent again after it is given.
+
 ## What is not exposed, and why that is a policy rather than a lock
 
 ```
