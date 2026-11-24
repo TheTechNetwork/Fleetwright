@@ -427,6 +427,8 @@ private fun MemberPage(
     var newCustodian by remember { mutableStateOf("") }
     // Remove is waiting on its dialog.
     var removing by remember { mutableStateOf(false) }
+    // Whose custody of this person is being given up, while the question is open.
+    var stopping by remember { mutableStateOf<String?>(null) }
     var removeResult by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf(false) }
     var credentials by remember { mutableStateOf(false) }
@@ -671,10 +673,48 @@ private fun MemberPage(
                         ) { Text("Add custodian") }
                     }
                 } else if (filed != null) {
-                    // A PERSON'S VAULT IS THEIRS. Whether their managers may
-                    // manage it is their own switch, under You, Credentials,
-                    // and this only reports where the vault says it stands.
-                    Text(personCustodyLine(filed.custody), style = Design.Style.bodySmall, color = Design.Palette.ink.now)
+                    // WHOEVER ADDED THEM MANAGES WHAT THEY KEEP, as the
+                    // vault lists it. Giving that up is offered to the one
+                    // who holds it and to an org admin of the vault, and to
+                    // nobody else (C-2).
+                    filed.custodians.forEach { address ->
+                        Text(
+                            "$address added them, and manages their credentials.",
+                            style = Design.Style.bodySmall,
+                            color = Design.Palette.ink.now,
+                        )
+                        if (address == me || held.youAdmin) {
+                            TextButton(
+                                enabled = !busy,
+                                onClick = { stopping = address },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) { Text("Stop managing their credentials", color = Design.Palette.bad.now) }
+                        }
+                    }
+                    // ASKED FIRST, because it is not given back: nobody is
+                    // made a person's custodian after whoever added them.
+                    stopping?.let { address ->
+                        AlertDialog(
+                            onDismissRequest = { stopping = null },
+                            title = { Text("Stop managing their credentials?") },
+                            text = { Text(STOP_MANAGING_SENTENCE) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    stopping = null
+                                    act { vault.setCustodian(Fleet(settings), filed.id, address, remove = true) }
+                                }) { Text("Stop managing") }
+                            },
+                            dismissButton = { TextButton(onClick = { stopping = null }) { Text("Cancel") } },
+                        )
+                    }
+                    // EVERY OTHER MANAGER waits on the person's own switch,
+                    // under You, Credentials, and this only reports where
+                    // the vault says it stands.
+                    Text(
+                        personCustodyLine(filed.custody, added = filed.custodians.isNotEmpty()),
+                        style = Design.Style.bodySmall,
+                        color = Design.Palette.ink.now,
+                    )
                 }
             }
         }
@@ -975,13 +1015,20 @@ fun memberSignInWord(state: MemberSignIn?): String = when (state) {
 fun memberKindWord(kind: String): String = if (kind == "agent") "Agent" else "Person"
 
 /**
+ * What giving up custody of a person costs, asked before it is done. The
+ * same sentence as iOS and the signing page.
+ */
+const val STOP_MANAGING_SENTENCE = "This is not given back. After it, managing their credentials is theirs to allow, as it is for their other managers."
+
+/**
  * Whether a person lets their managers manage their credentials, as the
  * vault says it. Anything else is an answer this build has not met, and is
  * said as unknown and never as off (C-5). The same sentences as iOS.
  */
-fun personCustodyLine(custody: String?): String = when (custody) {
-    "allowed" -> "Lets their managers manage their credentials."
-    "off" -> "Has not let their managers manage their credentials."
+fun personCustodyLine(custody: String?, added: Boolean = false): String = when (custody) {
+    // With somebody who added them already managing, the switch is about the rest.
+    "allowed" -> if (added) "Lets their other managers manage their credentials." else "Lets their managers manage their credentials."
+    "off" -> if (added) "Has not let their other managers manage their credentials." else "Has not let their managers manage their credentials."
     "no_vault" -> "Has not signed in on a phone yet, so there is no vault to manage."
     else -> "Unknown."
 }

@@ -437,44 +437,61 @@ private fun CredentialsScreen(settings: Settings, onDismiss: () -> Unit) {
             // FOR THE MACHINES ON YOUR HYPERVISOR: kept like any secret,
             // given its own row because it is pasted, not typed.
             OpenRow("SSH keys") { sshKeys = true }
-            // ONLY FOR SOMEBODY WITH MANAGERS: a member of their own in the
-            // vault's tree, and at least one manager above it. Anybody else
-            // has nothing this switch would do (C-2).
+            // ONLY FOR SOMEBODY SOMEBODY ELSE MAY MANAGE: a member of their
+            // own in the vault's tree, and whoever added them or a manager
+            // above it. Anybody else has nothing here to read or switch (C-2).
             val held = custody
-            if (held != null && held.member != null && held.managers.isNotEmpty()) {
+            if (held != null && held.member != null && !(held.custodians.isEmpty() && held.managers.isEmpty())) {
                 SectionHead("Your managers")
-                Row(
-                    Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Let my managers manage my credentials",
-                        style = Design.Style.body,
-                        color = Design.Palette.ink.now,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(
-                        checked = held.allow,
-                        enabled = !custodyBusy,
-                        onCheckedChange = { allow ->
-                            scope.launch {
-                                custodyBusy = true
-                                val vault = PhoneVault(settings)
-                                val r = vault.setCustody(Fleet(settings), allow)
-                                custodyFailed = r.isFailure
-                                custodyResult = r.getOrElse { it.message ?: "That did not work." }
-                                // Custody as the vault now holds it, so the
-                                // switch stays where the vault left it.
-                                runCatching { vault.list(Fleet(settings)) }.onSuccess { custody = it.custody }
-                                custodyBusy = false
-                            }
-                        },
-                    )
-                }
-                Hint(CUSTODY_SENTENCE)
-                held.managers.forEach { address ->
+                // WHOEVER ADDED THEM MANAGES WHAT THEY KEEP, with no switch:
+                // said first, where they keep things, so it is read before
+                // anything is kept. Not theirs to end, so no control is
+                // drawn for it (C-2); the sentence says whose it is.
+                held.custodians.forEach { address ->
                     SelectionContainer {
-                        Text(address, style = Design.Style.body, color = Design.Palette.ink.now)
+                        Text(
+                            "$address added you, and manages your credentials.",
+                            style = Design.Style.body,
+                            color = Design.Palette.ink.now,
+                        )
+                    }
+                }
+                if (held.custodians.isNotEmpty()) Hint(ADDED_SENTENCE)
+                // EVERY OTHER MANAGER waits on this switch, which is theirs alone.
+                if (held.managers.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (held.custodians.isEmpty()) "Let my managers manage my credentials" else "Let my other managers manage my credentials",
+                            style = Design.Style.body,
+                            color = Design.Palette.ink.now,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Switch(
+                            checked = held.allow,
+                            enabled = !custodyBusy,
+                            onCheckedChange = { allow ->
+                                scope.launch {
+                                    custodyBusy = true
+                                    val vault = PhoneVault(settings)
+                                    val r = vault.setCustody(Fleet(settings), allow)
+                                    custodyFailed = r.isFailure
+                                    custodyResult = r.getOrElse { it.message ?: "That did not work." }
+                                    // Custody as the vault now holds it, so
+                                    // the switch stays where the vault left it.
+                                    runCatching { vault.list(Fleet(settings)) }.onSuccess { custody = it.custody }
+                                    custodyBusy = false
+                                }
+                            },
+                        )
+                    }
+                    Hint(CUSTODY_SENTENCE)
+                    held.managers.forEach { address ->
+                        SelectionContainer {
+                            Text(address, style = Design.Style.body, color = Design.Palette.ink.now)
+                        }
                     }
                 }
                 // WHAT THEY CHANGED, newest first, by name and never by
@@ -903,3 +920,9 @@ private fun describeClient(c: Fleet.Client, me: String, canRevoke: Boolean): Str
  * sentence on both phones (test/members-in-apps.test.js).
  */
 const val CUSTODY_SENTENCE = "They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. You can turn this off."
+
+/**
+ * What whoever added a person may do, and whose it is to end, said under
+ * their address. The same sentence on both phones.
+ */
+const val ADDED_SENTENCE = "They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. They or an org admin can end this, and you can still remove anything your vault keeps."

@@ -352,6 +352,8 @@ struct MemberView: View {
     @State private var newCustodian = ""
     /// Remove is waiting on its dialog.
     @State private var removing = false
+    /// Whose custody of this person is being given up, while the question is open.
+    @State private var stopping: String?
     @State private var removeResult = ""
     @State private var starting = false
     @State private var startResult = ""
@@ -419,6 +421,17 @@ struct MemberView: View {
             Button("Remove member", role: .destructive) { Task { await remove() } }
         } message: {
             Text("Removes \(shown.name) from the organization. Its vault is not deleted; a custodian forgets what it keeps.")
+        }
+        // ASKED FIRST, because it is not given back: nobody is made a
+        // person's custodian after whoever added them.
+        .confirmationDialog("Stop managing their credentials?", isPresented: Binding(get: { stopping != nil }, set: { if !$0 { stopping = nil } }), titleVisibility: .visible) {
+            Button("Stop managing", role: .destructive) {
+                if let address = stopping {
+                    act { try await vault.setCustodian(fleet, member: shown.id, address: address, remove: true) }
+                }
+            }
+        } message: {
+            Text(stopManagingSentence)
         }
     }
 
@@ -589,10 +602,24 @@ struct MemberView: View {
             if filed.kind == "agent" {
                 agentCustodians(filed)
             } else {
-                // A PERSON'S VAULT IS THEIRS. Whether their managers may
-                // manage it is their own switch, under You, Credentials, and
-                // this only reports where the vault says it stands.
-                Text(personCustodyLine(filed.custody))
+                // WHOEVER ADDED THEM MANAGES WHAT THEY KEEP, as the vault
+                // lists it. Giving that up is offered to the one who holds it
+                // and to an org admin of the vault, and to nobody else (C-2).
+                ForEach(filed.custodians, id: \.self) { address in
+                    Text("\(address) added them, and manages their credentials.")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if address == me || org.youAdmin {
+                        Button("Stop managing their credentials", role: .destructive) { stopping = address }
+                        .frame(minHeight: 44)
+                        .disabled(busy)
+                    }
+                }
+                // EVERY OTHER MANAGER waits on the person's own switch,
+                // under You, Credentials, and this only reports where the
+                // vault says it stands.
+                Text(personCustodyLine(filed.custody, added: !filed.custodians.isEmpty))
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.ink)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1073,13 +1100,18 @@ func memberKindWord(_ kind: String) -> String {
     kind == "agent" ? "Agent" : "Person"
 }
 
+/// What giving up custody of a person costs, asked before it is done. The
+/// same sentence as Android and the signing page.
+let stopManagingSentence = "This is not given back. After it, managing their credentials is theirs to allow, as it is for their other managers."
+
 /// Whether a person lets their managers manage their credentials, as the
 /// vault says it. Anything else is an answer this build has not met, and is
 /// said as unknown and never as off (C-5). The same sentences as Android.
-func personCustodyLine(_ custody: String?) -> String {
+func personCustodyLine(_ custody: String?, added: Bool = false) -> String {
     switch custody ?? "" {
-    case "allowed": return "Lets their managers manage their credentials."
-    case "off": return "Has not let their managers manage their credentials."
+    // With somebody who added them already managing, the switch is about the rest.
+    case "allowed": return added ? "Lets their other managers manage their credentials." : "Lets their managers manage their credentials."
+    case "off": return added ? "Has not let their other managers manage their credentials." : "Has not let their managers manage their credentials."
     case "no_vault": return "Has not signed in on a phone yet, so there is no vault to manage."
     default: return "Unknown."
     }
