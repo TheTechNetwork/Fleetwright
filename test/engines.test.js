@@ -33,7 +33,7 @@ test('a member names up to three engines, each once, each with the model its eng
   assert.match(refused([{ engine: 'gemini' }]), /one of claude-code, codex, opencode/);
   // ACROSS PROVIDERS, NEVER ACROSS ACCOUNTS: the same engine twice is refused in those words.
   assert.match(refused([{ engine: 'codex' }, { engine: 'codex', model: 'other' }]), /codex is named twice\. A member falls back from one engine to another, never to a second account of the same one/);
-  assert.match(refused([{ engine: 'opencode' }]), /opencode needs a model.*the model says whose account pays/);
+  assert.match(refused([{ engine: 'opencode' }]), /OpenCode needs a model.*the model says whose account pays/);
   // Any OpenCode provider but Copilot runs on an API key, which is a later step's.
   assert.match(refused([{ engine: 'opencode', model: 'anthropic/claude-sonnet' }]), /github-copilot\/<model>\. Other providers run on API keys, which are not kept yet/);
   assert.match(refused([{ engine: 'codex', model: 'two words' }]), /a model name/);

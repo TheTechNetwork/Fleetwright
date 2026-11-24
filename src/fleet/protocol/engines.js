@@ -73,7 +73,7 @@ export function checkEngines(input) {
     const raw = /** @type {any} */ (e).model;
     const model = raw === undefined || raw === null || raw === '' ? null : String(raw);
     if (id === 'opencode') {
-      if (model === null) return refuse('opencode needs a model, written provider/model, like “github-copilot/gpt-5”: the model says whose account pays.');
+      if (model === null) return refuse('OpenCode needs a model, written provider/model, like “github-copilot/gpt-5”: the model says whose account pays.');
       if (!OPENCODE_MODEL_RE.test(model)) {
         return refuse('An opencode model is written github-copilot/<model>. Other providers run on API keys, which are not kept yet.');
       }
