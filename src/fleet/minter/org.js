@@ -28,14 +28,30 @@
 // when its signing keys were filed by the GitHub account now asking
 // (`dk:<address>`), which is the binding a box already checks signatures by.
 //
-// A PERSON'S VAULT IS THEIRS UNTIL THEY SAY OTHERWISE. A manager is a
-// custodian of every agent on their team by the tree alone. Of a person on
-// their team, only after that person turned it on from their own device
-// (`custody`): the tree is filed by admins and managers, and without the
-// switch a first-use admin could reach a person's sign-ins by filing a tree.
-// What a custodian then does to it is written beside the vault where its
-// owner reads it (`clog:`), because the push that tells them is the
-// coordinator's to drop.
+// WHOEVER ADDS A PERSON MANAGES THEIR CREDENTIALS, and nobody else does until
+// the person says so. Asked for in so many words, after the first build made
+// all of it the person's to turn on: "if a manager created the member they
+// should be able to manage it." So the one who files a person member is that
+// person's custodian, kept on the row as an agent's are.
+//
+// ONLY FOR A PERSON THE VAULT HAD NOT MET. The tree is filed by admins and
+// managers, and any team lead may file a member under their own team. If
+// filing a record gave custody of the vault its address already has, a team
+// lead could take the sign-ins of anybody in the fleet with no record yet,
+// and a first-use admin could take everybody's. So the filer becomes a
+// custodian only when no GitHub account has ever filed a key under the
+// address: a person who was added, and not one who was already there. Two
+// ways round that are closed where they would be tried. An account that
+// already has a vault and files its first key under an added address is
+// somebody the vault had met, and the custody is dropped at that moment
+// (`dropAddedBy`). And a record pointed at another address names another
+// person, so its custodians do not follow it. For everybody else, and for
+// every manager who did not add the person, the person's own switch
+// (`custody`) still decides, as it did.
+//
+// What a custodian then does to a vault is written beside it where its owner
+// reads it (`clog:`), because the push that tells them is the coordinator's
+// to drop.
 //
 // ONE ROW A MEMBER (`orgm:<id>`), for the reason the coordinator has: a row
 // is 128 KiB, and 200 members with their managers and custodians are more.
@@ -67,7 +83,7 @@ export const ORG_OPS = Object.freeze(['org', 'orgadmin', 'orgmember', 'custodian
  * @property {string} [email]        a person member's fleet address
  * @property {string|null} reportsTo
  * @property {string[]} managers     addresses an admin named beside the tree
- * @property {string[]} [custodians] an agent member's own custodians
+ * @property {string[]} [custodians] an agent member's own custodians; for a person, whoever added them before they had a vault
  * @property {number} at             when this row last changed, by the request's clock
  * @property {boolean} [removed]     a tombstone, so a replayed older change cannot bring it back
  */
@@ -88,6 +104,40 @@ const lower = (s) => String(s ?? '').trim().toLowerCase();
 export async function isBound(store, email, userId) {
   const row = await store.get(`dk:${lower(email)}`);
   return Boolean(row && row.github === userId && Array.isArray(row.keys) && row.keys.some((/** @type {any} */ k) => k && !k.removed && KEY_HASH_RE.test(String(k.kid))));
+}
+
+/**
+ * Whether the vault has met whoever this address is: a GitHub account has
+ * filed a signing key under it, at any time. Wider than `accountOf` on
+ * purpose. Somebody whose keys were all removed (a lost phone) still has a
+ * vault here, and a record filed for them in that gap must not make its
+ * filer their custodian.
+ *
+ * @param {Store} store @param {string} email
+ */
+async function addressMet(store, email) {
+  const row = await store.get(`dk:${lower(email)}`);
+  return Boolean(row && typeof row.github === 'string');
+}
+
+/**
+ * A GITHUB ACCOUNT THAT ALREADY HAS A VAULT FILES ITS FIRST KEY UNDER AN
+ * ADDRESS SOMEBODY ADDED. The vault has met this person after all, under
+ * another address, so whoever filed the record did not create them, and
+ * their custody would reach what was kept before the record existed. It is
+ * dropped here, at the one moment the vault learns whose the address is
+ * (vault.js, `devicekey`), and the person's own switch decides from then on.
+ * Under the `org` lock, like every other change to the tree.
+ *
+ * @param {Store} store @param {string} email
+ */
+export async function dropAddedBy(store, email) {
+  const address = lower(email);
+  for (const node of (await loadTree(store)).values()) {
+    if (node.kind !== 'person' || node.email !== address || !node.custodians?.length) continue;
+    const { custodians: _gone, ...rest } = node;
+    await store.put(`${ORG_MEMBER_PREFIX}${node.id}`, rest);
+  }
 }
 
 /** @param {Store} store @param {string} email @returns {Promise<string|null>} the GitHub account an address is bound to */
@@ -111,7 +161,11 @@ export async function loadTree(store) {
     if (!row || row.removed || row.id !== id || !MEMBER_ID_RE.test(id) || !MEMBER_KINDS.includes(row.kind)) continue;
     tree.set(id, {
       id, kind: row.kind, ...(row.kind === 'person' ? { email: lower(row.email) } : {}), reportsTo: typeof row.reportsTo === 'string' ? row.reportsTo : null,
-      managers: Array.isArray(row.managers) ? row.managers.map(lower) : [], ...(row.kind === 'agent' ? { custodians: Array.isArray(row.custodians) ? row.custodians.map(lower) : [] } : {}),
+      managers: Array.isArray(row.managers) ? row.managers.map(lower) : [],
+      // An agent always has the list. A person has one only when somebody
+      // added them before they had a vault, and a row from before that rule
+      // has none, which reads as nobody.
+      ...(row.kind === 'agent' || (Array.isArray(row.custodians) && row.custodians.length) ? { custodians: Array.isArray(row.custodians) ? row.custodians.map(lower) : [] } : {}),
       at: Number(row.at) || 0,
     });
   }
@@ -150,8 +204,9 @@ async function allowsCustody(store, account) {
 
 /**
  * Who may start a session as each member, and so who holds its vault: for an
- * agent, its custodians and its managers; for a person, the person, and
- * their managers once they allowed it. What a box is shown, signed
+ * agent, its custodians and its managers; for a person, the person, whoever
+ * added them, and their other managers once they allowed it. What a box is
+ * shown, signed
  * (vault.js, answerVaultKeys), and what this file checks a custodian by.
  *
  * @param {Store} store
@@ -166,7 +221,7 @@ export async function mayActFor(store, tree, id) {
   if (node.kind === 'agent') return [...new Set([...(node.custodians ?? []), ...managers])];
   const address = lower(node.email);
   const account = await accountOf(store, address);
-  return [...new Set([address, ...(account && (await allowsCustody(store, account)) ? managers : [])])];
+  return [...new Set([address, ...(node.custodians ?? []), ...(account && (await allowsCustody(store, account)) ? managers : [])])];
 }
 
 /**
@@ -201,7 +256,9 @@ export async function resolveFor(store, forId, email, who) {
     return { ok: true, own: false, vault: { userId: `${MEMBER_PREFIX}${id}`, login: `${MEMBER_PREFIX}${id}` }, acting: { by: email, member: id, kind: 'agent', owner: '' } };
   }
   const address = lower(node.email);
-  if (!manages(tree, email, id)) return refuse('not_custodian', `${address} is not on your team, so their credentials are not yours to manage.`);
+  // WHOEVER ADDED THEM, or a manager by the tree. The first needs no place
+  // above the person: an org admin files anybody anywhere.
+  if (!may.includes(email) && !manages(tree, email, id)) return refuse('not_custodian', `${address} is not on your team, so their credentials are not yours to manage.`);
   const account = await accountOf(store, address);
   if (!account) return refuse('no_vault', `${address} has not signed in on a phone or the signing page yet, so they have no vault to manage.`);
   if (!may.includes(email)) {
@@ -243,7 +300,11 @@ export async function ownCustody(store, email, account, row) {
   return {
     allow: row?.custody?.allow === true,
     member: mine?.id ?? null,
-    managers: mine ? managersOf(tree, mine.id) : [],
+    // WHO ADDED THEM, and so manages what they keep without being asked:
+    // shown to the person first, before they keep anything.
+    custodians: mine?.custodians ?? [],
+    // Everybody else the tree puts above them, who wait on the switch.
+    managers: mine ? managersOf(tree, mine.id).filter((a) => !(mine.custodians ?? []).includes(a)) : [],
     log: await custodyLog(store, account),
   };
 }
@@ -286,7 +347,7 @@ export async function runOrgOp(inside, ctx) {
       const account = node.kind === 'person' ? await accountOf(store, lower(node.email)) : null;
       members.push({
         id: node.id, kind: node.kind, ...(node.kind === 'person' ? { email: lower(node.email) } : {}), reportsTo: node.reportsTo, managers: node.managers,
-        ...(node.kind === 'agent' ? { custodians: node.custodians ?? [] } : { custody: !account ? 'no_vault' : (await allowsCustody(store, account)) ? 'allowed' : 'off' }),
+        ...(node.kind === 'agent' ? { custodians: node.custodians ?? [] } : { custodians: node.custodians ?? [], custody: !account ? 'no_vault' : (await allowsCustody(store, account)) ? 'allowed' : 'off' }),
         may: await mayActFor(store, tree, node.id),
       });
     }
@@ -373,12 +434,26 @@ export async function runOrgOp(inside, ctx) {
       if (!same) return refuse('not_admin', 'Naming extra managers on a member is an org admin’s to do.');
       if (prior && prior.kind === 'person' && lower(prior.email) !== address) return refuse('not_admin', 'Whose address a person member is, is an org admin’s to change.');
     }
+    // WHOEVER ADDS A PERSON THE VAULT HAS NOT MET is that person's custodian
+    // (the header). Decided once, when the member is first filed, and kept:
+    // a later change to their place neither gives it nor takes it. An address
+    // a GitHub account has ever filed a key under is somebody who was there
+    // first, whether or not a key of theirs is still listed, and filing a
+    // record for them gives nothing. Nobody is their own custodian.
+    //
+    // KEPT ONLY FOR THE SAME PERSON. A record whose address is changed, or
+    // an agent's turned into a person's, names somebody else, and what the
+    // old one's custodians held must not follow it to them.
+    const met = kind === 'person' ? await addressMet(store, address) : false;
+    const samePerson = Boolean(prior && prior.kind === 'person' && lower(prior.email) === address);
+    const added = kind === 'person' && !samePerson && !met && address !== email ? [email] : [];
+    const personCustodians = kind === 'person' ? (samePerson ? prior?.custodians ?? [] : added) : [];
     /** @type {OrgNode} */
     const next = {
       id, kind: /** @type {'person'|'agent'} */ (kind), ...(kind === 'person' ? { email: address } : {}), reportsTo, managers,
       // THE FIRST CUSTODIAN is whoever files an agent member. Kept across
       // every later change to its place: the tree moves, its own do not.
-      ...(kind === 'agent' ? { custodians: prior?.custodians?.length ? prior.custodians : [email] } : {}),
+      ...(kind === 'agent' ? { custodians: prior?.custodians?.length ? prior.custodians : [email] } : personCustodians.length ? { custodians: personCustodians } : {}),
       at,
     };
     const live = new Map(tree);
@@ -390,7 +465,15 @@ export async function runOrgOp(inside, ctx) {
     return {
       ok: true,
       answer: { id, may: await mayActFor(store, after, id) },
-      text: prior ? `Filed ${id}’s place in the organization. Custody follows it from now.` : kind === 'agent' ? `Filed ${id}. You are its first custodian.` : `Filed ${id}. Their managers hold their credentials only once ${address} allows it.`,
+      text: prior
+        ? `Filed ${id}’s place in the organization. Custody follows it from now.`
+        : kind === 'agent'
+          ? `Filed ${id}. You are its first custodian.`
+          : added.length
+            ? `Filed ${id}. You added ${address}, so you manage their credentials from their first sign-in, and they are shown that before they keep anything. Their other managers wait until ${address} allows it.`
+            : met
+              ? `Filed ${id}. ${address} already keeps their own sign-ins here, so managing them is theirs to allow, under You › Credentials.`
+              : `Filed ${id}. Their managers hold their credentials only once ${address} allows it.`,
     };
   }
 
@@ -398,7 +481,20 @@ export async function runOrgOp(inside, ctx) {
     const id = String(inside.member ?? '');
     const node = tree.get(id);
     if (!node) return refuse('no_member', `${MEMBER_ID_RE.test(id) ? id : 'That'} is not in the organization the vault holds.`);
-    if (node.kind !== 'agent') return refuse('bad_params', 'A person is their own vault’s owner. Their managers hold custody by the tree, once the person allows it.');
+    if (node.kind !== 'agent') {
+      // A PERSON'S CUSTODIAN CAN ONLY BE TAKEN AWAY, and only by an org admin
+      // or by the custodian. Nobody is added to a person this way after the
+      // one who added them: the next manager is let in by the person.
+      const address = lower(inside.address);
+      const held = node.custodians ?? [];
+      if (inside.remove !== true) return refuse('bad_params', `Nobody is made a custodian of a person after whoever added them. ${lower(node.email)} lets their other managers in themselves, under You › Credentials.`);
+      if (!held.includes(address)) return refuse('bad_params', `${address} is not ${id}’s custodian. A manager’s custody of a person comes from that person’s own switch.`);
+      if (!isOrgAdmin && address !== email) return refuse('not_admin', `Whoever added ${id} gives up managing their credentials themselves, or an org admin takes it away.`);
+      const { custodians: _gone, ...rest } = node;
+      const left = held.filter((a) => a !== address);
+      await store.put(`${ORG_MEMBER_PREFIX}${id}`, { ...rest, ...(left.length ? { custodians: left } : {}), at });
+      return { ok: true, text: `${address} no longer manages ${lower(node.email)}’s credentials. Their managers hold them only once ${lower(node.email)} allows it.` };
+    }
     const may = await mayActFor(store, tree, id);
     if (!may.includes(email)) return refuse('not_custodian', `Only one of ${id}’s custodians changes who they are. They are ${may.join(', ') || 'nobody yet'}.`);
     const stored = await store.get(`${ORG_MEMBER_PREFIX}${id}`);

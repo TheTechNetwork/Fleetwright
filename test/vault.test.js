@@ -2058,7 +2058,7 @@ test('custody of an agent follows the tree at once, and its own custodians are c
   // Eli still manages it by the tree (it reports to him), and that custody is the tree's to end.
   assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).ok, true);
   assert.match((await as(DANA, { op: 'custodian', member: 'debbie', address: ELI, remove: true })).text, /comes from the tree/);
-  assert.match((await as(ELI, { op: 'custodian', member: 'dana', address: ELI })).text, /A person is their own vault’s owner/);
+  assert.match((await as(ELI, { op: 'custodian', member: 'dana', address: ELI })).text, /Nobody is made a custodian of a person after whoever added them/);
 });
 
 test('a custodian keeps things in the member’s vault and not their own, and a box is given it only when approved for it and able to file it', async (t) => {
@@ -2177,10 +2177,94 @@ test('two boxes asking at once renew a member’s refresh token once, under the 
   assert.equal(m.calls.refresh - before, 1);
 });
 
+test('whoever adds a person the vault has not met manages their credentials, with no switch, and nobody gets that by filing a record for somebody already there', async (t) => {
+  // ASKED FOR: "if a manager created the member they should be able to
+  // manage it." docs/members.md, "Custodians of a person member".
+  const m = await minter();
+  t.after(m.restore);
+  let clock = Date.now() - 60_000;
+  /** @param {string} person @param {Record<string, unknown>} body @param {Record<string, unknown>} [o] */
+  const as = (person, body, o = {}) => m.phone(body, { person, at: (clock += 10), ...o });
+  const listKey = async (/** @type {string} */ person) => {
+    const key = (await generateKeyPair()).publicJwk;
+    assert.equal((await as(person, { op: 'devicekey', key, label: 'a phone' })).ok, true);
+    return key;
+  };
+  await listKey(ELI);
+  assert.equal((await as(ELI, { op: 'orgadmin', address: ELI }, { admin: true })).ok, true);
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'eli', kind: 'person', address: ELI })).ok, true);
+
+  // ELI ADDS DANA, who has never signed in here: he is her custodian, and is told so.
+  const added = await as(ELI, { op: 'orgmember', id: 'dana', kind: 'person', address: DANA, reportsTo: 'eli' });
+  assert.equal(added.ok, true, added.text);
+  assert.equal(added.text, `Filed dana. You added ${DANA}, so you manage their credentials from their first sign-in, and they are shown that before they keep anything. Their other managers wait until ${DANA} allows it.`);
+  assert.deepEqual(added.answer.may, [DANA, ELI], 'the list a box checks a start as her against');
+  // There is no vault to hold until she has signed in.
+  assert.equal((await as(ELI, { op: 'list', for: 'dana' })).error?.code, 'no_vault');
+
+  // SHE SIGNS IN, and is shown who manages what she keeps before she keeps anything.
+  const danaKey = await listKey(DANA);
+  const first = (await as(DANA, { op: 'list' })).answer.custody;
+  assert.deepEqual([first.custodians, first.managers, first.allow], [[ELI], [], false]);
+  // NO SWITCH: he keeps, lists and approves a machine for her vault, and she reads what he did.
+  const kept = await as(ELI, { op: 'put', name: 'secret:FOR_DANA', value: 'v1', for: 'dana' });
+  assert.equal(kept.ok, true, kept.text);
+  assert.ok(m.rows.get('v:43').items['secret:FOR_DANA'], 'in her vault and not his');
+  assert.deepEqual((await as(DANA, { op: 'list' })).answer.custody.log.map((/** @type {any} */ e) => [e.by, e.op, e.name]), [[ELI, 'put', 'secret:FOR_DANA']]);
+  const boxKeys = await generateKeyPair();
+  assert.equal((await as(ELI, { op: 'grant', hostKey: boxKeys.publicJwk, label: 'ops-box', for: 'dana' })).ok, true);
+  // THE VAULT IS STILL HERS: she forgets what it keeps, and her switch is hers and not his.
+  assert.equal((await as(DANA, { op: 'forget', name: 'secret:FOR_DANA' })).ok, true);
+  assert.equal((await as(ELI, { op: 'custody', allow: true, for: 'dana' })).error?.code, 'bad_params');
+  // Her record filed again later, he is still the one who added her.
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'dana', kind: 'person', address: DANA, reportsTo: 'eli' })).ok, true);
+  assert.deepEqual((await as(ELI, { op: 'org' })).answer.members.find((/** @type {any} */ x) => x.id === 'dana').custodians, [ELI]);
+
+  // IT ENDS WITH WHOEVER HOLDS IT, OR AN ORG ADMIN, and nobody is added after the first.
+  assert.match((await as(ELI, { op: 'custodian', member: 'dana', address: 'sam@example.com' })).text, /Nobody is made a custodian of a person after whoever added them/);
+  assert.equal((await as(DANA, { op: 'custodian', member: 'dana', address: ELI, remove: true })).error?.code, 'not_admin', 'not hers to end: she forgets what she keeps instead');
+  const gave = await as(ELI, { op: 'custodian', member: 'dana', address: ELI, remove: true });
+  assert.equal(gave.text, `${ELI} no longer manages ${DANA}’s credentials. Their managers hold them only once ${DANA} allows it.`);
+  assert.equal((await as(ELI, { op: 'list', for: 'dana' })).error?.code, 'custody_not_allowed');
+  assert.deepEqual((await as(DANA, { op: 'list' })).answer.custody.custodians, []);
+
+  // SOMEBODY ALREADY HERE IS NOT REACHED BY A RECORD THAT NAMES THEM. Taking
+  // her record out and filing it again is the cheapest way to try, and she
+  // keeps her own sign-ins by now, so it makes him nothing. Not even in the
+  // gap after a lost phone, when no key of hers is listed.
+  assert.equal((await as(DANA, { op: 'devicekey', key: danaKey, remove: true })).ok, true);
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'dana', remove: true })).ok, true);
+  const again = await as(ELI, { op: 'orgmember', id: 'dana', kind: 'person', address: DANA, reportsTo: 'eli' });
+  assert.equal(again.text, `Filed dana. ${DANA} already keeps their own sign-ins here, so managing them is theirs to allow, under You › Credentials.`);
+  assert.deepEqual(again.answer.may, [DANA]);
+  await listKey(DANA);
+  assert.equal((await as(ELI, { op: 'list', for: 'dana' })).error?.code, 'custody_not_allowed');
+  // And it is whoever adds them, admin or not: a person Dana adds to her own team is hers to manage.
+  const sam = await as(DANA, { op: 'orgmember', id: 'sam', kind: 'person', address: 'sam@example.com', reportsTo: 'dana' });
+  assert.deepEqual(sam.answer.may, ['sam@example.com', DANA]);
+
+  // NOR BY A RECORD FOR AN ADDRESS THEY HAVE NOT USED YET. Eli keeps his own
+  // sign-ins already. Dana, a team lead, files a member at a second address
+  // of his before he has listed a key under it. When his account does, the
+  // vault has met him, and what he kept is not hers.
+  assert.equal((await as(ELI, { op: 'put', name: 'secret:ELIS_OWN', value: 'his' })).ok, true);
+  const WORK = 'eli.work@example.com';
+  const pre = await as(DANA, { op: 'orgmember', id: 'eli-work', kind: 'person', address: WORK, reportsTo: 'dana' });
+  assert.deepEqual(pre.answer.may, [WORK, DANA], 'nobody is there yet, so the record says she added them');
+  await listKey(WORK);
+  assert.equal((await as(DANA, { op: 'list', for: 'eli-work' })).error?.code, 'custody_not_allowed');
+  assert.equal((await as(ELI, { op: 'org' })).answer.members.find((/** @type {any} */ x) => x.id === 'eli-work').custodians.length, 0);
+  // A RECORD POINTED AT SOMEBODY ELSE names a different person: Dana, who
+  // added Sam, is not thereby the custodian of whoever the record names next.
+  const moved = await as(ELI, { op: 'orgmember', id: 'sam', kind: 'person', address: 'pat@example.com', reportsTo: 'dana' });
+  assert.deepEqual(moved.answer.may, ['pat@example.com', ELI]);
+});
+
 test('a manager holds a person’s vault only once that person allows it, and the person reads what was done', async (t) => {
   const { m, as, tree } = await orgMinter(t);
   await tree();
-  // Eli manages Dana by the tree. Her vault is hers until she says otherwise.
+  // Eli manages Dana by the tree, and she was here before he filed her. Her
+  // vault is hers until she says otherwise.
   const before = await as(ELI, { op: 'put', name: 'secret:FOR_DANA', value: 'v1', for: 'dana' });
   assert.equal(before.error?.code, 'custody_not_allowed');
   assert.match(before.text, /has not let their managers manage their credentials/);
