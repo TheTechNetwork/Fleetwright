@@ -559,9 +559,13 @@ struct StartSheet: View {
                                 // FROM YOUR OWN HYPERVISOR, first among the new
                                 // machines: up in a minute or two, and billed to
                                 // nobody. Asked for: "Still can't run sessions on it".
+                                //
+                                // A TEMPLATE AT A SANDBOX PROVIDER is among
+                                // them, said by whose cloud it is on
+                                // (`sandboxLabel`): none is ever kept ready,
+                                // so only the others can say "ready now".
                                 ForEach(images) { image in
-                                    Text(standby?.template == image.template && (standby?.ready ?? 0) > 0
-                                         ? "\(image.label), ready now" : image.label)
+                                    Text(standby?.template == image.template && (standby?.ready ?? 0) > 0 ? "\(image.label), ready now" : image.sandboxLabel ?? image.label)
                                         .tag(vmImageTag + image.template)
                                 }
                                 if canStartMachine {
@@ -656,6 +660,12 @@ struct StartSheet: View {
                             Text(Self.labFooter(open: vmLab == "open"))
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
+                        } else if let rented = chosenImage, rented.onSandbox {
+                            // A RENTED MACHINE, said as one before it is
+                            // made: whose cloud it is on, and that it ends.
+                            Text(SandboxWords.rented(rented.whereWord))
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
                         } else if chosenPlatform == "vm" {
                             Text("Ready in about 2 minutes. Deleted with its files when time runs out.")
                                 .fleetType(.label)
@@ -713,20 +723,28 @@ struct StartSheet: View {
                 // login when it joins; with none kept it falls back to the
                 // runner repository's API key, and with neither it refuses the
                 // session. Nothing said so until after the machine had booted.
-                if chosenPlatform != nil, claude == .missing || claude == .needsGitHub {
-                    Section {
-                        // "May not" for a runner, which can fall back on the
-                        // runner repository's API key; "can't" for a machine
-                        // from your hypervisor, which has nothing to fall back
-                        // on. The fallback itself is Set up Claude's to explain.
-                        Text(chosenImage != nil
-                             ? "Set up Claude first, or this session can't start."
-                             : "Set up Claude first, or this session may not start.")
-                            .fleetType(.bodySmall)
-                            .foregroundStyle(Design.Palette.attention)
-                        ClaudeSetup(settings: settings) { claude = .kept }
-                    } header: {
-                        Text("Claude").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+                //
+                // NOT FOR A RENTED MACHINE (docs/api-engines.md): one at a
+                // sandbox provider is handed no sign-in after it is made and
+                // runs on what its template was given, so a Claude login
+                // kept here would not reach it, and "can't start" would be a
+                // claim this page cannot make.
+                if chosenImage?.onSandbox != true {
+                    if chosenPlatform != nil, claude == .missing || claude == .needsGitHub {
+                        Section {
+                            // "May not" for a runner, which can fall back on the
+                            // runner repository's API key; "can't" for a machine
+                            // from your hypervisor, which has nothing to fall back
+                            // on. The fallback itself is Set up Claude's to explain.
+                            Text(chosenImage != nil
+                                 ? "Set up Claude first, or this session can't start."
+                                 : "Set up Claude first, or this session may not start.")
+                                .fleetType(.bodySmall)
+                                .foregroundStyle(Design.Palette.attention)
+                            ClaudeSetup(settings: settings) { claude = .kept }
+                        } header: {
+                            Text("Claude").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+                        }
                     }
                 }
 
@@ -884,7 +902,7 @@ struct StartSheet: View {
             minutes: platform == nil ? nil : machineMinutes,
             runnerImage: platform == nil || runnerImage.isEmpty ? nil : runnerImage,
             template: chosenImage?.template,
-            imageLabel: chosenImage?.label,
+            imageLabel: chosenImage.map { $0.sandboxLabel ?? $0.label },
             // A LAB rides in `network`: the first free one of the kind asked.
             network: chosenImage == nil ? nil
                 : !vmLab.isEmpty ? chosenImage?.freeLab(open: vmLab == "open")?.id

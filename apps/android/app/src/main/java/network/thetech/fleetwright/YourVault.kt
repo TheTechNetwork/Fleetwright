@@ -55,10 +55,11 @@ import kotlinx.coroutines.launch
  * [onListed] is told what the vault answered each time it is listed, so the
  * screen around this can draw what else the answer carries without asking twice.
  *
- * THE SIGN-INS OTHER ENGINES RUN ON (docs/engines.md) are two rows of their
- * own under the kept ones: the Codex sign-in and the GitHub Copilot token,
- * each offered only when an engine of whoever this vault belongs to runs on
- * it, or when it is already kept and can be forgotten ([EngineSignInRow]).
+ * WHAT OTHER ENGINES RUN ON (docs/engines.md, docs/api-engines.md) has rows
+ * of its own under the kept ones: the Codex sign-in, the GitHub Copilot
+ * token, and an API key for each provider, each offered only when an engine
+ * of whoever this vault belongs to runs on it, or when it is already kept
+ * and can be forgotten ([EngineSignInRow]).
  */
 @Composable
 internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListed: (PhoneVault.Contents) -> Unit = {}) {
@@ -201,9 +202,9 @@ internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListe
             // here to press, and it took the Claude login out from under every
             // runner without a word.
             //
-            // THE TWO AN ENGINE RUNS ON have rows of their own below, with a
-            // paste field and where a Codex sign-in is held, so they are left
-            // out of this list and not drawn twice.
+            // THE ONES AN ENGINE RUNS ON have rows of their own below, with
+            // a paste field and where a Codex sign-in is held, so they are
+            // left out of this list and not drawn twice.
             kept.items.filter { it.name !in ENGINE_VAULT_ITEMS }.forEach { item ->
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 48.dp),

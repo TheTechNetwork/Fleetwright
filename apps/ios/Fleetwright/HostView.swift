@@ -86,6 +86,10 @@ struct HostView: View {
     /// cluster's setup run again over SSH, which needs no token on this phone,
     /// so it is offered where the Xen Orchestra one is not.
     @State private var holdsProxmox = false
+    /// Whose cloud this machine is rented on, when it is one from a sandbox
+    /// provider (docs/api-engines.md): read for a `vm-` machine, and nil
+    /// until the fleet has said and for a machine on your own hypervisor.
+    @State private var rentedFrom: String?
     @State private var busy = false
     @State private var result = ""
     @State private var channel: String?
@@ -383,6 +387,16 @@ struct HostView: View {
             // gets no line.
             if let runs = machineRunsLine(health) {
                 Text(runs).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+            }
+            // AND THE API PROVIDERS ITS OPERATOR TURNED ON
+            // (docs/api-engines.md), by name, under what it runs. A machine
+            // that names none gets no line: that is every machine until
+            // somebody with a shell on it says otherwise.
+            if let keys = machineApiProvidersLine(health?.apiProviders) {
+                Text(keys)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let version = health?.version?.head, !version.isEmpty {
                 Text(version).fleetType(.labelMono).foregroundStyle(Design.Palette.inkDim)
@@ -816,8 +830,13 @@ struct HostView: View {
                 NavigationLink {
                     VMMachineView(settings: settings, name: hostId)
                 } label: {
-                    Text("On your hypervisor: console, SSH, size and end")
+                    // A RENTED MACHINE HAS NO CONSOLE, ADDRESS OR SIZE, so
+                    // the row does not promise them (C-2).
+                    Text(rentedFrom.map(SandboxWords.hostLink) ?? "On your hypervisor: console, SSH, size and end")
                         .frame(minHeight: 44)
+                }
+                .task {
+                    rentedFrom = (try? await fleet.vmMachines())?.first { $0.name == hostId && $0.onSandbox }?.providerName
                 }
             }
             // ONE STEP AT A TIME, AND ONLY THE ONE YOU ARE ON.

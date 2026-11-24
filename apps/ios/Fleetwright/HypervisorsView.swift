@@ -15,6 +15,13 @@ import SwiftUI
 /// of 2026-11-06, finding 59). A row that wears the attention ring is one no
 /// machine can use, or a cluster too old for the fleet. Calm recedes, trouble
 /// comes forward.
+///
+/// A SANDBOX PROVIDER IS LISTED HERE TOO (docs/api-engines.md), because this
+/// is the page of places a machine can be made. Its row is the same shape
+/// and says what it is: the provider's name where a hypervisor has its
+/// address, and "Sandbox provider" where one says its kind. Adding one is a
+/// row of its own under Add a hypervisor: it is a key and a list of
+/// templates, and nothing is found at an address.
 struct HypervisorsView: View {
     let settings: Settings
 
@@ -31,11 +38,15 @@ struct HypervisorsView: View {
     /// One row per hypervisor: the fleet's, and this phone's pools the fleet
     /// does not list (no machine holds their token yet).
     private var rows: [Row] {
-        var all = (fleet ?? []).map { h in Row(address: h.address, proxmox: h.onProxmox, fleet: h, onPhone: !h.onProxmox && held.contains { $0.address == h.address }) }
+        var all = (fleet ?? []).filter { !$0.onSandbox }.map { h in Row(address: h.address, proxmox: h.onProxmox, fleet: h, onPhone: !h.onProxmox && held.contains { $0.address == h.address }) }
         for pool in held where !all.contains(where: { !$0.proxmox && $0.address == pool.address }) {
             all.append(Row(address: pool.address, proxmox: false, fleet: nil, onPhone: true))
         }
-        return all.sorted { ($0.proxmox ? 1 : 0, $0.address) < ($1.proxmox ? 1 : 0, $1.address) }
+        // A SANDBOX PROVIDER IS NEVER A POOL OF THIS PHONE'S, whatever its
+        // address reads as, so it joins the list after the pools are
+        // matched: its page is what the fleet saw and nothing else.
+        all += (fleet ?? []).filter(\.onSandbox).map { h in Row(address: h.address, proxmox: false, fleet: h, onPhone: false) }
+        return all.sorted { ($0.order, $0.address) < ($1.order, $1.address) }
     }
 
     struct Row: Identifiable, Hashable {
@@ -43,7 +54,18 @@ struct HypervisorsView: View {
         let proxmox: Bool
         let fleet: Fleet.Hypervisor?
         let onPhone: Bool
-        var id: String { "\(proxmox ? "proxmox" : "xo") \(address)" }
+        var id: String { "\(sandbox ? "sandbox" : proxmox ? "proxmox" : "xo") \(address)" }
+
+        /// A sandbox provider, which only the fleet reports: a phone holds
+        /// no pool of one.
+        var sandbox: Bool { fleet?.onSandbox == true }
+        /// Xen Orchestra pools first, then clusters, then providers.
+        var order: Int { sandbox ? 2 : proxmox ? 1 : 0 }
+        /// What the row is called: a hypervisor by its address, a provider
+        /// by its name, since "e2b" is nobody's address.
+        var title: String { sandbox ? (fleet?.provider ?? address) : address }
+        /// Which kind it is, in the words a person knows it by.
+        var kindName: String { sandbox ? SandboxWords.kind : proxmox ? "Proxmox VE" : "Xen Orchestra" }
     }
 
     var body: some View {
@@ -88,6 +110,18 @@ struct HypervisorsView: View {
             }
             .fleetCard(radius: Design.Radius.cardSmall)
             .fleetRow()
+            // AND A SANDBOX PROVIDER, which is a key and its templates
+            // rather than an address to look at. The same row opens the
+            // kept one, to replace or forget it.
+            NavigationLink {
+                SandboxProviderView(settings: settings)
+            } label: {
+                Label("Add a sandbox provider", systemImage: "plus")
+                    .fleetType(.body)
+                    .frame(minHeight: 44)
+            }
+            .fleetCard(radius: Design.Radius.cardSmall)
+            .fleetRow()
         }
         .listStyle(.plain)
         .listRowSpacing(Design.Space.groupTight)
@@ -111,11 +145,11 @@ struct HypervisorsView: View {
     private func card(_ row: Row) -> some View {
         VStack(alignment: .leading, spacing: Design.Space.hair) {
             HStack(alignment: .firstTextBaseline, spacing: Design.Space.insideTight) {
-                Text(row.address)
+                Text(row.title)
                     .fleetType(.bodyStrong)
                     .foregroundStyle(Design.Palette.ink)
                 Spacer(minLength: 0)
-                Text(row.proxmox ? "Proxmox VE" : "Xen Orchestra")
+                Text(row.kindName)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
@@ -176,6 +210,12 @@ struct HypervisorsView: View {
 /// where a pool has hosts and VMs.
 ///
 /// MOTION: the router words crossfade on the card, which is all that moves.
+///
+/// A SANDBOX PROVIDER'S PAGE IS THE SAME ONE WITH LESS ON IT: the sentence,
+/// how many templates and machines, and each machine of yours that was
+/// given its key with whether it reached the provider. It has no pools, no
+/// version, no edge router and no machine of its own, and nothing here sets
+/// one up: its key is replaced where it was added.
 struct HypervisorPageView: View {
     let settings: Settings
     let row: HypervisorsView.Row
@@ -204,7 +244,7 @@ struct HypervisorPageView: View {
         .listRowSpacing(Design.Space.groupTight)
         .scrollContentBackground(.hidden)
         .background(Design.Palette.bg)
-        .navigationTitle(row.address)
+        .navigationTitle(row.title)
         .refreshable { await loadEdges() }
         // THE ROUTERS, every half minute while the page is open, as on a
         // pool's page: the machine reading them does so on the same beat.
@@ -233,7 +273,7 @@ struct HypervisorPageView: View {
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
-            if !row.proxmox && !row.onPhone {
+            if !row.proxmox && !row.sandbox && !row.onPhone {
                 Text(HypervisorWords.xoElsewhere)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
@@ -268,6 +308,8 @@ struct HypervisorPageView: View {
     }
 
     private var asksEdges: Bool {
+        // A provider has no edge router to read, so none is asked after.
+        if row.sandbox { return false }
         if row.proxmox, case .none? = row.fleet?.edge { return false }
         return true
     }
@@ -730,7 +772,8 @@ enum HypervisorWords {
             case nil: break
             }
         }
-        if let n = h.images { lines.append(n == 1 ? "1 image" : "\(n) images") }
+        // A provider has templates where a hypervisor has images.
+        if let n = h.images { lines.append(h.onSandbox ? SandboxWords.templates(n) : n == 1 ? "1 image" : "\(n) images") }
         if let n = h.machines { lines.append(n == 1 ? "1 machine made on it" : "\(n) machines made on it") }
         return lines
     }

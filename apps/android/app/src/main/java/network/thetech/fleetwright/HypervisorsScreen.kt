@@ -48,6 +48,13 @@ import kotlinx.coroutines.withContext
  * machines and the counts are on its page, not in the row (the copy review of
  * 2026-11-06, finding 59). A row that wears the attention ring is one no
  * machine can use, or a cluster too old for the fleet.
+ *
+ * A SANDBOX PROVIDER IS LISTED HERE TOO (docs/api-engines.md), because this
+ * is the page of places a machine can be made. Its row is the same shape and
+ * says what it is: the provider's name where a hypervisor has its address,
+ * and "Sandbox provider" where one says its kind. Adding one is a row of its
+ * own under Add a hypervisor: it is a key and a list of templates, and
+ * nothing is found at an address.
  */
 @Composable
 internal fun HypervisorsScreen(
@@ -72,6 +79,8 @@ internal fun HypervisorsScreen(
     var failed by remember { mutableStateOf(false) }
     var open by remember { mutableStateOf<HypervisorRow?>(null) }
     var choosing by remember { mutableStateOf(false) }
+    // The sandbox provider's own page, open: its key and templates.
+    var renting by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf("") }
     var finding by remember { mutableStateOf(false) }
     // Nothing answered as either: said above the two rows.
@@ -144,6 +153,10 @@ internal fun HypervisorsScreen(
         )
         return
     }
+    if (renting) {
+        SandboxProviderScreen(settings, onDismiss = { renting = false })
+        return
+    }
     if (choosing) {
         FullScreen(title = "Add a hypervisor", onDismiss = { choosing = false }) {
             OutlinedTextField(
@@ -199,8 +212,8 @@ internal fun HypervisorsScreen(
                 verticalArrangement = Arrangement.spacedBy(Design.Space.hair),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(row.address, style = Design.Style.bodyStrong, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
-                    Text(if (row.proxmox) "Proxmox VE" else "Xen Orchestra", style = Design.Style.label, color = Design.Palette.inkDim.now)
+                    Text(row.title, style = Design.Style.bodyStrong, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                    Text(row.kindName, style = Design.Style.label, color = Design.Palette.inkDim.now)
                 }
                 // ONE STATUS, never colour alone: the word changes with the
                 // colour. `answered` keeps §7: a pool the fleet did not list
@@ -227,19 +240,41 @@ internal fun HypervisorsScreen(
         Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
             OpenRow("Add a hypervisor") { choosing = true }
         }
+        // AND A SANDBOX PROVIDER, which is a key and its templates rather
+        // than an address to look at. The same row opens the kept one, to
+        // replace or forget it.
+        Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
+            OpenRow("Add a sandbox provider") { renting = true }
+        }
     }
 }
 
 /** One row: the fleet's word on a hypervisor, and whether this phone holds its pool. */
-internal data class HypervisorRow(val address: String, val proxmox: Boolean, val fleet: Fleet.Hypervisor?, val onPhone: Boolean)
+internal data class HypervisorRow(val address: String, val proxmox: Boolean, val fleet: Fleet.Hypervisor?, val onPhone: Boolean) {
+    /** A sandbox provider, which only the fleet reports: a phone holds no pool of one. */
+    val sandbox: Boolean get() = fleet?.onSandbox == true
+
+    /** Xen Orchestra pools first, then clusters, then providers. */
+    val order: Int get() = if (sandbox) 2 else if (proxmox) 1 else 0
+
+    /** What the row is called: a hypervisor by its address, a provider by its name, since "e2b" is nobody's address. */
+    val title: String get() = if (sandbox) fleet?.provider ?: address else address
+
+    /** Which kind it is, in the words a person knows it by. */
+    val kindName: String get() = if (sandbox) SandboxWords.KIND else if (proxmox) "Proxmox VE" else "Xen Orchestra"
+}
 
 /** The fleet's hypervisors, and this phone's pools the fleet does not list (no machine holds their token yet). */
 internal fun hypervisorRows(fleet: List<Fleet.Hypervisor>?, held: List<XoHandoff.Held>): List<HypervisorRow> {
-    val all = (fleet ?: emptyList()).map { h ->
+    val all = (fleet ?: emptyList()).filter { !it.onSandbox }.map { h ->
         HypervisorRow(h.address, h.onProxmox, h, !h.onProxmox && held.any { it.address == h.address })
     }.toMutableList()
     for (pool in held) if (all.none { !it.proxmox && it.address == pool.address }) all.add(HypervisorRow(pool.address, false, null, true))
-    return all.sortedWith(compareBy({ if (it.proxmox) 1 else 0 }, { it.address }))
+    // A SANDBOX PROVIDER IS NEVER A POOL OF THIS PHONE'S, whatever its
+    // address reads as, so it joins the list after the pools are matched:
+    // its page is what the fleet saw and nothing else.
+    for (h in fleet ?: emptyList()) if (h.onSandbox) all.add(HypervisorRow(h.address, false, h, false))
+    return all.sortedWith(compareBy({ it.order }, { it.address }))
 }
 
 @Composable
@@ -265,6 +300,12 @@ private fun ChoiceRow(title: String, line: String, onClick: () -> Unit) {
  * reach it and its own machine where a pool has hosts and VMs. Same as iOS.
  *
  * MOTION: the router words crossfade on the card, which is all that moves.
+ *
+ * A SANDBOX PROVIDER'S PAGE IS THE SAME ONE WITH LESS ON IT: the sentence,
+ * how many templates and machines, and each machine of yours that was given
+ * its key with whether it reached the provider. It has no pools, no version,
+ * no edge router and no machine of its own, and nothing here sets one up: its
+ * key is replaced where it was added.
  */
 @Composable
 private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnOnFirewall: () -> Unit, onMakeOwn: (Boolean) -> Unit, onMakeEdge: (Boolean, Boolean, Boolean) -> Unit, onDismiss: () -> Unit) {
@@ -274,7 +315,8 @@ private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain:
     // pool's card shows, found by the address. A cluster that says it has
     // none is not asked. Same as iOS.
     val edge = row.fleet?.edge
-    val asks = !(row.proxmox && edge != null && !edge.there)
+    // A provider has no edge router to read, so none is asked after.
+    val asks = !row.sandbox && !(row.proxmox && edge != null && !edge.there)
     var edges by remember { mutableStateOf<Fleet.VmEdges?>(null) }
     var edgesAsked by remember { mutableStateOf(false) }
     var edgesFailed by remember { mutableStateOf(false) }
@@ -293,7 +335,7 @@ private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain:
         EdgePage(it) { showingEdge = false }
         return
     }
-    FullScreen(title = row.address, onDismiss = onDismiss) {
+    FullScreen(title = row.title, onDismiss = onDismiss) {
         // HOW IT IS: the verdict in a sentence, and the facts the machines
         // could tell under it, the way a pool's card has who it signed in as
         // and where its master answers.
@@ -310,7 +352,7 @@ private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain:
                 Text(words, style = Design.Style.body, color = if (HypervisorWords.wantsSomething(row.fleet, row.onPhone)) Design.Palette.attention.now else Design.Palette.ink.now)
             }
             row.fleet?.let { f -> HypervisorWords.facts(f).forEach { Text(it, style = Design.Style.label, color = Design.Palette.inkDim.now) } }
-            if (!row.proxmox && !row.onPhone) Text(HypervisorWords.XO_ELSEWHERE, style = Design.Style.label, color = Design.Palette.inkDim.now)
+            if (!row.proxmox && !row.sandbox && !row.onPhone) Text(HypervisorWords.XO_ELSEWHERE, style = Design.Style.label, color = Design.Palette.inkDim.now)
         }
         // THE EDGE ROUTERS, on a pool's card. A cluster says whether it has
         // routers and how they run, so its card is drawn from that, reading
@@ -531,7 +573,8 @@ object HypervisorWords {
                 null -> {}
             }
         }
-        h.images?.let { lines.add(if (it == 1) "1 image" else "$it images") }
+        // A provider has templates where a hypervisor has images.
+        h.images?.let { lines.add(if (h.onSandbox) SandboxWords.templates(it) else if (it == 1) "1 image" else "$it images") }
         h.machines?.let { lines.add(if (it == 1) "1 machine made on it" else "$it machines made on it") }
         return lines
     }

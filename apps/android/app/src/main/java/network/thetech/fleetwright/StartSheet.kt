@@ -568,6 +568,11 @@ fun StartSheet(
                         // FROM YOUR OWN HYPERVISOR, first among the new
                         // machines: up in a minute or two, and billed to
                         // nobody. Asked for: "Still can't run sessions on it".
+                        //
+                        // A TEMPLATE AT A SANDBOX PROVIDER is among them, said
+                        // by whose cloud it is on (`sandboxLabel`): none is
+                        // ever kept ready, so only the others can say "ready
+                        // now".
                         (if (chosenMember.isEmpty()) images else emptyList()).forEach { image ->
                             AssistChip(
                                 onClick = {
@@ -587,7 +592,7 @@ fun StartSheet(
                                 },
                                 label = {
                                     val ready = standby?.template == image.template && (standby?.ready ?: 0) > 0
-                                    val name = if (ready) "${image.label}, ready now" else image.label
+                                    val name = if (ready) "${image.label}, ready now" else image.sandboxLabel ?: image.label
                                     Text(if (template == image.template) "$name \u2713" else name)
                                 },
                             )
@@ -698,6 +703,9 @@ fun StartSheet(
                                 )
                             }
                         }
+                        // The template chosen, when it is one at a sandbox
+                        // provider: a rented machine, which is said as one.
+                        val rented = images.firstOrNull { it.template == template }?.takeIf { platform == "vm" && it.onSandbox }
                         if (platform.isNotEmpty()) {
                             // Five-minute steps between the protocol's bounds,
                             // the same as iOS: a stepper cannot ask for 4 or 351.
@@ -722,6 +730,10 @@ fun StartSheet(
                                     else "Alone on its own network. Reaches only Fleetwright and Claude.",
                                     style = MaterialTheme.typography.bodySmall,
                                 )
+                            } else if (rented != null) {
+                                // A RENTED MACHINE, said as one before it is
+                                // made: whose cloud it is on, and that it ends.
+                                Text(SandboxWords.rented(rented.whereWord), style = MaterialTheme.typography.bodySmall)
                             } else if (platform == "vm") {
                                 Text("Ready in about 2 minutes. Deleted with its files when time runs out.", style = MaterialTheme.typography.bodySmall)
                             } else {
@@ -776,19 +788,27 @@ fun StartSheet(
                 }
                 // ASKED WHERE IT MATTERS: a runner fetches its owner's Claude
                 // login when it joins, and nothing said so until after it had.
-                if (platform.isNotEmpty() && (claude == ClaudeKept.Missing || claude == ClaudeKept.NeedsGitHub)) {
-                    SectionHead("Claude")
-                    // "May not" for a runner, which can fall back on the runner
-                    // repository's API key; "can't" for a machine from your
-                    // hypervisor, which has nothing to fall back on. The
-                    // fallback itself is Set up Claude's to explain.
-                    Text(
-                        if (platform == "vm") "Set up Claude first, or this session can't start."
-                        else "Set up Claude first, or this session may not start.",
-                        style = Design.Style.bodySmall,
-                        color = Design.Palette.attention.now,
-                    )
-                    ClaudeSetup(settings, onKept = { claude = ClaudeKept.Kept })
+                //
+                // NOT FOR A RENTED MACHINE (docs/api-engines.md): one at a
+                // sandbox provider is handed no sign-in after it is made and
+                // runs on what its template was given, so a Claude login kept
+                // here would not reach it, and "can't start" would be a claim
+                // this page cannot make.
+                if (images.none { it.template == template && platform == "vm" && it.onSandbox }) {
+                    if (platform.isNotEmpty() && (claude == ClaudeKept.Missing || claude == ClaudeKept.NeedsGitHub)) {
+                        SectionHead("Claude")
+                        // "May not" for a runner, which can fall back on the runner
+                        // repository's API key; "can't" for a machine from your
+                        // hypervisor, which has nothing to fall back on. The
+                        // fallback itself is Set up Claude's to explain.
+                        Text(
+                            if (platform == "vm") "Set up Claude first, or this session can't start."
+                            else "Set up Claude first, or this session may not start.",
+                            style = Design.Style.bodySmall,
+                            color = Design.Palette.attention.now,
+                        )
+                        ClaudeSetup(settings, onKept = { claude = ClaudeKept.Kept })
+                    }
                 }
                 if (error.isNotBlank()) {
                     Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -827,7 +847,7 @@ fun StartSheet(
                             minutes = machineMinutes.takeIf { platform.isNotEmpty() },
                             runnerImage = runnerImage.ifBlank { null }.takeIf { runnerImageChoices.containsKey(platform) },
                             template = template.ifBlank { null }.takeIf { platform == "vm" },
-                            imageLabel = images.firstOrNull { it.template == template }?.label.takeIf { platform == "vm" },
+                            imageLabel = images.firstOrNull { it.template == template }?.let { it.sandboxLabel ?: it.label }.takeIf { platform == "vm" },
                             // A LAB rides in `network`: the first free one of the kind asked.
                             network = if (vmLab.isNotEmpty()) {
                                 images.firstOrNull { it.template == template }?.freeLab(open = vmLab == "open")?.id.takeIf { platform == "vm" }

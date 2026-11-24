@@ -216,11 +216,12 @@ struct PhoneVault {
 
     /// Keep the sign-in an engine other than Claude Code runs on
     /// (docs/engines.md, "Credentials"): `codex`, the whole text of the
-    /// `auth.json` that `codex login` writes, or `copilot`, one GitHub
-    /// Copilot token. Kept the way a named secret is, under its own name,
-    /// and the vault checks what it is: its refusal is a sentence, shown as
-    /// it came. A Codex file is sent as it was pasted, never trimmed here,
-    /// because the vault reads it whole.
+    /// `auth.json` that `codex login` writes, `copilot`, one GitHub
+    /// Copilot token, or `apikey:<provider>`, one API key
+    /// (docs/api-engines.md). Kept the way a named secret is, under its own
+    /// name, and the vault checks what it is: its refusal is a sentence,
+    /// shown as it came. A Codex file is sent as it was pasted, never
+    /// trimmed here, because the vault reads it whole.
     func keepEngineSignIn(_ fleet: Fleet, name: String, value: String, for member: String? = nil) async throws -> String {
         guard engineVaultItems.contains(name) else { throw FleetError.message("\(name) is not an engine's sign-in.") }
         guard !value.isBlank else { throw FleetError.message("Nothing to keep yet.") }
@@ -237,6 +238,20 @@ struct PhoneVault {
     func keepHypervisor(_ fleet: Fleet, address: String, record: String, box: String? = nil) async throws -> String {
         let name = box.map { "hypervisor:\(address)+\($0)" } ?? "hypervisor:\(address)"
         return try await ask(fleet, op: "put", extra: ["name": name, "value": record]).text
+    }
+
+    /// Keep a sandbox provider in this person's own vault
+    /// (docs/api-engines.md, "The item"): the provider's API key and the
+    /// templates to offer, under `sandbox:<provider>`. Never a member's
+    /// vault: a machine rented with it is its owner's, as a machine on
+    /// their own hypervisor is.
+    ///
+    /// THE WHOLE RECORD EVERY TIME. The vault reads nothing back, so
+    /// keeping it again replaces the key and every template together.
+    func keepSandbox(_ fleet: Fleet, provider: String, key: String, templates: [SandboxTemplate]) async throws -> String {
+        guard !templates.isEmpty else { throw FleetError.message(SandboxWords.needsTemplate) }
+        guard let record = sandboxRecordText(key: key, templates: templates) else { throw FleetError.message(SandboxWords.needsKey) }
+        return try await ask(fleet, op: "put", extra: ["name": "sandbox:\(provider)", "value": record]).text
     }
 
     func forget(_ fleet: Fleet, name: String, for member: String? = nil) async throws -> String {
@@ -402,6 +417,16 @@ struct PhoneVault {
         case "codex", "copilot":
             return "Machines you approved stop being given it. Getting it back means pasting it again."
         default:
+            // An API key is pasted, as the two sign-ins above are.
+            if apiProvider(item: name) != nil {
+                return "Machines you approved stop being given it. Getting it back means pasting it again."
+            }
+            // A SANDBOX PROVIDER: what happens to a machine already rented
+            // is the question somebody forgetting the key has, and its
+            // timer is the provider's own, so that much is certain.
+            if let provider = sandboxProviderName(item: name) {
+                return "Machines you approved stop being given it. A machine already rented at \(provider) still ends on its timer. Getting it back means entering the key and the templates again."
+            }
             return "Machines you approved stop being given it. Getting it back means typing it in again."
         }
     }
@@ -438,7 +463,10 @@ struct PhoneVault {
         case "cloudflare": return "Cloudflare"
         case "codex": return "Codex sign-in"
         case "copilot": return "GitHub Copilot token"
-        default: return name.hasPrefix("secret:") ? String(name.dropFirst("secret:".count)) : name
+        default:
+            if let provider = apiProvider(item: name) { return "\(provider.says) API key" }
+            if let provider = sandboxProviderName(item: name) { return "\(provider), sandbox provider" }
+            return name.hasPrefix("secret:") ? String(name.dropFirst("secret:".count)) : name
         }
     }
 }

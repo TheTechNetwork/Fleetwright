@@ -36,8 +36,55 @@ let engineDefault = "claude-code"
 /// How many a member names. One of each is all there are.
 let engineLimit = 3
 /// The vault items an engine other than Claude Code runs on, by the names
-/// the vault keeps them under.
-let engineVaultItems = ["codex", "copilot"]
+/// the vault keeps them under: the two sign-ins, then one API key for each
+/// provider below (`ENGINE_ITEM_KINDS` in src/fleet/minter/vault.js).
+let engineVaultItems = ["codex", "copilot", "apikey:openrouter", "apikey:ai-gateway"]
+
+/// A provider an OpenCode model may bill by the token, with an API key kept
+/// in the member's vault (docs/api-engines.md). `prefix` is OpenCode's own
+/// name for it, which is how a model on it starts; `item` is the vault item
+/// its key is kept under.
+struct ApiProvider: Hashable {
+    let id: String
+    let says: String
+    let prefix: String
+    let item: String
+}
+
+/// The providers there are, as the fleet's own table has them
+/// (`API_PROVIDERS` in src/fleet/protocol/engines.js). A model on any other
+/// prefix is your fleet's to refuse, in its own sentence.
+let apiProviders = [
+    ApiProvider(id: "openrouter", says: "OpenRouter", prefix: "openrouter", item: "apikey:openrouter"),
+    ApiProvider(id: "ai-gateway", says: "Vercel AI Gateway", prefix: "vercel", item: "apikey:ai-gateway"),
+]
+
+/// The provider a vault item is the API key of, or nil for any other item.
+func apiProvider(item: String) -> ApiProvider? {
+    apiProviders.first { $0.item == item }
+}
+
+/// The provider an engine bills, or nil for one that runs on a sign-in:
+/// only OpenCode, and only when its model starts with a provider's prefix
+/// (`providerOf`, the same rule).
+func apiProvider(of choice: EngineChoice) -> ApiProvider? {
+    guard choice.engine == "opencode", let model = choice.model else { return nil }
+    let prefix = model.components(separatedBy: "/").first ?? ""
+    return apiProviders.first { $0.prefix == prefix }
+}
+
+/// What a provider is called. One this build has never met is shown as the
+/// fleet sent it (C-5).
+func apiProviderName(_ id: String) -> String {
+    apiProviders.first { $0.id == id }?.says ?? id
+}
+
+/// The line under an API key's paste field: who bills, where its limit is
+/// set, and that no budget here sees it. The one thing to know before a
+/// key is kept, said where it is pasted.
+func apiKeyBillingLine(_ provider: ApiProvider) -> String {
+    "Billed by the token. What it may spend is set at \(provider.says), and no budget here counts it."
+}
 
 /// What an engine is called. One this build has never met is shown as the
 /// fleet sent it (C-5).
@@ -58,6 +105,14 @@ func engineVaultItem(_ id: String) -> String? {
     case "opencode": return "copilot"
     default: return nil
     }
+}
+
+/// The vault item one of a member's engines runs on: the key of the provider
+/// its model names, or the engine's own sign-in (`credentialOf`, the same
+/// rule). An OpenCode on OpenRouter runs on that key and not on a Copilot
+/// token, so it is the key's row that is offered for it.
+func engineVaultItem(for choice: EngineChoice) -> String? {
+    apiProvider(of: choice)?.item ?? engineVaultItem(choice.engine)
 }
 
 /// A list as it is said: "Claude Code, then Codex (gpt-5.1-codex)".
@@ -145,6 +200,16 @@ func machineRunsLine(_ health: Fleet.HostHealth?) -> String? {
     return "Runs: " + machineEngines(health.engines).map(engineName).joined(separator: ", ")
 }
 
+/// "API keys turned on for: OpenRouter", for a machine's page: the providers
+/// its operator turned on, by name (docs/api-engines.md). Nil when it names
+/// none, and then nothing is drawn: off is what every machine is until its
+/// operator says otherwise, and a line saying so would be on every page.
+func machineApiProvidersLine(_ reported: [String]?) -> String? {
+    let named = (reported ?? []).filter { !$0.isEmpty }
+    guard !named.isEmpty else { return nil }
+    return "API keys turned on for: " + named.map(apiProviderName).joined(separator: ", ")
+}
+
 /// What New session says before a start as a member is sent to a machine
 /// that does not run the member's first engine: which engines the session
 /// will have there. Nil when the first engine runs there, when the member
@@ -166,13 +231,14 @@ func engineStartNote(member: Fleet.Member, host: Fleet.FleetHost) -> String? {
     return "\(host.hostId) does not run \(engineName(first.engine)). A session as \(member.name) there runs on \(engineListWords(kept))."
 }
 
-/// Which of the two engine sign-ins a vault's screen offers: the ones an
-/// engine in this list runs on, and any the vault already keeps, so a kept
-/// one can always be forgotten. A Codex row for a member with no Codex
-/// engine would be a button for nothing (C-2).
+/// Which of the engine items a vault's screen offers: the ones an engine in
+/// this list runs on, and any the vault already keeps, so a kept one can
+/// always be forgotten. A Codex row for a member with no Codex engine, or an
+/// OpenRouter key's for one with no model on OpenRouter, would be a button
+/// for nothing (C-2).
 func engineItemsOffered(engines: [EngineChoice], kept: [String]) -> [String] {
     engineVaultItems.filter { item in
-        kept.contains(item) || engines.contains { engineVaultItem($0.engine) == item }
+        kept.contains(item) || engines.contains { engineVaultItem(for: $0) == item }
     }
 }
 
@@ -258,9 +324,10 @@ struct SessionEngineLines: View {
     }
 }
 
-/// One engine's sign-in in a vault: the Codex sign-in or the GitHub Copilot
-/// token. Whether it is kept and since when, the way to keep or replace it
-/// by pasting, and Forget, which asks first on the screen around this.
+/// One engine's item in a vault: the Codex sign-in, the GitHub Copilot token,
+/// or a provider's API key. Whether it is kept and since when, the way to
+/// keep or replace it by pasting, and Forget, which asks first on the screen
+/// around this.
 ///
 /// WHAT IS PASTED IS NEVER SHOWN AGAIN. The field is emptied when the vault
 /// took it and when this row leaves the screen, and nothing here reads a
@@ -270,8 +337,11 @@ struct SessionEngineLines: View {
 /// a renewal ends every other copy. So the row says which machine holds it,
 /// that pasting it again moves it, and, where it is pasted, that the paste
 /// is itself a copy of a file still on somebody's computer.
+///
+/// AN API KEY SPENDS MONEY NO BUDGET HERE COUNTS, so where one is pasted the
+/// row says who bills and where its limit is set (`apiKeyBillingLine`).
 struct EngineSignInRow: View {
-    /// "codex" or "copilot", as the vault names it.
+    /// "codex", "copilot" or a provider's key, as the vault names it.
     let name: String
     /// The kept item, or nil when the vault keeps none.
     let item: PhoneVault.Item?
@@ -352,6 +422,18 @@ struct EngineSignInRow: View {
                 .autocorrectionDisabled()
                 .fleetType(.labelMono)
                 .accessibilityLabel("The auth.json file")
+        } else if let provider = apiProvider(item: name) {
+            Text("Paste one \(provider.says) API key. OpenCode runs on it.")
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            SecureField("\(provider.says) API key", text: $pasted)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Text(apiKeyBillingLine(provider))
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
         } else {
             Text("Paste one GitHub Copilot token. OpenCode runs on it.")
                 .fleetType(.label)
@@ -412,8 +494,9 @@ struct MemberEnginesEditor: View {
         let index = engines.firstIndex { $0.engine == id } ?? 0
         let name = engineName(id)
         // OpenCode's model also says whose account pays, so it is required
-        // and the field shows the form it takes.
-        let prompt: String = id == "opencode" ? "github-copilot/<model>" : "Optional"
+        // and the field shows the shape it takes. Which providers there
+        // are, and what each runs on, is the line under it.
+        let prompt: String = id == "opencode" ? "provider/<model>" : "Optional"
         return VStack(alignment: .leading, spacing: Design.Space.hair) {
             Text("\(index + 1). \(name)")
                 .fleetType(.body)
@@ -426,7 +509,7 @@ struct MemberEnginesEditor: View {
                     .accessibilityLabel("Model for \(name)")
             }
             if id == "opencode" {
-                Text("OpenCode needs a model, written github-copilot/<model>.")
+                Text(openCodeModelLine)
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
@@ -474,17 +557,23 @@ struct MemberEnginesEditor: View {
     }
 }
 
+/// The line under OpenCode's model: the three ways one is written, and what
+/// each runs on. The model is also who pays, and two of the three bill by
+/// the token, so it is said before the member is saved.
+let openCodeModelLine = "OpenCode needs a model. Written github-copilot/<model>, it runs on the member’s Copilot token. Written openrouter/<model> or vercel/<model>, it runs on an API key and is billed by the token."
+
 /// What a member's engines are sent as: the list in its order, each with its
 /// model when one is named. Nil when the list cannot be sent as it stands,
 /// with the sentence to show: a member has at least one engine, and OpenCode
-/// is not sent without a model. Every other rule is your fleet's to refuse.
+/// is not sent without a model. Every other rule is your fleet's to refuse,
+/// a model on a provider it has no row for included.
 func memberEnginesToSend(_ engines: [EngineChoice]) -> (list: [[String: String]]?, problem: String?) {
     guard !engines.isEmpty else { return (nil, "A member has at least one engine.") }
     var list: [[String: String]] = []
     for choice in engines {
         let model = (choice.model ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if choice.engine == "opencode", model.isEmpty {
-            return (nil, "OpenCode needs a model, written github-copilot/<model>.")
+            return (nil, "OpenCode needs a model.")
         }
         list.append(model.isEmpty ? ["engine": choice.engine] : ["engine": choice.engine, "model": model])
     }

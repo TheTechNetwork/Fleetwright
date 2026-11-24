@@ -61,6 +61,12 @@ import kotlinx.coroutines.launch
  *
  * WHAT IT DID ON THE NETWORK is the hypervisor's count at its interfaces,
  * which a session on the machine cannot change: how much, not where to.
+ *
+ * A MACHINE RENTED FROM A SANDBOX PROVIDER (docs/api-engines.md) has a
+ * shorter page: whose cloud it is on, its state, when it ends, and the two
+ * things that can be done to it, more time and ending it. It has no console,
+ * no address, no restart and no size: the machine that made it refuses each
+ * in words, so none is drawn (C-2).
  */
 @Composable
 fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
@@ -149,7 +155,11 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                     when (ask) {
                         "reboot" -> "Restart $name? A session running on it ends."
                         "resize" -> "Restart $name with the new size? A session running on it ends."
-                        else -> "End $name now? It is stopped and removed with its disk, and anything on it is lost."
+                        // A rented machine has no disk of yours to speak of:
+                        // the provider removes it, and what was on it goes
+                        // with it.
+                        else -> if (machine?.onSandbox == true) "End $name now? ${machine?.providerName} removes it, and anything on it is lost."
+                        else "End $name now? It is stopped and removed with its disk, and anything on it is lost."
                     },
                 )
             },
@@ -177,6 +187,36 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
             // may not have looked yet, and this page cannot tell that from a
             // machine that is gone, so it says neither.
             m == null -> Hint("No report of this machine yet.")
+            // A RENTED MACHINE: what it is, and the two things that can be
+            // done to it. Nothing else is reported of one, and nothing else
+            // is drawn.
+            m.onSandbox -> {
+                SectionHead("This machine")
+                Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {
+                    Fact("On", m.providerName)
+                    Fact("State", vmStateWords(m.state), if (m.state == "Running") Design.Palette.ok.now else Design.Palette.attention.now)
+                    Fact("Made from", m.image ?: "Not reported")
+                    Fact("Ends", m.until?.let { "${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it))}, ${relative(it)}" } ?: "Unknown")
+                }
+                Hint(SandboxWords.machineFooter(m.providerName))
+
+                SectionHead("Work it")
+                // MORE TIME AND END, and nothing else. The provider counts a
+                // new time from now, so each choice says when it would end
+                // and not how much is added, and the hint says who is
+                // counting.
+                Text("More time", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
+                listOf(30 to "30 minutes from now", 60 to "1 hour from now", 120 to "2 hours from now").forEach { (minutes, label) ->
+                    OutlinedButton(onClick = { act("extend", minutes) }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text(label)
+                    }
+                }
+                Hint(SandboxWords.timeFooter(m.providerName))
+                OutlinedButton(onClick = { asking = "stop" }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("End it now", color = Design.Palette.bad.now)
+                }
+                if (message.isNotBlank()) Hint(message, if (failed) Design.Palette.bad.now else Design.Palette.ink.now)
+            }
             else -> {
                 SectionHead("This machine")
                 Column(Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).padding(horizontal = Design.Space.groupTight)) {

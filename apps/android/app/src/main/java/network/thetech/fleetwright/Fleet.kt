@@ -772,6 +772,13 @@ class Fleet(
          */
         val engines: List<String>? = null,
         /**
+         * The API providers this machine's operator turned on, by id
+         * (docs/api-engines.md). Empty is none: off is what a machine is
+         * until its operator says otherwise, so there is no third state to
+         * tell apart here.
+         */
+        val apiProviders: List<String> = emptyList(),
+        /**
          * The host's own answer to "is there something to apply", and the only
          * one that is right for every kind of box. Null from a host too old to
          * send it, and null from a host that could not find out.
@@ -2212,6 +2219,13 @@ class Fleet(
         /** Who changed it last, and when. Null on a fleet that never set it. */
         val updatedBy: String?,
         val updatedAt: Long?,
+        /**
+         * Whether a start as a member with an engine on an API key is asked
+         * about (docs/api-engines.md). NULL IS A FLEET FROM BEFORE THE
+         * GUARD, which is unknown and never off: the switch is not drawn at
+         * all for it (C-5).
+         */
+        val paidApi: Boolean? = null,
     )
 
     /**
@@ -2262,6 +2276,21 @@ class Fleet(
         }
     }
 
+    /**
+     * Change whether a start on a paid API key is asked about, as an admin.
+     *
+     * ALONE IN ITS REQUEST, because a field left out keeps what it was
+     * (docs/budgets.md), and only a fleet that sent the switch is ever sent
+     * it back: the three above go to every fleet with budgets, and this goes
+     * only to one that has the guard.
+     */
+    suspend fun setPaidApiApproval(paidApi: Boolean): Result<BudgetsReply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("paidApi", paidApi)
+            parseBudgetsReply(send("PUT", "/api/budgets/settings", body))
+        }
+    }
+
     private fun parseBudgetsReply(json: JSONObject): BudgetsReply {
         fun flag(from: JSONObject?, key: String): Boolean? =
             if (from != null && from.has(key) && !from.isNull(key)) from.optBoolean(key) else null
@@ -2275,6 +2304,8 @@ class Fleet(
                     workTypes = memberStrings(s.optJSONArray("workTypes")),
                     updatedBy = if (s.isNull("updatedBy")) null else s.optString("updatedBy").takeIf { it.isNotBlank() },
                     updatedAt = longOrNull(s, "updatedAt")?.takeIf { it > 0 },
+                    // Read only when it was sent: a missing switch is not one that is off.
+                    paidApi = flag(s, "paidApi"),
                 )
             },
             members = listed?.let { a ->
@@ -3007,8 +3038,14 @@ class Fleet(
          * than labs, and empty when the pool has none.
          */
         val labs: List<VmLab>? = null,
-        /** Which hypervisor it is on: `proxmox`, or `xo`; null from a coordinator older than Proxmox, which is Xen Orchestra. */
+        /**
+         * Which hypervisor it is on: `proxmox`, or `xo`; null from a
+         * coordinator older than Proxmox, which is Xen Orchestra. `sandbox`
+         * is a template at a sandbox provider, and then [provider] is whose
+         * cloud it is on, as the fleet names it ("E2B").
+         */
         val kind: String? = null,
+        val provider: String? = null,
     ) {
         /**
          * "New machine from Fleetwright Ubuntu 24.04 on Proxmox", or "… on
@@ -3025,6 +3062,21 @@ class Fleet(
 
         /** On Proxmox VE, where a machine is behind the cluster's firewall and a lab is a network on the cluster, not on an edge router. */
         val onProxmox: Boolean get() = kind == "proxmox"
+
+        /** A template at a sandbox provider (docs/api-engines.md): a rented machine on the provider's cloud, with no network of yours to go on. */
+        val onSandbox: Boolean get() = kind == "sandbox"
+
+        /**
+         * Where a machine from it goes, in a word, exactly as the fleet says
+         * it (core.js, imageWhere): the provider by name for a sandbox
+         * template, because whose cloud it is on is the thing to know about
+         * a rented machine, and the kind of hypervisor otherwise.
+         */
+        val whereWord: String
+            get() = if (onSandbox) provider ?: "a sandbox provider" else if (onProxmox) "Proxmox" else "XCP-ng"
+
+        /** "New machine from base on E2B", for a sandbox template in a picker; null for an image on a hypervisor, which [label] says. */
+        val sandboxLabel: String? get() = if (onSandbox) "New machine from $name on $whereWord" else null
     }
 
     /**
@@ -3064,7 +3116,11 @@ class Fleet(
      */
     data class Hypervisor(
         val address: String,
-        /** `proxmox`, or `xo` for Xen Orchestra. */
+        /**
+         * `proxmox`, or `xo` for Xen Orchestra. `sandbox` is a sandbox
+         * provider a machine of yours is given the key of
+         * (docs/api-engines.md), and then [provider] is its name.
+         */
         val kind: String,
         val boxes: List<HypervisorBox>,
         val pools: List<String>,
@@ -3078,8 +3134,16 @@ class Fleet(
         val holder: OwnMachine? = null,
         /** ITS EDGE ROUTER (docs/proxmox.md): null is no box said, never none. */
         val edge: EdgeRouter? = null,
+        val provider: String? = null,
     ) {
         val onProxmox: Boolean get() = kind == "proxmox"
+
+        /**
+         * Not a hypervisor of yours at all: a provider machines are rented
+         * from. It has templates and machines, and no pools, no version, no
+         * edge router and no machine of its own.
+         */
+        val onSandbox: Boolean get() = kind == "sandbox"
     }
 
     /** A box looked and saw none ([name] null), or the machine and whether it is up. */
@@ -3106,7 +3170,14 @@ class Fleet(
                 val pools = o.optJSONArray("pools")
                 Hypervisor(
                     address = address,
-                    kind = if (o.optString("kind") == "proxmox") "proxmox" else "xo",
+                    // One of three, and Xen Orchestra for one that did not
+                    // say, as every row was before the other two.
+                    kind = when (o.optString("kind")) {
+                        "proxmox" -> "proxmox"
+                        "sandbox" -> "sandbox"
+                        else -> "xo"
+                    },
+                    provider = text(o, "provider"),
                     boxes = if (boxes == null) emptyList() else (0 until boxes.length()).mapNotNull { j ->
                         val b = boxes.optJSONObject(j) ?: return@mapNotNull null
                         HypervisorBox(b.optString("hostId"), flag(b, "reachable"), text(b, "problem"))
@@ -3143,6 +3214,12 @@ class Fleet(
                 val o = list.optJSONObject(i) ?: return@mapNotNull null
                 val template = o.optString("template").takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val hosts = o.optJSONArray("hosts")
+                val kind = o.optString("kind").takeIf { it.isNotBlank() && it != "null" }
+                // A SANDBOX TEMPLATE IS OFFERED WITH NO NETWORK, GROUP OR
+                // LAB, whatever was sent: a rented machine is on its
+                // provider's network and none of yours, so there is no such
+                // choice to draw for it (C-2).
+                val rented = kind == "sandbox"
                 VmImage(
                     template = template,
                     name = o.optString("name").ifBlank { "Machine image" },
@@ -3150,10 +3227,11 @@ class Fleet(
                     poolName = o.optString("poolName").takeIf { it.isNotBlank() && it != "null" },
                     address = o.optString("address"),
                     hosts = if (hosts == null) emptyList() else (0 until hosts.length()).map { hosts.optString(it) },
-                    networks = networksOf(o.optJSONArray("networks")),
-                    groups = networksOf(o.optJSONArray("groups")),
-                    labs = labsOf(o.optJSONArray("labs")),
-                    kind = o.optString("kind").takeIf { it.isNotBlank() && it != "null" },
+                    networks = if (rented) null else networksOf(o.optJSONArray("networks")),
+                    groups = if (rented) null else networksOf(o.optJSONArray("groups")),
+                    labs = if (rented) null else labsOf(o.optJSONArray("labs")),
+                    kind = kind,
+                    provider = o.optString("provider").takeIf { it.isNotBlank() && it != "null" },
                 )
             }
         }
@@ -3199,10 +3277,21 @@ class Fleet(
         /** On Proxmox VE, the node and number its own console is opened by. */
         val node: String? = null,
         val vmid: Int? = null,
+        /** For a machine rented from a sandbox provider (`kind` is `sandbox`), whose cloud it is on. */
+        val provider: String? = null,
     ) {
         data class InLab(val name: String, val open: Boolean)
 
         val onProxmox: Boolean get() = kind == "proxmox"
+
+        /**
+         * Rented from a sandbox provider (docs/api-engines.md): it has a
+         * state and a timer, and no console, address, restart or size.
+         */
+        val onSandbox: Boolean get() = kind == "sandbox"
+
+        /** Whose cloud a rented machine is on, as the fleet names it. */
+        val providerName: String get() = provider ?: "a sandbox provider"
 
         /** The hypervisor's own name for itself, which is where its console opens and where you sign in. */
         val hypervisorName: String get() = if (onProxmox) "Proxmox VE" else "Xen Orchestra"
@@ -3382,6 +3471,7 @@ class Fleet(
                     kind = o.str("kind"),
                     node = o.str("node"),
                     vmid = o.num("vmid")?.toInt(),
+                    provider = o.str("provider"),
                 )
             }
         }
@@ -4368,6 +4458,9 @@ class Fleet(
                             (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() && it != "null" } }
                         } ?: emptyList()
                     },
+                    apiProviders = health?.optJSONArray("apiProviders")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() && it != "null" } }
+                    } ?: emptyList(),
                     // `has` first, for the same reason as appPending: a
                     // coordinator too old to say is not one that said no.
                     takesSessions = o.takeIf { it.has("takesSessions") && !it.isNull("takesSessions") }?.optBoolean("takesSessions"),
