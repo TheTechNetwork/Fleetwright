@@ -20,7 +20,7 @@ import { TASK_ID_RE } from './tasks.js';
 
 export const BUDGET_MODES = Object.freeze(['off', 'ask', 'refuse']);
 /** Why a start needs approval. */
-export const APPROVAL_REASONS = Object.freeze(['over-budget', 'dangerous', 'risky-work']);
+export const APPROVAL_REASONS = Object.freeze(['over-budget', 'dangerous', 'risky-work', 'paid-api']);
 export const APPROVAL_STATES = Object.freeze(['waiting', 'approved', 'declined', 'used', 'expired']);
 export const APPROVAL_ID_RE = /^a[1-9][0-9]{0,8}$/;
 /** How many kinds of work an owner may name as needing approval. */
@@ -47,14 +47,14 @@ const refuse = (code, text) => /** @type {const} */ ({ ok: false, code, text });
 export const monthOf = (/** @type {number} */ t) => new Date(t).toISOString().slice(0, 7);
 
 /**
- * @typedef {{ budgets: 'off'|'ask'|'refuse', dangerous: boolean, workTypes: string[], updatedBy: string|null, updatedAt: number }} BudgetSettings
+ * @typedef {{ budgets: 'off'|'ask'|'refuse', dangerous: boolean, paidApi: boolean, workTypes: string[], updatedBy: string|null, updatedAt: number }} BudgetSettings
  * @typedef {object} Spend
  * @property {string} month                  'YYYY-MM', UTC
  * @property {number} usd                    what was seen being spent this month
  * @property {string[]} unknown              sessions this month whose cost is unknown, by key
  * @property {Record<string, number>} seen   the last figure seen for each session, by key, newest last
  * @property {{ warn?: boolean, over?: boolean }} told  which of the month's two notices went out
- * @typedef {{ kind: 'over-budget'|'dangerous'|'risky-work', text: string }} Reason
+ * @typedef {{ kind: 'over-budget'|'dangerous'|'risky-work'|'paid-api', text: string }} Reason
  * @typedef {object} Approval
  * @property {string} id
  * @property {string} member
@@ -68,15 +68,24 @@ export const monthOf = (/** @type {number} */ t) => new Date(t).toISOString().sl
  * @property {string} [note]
  */
 
-/** A fleet that has set nothing: budgets stop nothing and nobody is asked. */
-export const NO_BUDGET_SETTINGS = Object.freeze({ budgets: 'off', dangerous: false, workTypes: Object.freeze([]), updatedBy: null, updatedAt: 0 });
+/**
+ * A fleet that has set nothing: budgets stop nothing, and nobody is asked
+ * about a session that skips prompts or about any kind of work.
+ *
+ * `paidApi` IS THE ONE THAT STARTS ON (docs/api-engines.md). It guards a
+ * start on an engine that bills by the token, which a budget cannot see and
+ * which no fleet had before the step that added this. So on by default
+ * changes nothing for a fleet with no such engine, and for one that adds
+ * one the first start is a question and not a bill.
+ */
+export const NO_BUDGET_SETTINGS = Object.freeze({ budgets: 'off', dangerous: false, paidApi: true, workTypes: Object.freeze([]), updatedBy: null, updatedAt: 0 });
 
 /**
  * The setting as an admin wrote it, checked. A field left out keeps what it
  * was.
  *
- * @param {unknown} input @param {{ budgets: string, dangerous: boolean, workTypes: readonly string[] }} [was]
- * @returns {{ ok: true, budgets: 'off'|'ask'|'refuse', dangerous: boolean, workTypes: string[] } | { ok: false, code: string, text: string }}
+ * @param {unknown} input @param {{ budgets: string, dangerous: boolean, paidApi?: boolean, workTypes: readonly string[] }} [was]
+ * @returns {{ ok: true, budgets: 'off'|'ask'|'refuse', dangerous: boolean, paidApi: boolean, workTypes: string[] } | { ok: false, code: string, text: string }}
  */
 export function checkBudgetSettings(input, was = NO_BUDGET_SETTINGS) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return refuse('bad_settings', 'The setting is what happens at a budget, whether a session that skips prompts needs approval, and the kinds of work that do.');
@@ -84,11 +93,19 @@ export function checkBudgetSettings(input, was = NO_BUDGET_SETTINGS) {
   const budgets = v.budgets === undefined ? was.budgets : String(v.budgets);
   if (!BUDGET_MODES.includes(budgets)) return refuse('bad_settings', 'What happens at a budget is off, ask or refuse.');
   if (v.dangerous !== undefined && typeof v.dangerous !== 'boolean') return refuse('bad_settings', 'Whether a session that skips permission prompts needs approval is true or false.');
+  if (v.paidApi !== undefined && typeof v.paidApi !== 'boolean') return refuse('bad_settings', 'Whether a session on a metered API key needs approval is true or false.');
   const listed = v.workTypes === undefined ? [...was.workTypes] : v.workTypes;
   if (!Array.isArray(listed) || listed.length > MAX_RISKY_WORK_TYPES) return refuse('bad_settings', `The kinds of work that need approval are a list of at most ${MAX_RISKY_WORK_TYPES}.`);
   const workTypes = [...new Set(listed.map((t) => String(t).trim().toLowerCase()))];
   if (workTypes.some((t) => !WORK_TYPE_RE.test(t))) return refuse('bad_settings', 'A kind of work is a short slug: lowercase letters, digits and hyphens, like “deploy”.');
-  return { ok: true, budgets: /** @type {'off'|'ask'|'refuse'} */ (budgets), dangerous: v.dangerous === undefined ? was.dangerous === true : v.dangerous, workTypes };
+  return {
+    ok: true,
+    budgets: /** @type {'off'|'ask'|'refuse'} */ (budgets),
+    dangerous: v.dangerous === undefined ? was.dangerous === true : v.dangerous,
+    // On unless somebody turned it off: a record from before it existed has none.
+    paidApi: v.paidApi === undefined ? was.paidApi !== false : v.paidApi,
+    workTypes,
+  };
 }
 
 /** A member's row for a month in which nothing has been seen yet. @param {number} now @returns {Spend} */
@@ -196,10 +213,10 @@ export function overBudget(/** @type {{ usd: number }|null} */ row, /** @type {n
  * or neither (docs/budgets.md, "What needs approval").
  *
  * @param {object} q
- * @param {{ budgets: string, dangerous: boolean, workTypes: readonly string[] }} q.settings
+ * @param {{ budgets: string, dangerous: boolean, paidApi?: boolean, workTypes: readonly string[] }} q.settings
  * @param {{ id: string, name?: string, budgetUsdMonth?: number|null }} q.member
  * @param {{ usd: number, unknown: string[] }|null} q.spend
- * @param {{ dangerous: boolean, workType?: string|null, task?: string|null }} q.start
+ * @param {{ dangerous: boolean, workType?: string|null, task?: string|null, paid?: boolean }} q.start
  * @returns {{ refused: string } | { reasons: Reason[] }}
  */
 export function approvalNeeded({ settings, member, spend, start }) {
@@ -212,6 +229,7 @@ export function approvalNeeded({ settings, member, spend, start }) {
     reasons.push({ kind: 'over-budget', text: said });
   }
   if (settings.dangerous && start.dangerous) reasons.push({ kind: 'dangerous', text: `This session would not ask before it runs commands, on ${who}’s sign-ins.` });
+  if (settings.paidApi !== false && start.paid) reasons.push({ kind: 'paid-api', text: `${who} has an engine that bills an API key by the token, which no budget here counts.` });
   if (start.workType && settings.workTypes.includes(start.workType)) {
     reasons.push({ kind: 'risky-work', text: `${start.task ? `${start.task} is` : 'This is'} ${start.workType} work, which this fleet asks about first.` });
   }

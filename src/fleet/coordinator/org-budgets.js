@@ -34,7 +34,7 @@ export class OrgBudgets {
   constructor({ now = () => Date.now() } = {}) {
     this.now = now;
     /** @type {import('../protocol/budgets.js').BudgetSettings} */
-    this.settings = { budgets: 'off', dangerous: false, workTypes: [], updatedBy: null, updatedAt: 0 };
+    this.settings = { budgets: 'off', dangerous: false, paidApi: true, workTypes: [], updatedBy: null, updatedAt: 0 };
     /** @type {Map<string, Spend>} member id → its month */
     this.spend = new Map();
     /** @type {Map<string, Approval>} in the order they were asked */
@@ -53,11 +53,12 @@ export class OrgBudgets {
     if (!who.admin) return refuse('not_admin', 'What a budget does is set by a fleet admin. Anybody can read it.');
     const checked = checkBudgetSettings(input, this.settings);
     if (!checked.ok) return refuse(checked.code, checked.text);
-    this.settings = { budgets: checked.budgets, dangerous: checked.dangerous, workTypes: checked.workTypes, updatedBy: who.email || 'an admin', updatedAt: this.now() };
+    this.settings = { budgets: checked.budgets, dangerous: checked.dangerous, paidApi: checked.paidApi, workTypes: checked.workTypes, updatedBy: who.email || 'an admin', updatedAt: this.now() };
     this.settingsDirty = true;
     const at = { off: 'Budgets are counted and stop nothing.', ask: 'A start past a member’s budget waits for approval.', refuse: 'A start past a member’s budget is refused.' }[checked.budgets];
     const more = [
       checked.dangerous ? 'A member start that skips permission prompts waits for approval.' : '',
+      checked.paidApi ? '' : 'A start on an engine that bills an API key is not asked about.',
       checked.workTypes.length ? `A start on ${checked.workTypes.join(', ')} work waits for approval.` : '',
     ].filter(Boolean).join(' ');
     return { ok: true, settings: this.settings, text: `${at}${more ? ` ${more}` : ''}` };
@@ -268,8 +269,8 @@ export class OrgBudgets {
    */
   restore(saved = {}) {
     const s = /** @type {any} */ (saved.settings);
-    const checked = checkBudgetSettings(s && typeof s === 'object' ? { budgets: s.budgets, dangerous: s.dangerous, workTypes: s.workTypes } : null, NO_BUDGET_SETTINGS);
-    if (checked.ok) this.settings = { budgets: checked.budgets, dangerous: checked.dangerous, workTypes: checked.workTypes, updatedBy: typeof s.updatedBy === 'string' ? s.updatedBy.slice(0, 200) : null, updatedAt: Number(s.updatedAt) || 0 };
+    const checked = checkBudgetSettings(s && typeof s === 'object' ? { budgets: s.budgets, dangerous: s.dangerous, workTypes: s.workTypes, ...(typeof s.paidApi === 'boolean' ? { paidApi: s.paidApi } : {}) } : null, NO_BUDGET_SETTINGS);
+    if (checked.ok) this.settings = { budgets: checked.budgets, dangerous: checked.dangerous, paidApi: checked.paidApi, workTypes: checked.workTypes, updatedBy: typeof s.updatedBy === 'string' ? s.updatedBy.slice(0, 200) : null, updatedAt: Number(s.updatedAt) || 0 };
     const rows = saved.spend instanceof Map ? [...saved.spend] : saved.spend && typeof saved.spend === 'object' && !(Symbol.iterator in saved.spend) ? Object.entries(saved.spend) : [...(saved.spend ?? [])];
     for (const [key, row] of rows) {
       const member = String(key).startsWith(SPEND_PREFIX) ? String(key).slice(SPEND_PREFIX.length) : String(key);

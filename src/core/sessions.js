@@ -31,8 +31,8 @@ import { Profiles } from './profiles.js';
 import { boxSecretsFor } from './secret-store.js';
 import { readSessionLogs } from './logs.js';
 import { phaseFor, advancePhases } from './activity.js';
-import { DEFAULT_ENGINE, HANDS_ON, turnFromHook, turnWords } from '../fleet/protocol/engines.js';
-import { boxEngines, nextEngine, handoffNote, continuationMessage, HANDOFF_FILE, HANDOFF_TAIL } from './engine-box.js';
+import { DEFAULT_ENGINE, HANDS_ON, API_PROVIDERS, enginesOn, providerOf, turnFromHook, turnWords } from '../fleet/protocol/engines.js';
+import { boxEngines, boxApiProviders, nextEngine, handoffNote, continuationMessage, HANDOFF_FILE, HANDOFF_TAIL } from './engine-box.js';
 import { writeFile, checkoutFacts, commitHandoff } from './files.js';
 import { SOCKET_FILE } from './hook-socket.js';
 import { ContextReader, cleanTranscriptPath } from './context-usage.js';
@@ -386,7 +386,12 @@ export class SessionManager {
     // anybody's word that it has one.
     if (engines) {
       const runs = boxEngines(this.cfg);
-      const missing = engines.filter((e) => !runs.includes(e.engine)).map((e) => e.engine);
+      // And an engine on an API key only for a provider this box's operator
+      // turned on (docs/api-engines.md).
+      const missing = enginesOn(engines, runs, boxApiProviders(this.cfg)).dropped.map((e) => {
+        const provider = providerOf(e);
+        return provider && runs.includes(e.engine) ? `${e.engine} on ${API_PROVIDERS[/** @type {keyof typeof API_PROVIDERS} */ (provider)].says}` : e.engine;
+      });
       if (missing.length) return { ok: false, message: `This machine does not run ${missing.join(' or ')}. It runs ${runs.join(', ')}.` };
     }
 
@@ -1461,7 +1466,7 @@ export class SessionManager {
     const rec = this.registry.get(name);
     if (!rec?.engines || rec.status !== 'running' || this.handingOn.has(name)) return null;
     const from = rec.engineAt ?? 0;
-    const to = nextEngine(rec, turn, boxEngines(this.cfg));
+    const to = nextEngine(rec, turn, boxEngines(this.cfg), boxApiProviders(this.cfg));
     if (to < 0) {
       if (HANDS_ON.includes(turn.reason)) log.info(`engines: ${name} stopped on ${turn.engine} (${turn.reason}) and its member names no engine after it that this box runs`);
       return null;

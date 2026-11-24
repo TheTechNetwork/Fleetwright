@@ -69,6 +69,8 @@
 //
 // NEVER THROWS. Every refusal is a code and a sentence.
 
+import { API_PROVIDERS, API_KEY_ITEMS } from '../protocol/engines.js';
+import { SANDBOX_PROVIDER_NAMES, sandboxProviderOf, sandboxRecord } from '../protocol/sandboxes.js';
 import { SEAL_KEY_RE, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, atRestAad, vaultAtRestAad, seal, open } from '../seal.js';
 import { verify, sign, signingInput } from '../crypto.js';
 import { githubUser } from '../../core/repo-tokens.js';
@@ -131,28 +133,26 @@ export const SECRET_PREFIX = 'secret:';
 export { HYPERVISOR_PREFIX, HYPERVISOR_ADDRESS_RE, splitHypervisorItem };
 
 /**
- * ITEM KINDS A LATER ENGINE NEEDS, named now so the field for them exists and
- * nothing else can take the names (docs/members.md, "Later kinds"): a Codex
- * sign-in, a Copilot token, and an API key by provider. NONE IS KEPT YET.
- * Each is refused as not kept yet, which is a different answer from a name a
- * vault has never heard of, and the one a person holding such a key needs.
- */
-export const FUTURE_ITEM_KINDS = Object.freeze(['apikey:']);
-
-/**
  * The items an engine runs on (docs/engines.md, "Credentials"): a Codex
  * sign-in, as the text of the `auth.json` that `codex login` leaves, and a
  * GitHub Copilot token. Pasted by a custodian, sealed and kept like a named
  * secret, listed by name and never read back.
  */
-export const ENGINE_ITEM_KINDS = Object.freeze(['codex', 'copilot']);
+export const ENGINE_ITEM_KINDS = /** @type {readonly string[]} */ (Object.freeze(['codex', 'copilot', ...API_KEY_ITEMS]));
+/**
+ * A metered API key (docs/api-engines.md): one unbroken run of printable
+ * characters, of a length a key has. Never tried against its provider from
+ * here, so this is all that is known of it.
+ */
+const API_KEY_RE = /^[\x21-\x7e]{16,512}$/;
 /** A Copilot token: one GitHub hands out, by its alphabet and length. Never tried against GitHub from here. */
 const COPILOT_TOKEN_RE = /^[A-Za-z0-9_-]{20,400}$/;
 
 /**
  * Is this the sign-in `codex login` writes: a ChatGPT sign-in, with a
- * refresh token? A file that holds only an API key is not kept: keys are a
- * later step's (FUTURE_ITEM_KINDS).
+ * refresh token? A file that holds only an API key is not kept: Codex runs
+ * here on a ChatGPT sign-in, and the keys a vault keeps are the ones in
+ * API_PROVIDERS (docs/api-engines.md).
  *
  * @param {string} value
  * @returns {{ ok: true } | { ok: false, text: string }}
@@ -170,15 +170,12 @@ export function checkCodexSignIn(value) {
     return {
       ok: false,
       text: read.OPENAI_API_KEY
-        ? 'That auth.json holds an API key and no ChatGPT sign-in. A vault keeps the sign-in from codex login; API keys are not kept yet.'
+        ? 'That auth.json holds an API key and no ChatGPT sign-in. For Codex a vault keeps the sign-in that codex login makes, and no OpenAI key.'
         : 'That auth.json holds no ChatGPT sign-in. Run codex login, sign in with ChatGPT, and paste the file it writes.',
     };
   }
   return { ok: true };
 }
-
-/** @param {string} name */
-const isFutureKind = (name) => FUTURE_ITEM_KINDS.some((k) => (k.endsWith(':') ? name.startsWith(k) : name === k));
 
 /**
  * A vault's id: a person's GitHub account id, or an agent member's principal
@@ -250,6 +247,8 @@ export const CLAUDE_CHECK_MIN_MS = 10 * 60_000;
  * @property {Record<string, { clientId: string, secret: string }>} [clients]  each OAuth provider's client, from the environment
  * @property {typeof globalThis.fetch} [fetchImpl]
  * @property {boolean} [takesEngines]  set per box request: whether that box said it takes the sign-ins an engine runs on (answerVaultBox)
+ * @property {boolean} [takesApiKeys]  set per box request: whether that box said it takes metered API keys (docs/api-engines.md)
+ * @property {boolean} [takesSandboxes]  set per box request: whether that box said it takes a sandbox provider's record
  * @property {() => number} [now]
  */
 
@@ -260,7 +259,7 @@ const refuse = (code, text) => ({ ok: false, error: { code }, text });
  * What a vault item is, from its name. Null for a name a vault does not keep.
  *
  * @param {string} name
- * @returns {'claude'|'oauth'|'secret'|'hypervisor'|'engine'|null}
+ * @returns {'claude'|'oauth'|'secret'|'sandbox'|'hypervisor'|'engine'|null}
  */
 export function itemKind(name) {
   if (name === 'claude') return 'claude';
@@ -268,6 +267,9 @@ export function itemKind(name) {
   if (Object.hasOwn(OAUTH_PROVIDERS, name)) return 'oauth';
   if (name.startsWith(SECRET_PREFIX) && SECRET_NAME_RE.test(name.slice(SECRET_PREFIX.length))) return 'secret';
   if (splitHypervisorItem(name)) return 'hypervisor';
+  // A sandbox provider's record (docs/api-engines.md): its key and the
+  // templates the person offers, for a provider this fleet has a driver for.
+  if (sandboxProviderOf(name)) return 'sandbox';
   return null;
 }
 
@@ -712,10 +714,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       const what = inside.op === 'forget' ? null : inside.signIn !== undefined ? { signIn: inside.signIn } : String(inside.value ?? '');
       return putClaude(store, key, who, owner, at, what, config.fetchImpl);
     }
-    if (isFutureKind(name)) {
-      return refuse('not_kept_yet', `${name.slice(0, 80)} is not kept yet. A vault will hold it once Fleetwright runs the engine that needs it (docs/members.md).`);
-    }
-    if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor' && kind !== 'engine') {
+    if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor' && kind !== 'engine' && kind !== 'sandbox') {
       return refuse('bad_name', 'A value put in a vault is a named secret (secret:NAME), a hypervisor’s token or a Claude token. GitHub and Cloudflare are kept by signing in.');
     }
     if (!kind) return refuse('bad_name', `${name.slice(0, 80) || 'That'} is not something a vault keeps.`);
@@ -736,27 +735,39 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       const reads = checkCodexSignIn(value);
       if (!reads.ok) return refuse('bad_value', reads.text);
     }
+    if (API_KEY_ITEMS.includes(name) && !API_KEY_RE.test(value.trim())) {
+      return refuse('bad_value', 'That is not an API key: one is a single run of letters, digits and punctuation with no spaces. Paste the key alone.');
+    }
     if (name === 'copilot' && !COPILOT_TOKEN_RE.test(value.trim())) {
       return refuse('bad_value', 'That is not a GitHub Copilot token: one is a single run of letters, digits, hyphens and underscores.');
+    }
+    if (kind === 'sandbox') {
+      const record = sandboxRecord(name, value);
+      if (!record) return refuse('bad_value', 'That is not a sandbox provider’s record: it is the provider’s API key and the templates to offer, each an id and a name.');
+      if (!record.templates.length) return refuse('bad_value', 'A sandbox provider is kept with at least one template to offer. A machine is made from a template, and only you know which of your account’s are built to join the fleet.');
     }
     if (kind === 'hypervisor' && !isHypervisorRecord(name, value)) {
       return refuse('bad_value', 'That is not the token record a hypervisor’s setup hands back, for that address.');
     }
     // A NEW DEPOSIT, so whichever machine held the last Codex sign-in holds
     // nothing of this one: `box` is not carried over (itemsFor).
-    row.items[name] = { at, sealed: await seal({ to: key.publicKey, aad: vaultAtRestAad(who.userId, name), payload: { value: name === 'copilot' ? value.trim() : value } }) };
+    row.items[name] = { at, sealed: await seal({ to: key.publicKey, aad: vaultAtRestAad(who.userId, name), payload: { value: name === 'copilot' || API_KEY_ITEMS.includes(name) ? value.trim() : value } }) };
     await save();
     if (kind === 'engine') {
       return {
         ok: true,
         text: name === 'codex'
           ? 'Kept the Codex sign-in. It is handed to one approved machine, the first that asks for it, because Codex renews it there and a renewal ends every other copy, the one on the computer it was pasted from included.'
-          : 'Kept the GitHub Copilot token. The machines approved for this vault are given it for sessions whose engine runs on it.',
+          : API_KEY_ITEMS.includes(name)
+            ? `Kept ${label(name)}. It is given only to approved machines whose operator turned that provider on, for sessions whose engine bills to it. What it may spend is set at the provider, not here.`
+            : 'Kept the GitHub Copilot token. The machines approved for this vault are given it for sessions whose engine runs on it.',
       };
     }
     return {
       ok: true,
-      text: kind === 'hypervisor'
+      text: kind === 'sandbox'
+        ? `Kept ${label(name)}. Approved machines whose operator turned that provider on can make machines there, and hold its key in memory only. The key is that whole account: what it may spend is set at the provider.`
+        : kind === 'hypervisor'
         ? `Kept ${label(name)}. The boxes you approved can make machines on it, and hold its token in memory only.`
         : `Kept ${label(name)}. Sessions you start on a box you approved can be given it by name.`,
     };
@@ -990,6 +1001,9 @@ function label(name) {
   if (name === 'claude') return 'your Claude login';
   if (name === 'codex') return 'the Codex sign-in';
   if (name === 'copilot') return 'the GitHub Copilot token';
+  for (const p of Object.values(API_PROVIDERS)) if (p.item === name) return `the ${p.says} API key`;
+  const sandbox = sandboxProviderOf(name);
+  if (sandbox) return `your ${SANDBOX_PROVIDER_NAMES[/** @type {keyof typeof SANDBOX_PROVIDER_NAMES} */ (sandbox)]} account’s key and templates`;
   if (Object.hasOwn(OAUTH_PROVIDERS, name)) return OAUTH_PROVIDERS[/** @type {keyof typeof OAUTH_PROVIDERS} */ (name)].label;
   const hypervisor = splitHypervisorItem(name);
   if (hypervisor) return hypervisor.box ? `the hypervisor at ${hypervisor.address}, as ${hypervisor.box}` : `the hypervisor at ${hypervisor.address}`;
@@ -1134,7 +1148,7 @@ export async function answerVaultBox(ask, config) {
       if (!tree?.has(member)) continue;
       custodians = await mayActFor(store, tree, member);
     }
-    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now, takesEngines: accepts?.includes('engines') === true }, members, custodians));
+    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now, takesEngines: accepts?.includes('engines') === true, takesApiKeys: accepts?.includes('apikeys') === true, takesSandboxes: accepts?.includes('sandboxes') === true }, members, custodians));
     if (one) accounts.push(one);
   }
   const sealed = await seal({ to: String(req.reply), aad: VAULT_BOX_AAD, payload: { at: now(), accounts } });
@@ -1211,6 +1225,10 @@ async function itemsFor(userId, hash, jwk, store, key, config, members, custodia
       // ONLY TO A BOX THAT TAKES THEM (`accepts`, signed in its request): a
       // box from before engines would file it where nothing reads it.
       if (!config.takesEngines) continue;
+      // AND A KEY ONLY TO A BOX THAT ASKS FOR KEYS (`apikeys`), which it does
+      // only while its operator has an API provider turned on. A box from
+      // step 4 takes sign-ins and is never handed something that bills.
+      if (API_KEY_ITEMS.includes(name) && !config.takesApiKeys) continue;
       if (name === 'codex') {
         // ONE MACHINE (docs/engines.md, "Credentials"). Codex renews its own
         // tokens where it runs, and a renewal ends every other copy, so the
@@ -1228,7 +1246,11 @@ async function itemsFor(userId, hash, jwk, store, key, config, members, custodia
       items.push({ name, value: String(inside.value), expiresAt: null });
       continue;
     }
-    if (kind === 'secret' || kind === 'hypervisor') {
+    // A SANDBOX PROVIDER'S RECORD ONLY TO A BOX THAT ASKS FOR THEM, which
+    // it does only while its operator has a provider turned on. The record
+    // is the provider's whole account.
+    if (kind === 'sandbox' && !config.takesSandboxes) continue;
+    if (kind === 'secret' || kind === 'hypervisor' || kind === 'sandbox') {
       items.push({ name, value: String(inside.value), expiresAt: null });
       continue;
     }

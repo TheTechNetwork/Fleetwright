@@ -6,7 +6,7 @@
 // coordinator asks what a box runs and believes the answer; the session
 // asks for a sign-in and is answered for its own member and nobody else.
 
-import { ENGINES, DEFAULT_ENGINE, HANDS_ON, turnWords } from '../fleet/protocol/engines.js';
+import { ENGINES, DEFAULT_ENGINE, HANDS_ON, API_PROVIDER_IDS, API_KEY_ITEMS, API_PROVIDERS, providerOf, credentialOf, turnWords } from '../fleet/protocol/engines.js';
 import { ENGINE_ITEMS, vaultEngineItem, keepEngineItem } from './vault-store.js';
 import { emailFromActor } from './accounts.js';
 import { RESULT_FILE } from '../fleet/protocol/tasks.js';
@@ -37,6 +37,19 @@ export function boxEngines(cfg) {
 }
 
 /**
+ * The metered API providers an engine on this box may bill to
+ * (docs/api-engines.md): the ones its operator named, and only on a box that
+ * runs OpenCode, which is the engine that speaks to them. None unless said.
+ *
+ * @param {{ sandbox?: boolean, sandboxHookSocket?: boolean, engines?: string[], apiProviders?: string[] }} cfg
+ * @returns {string[]}
+ */
+export function boxApiProviders(cfg) {
+  if (!boxEngines(cfg).includes('opencode')) return [];
+  return [...new Set((cfg.apiProviders ?? []).map((p) => String(p).trim().toLowerCase()).filter((p) => API_PROVIDER_IDS.includes(p)))];
+}
+
+/**
  * Which of a session's engines takes over from the one whose turn just
  * ended, as its place in the member's list, or -1 for none.
  *
@@ -45,15 +58,19 @@ export function boxEngines(cfg) {
  * is on now, so a late or repeated report of an earlier engine's ending
  * moves nothing. And only to an engine this box runs.
  *
- * @param {{ engines?: Array<{ engine: string }>|null, engineAt?: number }|null|undefined} rec
+ * @param {{ engines?: Array<{ engine: string, model?: string }>|null, engineAt?: number }|null|undefined} rec
  * @param {{ engine: string, reason: string }} turn
  * @param {string[]} runs  what this box runs (boxEngines)
+ * @param {string[]} [providers]  the API providers it may bill to (boxApiProviders)
  */
-export function nextEngine(rec, turn, runs) {
+export function nextEngine(rec, turn, runs, providers = []) {
   if (!rec?.engines || !HANDS_ON.includes(turn.reason)) return -1;
   const from = rec.engineAt ?? 0;
   if (rec.engines[from]?.engine !== turn.engine) return -1;
-  return rec.engines.findIndex((e, i) => i > from && runs.includes(e.engine));
+  return rec.engines.findIndex((e, i) => {
+    const provider = providerOf(e);
+    return i > from && runs.includes(e.engine) && (provider === null || providers.includes(provider));
+  });
 }
 
 /**
@@ -66,17 +83,28 @@ export function nextEngine(rec, turn, runs) {
  * for its member's Codex sign-in out of curiosity, and nothing a session
  * says chooses whose vault is read.
  *
- * @param {{ stateDir: string }} cfg
- * @param {{ createdBy?: string|null, engines?: Array<{ engine: string }>|null }|null|undefined} rec  the session's record
+ * @param {{ stateDir: string, sandbox?: boolean, sandboxHookSocket?: boolean, engines?: string[], apiProviders?: string[] }} cfg
+ * @param {{ createdBy?: string|null, engines?: Array<{ engine: string, model?: string }>|null }|null|undefined} rec  the session's record
  * @param {string} kind
  * @param {string|null} value  null to ask; text to hand back a renewed sign-in
  * @returns {{ ok: true, kind: string, value?: string } | { ok: false, error: string, message: string }}
  */
 export function answerEngineCredential(cfg, rec, kind, value = null) {
   if (!rec) return { ok: false, error: 'no_session', message: 'This machine has no record of this session.' };
-  const granted = (rec.engines ?? []).map((e) => ENGINES[/** @type {keyof typeof ENGINES} */ (e.engine)]?.credential);
-  if (!ENGINE_ITEMS.includes(kind) || !granted.includes(/** @type {any} */ (kind))) {
+  // WHAT ITS MEMBER'S ENGINES RUN ON: each engine's own item, or the key of
+  // the provider its model names (docs/api-engines.md).
+  const granted = (rec.engines ?? []).map((e) => credentialOf(e));
+  if (!ENGINE_ITEMS.includes(kind) || !granted.includes(kind)) {
     return { ok: false, error: 'not_granted', message: 'This session’s member names no engine that runs on that sign-in.' };
+  }
+  // A KEY, only for a provider this box's operator turned on. A box that was
+  // told to stop billing a provider stops handing its key out, whatever the
+  // vault left here before.
+  if (API_KEY_ITEMS.includes(kind)) {
+    const provider = API_PROVIDER_IDS.find((id) => API_PROVIDERS[/** @type {keyof typeof API_PROVIDERS} */ (id)].item === kind);
+    if (!provider || !boxApiProviders(cfg).includes(provider)) {
+      return { ok: false, error: 'not_granted', message: 'The operator of this machine has not turned that API provider on.' };
+    }
   }
   const who = emailFromActor(rec.createdBy ?? null) ?? String(rec.createdBy || '').toLowerCase();
   if (!who) return { ok: false, error: 'no_owner', message: 'Nobody was identified as this session’s owner, so there is no vault to read.' };

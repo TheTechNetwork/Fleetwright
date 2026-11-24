@@ -125,9 +125,9 @@ test('in refuse mode a start past the budget is refused outright, and nobody is 
 });
 
 test('the setting holds a mode, a flag and a short list, and says what is wrong with one that does not read', () => {
-  assert.deepEqual(checkBudgetSettings({ budgets: 'ask', dangerous: true, workTypes: [' Deploy ', 'deploy', 'prod-data'] }), { ok: true, budgets: 'ask', dangerous: true, workTypes: ['deploy', 'prod-data'] });
+  assert.deepEqual(checkBudgetSettings({ budgets: 'ask', dangerous: true, workTypes: [' Deploy ', 'deploy', 'prod-data'] }), { ok: true, budgets: 'ask', dangerous: true, paidApi: true, workTypes: ['deploy', 'prod-data'] });
   // A field left out keeps what it was.
-  assert.deepEqual(checkBudgetSettings({ dangerous: false }, { budgets: 'refuse', dangerous: true, workTypes: ['deploy'] }), { ok: true, budgets: 'refuse', dangerous: false, workTypes: ['deploy'] });
+  assert.deepEqual(checkBudgetSettings({ dangerous: false }, { budgets: 'refuse', dangerous: true, workTypes: ['deploy'] }), { ok: true, budgets: 'refuse', dangerous: false, paidApi: true, workTypes: ['deploy'] });
   const refused = (/** @type {any} */ input) => /** @type {any} */ (checkBudgetSettings(input)).text;
   assert.match(refused({ budgets: 'always' }), /off, ask or refuse/);
   assert.match(refused({ dangerous: 'yes' }), /true or false/);

@@ -58,10 +58,48 @@ export const RUNS = Object.freeze({
   opencode: Object.freeze({ protocol: 'acp', command: ['opencode', 'acp'], credential: 'copilot', bin: 'FLEETWRIGHT_OPENCODE_BIN' }),
 });
 
+/**
+ * The providers OpenCode may bill to with a metered API key
+ * (docs/api-engines.md): OpenCode's own name for each, which is the prefix
+ * of a model and the entry its key is filed under; the member's vault item;
+ * and the variable OpenCode's documentation names for the key, where it
+ * names one. Mirrored from src/fleet/protocol/engines.js, which this file
+ * cannot import; test/api-engines.test.js says if the two stop agreeing.
+ */
+export const API_PROVIDERS = Object.freeze({
+  openrouter: Object.freeze({ opencode: 'openrouter', item: 'apikey:openrouter', env: 'OPENROUTER_API_KEY' }),
+  'ai-gateway': Object.freeze({ opencode: 'vercel', item: 'apikey:ai-gateway', env: null }),
+});
+
+/** The API provider a model bills to, by its prefix, or null for one on a subscription. */
+export function providerOf(engine, model) {
+  if (engine !== 'opencode' || typeof model !== 'string') return null;
+  const prefix = model.split('/')[0];
+  return Object.values(API_PROVIDERS).find((p) => p.opencode === prefix) ?? null;
+}
+
+/**
+ * WHAT THIS RUNNER WAS HANDED AND MUST NEVER SAY: an API key, a Copilot
+ * token. An engine's error is its provider's own words, and a provider that
+ * quotes a key back ("key sk-… is not valid") would otherwise put it in the
+ * turn's detail, which goes to the coordinator, a notification and a screen.
+ * Everything this runner says passes through `line`, so it is taken out
+ * there.
+ */
+const withheld = new Set();
+
+/** Never say this value. One short enough to be an ordinary word is not kept, or it would be cut out of every sentence. */
+export function withhold(value) {
+  const v = typeof value === 'string' ? value.trim() : '';
+  if (v.length >= 12 && !/\s/.test(v)) withheld.add(v);
+}
+
 /** One printable line, bounded. An engine's error is its own words and could be anything. */
 export function line(value, max = 200) {
   if (value === undefined || value === null) return null;
-  const s = String(value).split('\n')[0].replace(/[^\x20-\x7e]/g, '').trim();
+  let said = String(value);
+  for (const secret of withheld) said = said.split(secret).join('[withheld]');
+  const s = said.split('\n')[0].replace(/[^\x20-\x7e]/g, '').trim();
   return s ? s.slice(0, max) : null;
 }
 
@@ -438,9 +476,10 @@ export function post(socketPath, pathname, body) {
  * is handed back to the box, which is the one machine that holds it.
  *
  * @param {string} engine @param {string} value @param {string} home
- * @returns {{ ok: true, file: string|null } | { ok: false, text: string }}
+ * @param {{ opencode: string, env: string|null }|null} [provider]  the API provider the model bills to, when it bills to one
+ * @returns {{ ok: true, file: string|null, env?: Record<string, string> } | { ok: false, text: string }}
  */
-export function stage(engine, value, home) {
+export function stage(engine, value, home, provider = null) {
   try {
     if (engine === 'codex') {
       const dir = process.env.CODEX_HOME || path.join(home, '.codex');
@@ -456,6 +495,15 @@ export function stage(engine, value, home) {
       // reach the model asked for does not report being on it.
       const dir = path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'opencode');
       mkdirSync(dir, { recursive: true, mode: 0o700 });
+      // AN API KEY, filed under OpenCode's own name for the provider, in the
+      // shape it keeps a key in. And, where OpenCode's documentation names a
+      // variable for it, in that variable for the engine's process alone:
+      // a newer OpenCode reads this file once, into a store of its own, and
+      // not again where that store already has an entry for the provider.
+      if (provider) {
+        writeFileSync(path.join(dir, 'auth.json'), `${JSON.stringify({ [provider.opencode]: { type: 'api', key: value.trim() } })}\n`, { mode: 0o600 });
+        return { ok: true, file: null, ...(provider.env ? { env: { [provider.env]: value.trim() } } : {}) };
+      }
       writeFileSync(path.join(dir, 'auth.json'), `${JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: value.trim(), access: '', expires: 0 } })}\n`, { mode: 0o600 });
       return { ok: true, file: null };
     }
@@ -505,17 +553,23 @@ export async function run(args, io = {}) {
   }
 
   /** One attempt at being ready: the credential, the engine's server, the two checks. */
+  // WHAT THIS ENGINE RUNS ON: its own sign-in, or the key of the provider
+  // its model names (docs/api-engines.md).
+  const provider = providerOf(args.engine, args.model);
+  const item = provider ? provider.item : spec.credential;
   const open = async () => {
-    const got = await post(socket, '/internal/engine-credential', { kind: spec.credential });
+    const got = await post(socket, '/internal/engine-credential', { kind: item });
     if (!got?.ok || typeof got.value !== 'string' || !got.value) {
-      return { failed: ended(args.engine, 'auth', { detail: got?.message ?? `this machine holds no ${spec.credential} sign-in for this member` }) };
+      return { failed: ended(args.engine, 'auth', { detail: got?.message ?? `this machine holds no ${provider ? 'key' : `${spec.credential} sign-in`} for this member` }) };
     }
-    const staged = stage(args.engine, got.value, home);
+    withhold(got.value);
+    const staged = stage(args.engine, got.value, home, provider);
     if (!staged.ok) return { failed: ended(args.engine, 'error', { detail: staged.text }) };
     const command = env[spec.bin] ? [env[spec.bin]] : [spec.command[0]];
     let child;
     try {
-      child = (io.spawnEngine ?? spawn)(command[0], spec.command.slice(1), { cwd, env, stdio: ['pipe', 'pipe', 'inherit'] });
+      // The key's variable, when there is one, for the engine's process and nothing else of this session's.
+      child = (io.spawnEngine ?? spawn)(command[0], spec.command.slice(1), { cwd, env: staged.env ? { ...env, ...staged.env } : env, stdio: ['pipe', 'pipe', 'inherit'] });
     } catch (e) {
       return { failed: ended(args.engine, 'error', { detail: `could not start ${command[0]}: ${e?.message ?? e}` }) };
     }

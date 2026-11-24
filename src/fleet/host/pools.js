@@ -17,14 +17,23 @@
 //   edges       own objects. A cluster's page is the Proxmox health entry,
 //               which already carries what it shows.
 
+//
+// AND A THIRD DRIVER, for machines on a sandbox provider's cloud
+// (sandbox-pools.js, docs/api-engines.md). It answers the same verbs. It has
+// no page, no network and no edge router of its own, so `look`, `act`,
+// `edges` and the console never go to it. A box whose operator named no
+// provider holds an empty one.
+
 import { XoPools } from './xo-pools.js';
 import { PvePools } from './pve-pools.js';
+import { SandboxPools, SANDBOX_KIND } from './sandbox-pools.js';
 
 export class Pools {
-  /** @param {{ xo?: XoPools, pve?: PvePools }} [drivers] */
-  constructor({ xo = new XoPools({}), pve = new PvePools({}) } = {}) {
+  /** @param {{ xo?: XoPools, pve?: PvePools, sandbox?: SandboxPools }} [drivers] */
+  constructor({ xo = new XoPools({}), pve = new PvePools({}), sandbox = new SandboxPools({}) } = {}) {
     this.xo = xo;
     this.pve = pve;
+    this.sandbox = sandbox;
   }
 
   /**
@@ -37,6 +46,9 @@ export class Pools {
     const all = new Map();
     for (const [k, v] of this.xo.held) all.set(k, v);
     for (const [k, v] of this.pve.held) all.set(k, v);
+    // A sandbox provider's key is not among them: `held` is read for pools
+    // and clusters with an address to dial (edge-watch.js, the console), and
+    // a provider has neither. `kindOf` and `report` are where it shows.
     return all;
   }
 
@@ -58,27 +70,49 @@ export class Pools {
    * @param {string} key
    */
   kindOf(key) {
+    if (this.sandbox.held.has(key)) return SANDBOX_KIND;
     return this.pve.held.has(key) ? 'proxmox' : 'xo';
   }
 
   /** @param {any[]} accounts */
   adopt(accounts) {
-    // Proxmox first, which keeps its records and strips nothing; then Xen
-    // Orchestra's, which strips every `hypervisor:` item before the hub.
-    return this.xo.adopt(this.pve.adopt(accounts));
+    // The sandbox driver first, which takes every `sandbox:` item out: a
+    // provider's key is its whole account, and the hub files what it is
+    // handed. Then Proxmox, which keeps its records and strips nothing; then
+    // Xen Orchestra's, which strips every `hypervisor:` item before the hub.
+    return this.xo.adopt(this.pve.adopt(this.sandbox.adopt(accounts)));
   }
 
   report() {
-    return [...this.xo.report(), ...this.pve.report()];
+    return [...this.xo.report(), ...this.pve.report(), ...this.sandbox.report()];
   }
 
   async refresh() {
-    await Promise.all([this.xo.refresh(), this.pve.refresh()]);
+    await Promise.all([this.xo.refresh(), this.pve.refresh(), this.sandbox.refresh()]);
   }
 
   /** @param {Parameters<XoPools['make']>[0]} ask */
   make(ask) {
+    if (this.sandbox.hasImage(ask.owner, ask.template)) return this.sandbox.make(ask);
     return this.pve.hasImage(ask.owner, ask.template) ? this.pve.make(ask) : this.xo.make(ask);
+  }
+
+  /**
+   * The hypervisors' answer, unless they say the machine is not theirs and
+   * this box holds a sandbox provider of the person's too. `unreachable`
+   * from a hypervisor is kept over the provider's "not there", for the
+   * reason it is between the two hypervisors.
+   *
+   * @template {{ ok: boolean, notHere?: boolean, unreachable?: boolean }} R
+   * @param {string} owner @param {() => Promise<R>} hypervisors @param {() => Promise<R>} sandbox
+   * @returns {Promise<R>}
+   */
+  async #orSandbox(owner, hypervisors, sandbox) {
+    if (!this.sandbox.holdsFor(owner)) return hypervisors();
+    const a = await hypervisors();
+    if (a.ok || !a.notHere) return a;
+    const b = await sandbox();
+    return b.ok || !b.notHere || !a.unreachable ? b : a;
   }
 
   /**
@@ -102,12 +136,12 @@ export class Pools {
 
   /** @param {Parameters<XoPools['handLogin']>[0]} ask */
   handLogin(ask) {
-    return this.#either(ask.owner, () => this.xo.handLogin(ask), () => this.pve.handLogin(ask));
+    return this.#orSandbox(ask.owner, () => this.#either(ask.owner, () => this.xo.handLogin(ask), () => this.pve.handLogin(ask)), () => /** @type {any} */ (this.sandbox.handLogin(ask)));
   }
 
   /** @param {Parameters<XoPools['control']>[0]} ask */
   control(ask) {
-    return this.#either(ask.owner, () => this.xo.control(ask), () => this.pve.control(ask));
+    return this.#orSandbox(ask.owner, () => this.#either(ask.owner, () => this.xo.control(ask), () => this.pve.control(ask)), () => /** @type {any} */ (this.sandbox.control(ask)));
   }
 
   /**

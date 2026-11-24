@@ -42,11 +42,57 @@ export const DEFAULT_ENGINE = 'claude-code';
 
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/;
 /**
- * An OpenCode model, `provider/model`. The only provider this step is GitHub
- * Copilot: every other one runs on an API key, which is a later step's
- * (docs/engines.md, "The engines").
+ * The providers an engine may run on with a metered API key
+ * (docs/api-engines.md). `opencode` is OpenCode's own name for the
+ * provider, which is the prefix of a model and the entry its key is filed
+ * under; `item` is the member's vault item; `env` is the variable
+ * OpenCode's documentation names for the key, where it names one.
+ *
+ * Mirrored in sandbox/engine.mjs, which a session's image carries alone;
+ * test/api-engines.test.js says if the two stop agreeing.
  */
-const OPENCODE_MODEL_RE = /^github-copilot\/[A-Za-z0-9][A-Za-z0-9._:-]{0,59}$/;
+export const API_PROVIDERS = Object.freeze({
+  openrouter: Object.freeze({ says: 'OpenRouter', opencode: 'openrouter', item: 'apikey:openrouter', env: 'OPENROUTER_API_KEY' }),
+  'ai-gateway': Object.freeze({ says: 'Vercel AI Gateway', opencode: 'vercel', item: 'apikey:ai-gateway', env: null }),
+});
+export const API_PROVIDER_IDS = /** @type {readonly string[]} */ (Object.freeze(Object.keys(API_PROVIDERS)));
+/** The vault items API keys are kept under. */
+export const API_KEY_ITEMS = /** @type {readonly string[]} */ (Object.freeze(Object.values(API_PROVIDERS).map((p) => p.item)));
+
+/**
+ * An OpenCode model, `provider/model`. GitHub Copilot's is one name. An API
+ * provider's is that provider's own model id, which may itself hold a
+ * slash (`openrouter/anthropic/claude-sonnet-5.5`). No model holds a comma
+ * or an equals sign, which is what lets a list travel as one line.
+ */
+const OPENCODE_COPILOT_RE = /^github-copilot\/[A-Za-z0-9][A-Za-z0-9._:-]{0,59}$/;
+const OPENCODE_API_RE = new RegExp(`^(?:${Object.values(API_PROVIDERS).map((p) => p.opencode).join('|')})/[A-Za-z0-9][A-Za-z0-9._:-]{0,39}(?:/[A-Za-z0-9][A-Za-z0-9._:-]{0,39}){0,2}$`);
+
+/**
+ * The API provider a choice bills to, or null: a subscription engine bills
+ * to nobody here.
+ *
+ * @param {{ engine: string, model?: string }|null|undefined} choice
+ * @returns {string|null} a key of API_PROVIDERS
+ */
+export function providerOf(choice) {
+  if (choice?.engine !== 'opencode' || typeof choice.model !== 'string') return null;
+  const prefix = choice.model.split('/')[0];
+  return API_PROVIDER_IDS.find((id) => API_PROVIDERS[/** @type {keyof typeof API_PROVIDERS} */ (id)].opencode === prefix) ?? null;
+}
+
+/**
+ * The member's vault item a choice runs on: the engine's own, or the key of
+ * the provider its model names.
+ *
+ * @param {{ engine: string, model?: string }|null|undefined} choice
+ * @returns {string|null}
+ */
+export function credentialOf(choice) {
+  const provider = providerOf(choice);
+  if (provider) return API_PROVIDERS[/** @type {keyof typeof API_PROVIDERS} */ (provider)].item;
+  return ENGINES[/** @type {keyof typeof ENGINES} */ (String(choice?.engine))]?.credential ?? null;
+}
 
 /** @param {string} text */
 const refuse = (text) => /** @type {const} */ ({ ok: false, text });
@@ -74,8 +120,9 @@ export function checkEngines(input) {
     const model = raw === undefined || raw === null || raw === '' ? null : String(raw);
     if (id === 'opencode') {
       if (model === null) return refuse('OpenCode needs a model, written provider/model, like “github-copilot/gpt-5”: the model says whose account pays.');
-      if (!OPENCODE_MODEL_RE.test(model)) {
-        return refuse('An opencode model is written github-copilot/<model>. Other providers run on API keys, which are not kept yet.');
+      if (model.length > 120) return refuse('That model’s name is too long to be one.');
+      if (!OPENCODE_COPILOT_RE.test(model) && !OPENCODE_API_RE.test(model)) {
+        return refuse(`An OpenCode model is written github-copilot/<model>, or ${Object.values(API_PROVIDERS).map((p) => `${p.opencode}/<model>`).join(' or ')} for one that runs on an API key.`);
       }
     } else if (model !== null && !MODEL_RE.test(model)) {
       return refuse('An engine’s model is a model name, like “opus” or a full model id.');
@@ -118,14 +165,30 @@ export function decodeEngines(text) {
 /**
  * A member's list cut to what one machine runs, in the member's order.
  *
+ * An engine on an API key is kept only for a machine that reports that
+ * provider (docs/api-engines.md). A machine that reports none, which is
+ * every machine from before API keys, is never sent one.
+ *
  * @param {EngineChoice[]} engines
  * @param {unknown} runs  the machine's `health.engines`; anything but a list is a machine from before this, which runs the default alone
- * @returns {{ kept: EngineChoice[], dropped: EngineChoice[], runs: string[] }}
+ * @param {unknown} [apiProviders]  the machine's `health.apiProviders`
+ * @returns {{ kept: EngineChoice[], dropped: EngineChoice[], runs: string[], providers: string[] }}
  */
-export function enginesOn(engines, runs) {
+export function enginesOn(engines, runs, apiProviders = null) {
   const has = Array.isArray(runs) ? runs.filter((r) => typeof r === 'string' && Object.hasOwn(ENGINES, r)) : [DEFAULT_ENGINE];
   if (!has.includes(DEFAULT_ENGINE)) has.unshift(DEFAULT_ENGINE);
-  return { kept: engines.filter((e) => has.includes(e.engine)), dropped: engines.filter((e) => !has.includes(e.engine)), runs: has };
+  const providers = Array.isArray(apiProviders) ? apiProviders.filter((p) => typeof p === 'string' && API_PROVIDER_IDS.includes(p)) : [];
+  const runsIt = (/** @type {EngineChoice} */ e) => {
+    if (!has.includes(e.engine)) return false;
+    const provider = providerOf(e);
+    return provider === null || providers.includes(provider);
+  };
+  return { kept: engines.filter(runsIt), dropped: engines.filter((e) => !runsIt(e)), runs: has, providers };
+}
+
+/** Is any engine in this list on a metered API key? */
+export function anyPaid(/** @type {EngineChoice[]|null|undefined} */ engines) {
+  return (engines ?? []).some((e) => providerOf(e) !== null);
 }
 
 /** Is this the list a host from before engines already runs: the default, alone, with no model named? */

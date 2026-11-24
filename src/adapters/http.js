@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 
 import { cleanText, TITLE_MAX, BRIEF_MAX, TASK_MAX } from '../core/text.js';
-import { boxEngines } from '../core/engine-box.js';
+import { boxEngines, boxApiProviders } from '../core/engine-box.js';
 import { ENGINES_PARAM_RE } from '../fleet/protocol/engines.js';
 import { MAX_WRITE_BYTES } from '../core/files.js';
 import { dispatch, parse, canonicalCommand } from './commands.js';
@@ -305,6 +305,8 @@ export class HttpAdapter {
         // The engines this box runs, Claude Code first (engine-box.js): what
         // the coordinator cuts a member's list to before it sends a start.
         engines: boxEngines(this.cfg),
+        // And the metered API providers one of them may bill to (docs/api-engines.md).
+        apiProviders: boxApiProviders(this.cfg),
         maxSessions: room.limit,
         free: room.free,
         capacity: { ceiling: room.ceiling, bound: room.bound, why: room.why },

@@ -375,6 +375,9 @@ export function loadConfig(env = process.env) {
     // operator's word, because nothing here can see into the image cheaply.
     // Empty, which is the default, runs Claude Code and nothing else.
     engines: list('FLEETWRIGHT_ENGINES'),
+    // The metered API providers an engine here may bill to (docs/api-engines.md).
+    // Empty is none: a key is asked of no vault and handed to no session.
+    apiProviders: list('FLEETWRIGHT_API_PROVIDERS'),
     // A download cache per person, shared by their sessions on this box and
     // mounted at /root/.cache: npm, pip, uv, go and pnpm keep what they fetched,
     // so the next session does not fetch it again. See cacheVolumeFor.
