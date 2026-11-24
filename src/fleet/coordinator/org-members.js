@@ -184,7 +184,7 @@ export class OrgMembers {
     }
     this.byId.delete(member.id);
     this.dirty.add(member.id);
-    return { ok: true, member, text: `Removed ${member.name}. Its vault is not deleted by this: forget what it keeps from its Credentials first, or after, as one of its custodians.` };
+    return { ok: true, member, text: `Removed ${member.name} from the fleet’s list. The vault keeps its own record of who may use a member’s credentials, and this did not tell it: a phone’s Org screen tells the vault first when it removes a member.` };
   }
 
   /** Every member as a file (docs/members.md, "The file"). */
