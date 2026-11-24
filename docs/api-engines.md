@@ -313,9 +313,11 @@ behind the hub's token like every route there.
   no longer lists.
 - **Make**: the hub is asked to start a container named for the machine
   (`vm-<12 hex>`, from the ticket), for 5 to 350 minutes and 60 unless
-  said. The ticket and the coordinator's address reach it in a file the hub
-  hands Podman on its standard input, never on a command line, where every
-  user of the box could read it.
+  said. The ticket is written into the machine's own volume first, as the
+  join file a VM has, by a container that lives just long enough to read it
+  from standard input. So it is in no command line, where every user of
+  the box could read it, and in no environment, which Podman keeps a record
+  of. The machine then starts with only the coordinator's address.
 - **Extend** adds minutes to its end, as on a hypervisor, and never further
   off than the longest a machine is made for. **End** stops it and removes
   it with its volume. Both are its owner's alone: to anybody else the
@@ -378,13 +380,19 @@ limits a box passes is not checked anywhere.
 What is left unproven is the last step: a machine enrolling with a real
 coordinator, being handed its owner's sign-in, and running a session.
 
-Two things to know about the ticket. It reaches the container on Podman's
-standard input and is in no command line, and the entrypoint takes it out
-of the environment before it starts anything, so no session inherits it. It
-is still in the environment the container's first process was started
-with, which root inside the container can read. It is spent the moment the
-machine enrols and is worth nothing after; a VM's ticket sits in its boot
-data in the same way.
+**What the first real run found.** The ticket was first handed to Podman
+as an environment file on its standard input. Every test passed, against a
+stand-in, and a real Podman refused it: the hub gives a child process a
+socket for its standard input, and a socket cannot be opened by path. The
+ticket now goes into the volume as above, which is also better than what
+was meant: it is in nothing Podman keeps of the container. The CI run
+checks that with `podman inspect`.
+
+A machine started from the same image somewhere else, with its ticket in
+its environment (a provider's template), still has it in the environment
+its first process was started with, which root inside can read. It is
+spent the moment the machine enrols and is worth nothing after; a VM's
+ticket sits in its boot data in the same way.
 
 ## Where it shows
 
@@ -446,7 +454,8 @@ at the box's next look), the three new lines in `test/mcp.test.js` and
 
 For a machine on a box of your own: `test/machines.test.js` (the hub: the
 build from either shape of release, in the background and never waited
-for; the ticket on standard input and in no command line; the cap; the
+for; the ticket into the volume from standard input, in no command line
+and no environment; the cap; the
 box's clock; more time and end; what is refused in words; the API with its
 token), `test/own-pools.test.js` (the driver over the real hub routes: off
 unless named, a place per approved person, the image offered once built,

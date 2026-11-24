@@ -66,7 +66,7 @@ test('a release that changed is another image, so a machine runs what its box ru
   assert.equal(machineImage({ installDir: root, machineImage: 'registry.example/ours:1' }), 'registry.example/ours:1');
 });
 
-test('making a machine starts a container that is told its ticket on standard input, and never on a command line', async (t) => {
+test('making a machine puts its ticket in the machine’s own volume from standard input, and in no command line or environment', async (t) => {
   const { podman, cfg, clock, machines } = await box(t);
   const r = await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 90 });
   assert.deepEqual([r.ok, r.name, r.minutes, r.until, r.text], [true, VM, 90, clock.now + 90 * 60_000, `Made ${VM} on this machine, for 90 minutes.`]);
@@ -76,12 +76,21 @@ test('making a machine starts a container that is told its ticket on standard in
   // WHO IT IS FOR AND WHEN IT ENDS travel with the container, so a hub that
   // lost its own notes still ends it on time.
   assert.deepEqual(made.labels, { 'fleetwright.machine': VM, 'fleetwright.owner': ELI, 'fleetwright.made': String(clock.now), 'fleetwright.until': String(clock.now + 90 * 60_000) });
-  assert.equal(made.stdin, `FLEETWRIGHT_TICKET=${ticket()}\nFLEETWRIGHT_COORDINATOR=${FLEET}\nFLEETWRIGHT_OWNER=${ELI}\nFLEETWRIGHT_MINUTES=90\n`);
-  const run = /** @type {string[]} */ (podman.calls().find((a) => a[0] === 'run'));
-  // THE TICKET IS A SECRET FOR FIFTEEN MINUTES, and an argument is readable
-  // by every user of the box: it is in no call this made.
+  // THE JOIN FILE A VM HAS, written into this machine's volume before it
+  // starts by a container that read it from standard input and is gone.
+  const [seed] = podman.state().seeds;
+  assert.equal(seed.volume, machineNames(VM).volume);
+  assert.deepEqual(JSON.parse(seed.stdin), { v: 1, coordinator: FLEET, ticket: ticket(), owner: ELI, minutes: 90 });
+  assert.equal(seed.wrote, 'umask 077 && cat > /var/lib/fleetwright-sidecar/vm-join.json');
+  const run = /** @type {string[]} */ (podman.calls().find((a) => a[0] === 'run' && a.includes('-d')));
+  // THE TICKET IS A SECRET FOR FIFTEEN MINUTES. An argument is readable by
+  // every user of the box, and an environment is kept in Podman's record of
+  // the container: it is in no call this made, and the machine itself is
+  // started with nothing on its standard input and only the fleet's address.
   assert.equal(JSON.stringify(podman.calls()).includes(ticket()), false);
-  assert.deepEqual(run.slice(run.indexOf('--env-file'), run.indexOf('--env-file') + 2), ['--env-file', '/dev/stdin']);
+  assert.equal(made.stdin, '');
+  assert.deepEqual(run.filter((a, i) => run[i - 1] === '-e'), [`FLEETWRIGHT_COORDINATOR=${FLEET}`]);
+  assert.equal(run.includes('--env-file'), false, 'Podman cannot open the standard input the hub gives it by path');
   // As a session's container on this box: its user namespace and its limits.
   for (const flag of ['--userns=nomap', '--memory=8g', '--cpus=2', '--pids-limit=512', '-d']) assert.ok(run.includes(flag), flag);
   assert.deepEqual(run.slice(run.indexOf('-v'), run.indexOf('-v') + 2), ['-v', `${machineNames(VM).volume}:/var/lib/fleetwright-sidecar`]);
@@ -129,21 +138,28 @@ test('a machine is refused in words where one cannot be made, and nothing is sta
   const r = await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET });
   assert.equal(r.text, `Podman did not start ${VM}: Error: crun: cannot set memory limit`);
   assert.deepEqual(podman.calls().filter((a) => a[0] === 'rm' || a[0] === 'volume').map((a) => a.join(' ')), [`rm -f fwm-${VM}`, `volume rm -f fwm-${VM}-state`]);
+  assert.deepEqual(podman.state().volumes, [], 'the volume that held its ticket went with it');
+  // AND REFUSING TO PREPARE IT, before any machine is started.
+  podman.set({ failRun: false, failSeed: true });
+  const unprepared = await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET });
+  assert.equal(unprepared.text, `Podman did not prepare ${VM}: Error: creating volume: no space left on device`);
+  assert.deepEqual([podman.state().containers, podman.state().volumes], [[], []]);
 });
 
 test('the image is built in the background, from this release and the Node the hub runs on, and a machine never waits for it', async (t) => {
   const { podman, cfg, machines } = await box(t, {}, { built: false });
-  podman.set({ buildMs: 300 });
+  podman.set({ buildMs: 1500 });
   // Nothing was built by merely looking.
   const before = await machines.list();
   assert.deepEqual(before.ok && before.image, { name: 'Linux, with the fleet', ready: false, building: false, problem: null });
   assert.equal(podman.calls().some((a) => a[0] === 'build'), false);
   // ASKED FOR A MACHINE WITH NO IMAGE: the build is started and the person is told, at once.
-  const started = Date.now();
   const first = await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET });
   assert.equal(first.ok, false);
   assert.match(first.text, /is building its machine image, which takes a few minutes/);
-  assert.ok(Date.now() - started < 290, 'the answer did not wait for the build');
+  // THE ANSWER CAME WHILE THE BUILD WAS STILL GOING: nothing was built yet.
+  assert.notEqual(machines.building, null);
+  assert.deepEqual(podman.state().images, []);
   const during = await machines.list({ prepare: true });
   assert.equal(during.ok && during.image.building, true);
   await machines.building;

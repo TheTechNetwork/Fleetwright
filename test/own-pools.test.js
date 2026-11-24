@@ -65,7 +65,7 @@ test('off unless the operator named it: a box that was not told holds nothing, r
 });
 
 test('a box reports itself as a place of the person’s own, for each person it is approved for, with its image once that is built', async (t) => {
-  const { podman, own } = await box(t, { built: false });
+  const { podman, own, adapter } = await box(t, { built: false });
   // BEFORE IT HAS LOOKED it cannot tell, and says neither "reachable" nor an image.
   assert.deepEqual(own.report().map((e) => [e.owner, e.reachable, e.images]), [[ELI, null, []], [SAM, null, []]]);
   podman.set({ buildMs: 250 });
@@ -77,7 +77,7 @@ test('a box reports itself as a place of the person’s own, for each person it 
     address: `own:${BOX}`, owner: ELI, kind: 'sandbox', own: true, provider: BOX, reachable: true, pools: [], images: [], networks: [], machines: [],
     problem: 'This machine is building its machine image, which takes a few minutes the first time and after an update.',
   });
-  await new Promise((r) => setTimeout(r, 400));
+  await adapter.machines.building;
   await own.refresh();
   assert.deepEqual(own.report().map((e) => [e.owner, e.own, e.images, e.problem]), [[ELI, true, [{ id: IMAGE, name: 'Linux, with the fleet' }], undefined], [SAM, true, [{ id: IMAGE, name: 'Linux, with the fleet' }], undefined]]);
   assert.equal(podman.calls().filter((a) => a[0] === 'build').length, 1);
@@ -93,7 +93,7 @@ test('making one asks the hub, which starts the container; the person’s machin
   const { podman, own } = await box(t);
   const r = await own.make(ask());
   assert.deepEqual(r, { ok: true, name: VM, minutes: 30, text: `Made ${VM} on ${BOX}, for 30 minutes. It joins when it has started and enrolled.` });
-  assert.equal(podman.state().containers[0].stdin.includes(`FLEETWRIGHT_COORDINATOR=${FLEET}\nFLEETWRIGHT_OWNER=${ELI}\n`), true);
+  assert.deepEqual(JSON.parse(podman.state().seeds[0].stdin), { v: 1, coordinator: FLEET, ticket: ticket(), owner: ELI, minutes: 30 });
   await own.refresh();
   const [eli, sam] = own.report();
   assert.deepEqual(eli.machines.map((/** @type {any} */ m) => [m.name, m.state, m.image, typeof m.until, m.cpus, m.memory]), [[VM, 'Running', 'Linux, with the fleet', 'number', null, null]]);
@@ -205,7 +205,7 @@ test('behind the one seam: its image is made here, and a machine by name is aske
 
 test('a sidecar told `own` reports the box in its health frame, with why it offers no image yet and nobody’s sign-in', async (t) => {
   const { Sidecar } = await import('../src/fleet/host/sidecar.js');
-  const { hub, podman } = await box(t, { built: false });
+  const { hub, podman, adapter } = await box(t, { built: false });
   podman.set({ failBuild: true });
   const make = (/** @type {string[]} */ sandboxProviders) => new Sidecar({
     hub,
@@ -217,7 +217,7 @@ test('a sidecar told `own` reports the box in its health frame, with why it offe
   const pools = /** @type {Pools} */ (sidecar.pools);
   pools.adopt(accounts());
   await pools.refresh();
-  await new Promise((r) => setTimeout(r, 300));
+  await adapter.machines.building;
   await pools.refresh();
   const health = /** @type {any} */ (await sidecar.health());
   assert.deepEqual(health.xo.map((/** @type {any} */ e) => [e.address, e.kind, e.own, e.provider, e.owner, e.reachable, e.images, e.problem]), [

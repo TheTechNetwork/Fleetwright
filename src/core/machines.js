@@ -15,9 +15,19 @@
 // the file does not know ends when its labels say, and a name in the file
 // with no container is dropped.
 //
-// THE TICKET NEVER TOUCHES A COMMAND LINE. `podman run` is given the
-// machine's environment as a file on its standard input, because an argument
-// is readable by every user of the box for as long as the process lives.
+// THE TICKET NEVER TOUCHES A COMMAND LINE OR AN ENVIRONMENT. An argument is
+// readable by every user of the box for as long as the process lives, and a
+// container's environment is kept in Podman's own record of it and in its
+// first process for as long as it runs. So the ticket is written into the
+// machine's own volume first, as the join file a VM has, by a container that
+// lives just long enough to read it from standard input; the machine then
+// starts with that volume and finds the file. The same way a session's
+// credential reaches its volume (podman.js).
+//
+// It was first handed to `podman run --env-file /dev/stdin`, which a real
+// Podman refuses: the hub gives a child a socket for its standard input, and
+// a socket cannot be opened by path. Found by CI's first real run
+// (scripts/machine-smoke.mjs), which is what that run is for.
 //
 // NOTHING HERE HAS RUN ON A PERSON'S BOX. The tests drive it against a
 // stand-in `podman` (test/machines.test.js), and CI builds the image and
@@ -398,8 +408,8 @@ export class Machines {
     const who = String(owner || '').toLowerCase();
     const m = TICKET_RE.exec(String(ticket || ''));
     if (!m) return { ok: false, text: 'That machine came without the ticket it enrols with, so it was not made.' };
-    // One line each, because that is what an environment file is: an address
-    // with a newline in it would be a second variable.
+    // An address is a label on the container and one word of one line: one
+    // with a space or a line in it is not an address.
     if (!who || /[\s=]/.test(who) || who.length > 254) return { ok: false, text: 'A machine is made for a signed-in person.' };
     if (!/^https:\/\/[^\s]+$/.test(String(coordinator || ''))) return { ok: false, text: 'This machine was not told the fleet’s address to give the new one, so it was not made.' };
     if (!podmanAvailable(cfg)) return { ok: false, text: 'Podman is not installed on this machine, and a machine here is a Podman container.' };
@@ -424,6 +434,19 @@ export class Machines {
     const now = this.now();
     const until = now + life * 60_000;
     const { container, volume } = machineNames(name);
+    // THE JOIN FILE, INTO THE MACHINE'S VOLUME, from standard input: what
+    // install/fleetwright-vm-join leaves on a VM, which the sidecar enrols
+    // from and blanks. JSON, so an address is only ever text.
+    const seeded = await podmanAsync(
+      cfg,
+      ['run', '--rm', '-i', ...usernsArgs(cfg), '--entrypoint', 'sh', '-v', `${volume}:/var/lib/fleetwright-sidecar`, machineImage(cfg), '-c', 'umask 077 && cat > /var/lib/fleetwright-sidecar/vm-join.json'],
+      { timeout: 120_000, input: `${JSON.stringify({ v: 1, coordinator, ticket, owner: who, minutes: life })}\n` },
+    );
+    if (seeded.status !== 0) {
+      await this.#remove(name);
+      this.ready = null;
+      return { ok: false, text: `Podman did not prepare ${name}: ${line(seeded.stderr || seeded.stdout) || 'it said nothing'}` };
+    }
     const run = await podmanAsync(
       cfg,
       [
@@ -435,8 +458,9 @@ export class Machines {
         '--label', `fleetwright.owner=${who}`,
         '--label', `fleetwright.made=${now}`,
         '--label', `fleetwright.until=${until}`,
-        // What it enrols with, read from this process's standard input.
-        '--env-file', '/dev/stdin',
+        // The fleet it joins, which is no secret. The ticket is in the
+        // volume below and nowhere here.
+        '-e', `FLEETWRIGHT_COORDINATOR=${coordinator}`,
         // Its key and its join file, so a restart of the container is the
         // same machine. Gone when the machine ends.
         '-v', `${volume}:/var/lib/fleetwright-sidecar`,
@@ -446,7 +470,7 @@ export class Machines {
         ...(cfg.sandboxPidsLimit ? [`--pids-limit=${cfg.sandboxPidsLimit}`] : []),
         machineImage(cfg),
       ],
-      { timeout: 120_000, input: `FLEETWRIGHT_TICKET=${ticket}\nFLEETWRIGHT_COORDINATOR=${coordinator}\nFLEETWRIGHT_OWNER=${who}\nFLEETWRIGHT_MINUTES=${life}\n` },
+      { timeout: 120_000 },
     );
     if (run.status !== 0) {
       // What a failed start can leave: a created container and its volume.

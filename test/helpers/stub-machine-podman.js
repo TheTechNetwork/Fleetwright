@@ -23,7 +23,7 @@ export function stubMachinePodman(t) {
   const file = path.join(dir, 'podman-state.json');
   const bin = path.join(dir, 'podman');
   const program = path.join(dir, 'podman.cjs');
-  writeFileSync(file, JSON.stringify({ images: [], containers: [], volumes: [], calls: [], failBuild: false, buildMs: 0, failRun: false, down: false }));
+  writeFileSync(file, JSON.stringify({ images: [], containers: [], volumes: [], seeds: [], calls: [], failBuild: false, buildMs: 0, failRun: false, failSeed: false, down: false }));
   // THE ARGUMENTS REACH THE PROGRAM IN A VARIABLE, not as its own arguments:
   // Node reads `--env-file` out of whatever follows a script's name, and a
   // machine's `podman run` carries exactly that flag.
@@ -65,11 +65,21 @@ const main = async () => {
     let stdin = '';
     for await (const c of process.stdin) stdin += c;
     s = read();
+    // A SHORT-LIVED CONTAINER THAT WRITES INTO A VOLUME from its standard
+    // input, and is gone: what it was handed is what the volume now holds.
+    if (args.includes('--rm')) {
+      if (s.failSeed) return done(125, '', 'Error: creating volume: no space left on device\\n');
+      const volume = after('-v').split(':')[0];
+      s.seeds.push({ volume, stdin, wrote: args[args.length - 1] });
+      if (!s.volumes.includes(volume)) s.volumes.push(volume);
+      write(s);
+      return done(0);
+    }
     if (s.failRun) return done(125, '', 'Error: crun: cannot set memory limit\\n');
     const labels = {};
     args.forEach((a, i) => { if (a === '--label') { const [k, ...v] = args[i + 1].split('='); labels[k] = v.join('='); } });
     s.containers.push({ name: after('--name'), state: 'running', labels, stdin, image: args[args.length - 1] });
-    s.volumes.push(after('-v').split(':')[0]);
+    if (!s.volumes.includes(after('-v').split(':')[0])) s.volumes.push(after('-v').split(':')[0]);
     write(s);
     return done(0, 'c0ffee\\n');
   }

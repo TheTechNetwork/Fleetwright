@@ -17,9 +17,14 @@
 # else is started: a session's pane does not inherit it. The sidecar spends
 # it at once and blanks it in the file whether or not that worked
 # (src/fleet/host/vm-join.js), so a restart finds no ticket and dials under
-# the name it was given. It stays readable in the environment this
-# container's first process was started with, to root in here; by then it
-# is spent, as a VM's is in its boot data.
+# the name it was given. A ticket that came in the environment stays
+# readable in the environment this container's first process was started
+# with, to root in here; by then it is spent, as a VM's is in its boot data.
+#
+# OR THE JOIN FILE IS ALREADY THERE, which is how a box of the fleet's own
+# starts one (src/core/machines.js): it writes the file into this machine's
+# volume before the machine starts, so the ticket is in no environment at
+# all. Then only the coordinator's address is in the environment.
 #
 # NO TIMER IN HERE. A VM powers itself off when its minutes are up. A
 # container is ended by whatever made it, which also knows when its time was

@@ -8,10 +8,12 @@
 // which proves what Podman is asked and nothing about what it then does. An
 // image that builds is not an image that runs, and four things here can only
 // be found out by running them: that the Containerfile builds from the
-// context the hub lays out, that `podman run` reads a machine's environment
-// from its standard input, that `podman ps` prints labels in the shape the
-// hub reads back, and that the host inside the image starts and tries to
-// enrol with the ticket it was given.
+// context the hub lays out, that a machine's ticket reaches its volume from
+// standard input, that `podman ps` prints labels in the shape the hub reads
+// back, and that the host inside the image starts and tries to enrol with
+// the ticket it was given. Its first run found the second of those wrong:
+// Podman would not read an environment file from the standard input the hub
+// gives it.
 //
 // WHAT IT DOES, as a box does it (src/core/machines.js, no second copy):
 //
@@ -122,8 +124,14 @@ try {
   if (!/could not enrol itself/.test(log)) die('the sidecar inside did not try to enrol with its ticket', log);
   if (log.includes(TICKET)) die('the ticket is in the machine’s log');
   ok('the hub listens, and the sidecar tried the ticket against a fleet that is not there');
-  const ps = await podman(['ps', '--no-trunc', '--format', '{{.Command}}']);
-  if ((ps.stdout + ps.stderr).includes(TICKET)) die('the ticket is in a command line', ps.stdout);
+  // NOWHERE BUT THE VOLUME: not in a command line, and not in what Podman
+  // keeps of the container, its environment included.
+  const kept = await podman(['inspect', container]);
+  if (kept.status !== 0) die('the machine could not be inspected', kept.stderr);
+  if (kept.stdout.includes(TICKET)) die('the ticket is in Podman’s record of the machine');
+  const join = await podman(['exec', container, 'sh', '-c', 'stat -c %a /var/lib/fleetwright-sidecar/vm-join.json && cat /var/lib/fleetwright-sidecar/vm-join.json']);
+  if (join.status !== 0 || !join.stdout.startsWith('600\n') || !join.stdout.includes('"coordinator":"https://fleet.invalid"')) die('the join file is not in the machine’s volume as a VM’s is', join.stdout + join.stderr);
+  ok('the ticket is in the machine’s volume, mode 600, and in nothing Podman keeps');
 
   step('4. it is listed, given more time, and ended, with nothing left');
   const listed = await machines.list();
