@@ -297,7 +297,15 @@ test('release, accept, reopen and cancel go through the coordinator with the tas
   assert.match(sent[1].params.task, /Reopened: Still drops \?next on Safari\./);
   assert.equal(task('t1').lock.session, 'cc-2');
   const released = /** @type {any} */ (core.actOnTask(dana, 't1', 'release', ''));
-  assert.match(released.text, /the session that held it is not stopped by this/);
+  assert.match(released.text, /^Released t1\. It is open again; the session that held it is not stopped by this\.$/);
+  // RELEASED AFTER IT CAME BACK: it keeps its result and its state, the
+  // answer says that and not "open again", and the history says who did it.
+  await start(dana, 't1');
+  await says('deb132', { event: 'session.ready', name: 'cc-3', tasked: true, taskId: 't1', result: { text: 'DONE' } });
+  const kept = /** @type {any} */ (core.actOnTask(dana, 't1', 'release', ''));
+  assert.deepEqual([kept.task.state, kept.task.lock, kept.task.result.outcome], ['returned', null, 'done']);
+  assert.equal(kept.text, 'Released t1 from its session, which is not stopped by this. It is still back with its result, to accept or reopen.');
+  assert.deepEqual(kept.task.handoffs.at(-1), { at: kept.task.updatedAt, by: dana.email, kind: 'released', session: 'cc-3', hostId: 'deb132', note: 'released by hand' });
   assert.equal(/** @type {any} */ (core.actOnTask(dana, 't1', 'cancel', '')).task.state, 'cancelled');
 });
 
@@ -318,7 +326,9 @@ test('the routes answer the same way on both coordinators: one function, and its
   make(dana, { title: 'Other' });
   await start(dana, 't1');
   assert.deepEqual((await call('GET', '/api/tasks?state=working', dana)).body.tasks.map((/** @type {any} */ t) => t.id), ['t1']);
-  assert.deepEqual((await call('GET', '/api/tasks?state=nonsense', dana)).body.tasks.map((/** @type {any} */ t) => t.id), ['t2', 't1']);
+  // A state nobody has is refused: answered with everything, a screen drew every task under one heading.
+  const nonsense = await call('GET', '/api/tasks?state=nonsense', dana);
+  assert.deepEqual([nonsense.status, nonsense.body.error.code, nonsense.body.tasks], [400, 'bad_state', undefined]);
   assert.equal((await call('PUT', '/api/tasks/t1', admin, { assignee: 'loose' })).status, 409, 'held');
   assert.equal((await call('POST', '/api/tasks/t1/act', dana, { action: 'accept' })).status, 409);
   assert.equal((await call('POST', '/api/tasks/t1/act', dana, { action: 'reopen' })).status, 409);

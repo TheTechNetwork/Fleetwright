@@ -326,17 +326,21 @@ export function confirmLock(task, { session, hostId, member, by, at }) {
  * that had already returned keeps its result.
  *
  * @param {Task} task
- * @param {{ by: string, at: number, note?: string, quiet?: boolean }} why  `quiet` for a start that never ran, which is not a change of hands
+ * @param {{ by: string, at: number, note?: string, quiet?: boolean, byHand?: boolean }} why
+ *   `quiet` for a start that never ran, which is not a change of hands;
+ *   `byHand` for a person's Release, which is written down whatever state
+ *   the task is in: somebody took a session off a task, and the history
+ *   says who. A session that merely ended after it had returned is not.
  * @returns {Task}
  */
-export function releaseLock(task, { by, at, note = '', quiet = false }) {
+export function releaseLock(task, { by, at, note = '', quiet = false, byHand = false }) {
   if (!task.lock) return task;
   const { session, hostId } = task.lock;
   return {
     ...task,
     state: task.state === 'working' || task.state === 'open' ? 'open' : task.state,
     lock: null,
-    handoffs: quiet || task.state !== 'working'
+    handoffs: quiet || (task.state !== 'working' && !byHand)
       ? task.handoffs
       : handed(task, { at, by, kind: 'released', ...(session ? { session } : {}), hostId, ...(note ? { note } : {}) }),
     updatedAt: at,
@@ -391,7 +395,7 @@ export function actOn(task, action, { by, at, note = '' }) {
   switch (action) {
     case 'release':
       if (!task.lock) return refuse('task_not_locked', `No session holds ${task.id}. There is nothing to release.`);
-      return { ok: true, task: releaseLock(task, { by, at, note: note || 'released by hand' }) };
+      return { ok: true, task: releaseLock(task, { by, at, note: note || 'released by hand', byHand: true }) };
     case 'accept':
       if (task.state !== 'returned') return refuse('task_not_returned', `${task.id} is ${task.state}. Only a task that has come back can be accepted.`);
       {

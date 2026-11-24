@@ -40,7 +40,7 @@ import { LinkedRepos } from './linked-repos.js';
 import { OrgMembers } from './org-members.js';
 import { MEMBER_ID_RE, composeFirstMessage } from '../protocol/members.js';
 import { OrgTasks } from './org-tasks.js';
-import { TASK_ID_RE, MAX_RESULT, lockTask, startFor, composeTaskMessage, firstBytes } from '../protocol/tasks.js';
+import { TASK_ID_RE, TASK_STATES, MAX_RESULT, lockTask, startFor, composeTaskMessage, firstBytes } from '../protocol/tasks.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
 import { VmStandby, MAX_READY, PENDING_MS } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
@@ -5809,6 +5809,12 @@ export class CoordinatorCore {
    * @param {{ state?: string|null }} [filter]
    */
   tasksFor(requester, filter = {}) {
+    // A STATE NOBODY HAS IS A QUESTION WITH NO ANSWER, not a request for
+    // everything: a screen asking for `retuned` was handed every task and
+    // drew them all under one heading.
+    if (filter.state && !TASK_STATES.includes(/** @type {any} */ (filter.state))) {
+      return { ok: false, error: { code: 'bad_state' }, text: `A task is ${TASK_STATES.join(', ')}. “${oneLine(filter.state, 40)}” is none of those.` };
+    }
     return { ok: true, tasks: this.tasks.visibleTo(this.#who(requester), filter).map((t) => this.#shown(t)) };
   }
 

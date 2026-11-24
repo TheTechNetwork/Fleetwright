@@ -208,7 +208,11 @@ export class OrgTasks {
     this.#keep(next.task);
     const t = next.task;
     const text = {
-      release: `Released ${t.id}. It is open again; the session that held it is not stopped by this.`,
+      // A task that had come back keeps its result and its state: saying
+      // "open again" beside "Came back: done" would be two answers.
+      release: t.state === 'open'
+        ? `Released ${t.id}. It is open again; the session that held it is not stopped by this.`
+        : `Released ${t.id} from its session, which is not stopped by this. It is still ${t.state === 'returned' ? 'back with its result, to accept or reopen' : t.state}.`,
       accept: `${t.id} is done.`,
       reopen: `${t.id} is open again, and its next session is told why.`,
       cancel: `${t.id} is cancelled. A session still working on it is not stopped by this.`,

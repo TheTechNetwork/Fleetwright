@@ -33,7 +33,7 @@ Nothing here runs unless somebody makes a task.
 | `state` | `open`, `working`, `returned`, `done` or `cancelled` | |
 | `branch` | `task/<id>-<the title as a slug>` | set when the task is made, never changed |
 | `parent` | the task this one was delegated from | optional |
-| `lock` | the session working on it: `{ session, hostId, member, by, at }` | one, or none |
+| `lock` | the session working on it: `{ session, hostId, member, by, at }`, with `readyAt` once that session is back at its prompt with no result, and, as a screen is sent it, `connected`: whether its machine is connected now | one, or none |
 | `result` | what came back: `{ outcome, summary, session, hostId, member, at, truncated }` | the summary is at most 4000 bytes |
 | `handoffs` | every change of hands, oldest first | the last 50 |
 | `createdBy`, `createdAt`, `updatedAt` | who made it, and when | set by the coordinator |
@@ -166,8 +166,10 @@ at its prompt and wrote no result. Nothing is made up from its log.
 said something, not that the work is right. Accept is a person's judgement,
 or the delegating agent's.
 
-The result is not put in the fleet's event feed, which more people read than
-may see the task. The feed gets the task's id and the outcome.
+The result is not put in the fleet's event feed. The feed gets one line: the
+task's id, its title, who it came back from and the outcome. That line is
+filed under the task's maker, so it is shown to them and to the fleet's
+admins and to nobody else.
 
 The person who made the task and everybody who may start as its assignee are
 told when it returns, as `task.returned`.
