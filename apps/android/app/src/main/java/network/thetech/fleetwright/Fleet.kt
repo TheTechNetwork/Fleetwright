@@ -136,6 +136,14 @@ class Fleet(
          * nothing is drawn.
          */
         val memberName: String? = null,
+        /**
+         * THE TASK IT IS WORK ON, by id, and the branch its box told it
+         * (docs/tasks.md). Null for a session nobody started on a task and
+         * from a host older than protocol 20, and then nothing is drawn: a
+         * session with no task is not "no task yet".
+         */
+        val taskId: String? = null,
+        val taskBranch: String? = null,
     ) {
         /**
          * "as Debbie", for a session started as a member, or null for one a
@@ -1843,6 +1851,233 @@ class Fleet(
     private fun parseMemberReply(json: JSONObject): MemberReply = MemberReply(
         ok = if (json.has("ok") && !json.isNull("ok")) json.optBoolean("ok") else null,
         member = json.optJSONObject("member")?.let { parseMember(it) },
+        text = json.optString("text").takeIf { it.isNotBlank() && it != "null" },
+    )
+
+    /**
+     * One task: a record above sessions, with a brief, one assignee, a
+     * branch, the session that holds its lock, what came back, and every
+     * change of hands (docs/tasks.md). No credential is ever in one.
+     * Named as iOS names it (Fleet.OrgTask).
+     *
+     * Everything past the id and the state is nullable or empty, so a field
+     * the coordinator stops sending is absent here and not a list that fails
+     * to load.
+     */
+    data class OrgTask(
+        val id: String,
+        val title: String? = null,
+        val brief: String? = null,
+        val workType: String? = null,
+        /** `owner/repo` the work is in, when the task names one. */
+        val repo: String? = null,
+        /** One member's id, or null for nobody. */
+        val assignee: String? = null,
+        /** "open", "working", "returned", "done" or "cancelled". */
+        val state: String,
+        /**
+         * What its sessions are told to work on. An instruction and a
+         * record: nothing checks that the branch exists.
+         */
+        val branch: String? = null,
+        /** The task this one was delegated from. */
+        val parent: String? = null,
+        /** Why it was reopened, which its next session is told. */
+        val note: String? = null,
+        val lock: Lock? = null,
+        val result: Returned? = null,
+        /** Every change of hands, oldest first. */
+        val handoffs: List<Handoff> = emptyList(),
+    ) {
+        /**
+         * The session working on it. [session] is null between a start
+         * being sent and its box answering.
+         */
+        data class Lock(
+            val session: String?,
+            val hostId: String?,
+            val by: String?,
+            val at: Long?,
+            /** When the session came back to its prompt with no result. */
+            val readyAt: Long?,
+            /**
+             * Whether its box is connected now. False is CANNOT TELL about
+             * the session, never "released"; null is a coordinator that did
+             * not say, and then nothing is claimed either way.
+             */
+            val connected: Boolean?,
+        )
+
+        /** What came back: the session's own account of the work. */
+        data class Returned(
+            /** "done", "blocked", "failed" or "unstated". */
+            val outcome: String?,
+            val summary: String,
+            /** The summary was longer than the fleet keeps and is cut. */
+            val truncated: Boolean,
+            val session: String?,
+            val hostId: String?,
+            val at: Long?,
+        )
+
+        data class Handoff(
+            val at: Long?,
+            val by: String?,
+            /**
+             * "created", "assigned", "started", "returned", "released",
+             * "accepted", "reopened", "cancelled" or "delegated".
+             */
+            val kind: String?,
+            val from: String?,
+            val to: String?,
+            val note: String?,
+            val session: String?,
+            val hostId: String?,
+            val task: String?,
+        )
+    }
+
+    /**
+     * The tasks this person may see, newest first. [tasks] is null when the
+     * answer carried no list: a refusal, or a fleet older than tasks, which
+     * is not the same as a fleet with none.
+     */
+    data class Tasks(val ok: Boolean?, val tasks: List<OrgTask>?, val text: String?)
+
+    /**
+     * One task, and what the fleet says about starting it. The answer to
+     * reading, making, changing and acting on one. A refusal carries [text],
+     * a sentence written for a person, and no task.
+     *
+     * [start] is `start`'s own parameters, ready to sign and send exactly as
+     * given, or null when nobody can start the task now. The phone never
+     * builds these: the words in `task` are the ones it shows and signs.
+     */
+    data class TaskReply(val ok: Boolean?, val task: OrgTask?, val start: Map<String, String>?, val text: String?)
+
+    /**
+     * The tasks in one state. Asked a state at a time on purpose: a fleet
+     * keeps 500 tasks with their briefs and results, and the Tasks screen
+     * opens on the unfinished ones only.
+     */
+    suspend fun tasks(state: String): Result<Tasks> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = get("/api/tasks?state=$state")
+            val list = json.optJSONArray("tasks")
+            Tasks(
+                ok = if (json.has("ok") && !json.isNull("ok")) json.optBoolean("ok") else null,
+                tasks = list?.let { a -> (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { parseTask(it) } } },
+                text = json.optString("text").takeIf { it.isNotBlank() && it != "null" },
+            )
+        }
+    }
+
+    suspend fun task(id: String): Result<TaskReply> = withContext(Dispatchers.IO) {
+        runCatching { parseTaskReply(get("/api/tasks/$id")) }
+    }
+
+    suspend fun createTask(fields: JSONObject): Result<TaskReply> = withContext(Dispatchers.IO) {
+        runCatching { parseTaskReply(post("/api/tasks", fields)) }
+    }
+
+    /** Change what a task says, or whose it is. Only the fields sent are changed. */
+    suspend fun changeTask(id: String, fields: JSONObject): Result<TaskReply> = withContext(Dispatchers.IO) {
+        runCatching { parseTaskReply(send("PUT", "/api/tasks/$id", fields)) }
+    }
+
+    /** Release, accept, reopen or cancel. */
+    suspend fun actOnTask(id: String, action: String, note: String? = null): Result<TaskReply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("action", action)
+            if (!note.isNullOrBlank()) body.put("note", note)
+            parseTaskReply(post("/api/tasks/$id/act", body))
+        }
+    }
+
+    /**
+     * Start a session on a task (docs/tasks.md, "Starting on a task").
+     *
+     * THE PARAMETERS ARE THE FLEET'S, SENT AS GIVEN. `GET /api/tasks/{id}`
+     * answers with `start`: the member, the task's id, its branch, its
+     * repository and the words. This signs and sends exactly that, through
+     * the path every member start takes, so the words a person read on the
+     * task's page are the words their phone signed. Nothing here rebuilds a
+     * brief: a phone that composed its own would sign something the page
+     * never showed.
+     *
+     * [host] is placement and rides beside the intent, as it does for any
+     * start. With none, the fleet places it where the member runs.
+     */
+    suspend fun startOnTask(params: Map<String, String>, host: String? = null): Reply =
+        intent("start", params, host = host)
+
+    private fun parseTask(o: JSONObject): OrgTask? {
+        fun text(from: JSONObject, key: String): String? = if (from.isNull(key)) null else from.optString(key).takeIf { it.isNotBlank() }
+        val id = text(o, "id") ?: return null
+        val state = text(o, "state") ?: return null
+        val handoffs = o.optJSONArray("handoffs")
+        return OrgTask(
+            id = id,
+            title = text(o, "title"),
+            brief = text(o, "brief"),
+            workType = text(o, "workType"),
+            repo = text(o, "repo"),
+            assignee = text(o, "assignee"),
+            state = state,
+            branch = text(o, "branch"),
+            parent = text(o, "parent"),
+            note = text(o, "note"),
+            lock = o.optJSONObject("lock")?.let { l ->
+                OrgTask.Lock(
+                    session = text(l, "session"),
+                    hostId = text(l, "hostId"),
+                    by = text(l, "by"),
+                    at = longOrNull(l, "at")?.takeIf { it > 0 },
+                    readyAt = longOrNull(l, "readyAt")?.takeIf { it > 0 },
+                    // `has` first: a missing field read as false would be
+                    // "its machine is not connected", which nobody said.
+                    connected = if (l.has("connected") && !l.isNull("connected")) l.optBoolean("connected") else null,
+                )
+            },
+            result = o.optJSONObject("result")?.let { r ->
+                OrgTask.Returned(
+                    outcome = text(r, "outcome"),
+                    summary = if (r.isNull("summary")) "" else r.optString("summary"),
+                    truncated = r.optBoolean("truncated", false),
+                    session = text(r, "session"),
+                    hostId = text(r, "hostId"),
+                    at = longOrNull(r, "at")?.takeIf { it > 0 },
+                )
+            },
+            handoffs = (0 until (handoffs?.length() ?: 0)).mapNotNull { i ->
+                handoffs?.optJSONObject(i)?.let { h ->
+                    OrgTask.Handoff(
+                        at = longOrNull(h, "at")?.takeIf { it > 0 },
+                        by = text(h, "by"),
+                        kind = text(h, "kind"),
+                        from = text(h, "from"),
+                        to = text(h, "to"),
+                        note = text(h, "note"),
+                        session = text(h, "session"),
+                        hostId = text(h, "hostId"),
+                        task = text(h, "task"),
+                    )
+                }
+            },
+        )
+    }
+
+    private fun parseTaskReply(json: JSONObject): TaskReply = TaskReply(
+        ok = if (json.has("ok") && !json.isNull("ok")) json.optBoolean("ok") else null,
+        task = json.optJSONObject("task")?.let { parseTask(it) },
+        // EXACTLY AS GIVEN, OR NOT AT ALL. Every parameter the fleet sends is
+        // text. One that is not could not be signed as it was sent, so the
+        // whole start is dropped and the page offers none, instead of signing
+        // a start with a piece missing.
+        start = json.optJSONObject("start")?.let { s ->
+            val keys = s.keys().asSequence().toList()
+            if (keys.all { s.opt(it) is String }) keys.associateWith { s.optString(it) } else null
+        },
         text = json.optString("text").takeIf { it.isNotBlank() && it != "null" },
     )
 
@@ -3891,6 +4126,8 @@ class Fleet(
                 archiveOk = if (o.has("archiveOk") && !o.isNull("archiveOk")) o.optBoolean("archiveOk") else null,
                 archiveText = o.optString("archiveText").takeIf { it.isNotBlank() && it != "null" },
                 memberName = o.optString("memberName").takeIf { it.isNotBlank() && it != "null" },
+                taskId = o.optString("taskId").takeIf { it.isNotBlank() && it != "null" },
+                taskBranch = o.optString("taskBranch").takeIf { it.isNotBlank() && it != "null" },
             )
         }
     }

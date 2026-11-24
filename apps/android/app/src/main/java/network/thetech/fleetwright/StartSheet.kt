@@ -86,6 +86,16 @@ data class StartRequest(
      * sign-in only.
      */
     val member: String? = null,
+    /**
+     * A START ON A TASK (docs/tasks.md): `start`'s own parameters as the
+     * fleet gave them on the task's page, where the person read the words in
+     * them. When set they are what is signed and sent, whole and unchanged,
+     * and nothing else here but `host` goes with them: a start put together
+     * from the fields above would be one the task's page never showed.
+     * `task` holds the same words, so whatever asks whether this start has
+     * something to do is answered truly; it is never what is sent.
+     */
+    val onTask: Map<String, String>? = null,
 )
 
 /**

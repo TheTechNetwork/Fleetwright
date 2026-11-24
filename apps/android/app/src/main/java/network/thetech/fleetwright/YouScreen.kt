@@ -71,7 +71,7 @@ fun YouScreen(
      */
     opening: String? = null,
     onOpened: () -> Unit = {},
-    /** A start New session described from a member's page, handed to whoever sends starts. */
+    /** A start described from a member's page or confirmed on a task's, handed to whoever sends starts. */
     onStart: (StartRequest) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -95,6 +95,13 @@ fun YouScreen(
     // How many members the organization has, once the fleet has said; null
     // until then and from a fleet older than members, and the row is not drawn.
     var orgCount by remember { mutableStateOf<Int?>(null) }
+    // How many tasks have come back and wait on somebody, once the fleet has
+    // said; null until then and from a fleet older than tasks, and the row
+    // is not drawn.
+    var tasksBack by remember { mutableStateOf<Int?>(null) }
+    // Bumped when the Tasks screen closes, so the count beside its row is
+    // asked again: an accepted task would otherwise go on being counted.
+    var tasksAsked by remember { mutableIntStateOf(0) }
     var open by rememberSaveable { mutableStateOf<String?>(null) }
     // Eggs.kt: taps on the build line. Not saved, so leaving You hides it again.
     var buildTaps by remember { mutableIntStateOf(0) }
@@ -120,6 +127,16 @@ fun YouScreen(
             if (got.ok != false && list != null) orgCount = list.size
         }
     }
+    // The same rule for tasks: only an answer that carries the list. The
+    // ones that came back are asked for alone, since they are the count this
+    // row shows and a fleet keeps hundreds of the others.
+    LaunchedEffect(signedIn, tasksAsked) {
+        if (!signedIn) return@LaunchedEffect
+        Fleet(settings).tasks("returned").onSuccess { got ->
+            val list = got.tasks
+            if (got.ok != false && list != null) tasksBack = list.size
+        }
+    }
     // A tapped notification about this person's vault lands on Credentials.
     LaunchedEffect(opening) {
         if (opening != null && signedIn) {
@@ -133,6 +150,14 @@ fun YouScreen(
         "temporary" -> TemporaryMachinesSheet(settings, onDismiss = { open = null })
         "linked" -> LinkedReposSheet(settings, onDismiss = { open = null })
         "org" -> OrgScreen(settings, onDismiss = { open = null }, onStart = onStart)
+        "tasks" -> TasksScreen(
+            settings,
+            onDismiss = {
+                open = null
+                tasksAsked++
+            },
+            onStart = onStart,
+        )
         "devices" -> DevicesSheet(settings, if (viewAsMember) false else admin, onDismiss = { open = null })
         "delegations" -> DelegationsSheet(settings, onDismiss = { open = null })
         "kinds" -> KindsSheet(settings = settings, onDismiss = { open = null })
@@ -268,6 +293,13 @@ fun YouScreen(
                 // team (docs/members.md). Drawn only once the list answered.
                 orgCount?.let { count ->
                     OpenRow("Organization", value = describeOrganization(count)) { open = "org" }
+                }
+                // THE WORK HANDED TO THE ORGANIZATION, beside it: tasks, the
+                // ones that came back first (docs/tasks.md). Drawn only once
+                // the fleet answered with a list, and the row says how many
+                // are waiting on somebody, or nothing.
+                tasksBack?.let { back ->
+                    OpenRow("Tasks", value = describeTasks(back)) { open = "tasks" }
                 }
             }
         }

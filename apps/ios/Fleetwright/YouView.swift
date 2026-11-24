@@ -15,7 +15,7 @@ import UserNotifications
 /// editing it by accident is how every request starts going somewhere else.
 ///
 /// Each finished piece of setup is one row: Credentials, Temporary machines,
-/// Linked repositories, Organization, Devices, Siri and Shortcuts. What only an admin can do (People) is drawn
+/// Linked repositories, Organization, Tasks, Devices, Siri and Shortcuts. What only an admin can do (People) is drawn
 /// for an admin and nobody else.
 struct YouView: View {
     let settings: Settings
@@ -39,6 +39,10 @@ struct YouView: View {
     /// How many members the organization has, once the fleet has said; nil
     /// until then and from a fleet older than members, and the row is not drawn.
     @State private var orgCount: Int?
+    /// How many tasks have come back and wait on somebody, once the fleet
+    /// has said; nil until then and from a fleet older than tasks, and the
+    /// row is not drawn.
+    @State private var tasksBack: Int?
     // Eggs.swift: taps on the build line. Not saved, so leaving You hides it again.
     @State private var buildTaps = 0
 
@@ -91,6 +95,21 @@ struct YouView: View {
                         } label: {
                             LabeledContent("Organization") {
                                 Text(describeOrganization(orgCount)).fleetType(.label)
+                            }
+                        }
+                    }
+                    // THE WORK HANDED TO THE ORGANIZATION, beside it: tasks,
+                    // the ones that came back first (docs/tasks.md). Drawn
+                    // only once the fleet answered with a list, and the row
+                    // says how many are waiting on somebody, or nothing.
+                    if let tasksBack {
+                        NavigationLink {
+                            TasksView(settings: settings)
+                        } label: {
+                            LabeledContent("Tasks") {
+                                if let waiting = describeTasks(returned: tasksBack) {
+                                    Text(waiting).fleetType(.label)
+                                }
                             }
                         }
                     }
@@ -340,6 +359,12 @@ struct YouView: View {
         // members answers without one, and "no members yet" would be a claim.
         if let org = try? await Fleet(settings: settings).members(), org.ok != false, let list = org.members {
             orgCount = list.count
+        }
+        // The same rule for tasks: only an answer that carries the list. The
+        // ones that came back are asked for alone, since they are the count
+        // this row shows and a fleet keeps hundreds of the others.
+        if let back = try? await Fleet(settings: settings).tasks(state: "returned"), back.ok != false, let list = back.tasks {
+            tasksBack = list.count
         }
     }
 
