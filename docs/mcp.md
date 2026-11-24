@@ -77,6 +77,14 @@ session as, and `fleet_member` adds, changes or removes one member's record.
 member's vault is filed by a person from the app or the signing page, with
 their own sign-in inside the request, which no MCP client holds.
 
+`fleet_member` takes `engines`, the member's engines in the order to try
+([engines.md](./engines.md)): each `claude-code`, `codex` or `opencode`, with
+a model after `=`. `fleet_members` prints each member's list, and
+`fleet_health` prints the engines each machine runs, which is what decides
+where a member can be started. The sign-ins those engines run on are vault
+items, and like every vault item they are deposited from a phone or the
+signing page and never through an MCP client.
+
 ## Tasks, and handing work on
 
 Three more are the fleet's own record ([tasks.md](./tasks.md)). `fleet_tasks`

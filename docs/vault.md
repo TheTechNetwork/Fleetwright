@@ -600,10 +600,25 @@ and phones on that fleet ask for the key to be pasted.
 
 ## Adding a provider
 
-Three names are held for the engines after Claude Code and kept by nothing
-yet: `codex`, `copilot` and `apikey:<provider>` (`FUTURE_ITEM_KINDS`). A vault
-refuses each as not kept yet, which is a different answer from a name it has
-never heard of.
+## What an engine runs on
+
+Two items are the sign-ins of the engines beside Claude Code
+([engines.md](./engines.md), "Credentials"): `codex`, the `auth.json` that
+`codex login` writes, and `copilot`, a GitHub Copilot token. A custodian
+pastes either into a member's Credentials. Each is sealed and listed like
+any other item, by name and state, and never read back.
+
+They differ from a Claude sign-in in three ways. **Nothing renews them from
+here**, so Test answers that they are not tried from the vault. **Only a box
+that says it takes them is given them** (`accepts` names `engines` in its
+signed request). **A Codex sign-in goes to one machine**: the first approved
+box that asks holds it, `list` names that box (`heldBy`), every other box is
+told it is held elsewhere, and depositing it again is how it moves. Codex
+renews its own tokens where it runs, and a renewal ends every other copy.
+
+One name is still held and kept by nothing: `apikey:<provider>`
+(`FUTURE_ITEM_KINDS`). A vault refuses it as not kept yet, which is a
+different answer from a name it has never heard of.
 
 One entry in `OAUTH_PROVIDERS` in `src/fleet/minter/vault.js` (its label and
 how it renews, in `src/core/oauth-refresh.js`), its client in the minter's

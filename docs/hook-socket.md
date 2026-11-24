@@ -237,6 +237,19 @@ which appears before the CLI has a session and so before any hook can fire.
 A session from an older image sends nothing and is read off the pane exactly
 as before.
 
+**A fourth event, and a fourth route, for the engines that are not Claude
+Code** ([engines.md](./engines.md)). Those run behind `fleetwright-engine`,
+which has no hooks, so it posts the same `UserPromptSubmit` a hook would and
+then one event of its own, `TurnEnded`, with how the turn ended:
+`{ engine, reason, detail, model, usage, resetsAt }`. The hub holds every
+field to a type and a bound (`cleanTurn`), takes it only for the engine the
+session's record says its pane is on, and reads Claude Code's own `Stop` and
+`StopFailure` as the same thing. `/internal/engine-credential` on the same
+socket is where that runner asks for the sign-in its engine runs on, and
+hands a renewed one back: answered only for an item one of this session's
+engines runs on, from this session's member's vault on this box. A hub with
+no other engines answers the route as one that is not there.
+
 A session can lie about its phase. It could already do everything that
 decides — a notification, an "is it done" answer, the restart's exclusions —
 by painting its pane, which is what these events replace, so nothing here

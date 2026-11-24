@@ -254,6 +254,15 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       workTypes: { type: 'array', items: { type: 'string' }, description: 'The kinds of work it takes, as short lowercase names: "backend", "code-review".' },
       instructions: { type: 'string', description: 'Markdown the member’s sessions open with, before the task. At most 4 KiB.' },
       model: { type: 'string', description: 'The model its Claude Code engine runs, when not the default.' },
+      engines: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'What runs the member, in the order to try: each "claude-code", "codex" or "opencode", with a model after "=" ' +
+          '("codex=gpt-5.1-codex"; opencode needs one, written "opencode=github-copilot/<model>"). Up to three, each once. ' +
+          'A session starts on the first that its machine runs, and at an account’s limit the next one continues from a ' +
+          'handoff note in the workspace. Each runs on the member’s own sign-in of its kind, kept in its vault.',
+      },
       tag: { type: 'string', description: 'The host tag its sessions go to when the person starting one names no machine.' },
       budgetUsdMonth: { type: 'number', description: 'A monthly budget in dollars. Stored; nothing enforces it yet.' },
     },

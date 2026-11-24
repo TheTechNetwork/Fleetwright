@@ -41,6 +41,19 @@ when that version is cut.
 - **An agent can hand work to another member.** `fleet_delegate` makes a
   task, starts the other member on it and waits for the result. The other
   member gets the brief and nothing else.
+- **A member can have more than one engine.** A member's page has Engines:
+  Claude Code, Codex and OpenCode, in the order to try them. When a session
+  stops at its account's limit, the machine writes HANDOFF.md in the
+  workspace and carries on with the member's next engine in the same
+  session, and the session and its task say which engine it moved to and
+  why. Off until a machine's operator installs the other engines and turns
+  them on; until then every member runs on Claude Code as before.
+- **Codex and Copilot sign-ins for a member.** A member's Credentials keeps
+  a Codex sign-in and a GitHub Copilot token. A Codex sign-in is handed to
+  one machine, and its row says which.
+- **A session says why its turn ended.** A limit, a sign-in that ended, the
+  wrong model or an error is named on the session, with when the limit lifts
+  if the engine said.
 
 ## 0.4.16 — 2026-11-04
 

@@ -15,8 +15,17 @@ starts the member's next engine in the same workspace.
 This is step 4 of the organization work ([ROADMAP.md](../ROADMAP.md)). Choosing
 the member is step 5, budgets step 6, and engines paid for by an API key
 step 7. **A machine runs only the engines it reports**, and none reports
-`codex` or `opencode` until somebody installs them on it, so a fleet that
-changes nothing runs exactly as it did.
+`codex` or `opencode` until its operator installs them in the session image
+and names them (`FLEETWRIGHT_ENGINES`), so a fleet that changes nothing runs
+exactly as it did.
+
+**What has and has not been run.** The two adapters are tested against
+stand-in servers that speak each engine's published protocol, and the Codex
+adapter's opening was checked against the real `codex app-server`, signed
+out. No turn has been sent to a real Codex or OpenCode, and the move from one
+engine to the next has not been run on a box: the note, the commit, the
+choice of engine and the launch command each have tests, and the tmux and
+podman steps between them do not.
 
 ## The engines
 
@@ -47,9 +56,10 @@ vault keeps one item of each kind, so there is no second account of the same
 provider to rotate to. The list falls back from one provider to another and
 that is all it can do.
 
-`opencode` is one row in the adapter's table (`src/core/engines/acp.js`):
-another agent that speaks the Agent Client Protocol is a row there and a
-credential rule, not a new adapter.
+`opencode` is one row in the runner's table (`RUNS` in `sandbox/engine.mjs`):
+another agent that speaks the Agent Client Protocol is a row there, a row in
+`ENGINES` (`src/fleet/protocol/engines.js`) and a credential rule, not a new
+adapter.
 
 ## One event: TurnEnded
 
@@ -63,7 +73,7 @@ TurnEnded { engine, reason, detail, model, usage, resetsAt }
 | reason | what happened | Claude Code | Codex | ACP |
 |---|---|---|---|---|
 | `done` | the turn ended | the `Stop` hook | `turn/completed`, status `completed` | `stopReason: end_turn` |
-| `limit` | the account's limit | `StopFailure` naming a rate or usage limit | `usageLimitExceeded`, `rateLimitExceeded`, or a rate-limit update at 100% | an error naming a rate limit or quota |
+| `limit` | the account's limit | `StopFailure` naming a rate or usage limit | `usageLimitExceeded`, or a failed turn while a rate-limit window stands at 100% | an error naming a rate limit or quota |
 | `auth` | not signed in, or the sign-in ended | `StopFailure` naming the sign-in | `account/read` with no account, or `unauthorized` | error `-32000`, Authentication required |
 | `model` | not the model that was asked for | | `thread/start` answers another model, `model/rerouted`, `modelNotFound` | the session reports another model, or none |
 | `refused` | the provider declined the work | | a policy error | `stopReason: refusal` |
@@ -87,13 +97,18 @@ The hub reads `Stop` and `StopFailure` as a TurnEnded and nothing else about
 it changes.
 
 **Every other engine runs behind `fleetwright-engine`**
-(`src/core/engines/run.js`), which is the pane's process where `claude` would
-have been: the same tmux session, the same container, the same workspace, the
-same socket. It starts the engine's own server on a pipe, speaks its
-protocol, prints what the agent says to the pane, and reports to the socket
-with the events the hooks use. So the list, the log, peek, stop, the archive
-and the result file ([tasks.md](./tasks.md)) work on these sessions with no
-change.
+(`sandbox/engine.mjs`, one file with no imports, copied into the session
+image), which is the pane's process where `claude` would have been: the same
+tmux session, the same container, the same workspace, the same socket. It
+starts the engine's own server on a pipe, speaks its protocol, prints what
+the agent says to the pane, and reports to the socket with the events the
+hooks use. So the list, the log, peek, stop and the result file
+([tasks.md](./tasks.md)) work on these sessions with no change.
+
+**Only in a container, with the session's socket.** The runner is in the
+image and the socket is how it is handed a sign-in, so a box whose sessions
+run outside a container, or without the socket, runs Claude Code alone and
+reports that, whatever its operator names.
 
 What these sessions do not have is said where it would be offered: no Remote
 Control link, and no dialog a phone can answer. A session that asks before it
@@ -113,10 +128,13 @@ answer. Neither is a turn, and neither spends anything.
 **On the model that was asked for.** OpenCode, given a model it cannot reach,
 uses another one and says nothing. So a turn runs only when the engine
 itself reports the model it is on and that is the model the member names:
-from `thread/start` for Codex, and from the session's model option for an ACP
-agent, set and then read back. An engine that does not say which model it is
-on is *cannot tell*, and cannot tell is not a match. That is a TurnEnded with
-reason `model`, before anything was asked of it.
+from `thread/start` for Codex, and for an ACP agent from the session's model
+option, set and then read back (an older agent, which lists its models and
+has no option to read, must list the model and accept being set to it). An
+engine that does not say which model it is on is *cannot tell*, and cannot
+tell is not a match. That is a TurnEnded with reason `model`, before anything
+was asked of it. Codex is also stopped mid-turn if it says it was moved to
+another model (`model/rerouted`).
 
 ## At a limit: HANDOFF.md, and the next engine
 
@@ -127,11 +145,14 @@ member's list has an engine after this one that the machine has, the box:
    branch when the session is on one, which engine stopped, why, when it
    says its limit lifts, what `git status` and the last five commits say when
    the workspace is a checkout, and the last of what the engine said;
-2. commits that file, and only that file, when the checkout is on the task's
-   own branch. It does not push: a push is the session's to make;
+2. commits that file, and only that file, inside the checkout, when the
+   session is on a task and the checkout is on that task's own branch. On
+   any other branch, or with no task, the note is written and not committed.
+   It does not push: a push is the session's to make;
 3. ends the pane and starts the next engine in the same session, with the
    first message the session was given and one line more: read `HANDOFF.md`
-   first.
+   first. The box keeps that first message in memory only, so after a hub
+   restart the next engine is handed the note and no first message.
 
 The session keeps its name, its workspace and its task's lock. Its record
 says which engine it is on and each change, and the box says so as it
@@ -169,24 +190,35 @@ for it and to no other, says which machine holds it, and gives it to another
 only after a custodian deposits it again. A Copilot token does not rotate
 and goes to every machine approved for the vault.
 
-**Nothing renews these from the vault**, unlike a Claude sign-in. Whether one
-still works is found by the check before a turn, on the machine, and an
-ended one is a TurnEnded with reason `auth` that the member's custodians are
-told.
+**Nothing renews these from the vault**, unlike a Claude sign-in, and Test
+answers that it is not tried from there. Whether one still works is found by
+the check before a turn, on the machine. An ended one is a TurnEnded with
+reason `auth`: it is said on the session, to whoever that session's events
+reach, and the member's next engine takes over if there is one.
 
-A box asks for them by saying it takes them (`accepts: ["members",
-"engines"]`), so a box from before this is never handed a file it would
+A box asks the vault for them by saying it takes them (`accepts: ["engines",
+"members"]`), so a box from before this is never handed a file it would
 leave lying where nothing reads it.
+
+**A session is handed one only through its own socket.** The runner asks the
+hub (`/internal/engine-credential`) for the item its engine runs on. The hub
+answers only for the session whose socket it is, only for an item one of
+that session's engines runs on, and only from that member's vault on this
+box. The runner writes it where the engine reads its sign-in, inside the
+container. When Codex has renewed its file by the end of a run, the runner
+hands the new one back the same way and the box keeps it in place of the
+old, so the next session on this machine is not signed out.
 
 ## What a machine reports
 
 `health.engines` lists the engines a machine runs. `claude-code` is always
 there. `codex` and `opencode` are there when the operator says so
-(`FLEETWRIGHT_ENGINES=codex,opencode`) and, on a machine that runs sessions
-outside a container, when the command is also on its path. A machine that
-runs sessions in a container cannot see into its image cheaply, so there the
-operator's word is the whole of it, and a wrong word is a session that says
-the command was not found.
+(`FLEETWRIGHT_ENGINES=codex,opencode`) on a machine whose sessions run in a
+container with the session's socket. A box cannot see into its image
+cheaply, so the operator's word is the whole of it, and a wrong word is a
+session that says the command was not found. The stock image has neither;
+`WITH_ENGINES=1` at build time adds both, at pinned versions
+(`sandbox/Containerfile`).
 
 ## Starting
 
@@ -222,20 +254,29 @@ the engines this machine does not run.
   an agent that says which model it fell back to.
 - **`HANDOFF.md` holds what the engine printed last**, which may be anything
   the session had on its screen.
+- **A session can say its own turn ended any way it likes.** TurnEnded comes
+  over the session's socket from a process inside the session. A lie there
+  puts a wrong word on a screen, or starts the member's own next engine in
+  the same workspace. It names no other session and reaches no other vault.
+- **A member's custodians are not told separately that an engine's sign-in
+  ended.** The session says so; the fifteen-minute check that tells
+  custodians about a Claude sign-in does not look at these.
 - **Limit detection for Claude Code and ACP agents reads the error's words**,
   because neither has a field for it. A limit worded in a way nobody has seen
   is an `error`, and hands nothing on.
 
 ## Tests
 
-`test/engines.test.js` (the list, TurnEnded from each vocabulary, the
-handoff note), `test/engines-codex.test.js` and `test/engines-acp.test.js`
-(each adapter against a stand-in server speaking the published protocol:
-sign-in, the model check, a turn, a limit, a refusal, a permission request),
-`test/engines-run.test.js` (the runner and what it reports),
-`test/engines-handoff.test.js` (the hub: the note, the commit only on the
-task's branch, the next engine, nothing handed on for a refusal),
-`test/engines-coordinator.test.js` (the list a start carries, the protocol 20
-refusal, the task's handoff), the engine items in `test/vault.test.js`
-(kept, one machine for a Codex sign-in, only to a box that takes them), and
-`test/engines-in-apps.test.js`.
+`test/engines.test.js` (the list and the line a start carries, TurnEnded
+from Claude Code's hooks, the choice of the next engine, the handoff note,
+the commit on a real checkout and only on the task's branch, what the
+session manager records, and that the runner's copies of the shared words
+match), `test/engines-run.test.js` (each adapter and the runner against a
+stand-in server speaking the published protocol: sign-in, the model check,
+a turn, a limit, a refusal, a permission request, the sign-in staged and
+handed back), `test/engines-hub.test.js` (TurnEnded and the sign-in on a
+session's socket, the launch command, what the watcher says as a session
+moves), `test/engines-coordinator.test.js` (the list a start carries, the
+protocol 20 refusal, the task's handoff), the engine items in
+`test/vault.test.js` (kept, one machine for a Codex sign-in, only to a box
+that takes them), and `test/engines-in-apps.test.js`.
