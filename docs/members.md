@@ -205,7 +205,8 @@ only way onto a member's sign-ins is a member start the box has checked.
 
 **A member's session is not pushed to the starter's archive.** That push is
 made with the starter's own GitHub sign-in on the box, and a box holding the
-member's vault need not hold theirs. A branch for the work is step 3's.
+member's vault need not hold theirs. A branch for the work is a task's
+([tasks.md](./tasks.md)).
 
 **Where.** With no host and no tag given, the member's `hosts.tag` places it.
 A member start is not sent to a temporary runner: a runner holds its owner's

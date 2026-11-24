@@ -31,6 +31,16 @@ when that version is cut.
 - **Your managers manage your credentials only if you let them.** You,
   Credentials has a switch for it, off until you turn it on, with a list of
   what they changed.
+- **Tasks.** A task is a piece of work with a short brief and one member it
+  belongs to. Start it and that member's session opens on the brief, on a
+  branch named for the task; when the session stops, what it wrote in
+  RESULT.md comes back as the task's result, marked DONE, BLOCKED or FAILED
+  in its own words. Accept it, or reopen it with a note for the next
+  session. Only one session works on a task at a time. Machines need
+  updating first.
+- **An agent can hand work to another member.** `fleet_delegate` makes a
+  task, starts the other member on it and waits for the result. The other
+  member gets the brief and nothing else.
 
 ## 0.4.16 — 2026-11-04
 

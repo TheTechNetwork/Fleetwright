@@ -77,6 +77,22 @@ session as, and `fleet_member` adds, changes or removes one member's record.
 member's vault is filed by a person from the app or the signing page, with
 their own sign-in inside the request, which no MCP client holds.
 
+## Tasks, and handing work on
+
+Three more are the fleet's own record ([tasks.md](./tasks.md)). `fleet_tasks`
+lists the tasks the caller may see, or shows one in full. `fleet_task` makes a
+task, changes one, hands it to another member, or releases, accepts, reopens
+or cancels it; it starts and stops no session. `fleet_start` takes `taskId`,
+and the server fills in the task's own words, assignee and branch.
+
+`fleet_delegate` is the loop as one call: make the task, start its assignee
+on it, wait, and answer with the result packet the box read from the
+session's `RESULT.md`. The brief is the whole handover, and nothing of the
+caller's conversation is sent. It is offered only where `fleet_start` is. A
+wait that runs out says the work is still going and how to keep waiting; a
+session that stops and wrote nothing is an error that says so, and no result
+is made up from its log.
+
 ## What is not exposed, and why that is a policy rather than a lock
 
 ```

@@ -62,10 +62,12 @@ test('every exposed tool is a real verb, with the verb\'s own parameters', () =>
     if (tool.verb === null) {
       assert.ok(tool.coordinator, `${tool.name} has no verb and no coordinator route`);
       assert.equal(tool.local, true, `${tool.name} reads a coordinator route but is not local`);
-      // A READ, with ONE WRITE: `fleet_member` changes a member's record in
-      // the organization, which is the fleet's own and no host's
-      // (docs/members.md). Named here so a second write is a deliberate edit.
-      assert.equal(tool.mutating, tool.name === 'fleet_member', `${tool.name} is a coordinator read and must not be mutating`);
+      // A READ, with THREE WRITES: `fleet_member` changes a member's record
+      // in the organization (docs/members.md), `fleet_task` a task's, and
+      // `fleet_delegate` makes a task and starts its assignee on it
+      // (docs/tasks.md). Both records are the fleet's own and no host's.
+      // Named here so another write is a deliberate edit.
+      assert.equal(tool.mutating, ['fleet_member', 'fleet_task', 'fleet_delegate'].includes(tool.name), `${tool.name} is a coordinator read and must not be mutating`);
       // No `host`: naming one would ask the fleet to route a question the fleet
       // itself answers.
       assert.ok(!('host' in tool.inputSchema.properties), `${tool.name} takes a host it cannot use`);
