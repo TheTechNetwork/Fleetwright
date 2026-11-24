@@ -66,6 +66,7 @@ import { BrowseCarrier, parseBrowseHosts } from './browse.js';
 import { XoPools } from './xo-pools.js';
 import { PvePools } from './pve-pools.js';
 import { SandboxPools } from './sandbox-pools.js';
+import { OwnPools, OWN_PROVIDER } from './own-pools.js';
 import { Pools } from './pools.js';
 import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
@@ -544,7 +545,7 @@ export class Sidecar {
     // (xo-holder.js): its health says so, and the coordinator asks it first.
     // AND PROXMOX'S CLUSTERS beside Xen Orchestra's pools, behind one face
     // (pools.js, docs/proxmox.md).
-    this.pools = xoPools ?? (vaultKey ? new Pools({ xo: new XoPools({ log: this.log, holderFor, boxId: this.hostId }), pve: new PvePools({ log: this.log, holderFor }), sandbox: new SandboxPools({ providers: sandboxProviders, log: this.log }) }) : null);
+    this.pools = xoPools ?? (vaultKey ? new Pools({ xo: new XoPools({ log: this.log, holderFor, boxId: this.hostId }), pve: new PvePools({ log: this.log, holderFor }), sandbox: new SandboxPools({ providers: sandboxProviders, log: this.log }), own: new OwnPools({ enabled: sandboxProviders.map((p) => String(p).trim().toLowerCase()).includes(OWN_PROVIDER), hub: this.hub, boxId: this.hostId, log: this.log }) }) : null);
     /**
      * THE POOLS' EDGE ROUTERS, read with the key the person's vault keeps
      * beside a pool's token (edge-watch.js), for the pools that have one.
@@ -2411,7 +2412,10 @@ export class Sidecar {
               // API errors name a path and a status, never the token. Xen
               // Orchestra's stays home, as before: its page asks the pool
               // itself, phone-direct.
-              const why = seen.kind === 'proxmox' && seen.reachable === false && typeof problem === 'string' ? { problem: problem.slice(0, 200) } : {};
+              // And why this box offers no machine of its own just now: its
+              // image is being built, or the build failed. Its own words
+              // about itself, with nobody's token near them.
+              const why = ((seen.kind === 'proxmox' && seen.reachable === false) || /** @type {any} */ (seen).own === true) && typeof problem === 'string' ? { problem: problem.slice(0, 200) } : {};
               return { ...seen, ...why, ...(edges ? { edges } : {}) };
             }),
           }

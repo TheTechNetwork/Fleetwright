@@ -287,6 +287,46 @@ export class HubClient {
   }
 
   /**
+   * The machines this box made out of its own containers, and whether it has
+   * an image to make one from (src/core/machines.js). `prepare` also starts
+   * building the image if there is none. A hub from before this answers 404,
+   * which is said as that and not as "none".
+   *
+   * @param {{ prepare?: boolean }} [opts]
+   * @returns {Promise<{ ok: boolean, text?: string, older?: boolean, max?: number, image?: { name: string, ready: boolean, building: boolean, problem: string|null }, machines?: Array<{ name: string, owner: string, state: string, until: number|null, madeAt: number|null }> }>}
+   */
+  async machines({ prepare = false } = {}) {
+    const r = await this.#json('GET', `/api/machines${prepare ? '?prepare=1' : ''}`, undefined, this.commandTimeoutMs, { allowStatus: [404] });
+    if (r.__status === 404) return { ok: false, older: true, text: 'fleetwright here is older than machines of its own; update it' };
+    return r;
+  }
+
+  /**
+   * Start a machine here, with the ticket it enrols with. The ticket goes in
+   * the body, over the loopback the hub token already crosses.
+   *
+   * @param {{ owner: string, ticket: string, coordinator: string, minutes: number|null }} ask
+   * @returns {Promise<{ ok: boolean, text: string, name?: string, minutes?: number, until?: number }>}
+   */
+  async makeMachine(ask) {
+    const r = await this.#json('POST', '/api/machines', ask, this.commandTimeoutMs, { allowStatus: [404] });
+    if (r.__status === 404) return { ok: false, text: 'fleetwright here is older than machines of its own; update it' };
+    return { ...r, ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '' };
+  }
+
+  /**
+   * End one of a person's machines here, or give it more time.
+   *
+   * @param {{ owner: string, name: string, action: string, minutes: number|null }} ask
+   * @returns {Promise<{ ok: boolean, text: string, notHere?: boolean, minutes?: number, until?: number }>}
+   */
+  async machineControl(ask) {
+    const r = await this.#json('POST', '/api/machines/control', ask, this.commandTimeoutMs, { allowStatus: [404] });
+    if (r.__status === 404) return { ok: false, notHere: true, text: 'fleetwright here is older than machines of its own; update it' };
+    return { ...r, ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '' };
+  }
+
+  /**
    * Hand fleetwright what this box's people approved it to hold, as the vault
    * just answered. See src/core/vault-store.js.
    *

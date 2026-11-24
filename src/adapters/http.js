@@ -42,6 +42,7 @@ import { readHouseRules } from '../core/rules.js';
 import { unsafeSandboxArgs } from '../core/sandbox-args.js';
 import { noteHealth } from '../core/update-confirm.js';
 import { renewProviderTokens } from '../core/keepalive.js';
+import { Machines } from '../core/machines.js';
 import { runnerAuthKind, saveRunnerLogin } from '../core/runner-login.js';
 import { applyVault, vaultClaudePeople, vaultBox } from '../core/vault-store.js';
 import { refreshVaultSessions } from '../core/vault-sessions.js';
@@ -107,6 +108,10 @@ export class HttpAdapter {
     this.cfg = cfg;
     this.sessions = sessions;
     this.login = login;
+    // The machines this box makes out of its own containers. It does nothing
+    // until it is asked, and the sidecar asks only where its operator turned
+    // that on (src/core/machines.js).
+    this.machines = new Machines(cfg);
     // THE SIDECAR'S OWN CREDENTIAL, distinct from the operator's below. A
     // request carrying it reaches the routes the sidecar calls and, on
     // /api/command, the command shapes the sidecar builds — see
@@ -463,6 +468,27 @@ export class HttpAdapter {
         // and a 500 with a reason is what it can log.
         return json(res, 500, { ok: false, text: /** @type {Error} */ (e).message });
       }
+    }
+
+    // MACHINES ON THIS BOX: containers running the fleet's own host, which
+    // the sidecar asks for because it never touches Podman itself
+    // (src/core/machines.js; docs/api-engines.md, "A machine on a box of
+    // your own"). Each answers 200 with `ok` and a sentence, so that what
+    // Podman said reaches the person who asked and is not flattened into a
+    // status. Making one never waits for the image to build: a build is
+    // minutes, and the answer says it was started.
+    if (p === '/api/machines' && method === 'GET') {
+      return json(res, 200, await this.machines.list({ prepare: url.searchParams.get('prepare') === '1' }));
+    }
+    if (p === '/api/machines' && method === 'POST') {
+      const body = await readJson(req);
+      const text = (/** @type {unknown} */ v) => (typeof v === 'string' ? v : '');
+      return json(res, 200, await this.machines.make({ owner: text(body.owner), ticket: text(body.ticket), coordinator: text(body.coordinator), minutes: typeof body.minutes === 'number' && Number.isFinite(body.minutes) ? body.minutes : null }));
+    }
+    if (p === '/api/machines/control' && method === 'POST') {
+      const body = await readJson(req);
+      const text = (/** @type {unknown} */ v) => (typeof v === 'string' ? v : '');
+      return json(res, 200, await this.machines.control({ owner: text(body.owner), name: text(body.name), action: text(body.action), minutes: typeof body.minutes === 'number' && Number.isFinite(body.minutes) ? body.minutes : null }));
     }
 
     // A RUNNER'S CLAUDE LOGIN, from the sidecar that fetched it (src/core/

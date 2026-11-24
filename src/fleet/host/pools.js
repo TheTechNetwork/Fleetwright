@@ -23,17 +23,26 @@
 // no page, no network and no edge router of its own, so `look`, `act`,
 // `edges` and the console never go to it. A box whose operator named no
 // provider holds an empty one.
+//
+// AND A FOURTH, for machines on this box itself (own-pools.js): a container
+// the box's hub runs, with nothing held at all. It is asked FIRST for a
+// machine by name, because it is the one driver that can say at once and
+// for certain whether a machine is its own: the hub is on this box, and a
+// hypervisor that is down would otherwise be waited out before a machine
+// here could be ended. Off unless the operator named `own`.
 
 import { XoPools } from './xo-pools.js';
 import { PvePools } from './pve-pools.js';
 import { SandboxPools, SANDBOX_KIND } from './sandbox-pools.js';
+import { OwnPools } from './own-pools.js';
 
 export class Pools {
-  /** @param {{ xo?: XoPools, pve?: PvePools, sandbox?: SandboxPools }} [drivers] */
-  constructor({ xo = new XoPools({}), pve = new PvePools({}), sandbox = new SandboxPools({}) } = {}) {
+  /** @param {{ xo?: XoPools, pve?: PvePools, sandbox?: SandboxPools, own?: OwnPools }} [drivers] */
+  constructor({ xo = new XoPools({}), pve = new PvePools({}), sandbox = new SandboxPools({}), own = new OwnPools({}) } = {}) {
     this.xo = xo;
     this.pve = pve;
     this.sandbox = sandbox;
+    this.own = own;
   }
 
   /**
@@ -58,7 +67,7 @@ export class Pools {
    * looks or reports, so a box holding only a provider still does both.
    */
   get holdsAny() {
-    return this.xo.held.size > 0 || this.pve.held.size > 0 || this.sandbox.held.size > 0;
+    return this.xo.held.size > 0 || this.pve.held.size > 0 || this.sandbox.held.size > 0 || this.own.held.size > 0;
   }
 
   /**
@@ -79,7 +88,7 @@ export class Pools {
    * @param {string} key
    */
   kindOf(key) {
-    if (this.sandbox.held.has(key)) return SANDBOX_KIND;
+    if (this.sandbox.held.has(key) || this.own.held.has(key)) return SANDBOX_KIND;
     return this.pve.held.has(key) ? 'proxmox' : 'xo';
   }
 
@@ -89,19 +98,22 @@ export class Pools {
     // provider's key is its whole account, and the hub files what it is
     // handed. Then Proxmox, which keeps its records and strips nothing; then
     // Xen Orchestra's, which strips every `hypervisor:` item before the hub.
-    return this.xo.adopt(this.pve.adopt(this.sandbox.adopt(accounts)));
+    // This box's own driver takes nothing out: it notes who the box is
+    // approved for, which is everybody in the answer.
+    return this.xo.adopt(this.pve.adopt(this.sandbox.adopt(this.own.adopt(accounts))));
   }
 
   report() {
-    return [...this.xo.report(), ...this.pve.report(), ...this.sandbox.report()];
+    return [...this.xo.report(), ...this.pve.report(), ...this.sandbox.report(), ...this.own.report()];
   }
 
   async refresh() {
-    await Promise.all([this.xo.refresh(), this.pve.refresh(), this.sandbox.refresh()]);
+    await Promise.all([this.xo.refresh(), this.pve.refresh(), this.sandbox.refresh(), this.own.refresh()]);
   }
 
   /** @param {Parameters<XoPools['make']>[0]} ask */
   make(ask) {
+    if (this.own.hasImage(ask.owner, ask.template)) return this.own.make(ask);
     if (this.sandbox.hasImage(ask.owner, ask.template)) return this.sandbox.make(ask);
     return this.pve.hasImage(ask.owner, ask.template) ? this.pve.make(ask) : this.xo.make(ask);
   }
@@ -145,14 +157,43 @@ export class Pools {
     return b.ok || b.unreachable || !a.unreachable ? b : a;
   }
 
+  /**
+   * This box's own answer, unless it says the machine is not one of its
+   * containers (or its hub could not be asked) and there is anything else
+   * to ask. If nothing else has the machine either, a hub that could not be
+   * asked is the answer kept: "not there" from the rest does not make it so.
+   *
+   * @template {{ ok: boolean, notHere?: boolean, unreachable?: boolean }} R
+   * @param {string} owner @param {() => Promise<R>} own @param {() => Promise<R>} rest
+   * @returns {Promise<R>}
+   */
+  async #ownFirst(owner, own, rest) {
+    if (!this.own.holdsFor(owner)) return rest();
+    const a = await own();
+    if (a.ok || !(a.notHere || a.unreachable)) return a;
+    const who = String(owner || '').toLowerCase();
+    const more = this.sandbox.holdsFor(who) || this.pve.holdsFor(who) || [...this.xo.held.values()].some((h) => h.owner === who);
+    if (!more) return a;
+    const b = await rest();
+    return b.ok || !b.notHere || !a.unreachable ? b : a;
+  }
+
   /** @param {Parameters<XoPools['handLogin']>[0]} ask */
   handLogin(ask) {
-    return this.#orSandbox(ask.owner, () => this.#either(ask.owner, () => this.xo.handLogin(ask), () => this.pve.handLogin(ask)), () => /** @type {any} */ (this.sandbox.handLogin(ask)));
+    return this.#ownFirst(
+      ask.owner,
+      () => /** @type {any} */ (this.own.handLogin(ask)),
+      () => this.#orSandbox(ask.owner, () => this.#either(ask.owner, () => this.xo.handLogin(ask), () => this.pve.handLogin(ask)), () => /** @type {any} */ (this.sandbox.handLogin(ask))),
+    );
   }
 
   /** @param {Parameters<XoPools['control']>[0]} ask */
   control(ask) {
-    return this.#orSandbox(ask.owner, () => this.#either(ask.owner, () => this.xo.control(ask), () => this.pve.control(ask)), () => /** @type {any} */ (this.sandbox.control(ask)));
+    return this.#ownFirst(
+      ask.owner,
+      () => /** @type {any} */ (this.own.control(ask)),
+      () => this.#orSandbox(ask.owner, () => this.#either(ask.owner, () => this.xo.control(ask), () => this.pve.control(ask)), () => /** @type {any} */ (this.sandbox.control(ask))),
+    );
   }
 
   /**

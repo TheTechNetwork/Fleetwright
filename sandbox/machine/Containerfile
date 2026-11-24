@@ -1,0 +1,71 @@
+# The fleet's own machine image: a container that is a fleet host.
+# docs/api-engines.md, "A machine on a box of your own".
+#
+# The session image beside this one (../Containerfile) is what a session runs
+# IN. This is a different thing: the fleet's host itself, the hub and the
+# sidecar, which joins a fleet with a ticket and then takes sessions like any
+# machine. A box's hub builds it and runs it as a place to make a machine with
+# no hypervisor and nobody else's cloud, and the same build at a sandbox
+# provider is the template that enrols.
+#
+# BUILT FROM A RELEASE. The host's code is copied from the release its
+# builder runs, not fetched: a machine runs the version its box runs, and
+# nothing of the fleet's is pulled from anywhere.
+#
+# THE BUILD'S CONTEXT IS NOT THE RELEASE ITSELF, because a release is not one
+# shape. A packaged box has `lib/` with everything bundled in and no `src/`
+# but the web pages; a checkout has `src/` and `node_modules`. A COPY cannot
+# take "whichever is there", so the hub lays the parts that exist out under
+# `release/`, with the entrypoint beside them, and builds from that
+# (stageMachineContext in src/core/machines.js). By hand, from a checkout:
+#
+#   node scripts/machine-smoke.mjs --stage /tmp/machine
+#   podman build -t fleetwright-machine:latest -f sandbox/machine/Containerfile \
+#     --build-arg NODE_MAJOR=26 /tmp/machine
+#
+# AND THE NODE ITS BUILDER RUNS, which is why NODE_MAJOR has no default here.
+# The session image pins a major and Renovate moves it; a second pin in this
+# file would be one more number to forget. The hub passes the major of the
+# Node it is running on (src/core/machines.js), so the host inside runs on
+# what the host outside does.
+
+FROM debian:13-slim
+
+ARG NODE_MAJOR
+RUN test -n "${NODE_MAJOR}" || { echo "fleetwright-machine: build with --build-arg NODE_MAJOR=<the major of the Node the box runs>" >&2; exit 1; }
+
+# What a host needs and a session's sandbox does not: tmux, because here a
+# session is a plain pane (the container is the sandbox, and there is not a
+# second one inside it). git for the work, procps and less for the root shell
+# a session has, tini to reap what panes leave behind.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl git tmux ripgrep procps less tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# CLAUDE CODE, AS A BOX'S OWN INSTALLER GETS IT (install/install.sh): its
+# installer, not a version written here. The session image pins the one a
+# sandboxed session runs, and that pin stays the only one in the repository.
+RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="/root/.local/bin:${PATH}"
+
+# TOLD IT IS A SANDBOX, because it is one. A session here is a plain pane
+# running as root in this container, and Claude Code refuses to run without
+# its permission prompts as root unless it is told it is contained. The
+# session image is told the same way, for the same reason (src/core/claude.js).
+ENV IS_SANDBOX=1
+
+# THE HOST, from the release as its builder laid it out.
+COPY release /opt/fleetwright/current
+COPY --chmod=0755 entrypoint /usr/local/bin/fleetwright-machine
+
+# Where the sidecar keeps its key and the join file. A volume is put here by
+# whatever starts this, so a restart is the same machine.
+RUN install -d -m 0700 /var/lib/fleetwright-sidecar /var/lib/fleetwright
+WORKDIR /root
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/fleetwright-machine"]

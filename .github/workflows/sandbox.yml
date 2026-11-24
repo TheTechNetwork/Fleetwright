@@ -9,11 +9,14 @@ name: Sandbox image
 # in one place and pulled by name is the only version of "the sandbox" that is
 # actually one thing.
 on:
+  # NOT sandbox/machine/, which is another image with a workflow of its own
+  # (machine-image.yml): a change there changes nothing a session runs in,
+  # and must not publish a new session image.
   push:
     branches: [main]
-    paths: ['sandbox/**', '.github/workflows/sandbox.yml']
+    paths: ['sandbox/**', '!sandbox/machine/**', '.github/workflows/sandbox.yml']
   pull_request:
-    paths: ['sandbox/**', '.github/workflows/sandbox.yml']
+    paths: ['sandbox/**', '!sandbox/machine/**', '.github/workflows/sandbox.yml']
   workflow_dispatch:
 
 concurrency:
