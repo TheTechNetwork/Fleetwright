@@ -50,7 +50,8 @@ struct FleetApp: View {
     @State private var openPool: PoolAsk?
 
     /// The page under You a notification asked to open: Credentials, when a
-    /// manager changed this person's vault. The You tab pushes it.
+    /// manager changed this person's vault, or a task's page, when one waits
+    /// for this person to choose its member. The You tab pushes it.
     @State private var openYou: String?
 
     /// The tab a screenshot run asked for, if this launch is one. The old

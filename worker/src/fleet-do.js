@@ -27,13 +27,14 @@ import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fle
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { MEMBERS_PREFIX, membersRoute } from '../../src/fleet/coordinator/org-members.js';
 import { TASKS_PREFIX, tasksRoute } from '../../src/fleet/coordinator/org-tasks.js';
+import { routingRoute } from '../../src/fleet/coordinator/org-routing.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { NOT_FRAMED } from './pages.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
 import { emailOf, installCommand, PINS_FULL } from '../../src/fleet/coordinator/enrollment.js';
 import { mcpRoutes, isMcpPath } from '../../src/mcp/routes.js';
 import { HEARTBEAT_PING, HEARTBEAT_PONG } from '../../src/fleet/protocol/heartbeat.js';
-import { decideRequest, DECIDE_MODEL } from '../../src/core/decide-questions.js';
+import { decideRequest, DECIDE_MODEL, DECIDE_MODEL_FIELD } from '../../src/core/decide-questions.js';
 
 /** How often to ask hosts for health if they have gone quiet. */
 const ALARM_MS = 30_000;
@@ -190,10 +191,19 @@ export class Fleet {
       decide:
         env.FLEETWRIGHT_DECIDE === '1' && env.AI && env.DECIDE_RATE_LIMIT
           ? {
-              ask: (/** @type {string} */ state) => this.#decide(state),
+              ask: (/** @type {string} */ state) => this.#askModel(decideRequest(state)),
               rateLimit: async () => (await /** @type {any} */ (env.DECIDE_RATE_LIMIT).limit({ key: 'decide' }))?.success === true,
               budget: env.DECIDE_NEURONS_PER_DAY,
             }
+          : null,
+      // THE MODEL'S PICK AMONG MEMBERS (docs/routing.md), a switch of its own
+      // on top of everything the decision model needs: exactly "1", and unset
+      // in every committed config. The core uses it only where `decide` is
+      // set, because the rate limit and the day's budget are that one's. The
+      // same model, the same one call, a different question.
+      route:
+        env.FLEETWRIGHT_ROUTE_MODEL === '1' && env.FLEETWRIGHT_DECIDE === '1' && env.AI && env.DECIDE_RATE_LIMIT
+          ? { pick: (/** @type {{ state: string, questions: Record<string, any> }} */ q) => this.#askModel({ model: DECIDE_MODEL_FIELD, state: q.state, questions: q.questions }) }
           : null,
     });
     // A runner ticket is minted at dispatch and spent by a job that starts
@@ -220,6 +230,9 @@ export class Fleet {
         // reason (org-tasks.js): a task with its brief, result and handoffs
         // is up to about 20 KiB, and MAX_TASKS of them are kept.
         this.#writeTasks(),
+        // The fleet's routing record and the day's count of asks put to a
+        // model, when either moved (org-routing.js).
+        ...(this.core.routing.takeChange() ? [this.state.storage.put('routing', this.core.routing.serialise())] : []),
         this.state.storage.put('runnerStarts', this.core.serialiseRunnerStarts()),
         // Machines kept ready, and which were made for it.
         this.state.storage.put('vmStandby', this.core.serialiseStandby()),
@@ -330,6 +343,7 @@ export class Fleet {
         this.state.storage.list ? await this.state.storage.list({ prefix: TASKS_PREFIX }) : [],
         await this.state.storage.get('taskSeq'),
       );
+      this.core.routing.restore(await this.state.storage.get('routing'));
       this.core.restoreRunnerStarts(await this.state.storage.get('runnerStarts'));
       this.core.restoreStandby(await this.state.storage.get('vmStandby'));
       this.core.restoreSetups(await this.state.storage.get('xosetups'));
@@ -1071,6 +1085,13 @@ export class Fleet {
     // coordinator.
     if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/')) {
       const answer = await tasksRoute(this.core, request.method, url.pathname, url.searchParams, requesterFor(client), () => readJson(request));
+      if (answer) return json(answer.body, answer.status);
+    }
+
+    // WHICH MEMBER A TASK GOES TO (docs/routing.md): the fleet's mode and its
+    // rules by kind of work. Everybody reads it; an admin writes it.
+    if (url.pathname === '/api/routing') {
+      const answer = await routingRoute(this.core, request.method, url.pathname, requesterFor(client), () => readJson(request));
       if (answer) return json(answer.body, answer.status);
     }
 
@@ -1877,15 +1898,18 @@ export class Fleet {
 
   /**
    * THE ONE PLACE THIS WORKER SPENDS ON A MODEL. Every wall is in front of it
-   * (core.js #onHostDecide); this is the call and nothing else: the model id a
-   * constant, the questions the pinned ones, never an `images` field, no
-   * retry. test/worker-ai-sites.test.js fails on a second reader of the
-   * binding anywhere in the Worker.
+   * (core.js #onHostDecide for a pane, #pick for routing a task); this is the
+   * call and nothing else: the model id a constant, the request built by one
+   * of two pure functions (decideRequest, routeQuestion), never an `images`
+   * field, no retry. test/worker-ai-sites.test.js fails on a second reader
+   * of the binding anywhere in the Worker.
    *
-   * @param {string} state  masked pane text, already through the gate
+   * @param {{ model: string, state: string, questions: Record<string, any> }} request
+   *   masked pane text already through the gate, or a task's title and the
+   *   top of its brief already through the same gate
    */
-  async #decide(state) {
-    return /** @type {any} */ (this.env.AI).run(DECIDE_MODEL, decideRequest(state));
+  async #askModel(request) {
+    return /** @type {any} */ (this.env.AI).run(DECIDE_MODEL, request);
   }
 
   /** The Claude check, said in the log when it throws rather than swallowed. */

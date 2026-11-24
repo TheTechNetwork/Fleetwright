@@ -14,7 +14,8 @@ extension Notification.Name {
     static let becameActive = Notification.Name("network.thetech.fleetwright.becameActive")
     /// Somebody tapped a notification. `userInfo["name"]` is the session it
     /// was about, when the payload said; `userInfo["host"]` the machine, for a
-    /// host event; `userInfo["pool"]` a PoolAsk, for a pool's news.
+    /// host event; `userInfo["pool"]` a PoolAsk, for a pool's news;
+    /// `userInfo["you"]` a page under You, a task's among them.
     static let notificationOpened = Notification.Name("network.thetech.fleetwright.notificationOpened")
 }
 
@@ -407,6 +408,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 // A MANAGER CHANGED THIS PERSON'S VAULT: Credentials, where
                 // what they changed is listed and the switch that allows it is.
                 if kind == "vault-custody" { return openCredentials() }
+                // A TASK WAITING FOR A MEMBER TO BE CHOSEN opens that task's
+                // page, where the members to choose among are buttons
+                // (docs/routing.md). The id is the payload's, so it is read
+                // as a task's id or not at all (taskPageId).
+                if kind == "task", let taskId = info["taskId"] as? String, taskPageId(taskPagePrefix + taskId) != nil {
+                    return open(task: taskId)
+                }
                 // A POOL XEN ORCHESTRA NO LONGER SHOWS, or one it shows again.
                 // Reconnect on a lost one opens the reconnect for it, starting
                 // from the machine that noticed (`hostId`), and Face ID is the
@@ -498,6 +506,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     @MainActor
     private func openCredentials() {
         NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["you": "credentials"])
+    }
+
+    /// And for a task waiting on a person to choose its member: FleetApp
+    /// opens You on that task's page.
+    @MainActor
+    private func open(task id: String) {
+        NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["you": taskPagePrefix + id])
     }
 
     /// And for a pool: FleetApp opens Machines on that pool's page.

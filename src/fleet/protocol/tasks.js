@@ -20,6 +20,7 @@
 
 import { oneLine } from '../../core/text.js';
 import { MEMBER_ID_RE, MAX_FIRST_MESSAGE, FIRST_MESSAGE_SEPARATOR } from './members.js';
+import { checkTaskRouting, cleanRoute } from './routing.js';
 
 /** A task's id: `t` and a number the coordinator counts up. Typed in commands, and part of a branch's name. */
 export const TASK_ID_RE = /^t[1-9][0-9]{0,8}$/;
@@ -94,6 +95,8 @@ export const RESULT_FOOTER =
  * @property {string} branch
  * @property {string|null} parent
  * @property {string} [note]  why it was reopened, told to the next session
+ * @property {'off'|'manual'|'auto'} [routing]  this task's own routing mode; absent follows the fleet's (docs/routing.md)
+ * @property {import('./routing.js').Route} [route]  the last routing decision about it
  * @property {TaskLock|null} lock
  * @property {TaskResult|null} result
  * @property {Handoff[]} handoffs
@@ -140,11 +143,11 @@ export function branchFor(id, title) {
  *
  * @param {any} input
  * @param {{ partial?: boolean }} [opts]
- * @returns {{ ok: true, fields: { title?: string, brief?: string, workType?: string, repo?: string, assignee?: string|null, parent?: string|null } } | { ok: false, code: string, text: string }}
+ * @returns {{ ok: true, fields: { title?: string, brief?: string, workType?: string, repo?: string, assignee?: string|null, parent?: string|null, routing?: 'off'|'manual'|'auto'|null } } | { ok: false, code: string, text: string }}
  */
 export function checkTask(input, { partial = false } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return refuse('bad_task', 'A task is an object with a title and a brief.');
-  /** @type {{ title?: string, brief?: string, workType?: string, repo?: string, assignee?: string|null, parent?: string|null }} */
+  /** @type {{ title?: string, brief?: string, workType?: string, repo?: string, assignee?: string|null, parent?: string|null, routing?: 'off'|'manual'|'auto'|null }} */
   const out = {};
 
   if (input.title !== undefined || !partial) {
@@ -186,6 +189,13 @@ export function checkTask(input, { partial = false } = {}) {
     if (!TASK_ID_RE.test(parent)) return refuse('bad_task', 'A parent is a task’s id, like t12.');
     out.parent = parent;
   }
+  // The task's own routing mode (docs/routing.md). Nothing, or an empty
+  // value, is "as the fleet is set".
+  if (input.routing !== undefined) {
+    const routing = checkTaskRouting(input.routing);
+    if (!routing.ok) return routing;
+    out.routing = routing.routing;
+  }
   return { ok: true, fields: out };
 }
 
@@ -210,7 +220,7 @@ const handed = (task, entry) => [...(task.handoffs ?? []), entry].slice(-MAX_HAN
 /**
  * A new task, open and unlocked.
  *
- * @param {{ id: string, title: string, brief: string, workType?: string, repo?: string, assignee?: string|null, parent?: string|null }} fields
+ * @param {{ id: string, title: string, brief: string, workType?: string, repo?: string, assignee?: string|null, parent?: string|null, routing?: 'off'|'manual'|'auto'|null }} fields
  * @param {{ by: string, at: number }} who
  * @returns {Task}
  */
@@ -226,6 +236,7 @@ export function newTask(fields, { by, at }) {
     state: 'open',
     branch: branchFor(fields.id, fields.title),
     parent: fields.parent ?? null,
+    ...(fields.routing ? { routing: fields.routing } : {}),
     lock: null,
     result: null,
     handoffs: [],
@@ -253,7 +264,7 @@ export function lockWords(/** @type {Task} */ task) {
  * or is released, first.
  *
  * @param {Task} task
- * @param {{ title?: string, brief?: string, workType?: string, repo?: string, assignee?: string|null }} fields  already through checkTask
+ * @param {{ title?: string, brief?: string, workType?: string, repo?: string, assignee?: string|null, routing?: 'off'|'manual'|'auto'|null }} fields  already through checkTask
  * @param {{ by: string, at: number, note?: string }} who
  * @returns {{ ok: true, task: Task } | { ok: false, code: string, text: string }}
  */
@@ -272,11 +283,53 @@ export function changeTask(task, fields, { by, at, note = '' }) {
     if (fields.repo) next.repo = fields.repo;
     else delete next.repo;
   }
+  if (fields.routing !== undefined) {
+    if (fields.routing) next.routing = fields.routing;
+    else delete next.routing;
+  }
   if (fields.assignee !== undefined && fields.assignee !== task.assignee) {
     if (task.lock) return refuse('task_locked', `${task.id} cannot change hands while it is being worked on: ${lockWords(task)}. Release it, or wait for it to come back.`);
     next.assignee = fields.assignee;
     next.handoffs = handed(task, { at, by, kind: 'assigned', from: task.assignee, to: fields.assignee, ...(note ? { note } : {}) });
+    // A QUESTION SOMEBODY ANSWERED BY HAND IS NOT STILL BEING ASKED. A task
+    // waiting on a person's pick that is then assigned the ordinary way has
+    // its answer, and its page must stop asking. It is written as what it
+    // was, a person's choice, and not thrown away: the record keeps that the
+    // model was already asked about this task once, which is what stops it
+    // being asked again if the task is ever left with nobody.
+    if (next.route?.how === 'waiting') {
+      if (fields.assignee) next.route = { ...next.route, how: 'person', member: fields.assignee, why: `${by} gave it to ${fields.assignee} by hand.`, at, by };
+      else delete next.route;
+    }
   }
+  return { ok: true, task: next };
+}
+
+/**
+ * Write a routing decision on a task (docs/routing.md, "What is written on
+ * the task"): the decision itself as `route`, a line in the history, and the
+ * assignee when the decision chose one.
+ *
+ * Only an open task nobody holds is routed: one being worked on has its
+ * member, and a finished one has had it. A `pinned` decision is the one
+ * exception, because it changes nothing and only says why nothing moved.
+ *
+ * @param {Task} task
+ * @param {unknown} decision  held to a Route's shape here, whoever made it
+ * @returns {{ ok: true, task: Task } | { ok: false, code: string, text: string }}
+ */
+export function routeTask(task, decision) {
+  const route = cleanRoute(decision);
+  if (!route) return refuse('bad_route', 'That is not a routing decision.');
+  if (route.how === 'pinned') return { ok: true, task: { ...task, route, updatedAt: route.at } };
+  if (task.state !== 'open') return refuse('task_not_open', `${task.id} is ${task.state}. Only an open task is routed.`);
+  if (task.lock) return refuse('task_locked', `${task.id} cannot be routed while it is being worked on: ${lockWords(task)}.`);
+  const chose = route.how === 'rule' || route.how === 'only' || route.how === 'model' || route.how === 'person';
+  if (chose && !route.member) return refuse('bad_route', 'A routing decision that chose somebody names them.');
+  /** @type {Task} */
+  const next = { ...task, route: chose ? route : { ...route, member: null }, updatedAt: route.at };
+  if (chose) next.assignee = route.member;
+  next.handoffs = handed(task, { at: route.at, by: route.by, kind: 'routed', from: task.assignee, to: chose ? route.member : null, note: route.how });
   return { ok: true, task: next };
 }
 

@@ -9,10 +9,11 @@ import SwiftUI
 /// to a member they act for.
 ///
 /// THE ONES THAT CAME BACK ARE FIRST, because those are asking a question:
-/// accept this, or reopen it. Then the ones being worked on, then the open
-/// ones. Every row is the same shape, and what state a task is in is said in
-/// words on its row; the returned ones also take the attention colour, which
-/// the design system keeps for whatever is asking.
+/// accept this, or reopen it. With them come the ones waiting for a member
+/// to be chosen (docs/routing.md), which ask one too. Then the ones being
+/// worked on, then the open ones. Every row is the same shape, and what
+/// state a task is in is said in words on its row; the ones asking also take
+/// the attention colour, which the design system keeps for whatever is asking.
 ///
 /// FINISHED TASKS ARE NOT ASKED FOR UNTIL SOMEBODY OPENS Finished. A fleet
 /// keeps 500 tasks with their briefs and results, and a list that opened on
@@ -88,7 +89,7 @@ struct TasksView: View {
                 NavigationLink {
                     page(task)
                 } label: {
-                    TaskRow(task: task, roster: members)
+                    TaskRow(task: task, roster: members, me: taskMe(settings))
                 }
             }
             NavigationLink("New task") {
@@ -127,7 +128,7 @@ struct TasksView: View {
                         NavigationLink {
                             page(task)
                         } label: {
-                            TaskRow(task: task, roster: members)
+                            TaskRow(task: task, roster: members, me: taskMe(settings))
                         }
                     }
                 }
@@ -160,9 +161,14 @@ struct TasksView: View {
                 }
                 unfinished += list
             }
+            // THE ONES ASKING SOMETHING COME FORWARD, in the order they were
+            // asked for: what came back, then the open ones waiting for a
+            // member to be chosen. The rest keep their order under them.
+            let asking = unfinished.filter { taskAsks($0) }
+            let rest = unfinished.filter { !taskAsks($0) }
             // A task that came back moves to the top, and one that was
             // accepted leaves. Under Reduce Motion it is simply there.
-            withAnimation(Design.Motion.settle(reduceMotion)) { tasks = unfinished }
+            withAnimation(Design.Motion.settle(reduceMotion)) { tasks = asking + rest }
             load = .answered
         } catch {
             load = .failed(error.localizedDescription)
@@ -200,12 +206,15 @@ struct TasksView: View {
 
 /// One task in a list: the title, its id and whose it is, and its state in
 /// words. Every row is this shape whatever the state, so a row that looks
-/// different means something: the attention colour is on a task that came
-/// back and on nothing else, and the words under it say the same thing to
-/// somebody who cannot see the colour.
+/// different means something: the attention colour is on a task that is
+/// asking (it came back, or it waits for a member to be chosen) and on
+/// nothing else, and the words under it say the same thing to somebody who
+/// cannot see the colour.
 private struct TaskRow: View {
     let task: Fleet.OrgTask
     let roster: [Fleet.Member]
+    /// This person's fleet address, so a question put to them says "you".
+    var me = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.hair) {
@@ -217,10 +226,10 @@ private struct TaskRow: View {
                 .foregroundStyle(Design.Palette.inkDim)
             // A CHANGE OF STATE IS NEWS, and reads as a change: the words
             // crossfade, which is the one movement Reduce Motion keeps.
-            Text(taskStateWords(task))
+            Text(taskStateWords(task, me: me))
                 .fleetType(.label)
-                .foregroundStyle(task.state == "returned" ? Design.Palette.attention : Design.Palette.inkDim)
-                .animation(Design.Motion.change, value: taskStateWords(task))
+                .foregroundStyle(taskAsks(task) ? Design.Palette.attention : Design.Palette.inkDim)
+                .animation(Design.Motion.change, value: taskStateWords(task, me: me))
         }
         .frame(minHeight: 44)
     }
@@ -265,6 +274,13 @@ struct NewTaskView: View {
 /// back, Reopen on one that came back or is done, Cancel and Edit until it is
 /// finished. A refusal is still possible, since somebody else can act first,
 /// and then the fleet's own sentence is what the page shows.
+///
+/// HOW IT WAS ROUTED IS THE FLEET'S SENTENCE (docs/routing.md), under whose
+/// it is. While the fleet waits for a person to say which member, the
+/// members it is choosing among are buttons under the task's head, before
+/// the brief, because that is the question the page is asking. Route it is
+/// drawn only for an open task nobody holds, with no member, that is not
+/// already waiting and whose own routing is not off.
 ///
 /// WHAT A SESSION SAID IS SHOWN AS WHAT A SESSION SAID. The branch is what
 /// sessions are told, never a link: nothing checks that it exists. The result
@@ -311,6 +327,12 @@ struct TaskView: View {
         Form {
             if let task {
                 headSection(task)
+                // WHICH MEMBER, while the fleet waits for a person to say:
+                // offered where Reassign is, on an open task nobody holds,
+                // since an answer is an assignment by hand (C-2).
+                if let route = task.route, route.how == "waiting", (task.assignee ?? "").isEmpty, task.lock == nil, task.state == "open" {
+                    chooseSection(task, route)
+                }
                 if let brief = task.brief, !brief.isEmpty { briefSection(brief) }
                 if let lock = task.lock { lockSection(lock) }
                 if let returned = task.result { resultSection(returned) }
@@ -356,15 +378,30 @@ struct TaskView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 // THE STATE, IN WORDS, under the title and before anything
                 // else. A change crossfades (Reduce Motion keeps that one).
-                Text(taskStateWords(task))
+                Text(taskStateWords(task, me: taskMe(settings)))
                     .fleetType(.body)
-                    .foregroundStyle(task.state == "returned" ? Design.Palette.attention : Design.Palette.ink)
+                    .foregroundStyle(taskAsks(task) ? Design.Palette.attention : Design.Palette.ink)
                     .fixedSize(horizontal: false, vertical: true)
-                    .animation(Design.Motion.change, value: taskStateWords(task))
+                    .animation(Design.Motion.change, value: taskStateWords(task, me: taskMe(settings)))
             }
             .padding(.vertical, Design.Space.hair)
             LabeledContent("Assigned to") {
                 Text(taskMemberName(task.assignee, roster) ?? "Nobody").fleetType(.label)
+            }
+            // HOW IT CAME TO BE WHOSE IT IS, or why it is nobody's: the
+            // fleet's last routing decision, in the fleet's own sentence.
+            // Stacked, because the sentence is long and wraps.
+            if let route = task.route {
+                VStack(alignment: .leading, spacing: Design.Space.hair) {
+                    Text("Routing")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                    Text(routeWords(route, roster))
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .combine)
             }
             if let kind = task.workType, !kind.isEmpty {
                 LabeledContent("Kind of work") { Text(kind).fleetType(.label) }
@@ -396,6 +433,46 @@ struct TaskView: View {
                     .textSelection(.enabled)
                 Button("Try again") { Task { await reload() } }
             }
+        }
+    }
+
+    /// Which member: the ones the fleet is choosing among, each a button
+    /// with the member's name and its role under it, and Somebody else,
+    /// which opens the Reassign picker for anybody the list does not have.
+    ///
+    /// A PRESS IS THE ANSWER. It is an assignment by hand, which Reassign
+    /// can change again, so it asks nothing first. What the fleet says of it
+    /// is the line where every action's answer is, and a refusal is its
+    /// sentence there. The name takes the accent, which the design keeps
+    /// for what can be pressed, so the row reads as a button and not a fact.
+    @ViewBuilder private func chooseSection(_ task: Fleet.OrgTask, _ route: Fleet.OrgTask.Route) -> some View {
+        Section {
+            ForEach(route.candidates ?? [], id: \.self) { candidate in
+                Button { sendRoute(member: candidate) } label: {
+                    VStack(alignment: .leading, spacing: Design.Space.hair) {
+                        Text(taskMemberName(candidate, roster) ?? candidate)
+                            .fleetType(.body)
+                            .foregroundStyle(Design.Palette.accent)
+                        if let role = roster.first(where: { $0.id == candidate })?.role, !role.isEmpty {
+                            Text(role)
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .disabled(busy)
+                .accessibilityHint("Gives this task to them")
+            }
+            NavigationLink("Somebody else") {
+                TaskReassignView(settings: settings, task: task, members: roster, you: standing) { reply in
+                    apply(reply)
+                }
+            }
+            .disabled(busy)
+        } header: {
+            taskSectionHead("Choose a member")
         }
     }
 
@@ -563,6 +640,16 @@ struct TaskView: View {
                 }
                 .disabled(busy)
             }
+            // ROUTE IT, only where the fleet would route one: an open task
+            // nobody holds, with no member, that is not already waiting on
+            // a person, and whose own routing is not off, which the fleet
+            // refuses whatever its setting is. Edit is where that is turned
+            // back on. Whether the fleet's own routing is on is its to say.
+            if task.lock == nil, task.state == "open", (task.assignee ?? "").isEmpty, task.route?.how != "waiting", task.routing != "off" {
+                Button("Route it") { sendRoute(member: nil) }
+                    .disabled(busy)
+                    .frame(minHeight: 44)
+            }
             // ACCEPT is a person's judgement of a result, so it is offered
             // only where there is one waiting.
             if task.state == "returned" {
@@ -712,6 +799,22 @@ struct TaskView: View {
             defer { busy = false }
             do {
                 apply(try await Fleet(settings: settings).actOnTask(id: id, action: action))
+            } catch {
+                failed = true
+                result = error.localizedDescription
+            }
+        }
+    }
+
+    /// Ask for the task to be routed now, or, with a member, answer which
+    /// one it goes to. Either way what the fleet said is the page's line.
+    private func sendRoute(member: String?) {
+        Task { @MainActor in
+            busy = true
+            result = ""
+            defer { busy = false }
+            do {
+                apply(try await Fleet(settings: settings).routeTask(id: id, member: member))
             } catch {
                 failed = true
                 result = error.localizedDescription
@@ -1047,8 +1150,18 @@ struct TaskReopenView: View {
 /// over: a brief the fleet would refuse is not sent to find that out.
 ///
 /// WHOSE IT IS, when it is made, is chosen from the members this person may
-/// hand work to, or Nobody. After that it changes hands under Reassign, which
-/// is refused while a session holds the task, so Edit does not offer it.
+/// hand work to, or Nobody, or left to the fleet (docs/routing.md). After
+/// that it changes hands under Reassign, which is refused while a session
+/// holds the task, so Edit does not offer it.
+///
+/// LET THE FLEET CHOOSE asks how, once it is picked: as the fleet is set,
+/// which sends nothing about routing, or this task's own mode. Edit has the
+/// task's own mode as a choice of its own, with Off beside the other two.
+///
+/// NOBODY MEANS NOBODY. A fleet whose routing is on routes every task made
+/// with no member, so a task made for Nobody is sent with its own routing
+/// off, which holds whatever the fleet is set to, and the form says what
+/// that means under the choice.
 struct TaskForm: View {
     let settings: Settings
     let existing: Fleet.OrgTask?
@@ -1060,6 +1173,8 @@ struct TaskForm: View {
     @State private var title: String
     @State private var brief: String
     @State private var assignee = ""
+    /// The task's own routing mode, or empty to follow the fleet's setting.
+    @State private var routing: String
     @State private var repo: String
     @State private var workType: String
     @State private var busy = false
@@ -1076,6 +1191,7 @@ struct TaskForm: View {
         _brief = State(initialValue: existing?.brief ?? "")
         _repo = State(initialValue: existing?.repo ?? "")
         _workType = State(initialValue: existing?.workType ?? "")
+        _routing = State(initialValue: existing?.routing ?? "")
     }
 
     private var creating: Bool { existing == nil }
@@ -1113,10 +1229,45 @@ struct TaskForm: View {
                 Section {
                     Picker("Assignee", selection: $assignee) {
                         Text("Nobody").tag("")
+                        Text("Let the fleet choose").tag(taskFleetChooses)
                         ForEach(taskAssignable(members, you)) { member in
                             Text(member.name).tag(member.id)
                         }
                     }
+                    // WHAT NOBODY MEANS, while it is the choice: the task is
+                    // sent with its own routing off.
+                    if assignee.isEmpty {
+                        Text("It stays with nobody until somebody assigns it or changes its routing.")
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    // HOW, only once the fleet is to choose. Off is not
+                    // here: a task nobody is to be chosen for is Nobody.
+                    if assignee == taskFleetChooses {
+                        Picker("How", selection: $routing) {
+                            Text(routingAsFleet).tag("")
+                            Text(routingModeName("manual")).tag("manual")
+                            Text(routingModeName("auto")).tag("auto")
+                        }
+                    }
+                }
+            } else {
+                // THE TASK'S OWN MODE, which holds for this task whatever
+                // the fleet's is. Changing it routes nothing by itself.
+                Section {
+                    Picker("Routing", selection: $routing) {
+                        Text(routingAsFleet).tag("")
+                        ForEach(routingModes, id: \.self) { mode in
+                            Text(routingModeName(mode)).tag(mode)
+                        }
+                        // A mode from a newer fleet stays what it is (C-5).
+                        if !routing.isEmpty, !routingModes.contains(routing) {
+                            Text(routing).tag(routing)
+                        }
+                    }
+                } footer: {
+                    Text("This task’s own setting, used when it is routed.")
                 }
             }
 
@@ -1174,9 +1325,24 @@ struct TaskForm: View {
             let fleet = Fleet(settings: settings)
             let reply: Fleet.TaskReply
             if let existing {
+                // Sent empty as well as set: empty is how a task follows
+                // the fleet's setting again.
+                fields["routing"] = routing
                 reply = try await fleet.changeTask(id: existing.id, fields: fields)
             } else {
-                if !assignee.isEmpty { fields["assignee"] = assignee }
+                // WHAT IS SENT ABOUT ROUTING, by whose it is to be. The
+                // fleet choosing: the mode that was named, and nothing for
+                // "As your fleet is set". Nobody: off, always, so the task
+                // stays with nobody on a fleet whose routing is on; a fleet
+                // from before routing passes the field over. A member: the
+                // member, and no mode.
+                if assignee == taskFleetChooses {
+                    if !routing.isEmpty { fields["routing"] = routing }
+                } else if assignee.isEmpty {
+                    fields["routing"] = "off"
+                } else {
+                    fields["assignee"] = assignee
+                }
                 reply = try await fleet.createTask(fields: fields)
             }
             if reply.ok == true, reply.task != nil {
@@ -1233,7 +1399,11 @@ func taskCountLine(_ count: Int, limit: Int, unit: String) -> String? {
 /// AN OUTCOME OR A STATE THIS BUILD HAS NEVER MET IS SHOWN AS ITSELF, and a
 /// task that came back with no result attached says only that it came back:
 /// nothing is put in the place of an answer the fleet did not send (C-5).
-func taskStateWords(_ task: Fleet.OrgTask) -> String {
+///
+/// A TASK WAITING FOR A MEMBER TO BE CHOSEN says who is being asked: "you",
+/// when the fleet asked this person (`me`, their fleet address), and nobody
+/// by name otherwise, since anybody who could assign it can answer.
+func taskStateWords(_ task: Fleet.OrgTask, me: String = "") -> String {
     switch task.state {
     case "returned":
         switch task.result?.outcome {
@@ -1250,6 +1420,11 @@ func taskStateWords(_ task: Fleet.OrgTask) -> String {
     case "open":
         // A start has been sent and its machine has not answered yet.
         if let host = task.lock?.hostId, !host.isEmpty { return "Open, a session is starting on \(host)" }
+        if taskWaitsForMember(task) {
+            let asked = (task.route?.asked ?? "").lowercased()
+            if !me.isEmpty, asked == me { return "Open, waiting for you to choose a member" }
+            return "Open, waiting for a member to be chosen"
+        }
         if (task.assignee ?? "").isEmpty { return "Open, assigned to nobody" }
         return "Open"
     case "done": return "Done"
@@ -1347,6 +1522,9 @@ func taskHandoffWords(_ handoff: Fleet.OrgTask.Handoff, _ roster: [Fleet.Member]
     // Its session moved to the member's next engine: here `from` and `to`
     // are engines and the note is why the first one stopped.
     case "engine": return engineMoveWords(from: handoff.from, to: handoff.to, reason: handoff.note)
+    // A routing decision: the note is how it was decided, and `to` is whom
+    // it chose, when it chose somebody (docs/routing.md).
+    case "routed": return routedHandoffWords(how: handoff.note, to: taskMemberName(handoff.to, roster))
     default: return handoff.kind ?? "A change with no name"
     }
 }
@@ -1362,6 +1540,27 @@ func taskHandoffWho(_ handoff: Fleet.OrgTask.Handoff) -> String {
 func taskAssignable(_ members: [Fleet.Member], _ you: Fleet.Members.Standing?) -> [Fleet.Member] {
     let allowed = Set((you?.manages ?? []) + (you?.startAs ?? []))
     return members.filter { allowed.contains($0.id) }
+}
+
+/// The name a notification gives a task's page among the pages under You:
+/// "task:t12".
+let taskPagePrefix = "task:"
+
+/// The task a page name asks for, or nil when it names something else.
+///
+/// THE ID CAME FROM A NOTIFICATION'S PAYLOAD and ends up in a request's
+/// path, so it is held to what a task's id is: a few letters and digits,
+/// and nothing that could name another path.
+func taskPageId(_ page: String) -> String? {
+    guard page.hasPrefix(taskPagePrefix) else { return nil }
+    let id = String(page.dropFirst(taskPagePrefix.count))
+    guard !id.isEmpty, id.count <= 24, id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { return nil }
+    return id
+}
+
+/// This person's fleet address, as the fleet writes whom it asked.
+func taskMe(_ settings: Settings) -> String {
+    settings.signedInAs.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 }
 
 /// The row under You: how many tasks have come back and are waiting on

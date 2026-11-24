@@ -76,6 +76,7 @@ struct OrgView: View {
             case .answered:
                 if !team.isEmpty { teamSection }
                 everyoneSection
+                routingSection
                 if isAdmin { filesSection }
             }
         }
@@ -142,6 +143,17 @@ struct OrgView: View {
             }
         } header: {
             orgSectionHead("Everyone")
+        }
+    }
+
+    /// WHICH MEMBER A TASK GOES TO when nobody was given it (docs/routing.md):
+    /// the fleet's setting, which everybody reads and an admin sets. The
+    /// row is for everybody, and its page draws a control only for an admin.
+    @ViewBuilder private var routingSection: some View {
+        Section {
+            NavigationLink("Routing") {
+                RoutingView(settings: settings, members: members)
+            }
         }
     }
 

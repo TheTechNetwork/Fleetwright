@@ -67,7 +67,9 @@ fun YouScreen(
     modifier: Modifier = Modifier,
     /**
      * The page a notification asked to open, by name: "credentials", when a
-     * manager changed this person's vault. Opened once, then [onOpened].
+     * manager changed this person's vault, or "task:" and a task's id, when
+     * one waits for this person to choose its member. Opened once, then
+     * [onOpened].
      */
     opening: String? = null,
     onOpened: () -> Unit = {},
@@ -145,6 +147,19 @@ fun YouScreen(
         }
     }
 
+    // A TASK'S PAGE, asked for by id from a notification, which the page then
+    // asks the fleet about itself.
+    taskPageId(open)?.let { id ->
+        TaskPage(
+            settings = settings,
+            id = id,
+            onDismiss = {
+                open = null
+                tasksAsked++
+            },
+            onStart = onStart,
+        )
+    }
     when (open) {
         "credentials" -> CredentialsScreen(settings, onDismiss = { open = null })
         "temporary" -> TemporaryMachinesSheet(settings, onDismiss = { open = null })

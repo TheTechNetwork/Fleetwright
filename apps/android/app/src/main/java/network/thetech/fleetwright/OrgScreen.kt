@@ -87,6 +87,8 @@ internal fun OrgScreen(settings: Settings, onDismiss: () -> Unit, onStart: (Star
     // the list last had it.
     var opened by remember { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf(false) }
+    // The fleet's routing is open, on its own page.
+    var routing by remember { mutableStateOf(false) }
     // Every member as a file, once an admin asked for them.
     var files by remember { mutableStateOf(listOf<Fleet.MemberFile>()) }
     var importText by remember { mutableStateOf("") }
@@ -170,6 +172,10 @@ internal fun OrgScreen(settings: Settings, onDismiss: () -> Unit, onStart: (Star
         )
     }
 
+    // WHICH MEMBER A TASK GOES TO when nobody was given it (docs/routing.md):
+    // the fleet's setting, which everybody reads and an admin sets.
+    if (routing) RoutingScreen(settings, members = members, onDismiss = { routing = false })
+
     FullScreen(title = "Organization", onDismiss = onDismiss) {
         val why = failed
         when {
@@ -207,6 +213,9 @@ internal fun OrgScreen(settings: Settings, onDismiss: () -> Unit, onStart: (Star
                     ) { opened = row.member.id }
                 }
                 if (canAdd) OpenRow("Add a member") { adding = true }
+                // The row is for everybody, and its page draws a control
+                // only for an admin.
+                OpenRow("Routing") { routing = true }
 
                 // EVERY MEMBER AS A MARKDOWN FILE, for an admin: read them
                 // out, or paste one back in. A file is the record and the

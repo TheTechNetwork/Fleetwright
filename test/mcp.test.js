@@ -67,7 +67,7 @@ test('every exposed tool is a real verb, with the verb\'s own parameters', () =>
       // `fleet_delegate` makes a task and starts its assignee on it
       // (docs/tasks.md). Both records are the fleet's own and no host's.
       // Named here so another write is a deliberate edit.
-      assert.equal(tool.mutating, ['fleet_member', 'fleet_task', 'fleet_delegate'].includes(tool.name), `${tool.name} is a coordinator read and must not be mutating`);
+      assert.equal(tool.mutating, ['fleet_member', 'fleet_task', 'fleet_delegate', 'fleet_set_routing'].includes(tool.name), `${tool.name} is a coordinator read and must not be mutating`);
       // No `host`: naming one would ask the fleet to route a question the fleet
       // itself answers.
       assert.ok(!('host' in tool.inputSchema.properties), `${tool.name} takes a host it cannot use`);

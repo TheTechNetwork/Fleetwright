@@ -20,7 +20,9 @@ import UserNotifications
 struct YouView: View {
     let settings: Settings
     /// The page a notification asked to open, by name: "credentials", when a
-    /// manager changed this person's vault. Pushed here and cleared by going back.
+    /// manager changed this person's vault, or "task:" and a task's id, when
+    /// one waits for this person to choose its member. Pushed here and
+    /// cleared by going back.
     @Binding var opening: String?
 
     @State private var signInResult = ""
@@ -161,7 +163,15 @@ struct YouView: View {
         .background(Design.Palette.bg)
         .listRowBackground(Design.Palette.card)
         .navigationTitle("You")
-        .navigationDestination(item: $opening) { _ in CredentialsHome(settings: settings) }
+        .navigationDestination(item: $opening) { page in
+            // A TASK'S PAGE, asked for by id, which the page then asks the
+            // fleet about itself. Anything else is Credentials, as before.
+            if let taskId = taskPageId(page) {
+                TaskView(settings: settings, id: taskId)
+            } else {
+                CredentialsHome(settings: settings)
+            }
+        }
         .task(id: settings.credential) { await loadRunners() }
         .task { await readPushKeyDoubt() }
     }

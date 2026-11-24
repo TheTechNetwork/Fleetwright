@@ -25,10 +25,11 @@
 // NEVER THROWS. Every refusal is a code and a sentence.
 
 import {
-  checkTask, checkNote, newTask, changeTask, lockTask, confirmLock, releaseLock, returnTask, actOn, startFor,
+  checkTask, checkNote, newTask, changeTask, routeTask, lockTask, confirmLock, releaseLock, returnTask, actOn, startFor,
   TASK_ID_RE, TASK_STATES, MAX_TASKS,
 } from '../protocol/tasks.js';
 import { cleanTurn } from '../protocol/engines.js';
+import { cleanRoute } from '../protocol/routing.js';
 
 /** The prefix a task's row is stored under. */
 export const TASKS_PREFIX = 'tasks:';
@@ -191,6 +192,43 @@ export class OrgTasks {
     this.#keep(next.task);
     const moved = next.task.assignee !== found.task.assignee;
     return { ok: true, task: next.task, moved, text: moved ? `${next.task.id} is ${next.task.assignee ? `now ${next.task.assignee}’s` : 'assigned to nobody'}.` : `Saved ${next.task.id}.` };
+  }
+
+  /**
+   * Write a routing decision on a task the person can see (docs/routing.md).
+   * The core made the decision; this holds it to a decision's shape and to
+   * the task's state, and keeps it.
+   *
+   * @param {Who} who @param {unknown} id @param {unknown} decision
+   * @returns {{ ok: true, task: Task } | { ok: false, error: { code: string }, text: string }}
+   */
+  route(who, id, decision) {
+    const found = this.find(who, id);
+    if (!found.ok) return found;
+    const next = routeTask(found.task, decision);
+    if (!next.ok) return refused(next);
+    this.#keep(next.task);
+    return { ok: true, task: next.task };
+  }
+
+  /**
+   * A person's answer to "which member": an assignment by hand, checked as
+   * one, and written down as the answer to the question.
+   *
+   * @param {Who} who @param {unknown} id @param {string} memberId
+   * @param {(id: string) => { name: string }|null} member
+   * @param {Record<string, unknown>} decision  the rest of the route record
+   * @returns {{ ok: true, task: Task } | { ok: false, error: { code: string }, text: string }}
+   */
+  answer(who, id, memberId, member, decision) {
+    const found = this.find(who, id);
+    if (!found.ok) return found;
+    const standing = this.#mayAssign(who, memberId, member);
+    if (!standing.ok) return standing;
+    const next = routeTask(found.task, { ...decision, how: 'person', member: memberId });
+    if (!next.ok) return refused(next);
+    this.#keep(next.task);
+    return { ok: true, task: next.task };
   }
 
   /**
@@ -452,6 +490,8 @@ function readTask(row) {
     branch: typeof row.branch === 'string' && row.branch.startsWith(`task/${row.id}`) ? row.branch : made.branch,
     state: row.state,
     ...(note.ok && note.note ? { note: note.note } : {}),
+    // The last routing decision, read back as one or not at all (routing.js).
+    ...(cleanRoute(row.route) ? { route: /** @type {import('../protocol/routing.js').Route} */ (cleanRoute(row.route)) } : {}),
     lock: row.state === 'done' || row.state === 'cancelled' ? null : lock,
     result,
     handoffs: Array.isArray(row.handoffs) ? row.handoffs.filter((/** @type {any} */ h) => h && typeof h === 'object' && typeof h.kind === 'string').slice(-50) : made.handoffs,
@@ -460,7 +500,7 @@ function readTask(row) {
 }
 
 /** What each refusal answers with. Anything not here is a 400. */
-const STATUS = Object.freeze({ not_signed_in: 403, not_manager: 403, no_task: 404, no_member: 404, task_locked: 409, task_not_open: 409, task_not_returned: 409, task_not_locked: 409, task_closed: 409, too_many: 409 });
+const STATUS = Object.freeze({ not_signed_in: 403, not_manager: 403, no_task: 404, no_member: 404, task_locked: 409, task_not_open: 409, task_not_returned: 409, task_not_locked: 409, task_closed: 409, too_many: 409, task_pinned: 409, routing_off: 409 });
 
 /**
  * The `/api/tasks` routes, for both coordinators, so the Worker's and the
@@ -471,8 +511,9 @@ const STATUS = Object.freeze({ not_signed_in: 403, not_manager: 403, no_task: 40
  *   GET    /api/tasks/{id}       the task, and what to sign to start it
  *   PUT    /api/tasks/{id}       { title?, brief?, workType?, repo?, assignee?, note? }
  *   POST   /api/tasks/{id}/act   { action, note? }
+ *   POST   /api/tasks/{id}/route { member? }   route it now, or answer who it goes to (docs/routing.md)
  *
- * @param {{ tasksFor: Function, taskFor: Function, createTask: Function, changeTask: Function, actOnTask: Function }} core
+ * @param {{ tasksFor: Function, taskFor: Function, createTask: Function, changeTask: Function, actOnTask: Function, routeTask: Function }} core
  * @param {string|undefined} method @param {string} pathname @param {URLSearchParams|null} query
  * @param {{ email?: string|null, admin?: boolean }|null} requester
  * @param {() => Promise<any>} readBody
@@ -483,7 +524,16 @@ export async function tasksRoute(core, method, pathname, query, requester, readB
   const said = (r) => ({ status: r.ok ? 200 : (STATUS[/** @type {keyof typeof STATUS} */ (r.error?.code)] ?? 400), body: r });
   if (pathname === '/api/tasks') {
     if (method === 'GET') return said(core.tasksFor(requester, { state: query?.get('state') ?? null }));
-    if (method === 'POST') return said(core.createTask(requester, await readBody()));
+    if (method === 'POST') {
+      // A task whose routing left a pick for the model is answered once the
+      // model has been asked, so the reply says who it went to, or who is
+      // being asked (docs/routing.md).
+      const made = core.createTask(requester, await readBody());
+      if (!made.ok || !made.routePending) return said(made);
+      const { routePending: _pending, ...rest } = made;
+      const routed = await core.routeTask(requester, made.task.id, {});
+      return said(routed.ok ? { ...rest, task: routed.task, start: routed.start, text: `${rest.text} ${routed.text}`.trim() } : rest);
+    }
     return null;
   }
   const rest = pathname.slice('/api/tasks/'.length).split('/');
@@ -502,6 +552,10 @@ export async function tasksRoute(core, method, pathname, query, requester, readB
   if (rest.length === 2 && rest[1] === 'act' && method === 'POST') {
     const body = await readBody();
     return said(core.actOnTask(requester, id, body?.action, body?.note));
+  }
+  if (rest.length === 2 && rest[1] === 'route' && method === 'POST') {
+    const body = await readBody();
+    return said(await core.routeTask(requester, id, { member: body?.member }));
   }
   return null;
 }

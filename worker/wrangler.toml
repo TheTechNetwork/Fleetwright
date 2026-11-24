@@ -195,6 +195,12 @@ compatibility_flags = ["nodejs_als"]
 #                                 nothing is spent. The budget's unset → 8,000
 #                                 neurons a day, inside the free 10,000; any
 #                                 value is clamped to 100,000
+#   FLEETWRIGHT_ROUTE_MODEL       lets the same model pick which member a
+#                                 task goes to (docs/routing.md), on only
+#                                 when this is exactly "1" AND everything
+#                                 FLEETWRIGHT_DECIDE needs is in place. Unset
+#                                 → a pick among several members is asked of
+#                                 a person, and nothing is spent
 #
 # FLEETWRIGHT_AUTH_ALLOW IS NOT IN THIS LIST because it is a `wrangler secret`
 # rather than a var. It decides who can reach a fleet; it does not belong in a

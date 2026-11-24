@@ -212,6 +212,8 @@ test('a fork cannot spend on the decision model: the default binds no AI and no 
   assert.ok(!/^\s*name\s*=\s*"DECIDE_RATE_LIMIT"/m.test(DEFAULT), 'wrangler.toml declares the decide rate limit');
   for (const [name, toml] of [['wrangler.toml', DEFAULT], ['wrangler.production.toml', PRODUCTION]]) {
     assert.ok(!/^\s*FLEETWRIGHT_DECIDE\s*=/m.test(toml), `${name} turns the decision model on; that is the operator's to do, not a committed default`);
+    // And the same model's second question, which member a task goes to (docs/routing.md).
+    assert.ok(!/^\s*FLEETWRIGHT_ROUTE_MODEL\s*=/m.test(toml), `${name} turns the routing model on; that is the operator's to do, not a committed default`);
   }
 });
 

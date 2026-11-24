@@ -25,6 +25,7 @@ import { describeRunnerAuth } from '../core/runner-auth-words.js';
 import { oneLine, LABEL_RE } from '../core/text.js';
 import { hostReported, rcLink } from '../fleet/coordinator/core.js';
 import { packetWords, RESULT_FILE } from '../fleet/protocol/tasks.js';
+import { routeWords } from '../fleet/protocol/routing.js';
 import { ENGINES, checkEngines, decodeEngines, enginesWords } from '../fleet/protocol/engines.js';
 
 /**
@@ -134,6 +135,33 @@ export function backAtPrompt(session) {
 /** What an older coordinator, with no tasks, is said to be. */
 const NO_TASKS = 'This coordinator does not keep tasks yet, so there are none to list, make or hand on.';
 
+const NO_ROUTING = 'This coordinator does not route tasks yet: a task goes to the member it is given to and to nobody else.';
+
+/**
+ * The fleet's routing in words: the mode and what it means, the rules, and
+ * whether a pick can be a model's.
+ *
+ * @param {{ routing: { mode: string, rules: Array<{ workType: string, member: string }>, updatedBy?: string|null }, model?: boolean }} r
+ */
+function describeRouting(r) {
+  const mode = String(r.routing.mode);
+  const means = {
+    off: 'Routing is off. A task with no assignee stays with nobody, unless the task itself asks to be routed.',
+    manual: 'Routing is manual. A task with no assignee goes by the rules below; a pick among several members is asked of a person.',
+    auto: r.model
+      ? 'Routing is auto. A task with no assignee goes by the rules below; a pick among several members is the fleet’s model’s, and a person is asked when the model gives no usable answer.'
+      : 'Routing is auto, and this fleet has no model to pick with, so a pick among several members is asked of a person.',
+  }[mode] ?? `Routing is ${mode}.`;
+  const rules = Array.isArray(r.routing.rules) ? r.routing.rules : [];
+  return [
+    means,
+    rules.length ? 'Rules, by kind of work:' : 'No rules by kind of work.',
+    ...rules.map((x) => `  ${x.workType} → ${x.member}`),
+    'A task somebody was given is never moved, and routing only chooses among members the person asking could have assigned it to by hand.',
+    ...(r.routing.updatedBy ? [`Last changed by ${r.routing.updatedBy}.`] : []),
+  ].join('\n');
+}
+
 /** When, to the minute, in UTC: a task's times are read by agents and people in different places. */
 const taskTime = (/** @type {unknown} */ at) => (Number(at) > 0 ? `${new Date(Number(at)).toISOString().replace('T', ' ').slice(0, 16)} UTC` : 'an unknown time');
 
@@ -167,6 +195,10 @@ function describeTask(t, full = false) {
     );
   }
   if (t.parent) lines.push(`Delegated from ${t.parent}.`);
+  // HOW IT CAME TO BE WHOSE IT IS, or why it is nobody's (docs/routing.md).
+  // The fleet's own sentence; the ids in it are members' ids.
+  if (t.route?.how) lines.push(`Routing: ${routeWords(t.route)}${t.routing ? ` (this task’s own mode is ${t.routing})` : ''}`);
+  else if (t.routing) lines.push(`Routing: this task’s own mode is ${t.routing}.`);
   if (!full) return lines.join('\n');
   lines.push('', 'Brief:', String(t.brief ?? ''));
   if (t.note) lines.push('', `Reopened: ${t.note}`);
@@ -1020,6 +1052,9 @@ export class McpServer {
     if (tool.name === 'fleet_tasks') return await this.#tasks(params);
     if (tool.name === 'fleet_task') return await this.#task(params);
     if (tool.name === 'fleet_delegate') return await this.#delegate(params);
+    // WHICH MEMBER A TASK GOES TO (docs/routing.md).
+    if (tool.name === 'fleet_routing') return await this.#routing();
+    if (tool.name === 'fleet_set_routing') return await this.#setRouting(params);
     if (tool.coordinator) return await this.#coordinatorRead(tool.coordinator);
 
     // A LOCAL TOOL — the waiting happens here, not in the fleet.
@@ -1419,7 +1454,7 @@ export class McpServer {
     );
     /** @type {Record<string, unknown>} */
     const fields = {};
-    for (const field of ['title', 'brief', 'workType', 'repo', 'note']) if (params[field] !== undefined) fields[field] = params[field];
+    for (const field of ['title', 'brief', 'workType', 'repo', 'note', 'routing']) if (params[field] !== undefined) fields[field] = params[field];
     if (params.assignee !== undefined) fields.assignee = params.assignee === '' ? null : params.assignee;
     if (!params.id) {
       if (params.action) return this.#text('`action` needs the `id` of the task to act on.', true);
@@ -1428,6 +1463,12 @@ export class McpServer {
       return 'failed' in made ? made.failed : said(made);
     }
     const at = `/api/tasks/${encodeURIComponent(String(params.id))}`;
+    // ROUTE IT, or answer who it goes to (docs/routing.md). Its own route,
+    // because it is neither a change of fields nor one of the four acts.
+    if (params.action === 'route') {
+      const routed = await this.#org('POST', `${at}/route`, params.assignee ? { member: params.assignee } : {}, NO_TASKS);
+      return 'failed' in routed ? routed.failed : said(routed);
+    }
     if (params.action) {
       const done = await this.#org('POST', `${at}/act`, { action: params.action, ...(params.note !== undefined ? { note: params.note } : {}) }, NO_TASKS);
       return 'failed' in done ? done.failed : said(done);
@@ -1456,17 +1497,41 @@ export class McpServer {
     let id = String(params.task ?? '').trim().toLowerCase();
     let lead = '';
     if (!id) {
-      if (!params.to || !params.title || !params.brief) {
-        return this.#text('fleet_delegate needs `to`, `title` and `brief` for new work, or `task` to keep waiting for work already handed over.', true);
+      if (!params.title || !params.brief) {
+        return this.#text('fleet_delegate needs `title` and `brief` for new work (and `to`, unless the fleet’s routing is to choose), or `task` to keep waiting for work already handed over.', true);
       }
       /** @type {Record<string, unknown>} */
-      const fields = { title: params.title, brief: params.brief, assignee: params.to };
+      const fields = { title: params.title, brief: params.brief, ...(params.to ? { assignee: params.to } : {}) };
       for (const field of ['workType', 'repo', 'parent']) if (params[field] !== undefined) fields[field] = params[field];
+      // WITH NOBODY NAMED, THE FLEET'S ROUTING CHOOSES (docs/routing.md), under
+      // this task's own mode when one is given. A member named is a member
+      // named: `routing` is not sent, and nothing second-guesses the choice.
+      if (!params.to && params.routing !== undefined) fields.routing = params.routing;
       const made = await this.#org('POST', '/api/tasks', fields, NO_TASKS);
       if ('failed' in made) return made.failed;
       if (made.body?.ok !== true || !made.body.task) return this.#text(String(made.body?.text || 'The fleet refused the task and did not say why.'), true);
       id = String(made.body.task.id);
       const unstarted = `${id} was made and is open, with nothing working on it. Start it with fleet_start and \`taskId\` once that is put right, or cancel it with fleet_task.`;
+      // ROUTING CHOSE NOBODY: a person is being asked, or no member takes
+      // this kind of work, or routing is off. Nothing is started, and the
+      // reply says which of the three and what to do next.
+      if (!made.body.task.assignee) {
+        const how = made.body.task.route?.how;
+        // A MODE THAT WAS ASKED FOR AND DID NOT COME BACK ON THE TASK was not
+        // taken: this coordinator is from before routing. Saying "routing is
+        // off, pass routing" to somebody who passed it would report a state
+        // nobody knows (C-5) and send them round again.
+        const asked = typeof params.routing === 'string' && params.routing && params.routing !== 'off' ? String(params.routing) : '';
+        const notTaken = asked && made.body.task.routing !== asked;
+        const next = how === 'waiting'
+          ? `Nothing was started. When somebody has chosen (fleet_task with \`action: "route"\` and \`assignee\` is your own answer, if you may give one), start it with fleet_start and \`taskId: "${id}"\`.`
+          : how === 'nobody'
+            ? `Nothing was started. Give it to a member with fleet_task and \`assignee\`, or cancel it.`
+            : notTaken
+              ? `Nothing was started: this fleet did not take \`routing: "${asked}"\` for the task, so its coordinator is from before routing and chose nobody. Name a member with \`to\`, or give ${id} to one with fleet_task.`
+              : `Nothing was started: the fleet’s routing is off, so no member was chosen. Name one with \`to\`, pass \`routing: "manual"\` for this task, or give ${id} to a member with fleet_task.`;
+        return this.#text(`${made.body.text}\n\n${next}`, true);
+      }
       if (!made.body.start) return this.#text(`${made.body.text}\n\n${unstarted}`, true);
       /** @type {any} */
       let reply;
@@ -1483,7 +1548,9 @@ export class McpServer {
         this.#watchStarted();
       }
       const landed = reply?.hostId || session?.hostId;
-      lead = `Handed ${id} to ${params.to}${named ? `: ${named}${landed ? ` on ${landed}` : ''}` : ''}.\n\n`;
+      // Who it went to is the task's assignee, which routing may have chosen.
+      const to = String(made.body.task.assignee);
+      lead = `Handed ${id} to ${to}${params.to ? '' : `, chosen by routing (${String(made.body.task.route?.how ?? 'unknown')})`}${named ? `: ${named}${landed ? ` on ${landed}` : ''}` : ''}.\n\n`;
     }
 
     const ceiling = this.maxWaitMs ? this.maxWaitMs / 1000 : 900;
@@ -1531,6 +1598,41 @@ export class McpServer {
       }
       await this.sleep(Math.min(5000, Math.max(1000, deadline - this.now())));
     }
+  }
+
+  /** The fleet's routing, as an agent needs it to predict where a task will go (docs/routing.md). */
+  async #routing() {
+    const got = await this.#org('GET', '/api/routing', undefined, NO_ROUTING);
+    if ('failed' in got) return got.failed;
+    if (got.body?.ok !== true || !got.body.routing) return this.#text(String(got.body?.text || NO_ROUTING), got.body?.ok === false);
+    return this.#text(describeRouting(got.body));
+  }
+
+  /**
+   * An admin's change to the fleet's routing.
+   *
+   * @param {Record<string, unknown>} params
+   */
+  async #setRouting(params) {
+    /** @type {Record<string, unknown>} */
+    const fields = {};
+    if (params.mode !== undefined) fields.mode = params.mode;
+    if (params.rules !== undefined) {
+      if (!Array.isArray(params.rules)) return this.#text('`rules` is a list, each written "kind-of-work=member-id".', true);
+      /** @type {Array<{ workType: string, member: string }>} */
+      const rules = [];
+      for (const r of params.rules) {
+        const [workType, member, extra] = String(r).split('=');
+        if (!workType || !member || extra !== undefined) return this.#text(`“${oneLine(r, 60)}” is not a rule. Write each as "kind-of-work=member-id", like "backend=debbie".`, true);
+        rules.push({ workType: workType.trim(), member: member.trim() });
+      }
+      fields.rules = rules;
+    }
+    if (!Object.keys(fields).length) return this.#text('fleet_set_routing needs `mode`, `rules`, or both.', true);
+    const saved = await this.#org('PUT', '/api/routing', fields, NO_ROUTING);
+    if ('failed' in saved) return saved.failed;
+    if (saved.body?.ok !== true) return this.#text(String(saved.body?.text || 'The fleet refused it and did not say why.'), true);
+    return this.#text(`${saved.body.text}\n\n${describeRouting(saved.body)}`);
   }
 
   /** The organization, as a tree an agent can choose a member from. */

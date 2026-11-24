@@ -35,6 +35,8 @@ Nothing here runs unless somebody makes a task.
 | `parent` | the task this one was delegated from | optional |
 | `lock` | the session working on it: `{ session, hostId, member, by, at }`, with `readyAt` once that session is back at its prompt with no result, and, as a screen is sent it, `connected`: whether its machine is connected now | one, or none |
 | `result` | what came back: `{ outcome, summary, session, hostId, member, at, truncated }` | the summary is at most 4000 bytes |
+| `routing` | this task's own routing mode, `auto`, `manual` or `off` ([routing.md](./routing.md)) | optional; absent follows the fleet's |
+| `route` | the last routing decision about it: how, who, among whom, and why | set by the coordinator |
 | `handoffs` | every change of hands, oldest first | the last 50 |
 | `createdBy`, `createdAt`, `updatedAt` | who made it, and when | set by the coordinator |
 
@@ -205,10 +207,11 @@ then with that person's rights.
 
 ```
 GET    /api/tasks              { tasks }             the ones you may see
-POST   /api/tasks              { title, brief, assignee?, workType?, repo?, parent? }
+POST   /api/tasks              { title, brief, assignee?, workType?, repo?, parent?, routing? }
 GET    /api/tasks/{id}         { task, start }       start is what to sign, or null
-PUT    /api/tasks/{id}         { title?, brief?, workType?, repo?, assignee?, note? }
+PUT    /api/tasks/{id}         { title?, brief?, workType?, repo?, assignee?, note?, routing? }
 POST   /api/tasks/{id}/act     { action: release | accept | reopen | cancel, note? }
+POST   /api/tasks/{id}/route   { member? }           routing.md
 ```
 
 - **MCP**: `fleet_tasks` lists or reads, `fleet_task` makes, changes and acts,

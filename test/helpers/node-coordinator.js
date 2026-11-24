@@ -49,6 +49,7 @@ import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fle
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { membersRoute } from '../../src/fleet/coordinator/org-members.js';
 import { tasksRoute } from '../../src/fleet/coordinator/org-tasks.js';
+import { routingRoute } from '../../src/fleet/coordinator/org-routing.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { resource } from '../../src/core/resources.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
@@ -210,6 +211,7 @@ export class Coordinator {
     this.core.linkedRepos.restore(state.linkedRepos);
     this.core.org.restore(state.orgMembers);
     this.core.tasks.restore(state.orgTasks?.tasks, state.orgTasks?.seq);
+    this.core.routing.restore(state.routing);
     this.core.restoreRunnerStarts(state.runnerStarts);
     this.core.restoreStandby(state.vmStandby);
     this.core.restoreHolderJoins(state.holderJoins);
@@ -318,6 +320,7 @@ export class Coordinator {
         orgMembers: this.core.org.serialise(),
         // And the tasks, with the counter that numbers them (org-tasks.js).
         orgTasks: this.core.tasks.serialise(),
+        routing: this.core.routing.serialise(),
         runnerStarts: this.core.serialiseRunnerStarts(),
         vmStandby: this.core.serialiseStandby(),
         holderJoins: this.core.serialiseHolderJoins(),
@@ -1296,6 +1299,12 @@ export class Coordinator {
     // The fleet's tasks — see the Worker's copy.
     if (p === '/api/tasks' || p.startsWith('/api/tasks/')) {
       const answer = await tasksRoute(this.core, req.method, p, url.searchParams, requesterFor(client), () => readJson(req));
+      if (answer) return json(res, answer.status, answer.body);
+    }
+
+    // Which member a task goes to — see the Worker's copy.
+    if (p === '/api/routing') {
+      const answer = await routingRoute(this.core, req.method ?? 'GET', p, requesterFor(client), () => readJson(req));
       if (answer) return json(res, answer.status, answer.body);
     }
 
