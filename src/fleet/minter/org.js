@@ -58,7 +58,7 @@
 //
 // NEVER THROWS. Every refusal is a code and a sentence.
 
-import { MEMBER_ID_RE, MEMBER_KINDS, MEMBER_PREFIX, MAX_MEMBERS, MAX_MANAGERS, checkTree, manages, chainAbove } from '../protocol/members.js';
+import { MEMBER_ID_RE, MEMBER_KINDS, MEMBER_PREFIX, MEMBER_ACCOUNT_DOMAIN, MAX_MEMBERS, MAX_MANAGERS, checkTree, manages, chainAbove } from '../protocol/members.js';
 
 /** The minter's own list of who may file the tree's roots. */
 export const ORG_ADMINS_ROW = 'org:admins';
@@ -72,6 +72,20 @@ export const MAX_CUSTODIANS = 8;
 const MAX_LOG = 20;
 const ADDRESS_RE = /^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,63}$/;
 const KEY_HASH_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * A fleet address a person can hold. NEVER ONE AT `members.invalid`: that is
+ * where a box files an agent member's vault (`debbie@members.invalid`,
+ * protocol/members.js), and a box runs a person member's session as their
+ * address. So a person record at that address was a session on the agent's
+ * sign-ins for whoever filed it, with no custody of the agent at all: found
+ * by the outsider review of this file, where the coordinator's store refused
+ * the address and this one, the one a box believes, did not. Refused for
+ * every address taken here, since none of them is a person's.
+ *
+ * @param {unknown} a
+ */
+const isAddress = (a) => ADDRESS_RE.test(String(a)) && !lower(a).endsWith(`@${MEMBER_ACCOUNT_DOMAIN}`) && !lower(a).endsWith(`.${MEMBER_ACCOUNT_DOMAIN}`);
 
 /** The ops this file answers, so vault.js sends them here under one lock. */
 export const ORG_OPS = Object.freeze(['org', 'orgadmin', 'orgmember', 'custodian']);
@@ -159,6 +173,9 @@ export async function loadTree(store) {
   for (const [key, row] of await store.list({ prefix: ORG_MEMBER_PREFIX })) {
     const id = key.slice(ORG_MEMBER_PREFIX.length);
     if (!row || row.removed || row.id !== id || !MEMBER_ID_RE.test(id) || !MEMBER_KINDS.includes(row.kind)) continue;
+    // A person row at an agent's box account, kept from before that was
+    // refused (isAddress), is nobody: no box is told of it.
+    if (row.kind === 'person' && !isAddress(lower(row.email))) continue;
     tree.set(id, {
       id, kind: row.kind, ...(row.kind === 'person' ? { email: lower(row.email) } : {}), reportsTo: typeof row.reportsTo === 'string' ? row.reportsTo : null,
       managers: Array.isArray(row.managers) ? row.managers.map(lower) : [],
@@ -175,7 +192,7 @@ export async function loadTree(store) {
 /** @param {Store} store @returns {Promise<string[]>} */
 async function orgAdmins(store) {
   const row = await store.get(ORG_ADMINS_ROW);
-  return Array.isArray(row?.admins) ? row.admins.map(lower).filter((/** @type {string} */ a) => ADDRESS_RE.test(a)) : [];
+  return Array.isArray(row?.admins) ? row.admins.map(lower).filter((/** @type {string} */ a) => isAddress(a)) : [];
 }
 
 /**
@@ -332,7 +349,8 @@ export async function membersForBoxes(store, listed) {
  *
  * @param {any} inside  the opened request
  * @param {{ store: Store, email: string, who: { userId: string, login: string }, at: number, fleetAdmin: boolean }} ctx
- * @returns {Promise<{ ok: true, answer?: any, text: string } | { ok: false, error: { code: string }, text: string }>}
+ * @returns {Promise<{ ok: true, answer?: any, text: string, empty?: string } | { ok: false, error: { code: string }, text: string }>}
+ *   `empty` names an agent member whose vault the caller empties
  */
 export async function runOrgOp(inside, ctx) {
   const { store, email, who, at } = ctx;
@@ -361,7 +379,7 @@ export async function runOrgOp(inside, ctx) {
   if (inside.op === 'orgadmin') {
     const address = lower(inside.address);
     const remove = inside.remove === true;
-    if (!ADDRESS_RE.test(address)) return refuse('bad_params', 'An org admin is a fleet address.');
+    if (!isAddress(address)) return refuse('bad_params', 'An org admin is a fleet address.');
     if (!admins.length) {
       // THE FIRST, and the one moment the coordinator's word gives anything:
       // the person filing must be who it says administers the fleet.
@@ -403,18 +421,28 @@ export async function runOrgOp(inside, ctx) {
       if (!isOrgAdmin && !manages(tree, email, id)) return refuse('not_manager', `${id} is not on your team, so removing it from the vault’s tree is not yours to do.`);
       const reports = [...tree.values()].filter((n) => n.reportsTo === id).map((n) => n.id);
       if (reports.length) return refuse('has_reports', `${reports.join(', ')} still ${reports.length === 1 ? 'reports' : 'report'} to ${id}. Move ${reports.length === 1 ? 'it' : 'them'} first.`);
-      await store.put(`${ORG_MEMBER_PREFIX}${id}`, { id, at, removed: true });
-      return { ok: true, text: `Removed ${id} from the organization. Nobody holds custody of it through the tree now; what its vault keeps stays until a custodian forgets it.` };
+      // WHAT THE TOMBSTONE REMEMBERS. Whose address a person was, so filing
+      // them again is not adding somebody new (below, `again`).
+      await store.put(`${ORG_MEMBER_PREFIX}${id}`, { id, at, removed: true, kind: prior.kind, ...(prior.kind === 'person' ? { email: lower(prior.email) } : {}) });
+      // AN AGENT'S VAULT GOES WITH IT (`empty`, done by vault.js under the
+      // vault's own lock). It used to stay "until a custodian forgets it",
+      // and that could not happen: nobody is the custodian of a member that
+      // is not in the tree, so the sign-ins were kept, renewed, and handed to
+      // whoever filed the id next. A person's vault is their own and is not
+      // touched.
+      return prior.kind === 'agent'
+        ? { ok: true, empty: id, text: `Removed ${id} from the organization.` }
+        : { ok: true, text: `Removed ${id} from the organization. What ${lower(prior.email)} keeps is their own, and stays theirs.` };
     }
 
     const kind = String(inside.kind ?? '');
     if (!MEMBER_KINDS.includes(/** @type {any} */ (kind))) return refuse('bad_params', 'A member is a person or an agent.');
     const address = lower(inside.address);
-    if (kind === 'person' ? !ADDRESS_RE.test(address) : Boolean(address)) return refuse('bad_params', 'A person member has a fleet address, and an agent member has none.');
+    if (kind === 'person' ? !isAddress(address) : Boolean(address)) return refuse('bad_params', 'A person member has a fleet address, and an agent member has none.');
     const reportsTo = inside.reportsTo === undefined || inside.reportsTo === null || inside.reportsTo === '' ? null : String(inside.reportsTo);
     if (reportsTo !== null && !MEMBER_ID_RE.test(reportsTo)) return refuse('bad_params', 'reportsTo is another member’s id, or nothing.');
     const managersIn = inside.managers === undefined ? (prior?.managers ?? []) : inside.managers;
-    if (!Array.isArray(managersIn) || managersIn.length > MAX_MANAGERS || managersIn.some((a) => !ADDRESS_RE.test(lower(a)))) {
+    if (!Array.isArray(managersIn) || managersIn.length > MAX_MANAGERS || managersIn.some((a) => !isAddress(lower(a)))) {
       return refuse('bad_params', `managers is at most ${MAX_MANAGERS} fleet addresses.`);
     }
     const managers = [...new Set(managersIn.map(lower))].sort();
@@ -446,7 +474,11 @@ export async function runOrgOp(inside, ctx) {
     // old one's custodians held must not follow it to them.
     const met = kind === 'person' ? await addressMet(store, address) : false;
     const samePerson = Boolean(prior && prior.kind === 'person' && lower(prior.email) === address);
-    const added = kind === 'person' && !samePerson && !met && address !== email ? [email] : [];
+    // REMOVED AND FILED AGAIN is not somebody new either. Without this,
+    // custody an org admin took away came back by removing the record and
+    // filing it again.
+    const again = Boolean(stored?.removed && stored.kind === 'person' && lower(stored.email) === address);
+    const added = kind === 'person' && !samePerson && !met && !again && address !== email ? [email] : [];
     const personCustodians = kind === 'person' ? (samePerson ? prior?.custodians ?? [] : added) : [];
     /** @type {OrgNode} */
     const next = {
@@ -464,6 +496,10 @@ export async function runOrgOp(inside, ctx) {
     const after = new Map(tree).set(id, next);
     return {
       ok: true,
+      // A NEW AGENT STARTS WITH AN EMPTY VAULT, whatever a member that had
+      // this id before left under it (a removal from before removals emptied
+      // one, or a write that raced one).
+      ...(kind === 'agent' && !prior ? { empty: id } : {}),
       answer: { id, may: await mayActFor(store, after, id) },
       text: prior
         ? `Filed ${id}’s place in the organization. Custody follows it from now.`
@@ -500,7 +536,7 @@ export async function runOrgOp(inside, ctx) {
     const stored = await store.get(`${ORG_MEMBER_PREFIX}${id}`);
     if (stored && Number(stored.at) >= at) return refuse('stale', `${id} has a newer change than this one. Nothing was changed.`);
     const address = lower(inside.address);
-    if (!ADDRESS_RE.test(address)) return refuse('bad_params', 'A custodian is a fleet address.');
+    if (!isAddress(address)) return refuse('bad_params', 'A custodian is a fleet address.');
     const own = node.custodians ?? [];
     if (inside.remove === true) {
       if (!own.includes(address)) return refuse('bad_params', `${address} is not one of ${id}’s own custodians. A manager’s custody comes from the tree and ends when the tree changes.`);

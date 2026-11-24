@@ -80,7 +80,7 @@ import { probeClaude } from '../../core/claude-token-probe.js';
 import { claudeSignIn, claudeRenewals, describeRenewals, freshClaude, checkClaude } from './claude-login.js';
 import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
 import { HYPERVISOR_PREFIX, HYPERVISOR_ADDRESS_RE, splitHypervisorItem } from '../protocol/hypervisor-name.js';
-import { memberOfPrincipal } from '../protocol/members.js';
+import { MEMBER_PREFIX, memberOfPrincipal } from '../protocol/members.js';
 import { ORG_OPS, runOrgOp, resolveFor, logCustody, ownCustody, membersForBoxes, loadTree, mayActFor, dropAddedBy } from './org.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
@@ -459,6 +459,25 @@ async function loadKey(config) {
   }
 }
 
+/**
+ * Everything an agent member's vault keeps and every machine approved for
+ * it, forgotten at once (org.js, a removal). Rows are written over and not
+ * deleted, as a single forget does, so an older request replayed afterwards
+ * is still told it is stale. Called under the vault's `row:` lock.
+ *
+ * @param {VaultStore} store @param {string} vaultId  `member:<id>` @param {number} at
+ * @returns {Promise<{ items: number, grants: number }>} how much there was
+ */
+async function emptyMemberVault(store, vaultId, at) {
+  const kept = await store.get(`v:${vaultId}`);
+  const claude = await store.get(`gh:${vaultId}`);
+  const items = Object.values(kept?.items ?? {}).filter((v) => v && !v.forgotten && v.sealed).length + (claude?.sealed && !claude.forgotten ? 1 : 0);
+  const grants = Object.values(kept?.grants ?? {}).filter((g) => g && !g.revoked && g.jwk).length;
+  if (kept) await store.put(`v:${vaultId}`, { login: vaultId, items: {}, grants: {} });
+  if (claude) await store.put(`gh:${vaultId}`, { at: Math.max(at, Number(claude.at) || 0), login: vaultId, forgotten: true });
+  return { items, grants };
+}
+
 /** @param {any} row */
 function emptyRow(row) {
   return {
@@ -528,7 +547,30 @@ export async function answerVaultDevice(ask, config) {
   if (ORG_OPS.includes(inside.op)) {
     const done = await withLock('org', () => runOrgOp(inside, { store, email, who, at, fleetAdmin: a.admin === true }));
     if (!done.ok) return done;
-    return { ok: true, sealed: await seal({ to: reply, aad: VAULT_REPLY_AAD, payload: done.answer ?? {} }), text: done.text, ...(inside.op === 'org' ? {} : { changed: true }) };
+    // AN AGENT MEMBER'S VAULT, EMPTIED: when it is removed, and before a new
+    // one is filed under an id something was left under (org.js says which).
+    // Under the vault's own lock and after the tree's is let go, the order
+    // every request for a member takes them in, so neither waits on the other.
+    let text = done.text;
+    if (done.empty) {
+      const memberVault = `${MEMBER_PREFIX}${done.empty}`;
+      const gone = await withLock(`row:${memberVault}`, () => emptyMemberVault(store, memberVault, at));
+      if (inside.remove === true) {
+        // IN NUMBERS, since it cannot be undone and nobody can look after.
+        const what = [
+          ...(gone.items ? [`${gone.items} thing${gone.items === 1 ? '' : 's'} it kept`] : []),
+          ...(gone.grants ? [`${gone.grants} approved machine${gone.grants === 1 ? '' : 's'}`] : []),
+        ];
+        text += what.length
+          ? ` Its vault went with it: ${what.join(' and ')} ${gone.items + gone.grants === 1 ? 'is' : 'are'} forgotten, and a box stops being given anything of it when it next asks.`
+          : ' Its vault kept nothing.';
+        if (gone.items || gone.grants) await logCustody(store, memberVault, { at, by: email, op: 'forget', name: 'everything, with the member' });
+      } else if (gone.items || gone.grants) {
+        text += ` A member removed before left a vault under this id. It was emptied first, so nothing of it is ${done.empty}’s.`;
+        await logCustody(store, memberVault, { at, by: email, op: 'forget', name: 'what an earlier member left' });
+      }
+    }
+    return { ok: true, sealed: await seal({ to: reply, aad: VAULT_REPLY_AAD, payload: done.answer ?? {} }), text, ...(inside.op === 'org' ? {} : { changed: true }) };
   }
   // FOR A MEMBER'S VAULT, when the request names one (docs/members.md): an
   // agent's own, or a person's whose manager this is and who allowed it.
@@ -675,7 +717,10 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       // already: whoever added a person member at this address did not add
       // somebody new, and does not get what this account kept before
       // (org.js, dropAddedBy; docs/members.md, "Custodians of a person member").
-      if (!remove && kept?.github !== who.userId && (await store.get(`v:${who.userId}`))) {
+      // A Claude login kept for runners is a vault too. It is filed by the
+      // GitHub account alone (`gh:`), with no key and no `v:` row, so asking
+      // after `v:` only handed it to whoever filed its owner's address.
+      if (!remove && kept?.github !== who.userId && ((await store.get(`v:${who.userId}`)) || (await store.get(`gh:${who.userId}`))?.sealed)) {
         await withLock('org', () => dropAddedBy(store, email));
       }
       return {

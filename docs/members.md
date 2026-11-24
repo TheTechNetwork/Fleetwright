@@ -141,6 +141,14 @@ last one cannot be removed. Every manager of the member is a custodian too,
 for as long as the tree says so: move the member out of their team and their
 custody ends with that change, at the minter, at once.
 
+**Removing an agent empties its vault.** Everything it kept and every machine
+approved for it is forgotten in the same change, and the answer says how
+much. It used to stay "until a custodian forgets it", which could not
+happen: nobody is the custodian of a member that is not in the tree, so the
+sign-ins were kept, renewed, and handed to whoever filed the same id next. A
+new agent filed under an id something was left under starts empty too. A
+person's vault is their own and a removal does not touch it.
+
 **Custodians of a person member.** A person's vault holds their own
 sign-ins, and who else holds custody of it depends on who was there first.
 
@@ -162,11 +170,14 @@ sign-ins, and who else holds custody of it depends on who was there first.
   test (`test/vault.test.js`):
   - *Taking a record out and filing it again*, or filing one for somebody
     whose keys were all removed after a lost phone. The address was met, so
-    it gives nothing.
+    it gives nothing. Nor does it give back custody an org admin took away
+    from somebody nobody had met yet: the removal remembers whose address
+    the record was.
   - *Filing a record at an address somebody has not used yet.* When a
     GitHub account that already has a vault files its first key under that
     address, the vault had met them after all, and the custody is dropped at
-    that moment.
+    that moment. A Claude login kept for runners counts as a vault here: it
+    is filed by the GitHub account alone, before any key.
   - *Pointing an existing record at another address.* That names another
     person, so the old one's custodian does not follow it. Whoever made the
     change added the new one, on the same terms.
@@ -248,6 +259,13 @@ rule: no fallback to the asker's account or to anything on the box. A member
 with no sign-in on that box is a refusal that names the member. A box refuses
 any request that names an address at that domain as the one asking, so the
 only way onto a member's sign-ins is a member start the box has checked.
+
+**Nobody is filed at that domain.** A box runs a person member's session as
+their address, so a person record at `debbie@members.invalid` was a session
+on Debbie's sign-ins for whoever filed it, with no custody of Debbie at all.
+The minter refuses the domain for every address it takes (a person's, a
+manager's, a custodian's, an org admin's), and a box drops such a record
+from a list a minter older than that rule signs.
 
 **A member's session is not pushed to the starter's archive.** That push is
 made with the starter's own GitHub sign-in on the box, and a box holding the
