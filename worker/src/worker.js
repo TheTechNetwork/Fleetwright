@@ -3310,6 +3310,258 @@ const OPENAPI = JSON.stringify({
         }
       }
     },
+    "/api/members": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "The organization: every member, and what you may do",
+        "description": "A member is a person or an agent with a role, a place in a tree (`reportsTo`), standing instructions and a vault of its own. Everybody in the fleet reads the list. `you` says whether you are an admin, which member is yours, whom you manage (the tree, and `managers`), and whom you may start a session as. No credential is ever in a record. See docs/members.md.",
+        "responses": {
+          "200": {
+            "description": "`members` and `you`"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
+      }
+    },
+    "/api/members/export": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Every member as a markdown file",
+        "description": "One file a member, as `files: [{ name, text }]`: the record as YAML front matter and the instructions as the body. No credential is in one.",
+        "responses": {
+          "200": {
+            "description": "`files`"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
+      }
+    },
+    "/api/members/import": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Make or change a member from its markdown file",
+        "description": "One file, under the rules of any other write: an admin anywhere, a manager inside their own team. A field the file format does not have is refused by name.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "The file: front matter between two lines of three dashes, then the instructions."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "the member, as saved"
+          },
+          "400": {
+            "description": "the record does not read as a member, with the reason in `text`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not an admin, and not this member\u2019s manager"
+          }
+        }
+      }
+    },
+    "/api/members/{id}": {
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Make a member, or change one",
+        "description": "An admin writes any member. A manager writes the members the tree puts under them, and moves one only to a place still under them; `managers`, `kind` and `email` are an admin\u2019s. This changes the record. Custody of the member\u2019s vault is held by the minting Worker and filed from a phone or the signing page (docs/members.md).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$"
+            },
+            "description": "The member\u2019s id: lowercase letters, digits and hyphens, at most 40"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "kind",
+                  "role"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "person",
+                      "agent"
+                    ]
+                  },
+                  "email": {
+                    "type": "string",
+                    "description": "A person member\u2019s fleet address. An agent member has none."
+                  },
+                  "role": {
+                    "type": "string",
+                    "maxLength": 60
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "reportsTo": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Another member\u2019s id, or nobody. No cycles."
+                  },
+                  "managers": {
+                    "type": "array",
+                    "maxItems": 4,
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Fleet addresses that manage this member beside the tree. An admin\u2019s to set."
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 300
+                  },
+                  "workTypes": {
+                    "type": "array",
+                    "maxItems": 12,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "instructions": {
+                    "type": "string",
+                    "description": "Markdown the member\u2019s sessions open with, at most 4 KiB."
+                  },
+                  "engines": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "engine"
+                      ],
+                      "properties": {
+                        "engine": {
+                          "type": "string",
+                          "enum": [
+                            "claude-code"
+                          ]
+                        },
+                        "model": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "hosts": {
+                    "type": "object",
+                    "properties": {
+                      "tag": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "budgetUsdMonth": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "description": "Stored. Nothing enforces it yet."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "the member, as saved"
+          },
+          "400": {
+            "description": "the record does not read as a member, with the reason in `text`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not an admin, and not this member\u2019s manager"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Remove a member",
+        "description": "Refused while anybody reports to it. Its vault is not deleted by this: a custodian forgets what it keeps.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$"
+            },
+            "description": "The member\u2019s id: lowercase letters, digits and hyphens, at most 40"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "removed"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not an admin, and not this member\u2019s manager"
+          },
+          "404": {
+            "description": "no member by that id"
+          },
+          "409": {
+            "description": "somebody still reports to it"
+          }
+        }
+      }
+    },
     "/api/runner-repo": {
       "get": {
         "tags": [

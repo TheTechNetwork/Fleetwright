@@ -55,6 +55,7 @@
 import { cleanText, TITLE_MAX, BRIEF_MAX, TASK_MAX } from '../../core/text.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { delegationShape } from './intent-signature.js';
+import { MEMBER_ID_RE, MAX_INSTRUCTIONS } from './members.js';
 
 /** A device's P-256 signature over an intent as WebCrypto makes one: r || s, 64 bytes, base64url (intent-signature.js). */
 export const SIG_RE = /^[A-Za-z0-9_-]{86}$/;
@@ -482,8 +483,17 @@ export const PVESETUP_STEPS = Object.freeze([
 // would hang: the coordinator opens one only through a box that speaks 18,
 // and a box older than it sends no `browse`, so no phone offers one there.
 // docs/browse.md.
+//
+// v19, 24 Nov 2026: A SESSION AS A MEMBER. `start` takes `member`: the session
+// runs on that member's sign-ins and not the starter's, opens with that
+// member's instructions, and records both who it ran as and who started it
+// (docs/members.md). The box takes who may start as a member from the list the
+// minter signs, and refuses a member start nobody on it signed or delegated.
+// An older host is never handed one: `member` dropped, the session would run
+// on the starter's own account and say it started, which is the one thing a
+// member start must never do, so the coordinator refuses rather than send it.
 /** @type {number} */
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 
 /**
  * The GitHub images each runner platform may run on, newest first, and the
@@ -958,6 +968,39 @@ export const VERBS = Object.freeze({
         describe:
           'Set by the fleet from whether you administer the machine; anything sent here is replaced. Whether ' +
           'a `secret` may be answered from the ones its operator keeps on it, or only from your own vault.',
+      },
+      // WHO THE SESSION RUNS AS (v19, docs/members.md). SIGNED, like the task:
+      // a session on a member's sign-ins is started by somebody the minter
+      // lists for that member, and the box checks the signature against that
+      // list, so this is the person's word and never the coordinator's.
+      member: {
+        type: 'text',
+        required: false,
+        max: 40,
+        pattern: MEMBER_ID_RE,
+        shapeName: 'a member’s id',
+        since: 19,
+        describe:
+          'Start the session as this member of the organization, by id (fleet_members lists them). It runs on ' +
+          'that member’s own sign-ins, never yours, opens with the member’s instructions and then your task, and ' +
+          'goes to a machine carrying the member’s tag when you name none. You must be that person, or one of ' +
+          'the member’s custodians.',
+      },
+      // WHAT THE COORDINATOR KNOWS ABOUT THAT MEMBER, written by it and never
+      // by a caller, so left out of what a device signs: the name and role a
+      // session records, and the instructions its first message opens with.
+      // The box composes that message and holds it to the cap a task has.
+      memberName: {
+        type: 'text', required: false, max: 80, since: 19, setBy: 'fleet',
+        describe: 'Set by the fleet from the member’s record; anything sent here is replaced.',
+      },
+      memberRole: {
+        type: 'text', required: false, max: 60, since: 19, setBy: 'fleet',
+        describe: 'Set by the fleet from the member’s record; anything sent here is replaced.',
+      },
+      memberBrief: {
+        type: 'raw', required: false, max: MAX_INSTRUCTIONS, since: 19, setBy: 'fleet',
+        describe: 'Set by the fleet from the member’s instructions; anything sent here is replaced.',
       },
     },
     mutating: true,
