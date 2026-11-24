@@ -1925,6 +1925,20 @@ const OPENAPI = JSON.stringify({
                                     "null"
                                   ],
                                   "description": "why it could not be read, in a sentence"
+                                },
+                                "memory": {
+                                  "type": [
+                                    "integer",
+                                    "null"
+                                  ],
+                                  "description": "the memory its hypervisor gives it, in bytes; null is not read, or a box from before it said"
+                                },
+                                "needs": {
+                                  "type": [
+                                    "integer",
+                                    "null"
+                                  ],
+                                  "description": "the memory the box would build it with, in bytes: one with less crashes in use; null is a box from before it said"
                                 }
                               }
                             }

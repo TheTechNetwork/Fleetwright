@@ -7551,6 +7551,8 @@ export class CoordinatorCore {
     const text = (/** @type {unknown} */ v, /** @type {number} */ max) => (typeof v === 'string' && v.trim() ? v.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max) : null);
     const num = (/** @type {unknown} */ v, /** @type {number} */ max) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= max ? v : null);
     const count = (/** @type {unknown} */ v) => (Number.isInteger(v) && /** @type {number} */ (v) >= 0 && /** @type {number} */ (v) < 1_000_000_000 ? /** @type {number} */ (v) : null);
+    // Memory in bytes: a whole number above none and up to a tebibyte.
+    const bytes = (/** @type {unknown} */ v) => (Number.isInteger(v) && /** @type {number} */ (v) > 0 && /** @type {number} */ (v) <= 1024 ** 4 ? /** @type {number} */ (v) : null);
     /** @type {Map<string, { address: string, hostId: string, at: number, listening: boolean|null, routers: Array<Record<string, any>>, events: Array<Record<string, any>>, seen: number }>} */
     const found = new Map();
     for (const host of this.registry.reachable()) {
@@ -7585,6 +7587,13 @@ export class CoordinatorCore {
               : null,
             heardAt: when(r.heardAt),
             problem: text(r.problem, 200),
+            // HOW MUCH MEMORY IT HAS, AND HOW MUCH IT NEEDS, as the box read
+            // its hypervisor and as the box would build it. Asked for as
+            // "prompt users to one click fix": a router with less than it
+            // needs crashes, and the phone can only say so with both. Null
+            // is not read (or a box from before it said), never "none".
+            memory: bytes(r.memory),
+            needs: bytes(r.needs),
           }));
         const events = (Array.isArray(e.edges.events) ? e.edges.events : [])
           .slice(-EDGE_REPORT.events)
