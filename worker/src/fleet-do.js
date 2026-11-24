@@ -25,6 +25,7 @@ import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification,
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
+import { MEMBERS_PREFIX, membersRoute } from '../../src/fleet/coordinator/org-members.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { NOT_FRAMED } from './pages.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
@@ -208,6 +209,12 @@ export class Fleet {
         this.state.storage.put('runnerRepos', this.core.runnerRepos.serialise()),
         // Each person's archive and templates repositories (linked-repos.js).
         this.state.storage.put('linkedRepos', this.core.linkedRepos.serialise()),
+        // The organization's members, ONE ROW EACH under `members:<id>` and
+        // only the rows that changed (org-members.js, takeChanges): a member
+        // carries 4 KiB of instructions, and one value for all of them would
+        // hold about a dozen. Bounded by MAX_MEMBERS rows of one checked
+        // record each (test/members-coordinator.test.js measures the widest).
+        this.#writeMembers(),
         this.state.storage.put('runnerStarts', this.core.serialiseRunnerStarts()),
         // Machines kept ready, and which were made for it.
         this.state.storage.put('vmStandby', this.core.serialiseStandby()),
@@ -311,6 +318,8 @@ export class Fleet {
       // Each person's own runner repository, and sessions waiting for a runner.
       this.core.runnerRepos.restore(await this.state.storage.get('runnerRepos'));
       this.core.linkedRepos.restore(await this.state.storage.get('linkedRepos'));
+      // One row a member (above). A storage with no `list` holds none.
+      this.core.org.restore(this.state.storage.list ? await this.state.storage.list({ prefix: MEMBERS_PREFIX }) : []);
       this.core.restoreRunnerStarts(await this.state.storage.get('runnerStarts'));
       this.core.restoreStandby(await this.state.storage.get('vmStandby'));
       this.core.restoreSetups(await this.state.storage.get('xosetups'));
@@ -1036,6 +1045,14 @@ export class Fleet {
         const r = this.core.clearLinkedRepo(requesterFor(client), role);
         return json(r, r.ok ? 200 : 400);
       }
+    }
+
+    // THE ORGANIZATION'S MEMBERS (docs/members.md). Everybody in the fleet
+    // reads them; an admin, or a member's manager, writes one. The rules are
+    // org-members.js's, and the same on the Node coordinator.
+    if (url.pathname === '/api/members' || url.pathname.startsWith('/api/members/')) {
+      const answer = await membersRoute(this.core, request.method, url.pathname, requesterFor(client), () => readJson(request));
+      if (answer) return json(answer.body, answer.status);
     }
 
     // WHETHER THIS PERSON'S RUNNERS MAY BOOT GITHUB'S LARGER MACHINES, said
@@ -1770,6 +1787,19 @@ export class Fleet {
     if (this.sockets.get(hostId) !== socket) return; // a corpse, not the connection
     this.sockets.delete(hostId);
     this.core.hostDisconnected(hostId, why);
+  }
+
+  /**
+   * The member rows that changed, written and deleted one key each. Storage
+   * that cannot delete (a test's) keeps a removed member's row, which the
+   * next restore reads back; the real one always can.
+   */
+  async #writeMembers() {
+    const { put, del } = this.core.org.takeChanges();
+    await Promise.all([
+      ...Object.entries(put).map(([key, member]) => this.state.storage.put(key, member)),
+      ...del.map((key) => this.state.storage.delete?.(key)),
+    ]);
   }
 
   /**

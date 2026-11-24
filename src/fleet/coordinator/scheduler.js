@@ -127,14 +127,30 @@ const CREDENTIAL_VERBS = new Set(['connect', 'link', 'unlink', 'verify', 'setupt
 function sessionsOf(registry, name, requester) {
   const claims = registry.findSessions(name);
   if (!requester || requester.admin) return claims;
+  return claims.filter((c) => mayActOn(c, requester));
+}
+
+/**
+ * Is this session one the requester may see and act on? Theirs, as always.
+ * And one started as a member (docs/members.md), whose creator is the
+ * member's own account: for the person who started it, and for whoever
+ * manages that member or holds its custody, which the coordinator worked out
+ * before asking (`requester.members`, core.js).
+ *
+ * @param {{ createdBy?: string|null, startedBy?: string|null, member?: string|null }} claim
+ * @param {{ email?: string|null, members?: string[] }} requester
+ */
+export function mayActOn(claim, requester) {
   const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
-  return claims.filter((c) => String(c.createdBy || '').toLowerCase() === mine);
+  if (String(claim.createdBy || '').toLowerCase() === mine) return true;
+  if (typeof claim.member !== 'string' || !claim.member) return false;
+  return String(claim.startedBy || '').toLowerCase() === mine || Boolean(requester.members?.includes(claim.member));
 }
 
 /**
  * @param {import('./registry.js').HostRegistry} registry
  * @param {{ verb: string, params?: Record<string, any> }} intent
- * @param {{ maxPinAgeMs?: number, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null }} [opts]
+ * @param {{ maxPinAgeMs?: number, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean, members?: string[] }|null }} [opts]
  * @returns {Placement}
  */
 export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = '', preferLabels = null, requester = null } = {}) {
@@ -767,7 +783,7 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
   const takenOn = (/** @type {import('./registry.js').HostEntry} */ h) => {
     if (verb !== 'start' || !name || !requester || requester.admin) return false;
     const mine = `fleet:${String(requester.email || '').toLowerCase()}`;
-    return registry.findSessions(name).some((c) => c.host.hostId === h.hostId && String(c.createdBy || '').toLowerCase() !== mine);
+    return registry.findSessions(name).some((c) => c.host.hostId === h.hostId && String(c.createdBy || '').toLowerCase() !== mine && !mayActOn(c, requester ?? {}));
   };
   const nameUnavailable = /** @type {Placement} */ ({
     kind: 'refused',

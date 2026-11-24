@@ -195,7 +195,7 @@ fun SessionSheet(
                         session.hostId?.let { "on $it" },
                         session.workspace?.let { "· $it" },
                         session.age?.let { "· $it" },
-                        session.account?.takeIf { it != "shared" }?.let { "· $it" },
+                        (session.asMember ?: session.account?.takeIf { it != "shared" })?.let { "· $it" },
                         session.contextLine?.let { "· $it" },
                     ).joinToString(" "),
                     style = Design.Style.micro,

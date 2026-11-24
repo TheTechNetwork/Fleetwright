@@ -20,7 +20,7 @@ import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { oneLine } from '../../core/text.js';
 import { RC_URL_RE } from '../../core/pane.js';
-import { place } from './scheduler.js';
+import { place, mayActOn } from './scheduler.js';
 import { actorEmail, intentSigningInput, needsSignature, MCP_UNDELEGATED_VERBS } from '../protocol/intent-signature.js';
 import { Delegations } from './delegations.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, PVESETUP_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage, PIN_SENTENCES } from '../protocol/intents.js';
@@ -37,6 +37,8 @@ import { HEARTBEAT_PONG } from '../protocol/heartbeat.js';
 import { RunnerTickets, randomHex, hashSecret, constantTimeEqual, TICKETS_FULL } from './runner-tickets.js';
 import { RunnerRepos } from './runner-repos.js';
 import { LinkedRepos } from './linked-repos.js';
+import { OrgMembers } from './org-members.js';
+import { MEMBER_ID_RE, composeFirstMessage } from '../protocol/members.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
 import { VmStandby, MAX_READY, PENDING_MS } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
@@ -132,6 +134,8 @@ const VAULT_SIGNIN_PROTOCOL = 15;
 const TUNNEL_PROTOCOL = 17;
 /** The protocol a box speaks to carry a web view's connections for a phone (`browse` frames, v18). */
 const BROWSE_PROTOCOL = 18;
+/** The protocol a box speaks to run a session as a member, on that member's sign-ins (`start.member`, v19). */
+const MEMBER_PROTOCOL = 19;
 /**
  * How long a machine's ticket lives: as long as the fleet waits for a machine
  * kept ready to enrol before it takes it to have failed (vm-standby.js), and
@@ -616,6 +620,20 @@ export class CoordinatorCore {
     // private archive a session is pushed to, and templates. See
     // linked-repos.js for why `runners` stays in the store above.
     this.linkedRepos = new LinkedRepos({ now });
+    // THE ORGANIZATION: who the fleet's members are, by role, in a tree
+    // (org-members.js, docs/members.md). The records are this coordinator's.
+    // Custody of a member's vault is not: the minter holds it.
+    this.org = new OrgMembers({ now });
+    /**
+     * Who may start a session as each member, as the minter last signed it
+     * for a box (#onHostKeys): member id → fleet addresses. READ, NEVER
+     * WRITTEN HERE: it is what lets this coordinator refuse first in a
+     * person's words, and a box checks the same list itself, signed, so a
+     * wrong copy here costs a refusal and grants nothing. Null until a box
+     * has asked since this object started, and then nothing is refused on it.
+     * @type {Map<string, string[]>|null}
+     */
+    this.memberCustody = null;
     /**
      * A session to start on a runner once it joins, keyed by the host id the
      * runner enrolled under. Set when a ticket carrying a start is spent,
@@ -4189,6 +4207,26 @@ export class CoordinatorCore {
       delete params.boxSecrets;
       const archive = this.linkedRepos.get(spec.requester?.email, 'archive')?.repo;
       if (archive) params.archive = archive;
+      // AS A MEMBER (docs/members.md, "Starting as a member"). What the
+      // person signed is `member` and the task. Who the member is and what
+      // its sessions open with are this coordinator's record, written here
+      // and never taken from a caller, like `archive` above.
+      delete params.memberName;
+      delete params.memberRole;
+      delete params.memberBrief;
+      if (params.member !== undefined) {
+        // NOT PUSHED TO THE STARTER'S ARCHIVE: that push is made with the
+        // starter's own GitHub sign-in on the box (archive.js), and a box
+        // holding the member's vault need not hold theirs.
+        delete params.archive;
+        const as = this.#startAs(spec.requester, params.member, params.task);
+        if (!as.ok) return as;
+        params.memberName = as.member.name;
+        params.memberRole = as.member.role;
+        if (as.member.instructions) params.memberBrief = as.member.instructions;
+        // WHERE THE MEMBER RUNS, when the person did not say where.
+        if (!spec.preferHost && !spec.preferLabels && as.member.hosts?.tag) spec = { ...spec, preferLabels: as.member.hosts.tag };
+      }
       spec = { ...spec, params };
     }
     if (spec.verb === 'resume') {
@@ -4224,7 +4262,11 @@ export class CoordinatorCore {
       // And who is asking, so pinned verbs can refuse a member acting on work
       // that is not theirs — with the same words as "unknown", so an access
       // control never becomes an existence oracle.
-      requester: spec.requester ?? null,
+      //
+      // WITH THE MEMBERS THEY MAY ACT FOR, so a session started as one, whose
+      // creator is the member's own account, is still theirs to stop and
+      // read: the ones they manage, and the ones the minter lists them for.
+      requester: spec.requester ? { ...spec.requester, members: this.#actsFor(spec.requester) } : null,
     });
     let placement = placeIt();
     // A MACHINE THAT HAS NOT SPOKEN YET IS NOT A MACHINE THAT CANNOT WORK. A
@@ -4341,7 +4383,12 @@ export class CoordinatorCore {
       const filtering = Boolean(spec.requester && !spec.requester.admin);
       if (filtering) {
         const mine = `fleet:${String(spec.requester?.email || '').toLowerCase()}`;
-        sessions = sessions.filter((s) => String(s.createdBy || '').toLowerCase() === mine);
+        // AND THE SESSIONS OF THEIR TEAM: one started as a member this person
+        // manages is theirs to see, whoever started it (docs/members.md). The
+        // member on a session is the box's word, as its creator is, and what
+        // a box could gain by naming one is a row in a manager's list.
+        const asker = { email: spec.requester?.email, members: this.#actsFor(spec.requester) };
+        sessions = sessions.filter((s) => String(s.createdBy || '').toLowerCase() === mine || mayActOn(s, asker));
       }
 
       // AND THE PROSE WITH IT, which is where this filter was leaking everything
@@ -4479,6 +4526,16 @@ export class CoordinatorCore {
       };
     }
 
+    // A MEMBER'S SESSION IS NOT SENT TO A RUNNER. A runner is handed its
+    // owner's sign-in and nobody else's (claude.js, answerLogin), so it holds
+    // nothing a member's session could run on.
+    if (spec.verb === 'start' && spec.params?.member && placement.host?.ephemeral) {
+      return {
+        ok: false,
+        error: { code: 'member_needs_a_box' },
+        text: `${placement.host.hostId} is a temporary machine, and it holds only its owner’s sign-in. Start ${spec.params.memberName || spec.params.member} on a permanent machine its custodians approved.`,
+      };
+    }
     if ((spec.verb === 'start' || spec.verb === 'resume') && placement.host) spec = this.#boxSecrets(spec, placement.host);
     const outdated = placement.host ? this.#cannotCarry(placement.host, spec) : null;
     if (outdated) return outdated;
@@ -4836,7 +4893,7 @@ export class CoordinatorCore {
    * coordinator's word is needed for that and is not enough on its own. The
    * answer comes back sealed to a key the device made for it.
    *
-   * @param {{ email?: string|null }|null} requester @param {any} body
+   * @param {{ email?: string|null, admin?: boolean }|null} requester @param {any} body
    * @returns {Promise<Record<string, unknown>>}
    */
   async vaultDevice(requester, body) {
@@ -4857,13 +4914,29 @@ export class CoordinatorCore {
     }
     recent.push(now);
     this.claudeAsks.set(key, recent);
-    const r = await this.minter.vault('device', { sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct }, email }).then(
+    // `admin` is read by the minter at one moment only: when nobody
+    // administers the organization there yet and the first admin files
+    // themselves (minter/org.js). It can give nothing after that.
+    const r = await this.minter.vault('device', { sealed: { epk: sealed.epk, iv: sealed.iv, ct: sealed.ct }, email, admin: Boolean(requester?.admin) }).then(
       (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
       (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
     );
     // WHAT CHANGED, in the minter's own words, which never carry a value.
     this.record({ event: r.ok ? 'vault.changed' : 'vault.refused', actor: email, text: `${email}: ${String(r.text || '').slice(0, 200)}` });
     if (r.ok && r.changed === true) this.#vaultChanged();
+    // A CUSTODIAN CHANGED SOMEBODY'S VAULT, and the minter says whom to tell
+    // (docs/members.md). Their own phones only. The minter keeps the same
+    // line beside the vault, where its owner reads it whatever happens here.
+    const notify = r.ok ? r.notify : null;
+    const owner = String(notify?.email || '').toLowerCase();
+    if (owner && owner !== email && typeof notify.text === 'string') {
+      const said = oneLine(notify.text, 240);
+      this.record({ event: 'vault.custody', actor: owner, text: `${owner}: ${said}` });
+      const own = this.#devicesOf(owner).filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === owner);
+      if (this.push && own.length) {
+        await this.push.send(own, { title: 'A manager changed your vault', body: `${said} You › Credentials lists what your managers changed, and turns it off.`, data: { event: 'vault.custody', kind: 'vault-custody', name: '', hostId: '', url: '' } }).catch(() => {});
+      }
+    }
     return r.ok
       ? { ok: true, sealed: r.sealed, text: String(r.text || '') }
       : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') };
@@ -4895,6 +4968,27 @@ export class CoordinatorCore {
   #claudeCheckedAt = 0;
 
   /**
+   * Whose phones hear about a Claude sign-in: the person's own and the
+   * admins', as it always was, or for an agent member each custodian's own.
+   *
+   * @param {string} email  the person, or the member's principal
+   * @param {string|null} member
+   * @param {unknown} tell  the member's custodians, as the minter listed them
+   */
+  #whoToTell(email, member, tell) {
+    if (!member) {
+      const devices = this.#devicesOf(email);
+      const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
+      return { own, admins: devices.filter((d) => !own.includes(d)), whose: email };
+    }
+    const custodians = (Array.isArray(tell) ? tell : []).slice(0, 64).map((a) => String(a).toLowerCase());
+    const seen = new Set();
+    const theirs = custodians.flatMap((a) => this.#devicesOf(a).filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === a))
+      .filter((d) => !seen.has(d) && seen.add(d));
+    return { own: [], admins: theirs, whose: this.org.get(member)?.name ?? member };
+  }
+
+  /**
    * Ask the minter after every kept Claude sign-in, and tell each person whose
    * sign-in Anthropic has ended, on their phones. Called from the alarm
    * (fleet-do.js), at most every CLAUDE_CHECK_MS.
@@ -4924,8 +5018,11 @@ export class CoordinatorCore {
     if (!r?.ok || !Array.isArray(r.ended)) return 0;
     let told = 0;
     for (const e of r.ended.slice(0, 100)) {
-      const email = String(e?.email || '').trim().toLowerCase();
-      if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
+      // A MEMBER'S SIGN-IN has no address: it is told to its custodians,
+      // as the minter lists them (`tell`), under the member's name.
+      const member = typeof e?.member === 'string' && MEMBER_ID_RE.test(e.member) ? e.member : null;
+      const email = member ? `member:${member}` : String(e?.email || '').trim().toLowerCase();
+      if (!member && !/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
       const at = Number(e.at);
       const hhmm = (/** @type {number} */ t) => new Date(t).toISOString().slice(11, 16);
       const when = Number.isFinite(at) ? ` at ${hhmm(at)} UTC` : '';
@@ -4948,15 +5045,13 @@ export class CoordinatorCore {
       this.record({ event: 'claude.ended', actor: email, text: `${email}: ${cause} (${String(e.why || '').slice(0, 160)})` });
       told += 1;
       if (!this.push) continue;
-      const devices = this.#devicesOf(email);
-      const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
-      const admins = devices.filter((d) => !own.includes(d));
+      const { own, admins, whose } = this.#whoToTell(email, member, e.tell);
       const body = `${cause} Sessions cannot start with it. Sign in to Claude again from your phone or the signing page.`;
       const data = { event: 'claude.ended', kind: 'claude-ended', name: '', hostId: '', url: '' };
       const said = kind === 'outside' ? 'was ended' : 'stopped working';
       try {
         if (own.length) await this.push.send(own, { title: `Your Claude sign-in ${said}`, body, data });
-        if (admins.length) await this.push.send(admins, { title: `${email}’s Claude sign-in ${said}`, body: body.replace('from your phone', 'from their phone'), data });
+        if (admins.length) await this.push.send(admins, { title: `${whose}’s Claude sign-in ${said}`, body: member ? body.replace('Sign in to Claude again', 'Sign it in to Claude again') : body.replace('from your phone', 'from their phone'), data });
       } catch { /* recorded above; a phone not told is no reason to stop telling the next */ }
     }
     // REFUSED AT THE USAGE ADDRESS (claude-login.js, checkClaude): renewing
@@ -4965,8 +5060,11 @@ export class CoordinatorCore {
     // what was seen: where it was refused, with what, and whether renewing
     // was tried. What would mend it is not known, so it is not promised.
     for (const e of (Array.isArray(r.refused) ? r.refused : []).slice(0, 100)) {
-      const email = String(e?.email || '').trim().toLowerCase();
-      if (!/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
+      // A MEMBER'S SIGN-IN has no address: it is told to its custodians,
+      // as the minter lists them (`tell`), under the member's name.
+      const member = typeof e?.member === 'string' && MEMBER_ID_RE.test(e.member) ? e.member : null;
+      const email = member ? `member:${member}` : String(e?.email || '').trim().toLowerCase();
+      if (!member && !/^[^\s@]{1,64}@[^\s@]{1,190}$/.test(email)) continue;
       const at = Number(e.at);
       const when = Number.isFinite(at) ? ` at ${new Date(at).toISOString().slice(11, 16)} UTC` : '';
       const status = e.status === 403 ? 403 : e.status === 401 ? 401 : null;
@@ -4976,14 +5074,12 @@ export class CoordinatorCore {
       this.record({ event: 'claude.refused', actor: email, text: `${email}: ${cause}` });
       told += 1;
       if (!this.push) continue;
-      const devices = this.#devicesOf(email);
-      const own = devices.filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === email);
-      const admins = devices.filter((d) => !own.includes(d));
+      const { own, admins, whose } = this.#whoToTell(email, member, e.tell);
       const body = `${cause} Signing in to Claude again from your phone or the signing page may mend it.`;
       const data = { event: 'claude.refused', kind: 'claude-ended', name: '', hostId: '', url: '' };
       try {
         if (own.length) await this.push.send(own, { title: 'Claude refused your sign-in’s access token', body, data });
-        if (admins.length) await this.push.send(admins, { title: `Claude refused ${email}’s access token`, body: body.replace('from your phone', 'from their phone'), data });
+        if (admins.length) await this.push.send(admins, { title: `Claude refused ${whose}’s access token`, body: member ? body.replace('Signing in to Claude again', 'Signing it in to Claude again') : body.replace('from your phone', 'from their phone'), data });
       } catch { /* recorded above */ }
     }
     return told;
@@ -5570,6 +5666,116 @@ export class CoordinatorCore {
   }
 
   /**
+   * The organization, for anybody in the fleet: every member, and what the
+   * person asking may do (docs/members.md).
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   */
+  membersFor(requester) {
+    return { ok: true, members: this.org.all(), you: this.org.standing(requester, this.memberCustody) };
+  }
+
+  /**
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @param {unknown} id @param {unknown} input
+   */
+  setMember(requester, id, input) {
+    const saved = this.org.set(requester, id, input);
+    if (!saved.ok) return saved;
+    this.onStateChanged?.();
+    const by = String(requester?.email || 'an admin').toLowerCase();
+    this.record({ event: 'member.saved', actor: by, text: `${by} ${saved.created ? 'added' : 'changed'} the member ${saved.member.id} (${oneLine(saved.member.role, 60)})` });
+    return saved;
+  }
+
+  /**
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @param {unknown} id
+   */
+  removeMember(requester, id) {
+    const gone = this.org.remove(requester, id);
+    if (!gone.ok) return gone;
+    this.onStateChanged?.();
+    const by = String(requester?.email || 'an admin').toLowerCase();
+    this.record({ event: 'member.removed', actor: by, text: `${by} removed the member ${gone.member.id}` });
+    return { ok: true, text: gone.text };
+  }
+
+  /** Every member as a markdown file. No credential is in one: none is in a record. */
+  exportMembers() {
+    return { ok: true, files: this.org.exportFiles() };
+  }
+
+  /**
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @param {unknown} text  one member's file
+   */
+  importMember(requester, text) {
+    const read = this.org.importFile(requester, text);
+    if (!read.ok) return read;
+    this.onStateChanged?.();
+    const by = String(requester?.email || 'an admin').toLowerCase();
+    this.record({ event: 'member.saved', actor: by, text: `${by} ${read.created ? 'added' : 'changed'} the member ${read.member.id} from a file` });
+    return read;
+  }
+
+  /**
+   * The members whose sessions this person may see and act on: the ones the
+   * tree puts under them, and the ones they may start as.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
+   * @returns {string[]}
+   */
+  #actsFor(requester) {
+    const standing = this.org.standing(requester ?? null, this.memberCustody);
+    return [...new Set([...standing.manages, ...standing.startAs])];
+  }
+
+  /**
+   * May this person start a session as this member, and with what?
+   *
+   * THE FIRST OF THREE CHECKS, and the only one in a person's words before
+   * anything is sent. The box makes the one that counts, against the list
+   * the minter signed (docs/members.md), so this refuses what it can see is
+   * wrong and passes on what it cannot see:
+   *
+   *  - with the minter's last list in hand, the person must be on it for
+   *    this member;
+   *  - with none yet (no box has asked since this object started), nothing
+   *    is refused for custody here. Guessing from this coordinator's own
+   *    tree would turn away a custodian the minter lists and the tree does
+   *    not show.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
+   * @param {unknown} id @param {unknown} task
+   * @returns {{ ok: true, member: import('../protocol/members.js').Member } | { ok: false, error: { code: string }, text: string }}
+   */
+  #startAs(requester, id, task) {
+    const member = this.org.get(id);
+    if (!member) return { ok: false, error: { code: 'no_member' }, text: `There is no member called ${oneLine(String(id), 40)}. fleet_members lists them.` };
+    const email = String(requester?.email || '').toLowerCase();
+    if (!email) {
+      return { ok: false, error: { code: 'not_signed_in' }, text: `Starting as ${member.name} needs a signed-in identity: a member’s session is started by somebody its vault’s custodians can be checked against.` };
+    }
+    const listed = this.memberCustody?.get(member.id);
+    if (this.memberCustody && !(listed ?? []).includes(email)) {
+      const own = member.kind === 'person';
+      return {
+        ok: false,
+        error: { code: 'not_custodian' },
+        text: listed === undefined
+          ? `${member.name}’s custody has not been filed yet, so nobody can start a session as ${own ? 'them' : 'it'}. Whoever manages ${own ? 'them' : 'it'} files it from the Org screen, on a phone or the signing page.`
+          : own
+            ? `Only ${member.name}, and managers ${member.name} has let manage their credentials, can start a session as them.`
+            : `You are not one of ${member.name}’s custodians, so you cannot start a session as it. A custodian can add you from its Credentials.`,
+      };
+    }
+    const first = composeFirstMessage(member.instructions, typeof task === 'string' ? task : '');
+    if (!first.ok) return { ok: false, error: { code: 'bad_params' }, text: first.text };
+    return { ok: true, member };
+  }
+
+  /**
    * One person's linked repositories, every role, for the screen that links
    * them. `runners` is their own runner repository from RunnerRepos; the
    * fleet's is beside it, as `fleet.runners`, so a person can see what they
@@ -5864,6 +6070,22 @@ export class CoordinatorCore {
    * @returns {{ ok: false, error: { code: string }, text: string }|null}
    */
   #cannotCarry(host, spec) {
+    // AS A MEMBER, first, because this is the one that must never be dropped:
+    // a box older than 19 would lose `member` (buildIntent) and run the
+    // session as the person who asked, on their sign-ins, and say it started.
+    if (spec.verb === 'start' && spec.params?.member) {
+      const speaks = Number(host?.health?.protocol);
+      if (!(Number.isInteger(speaks) && speaks >= MEMBER_PROTOCOL)) {
+        return {
+          ok: false,
+          error: { code: 'host_outdated' },
+          text:
+            `${host?.hostId} is too old to run a session as a member — it speaks protocol ` +
+            `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${MEMBER_PROTOCOL}. It would run on your own sign-ins and not ` +
+            `${spec.params.memberName || spec.params.member}’s. Update it, or pick another machine.`,
+        };
+      }
+    }
     // A RELAY, which dropped would answer for the machine's own network, or
     // begin a job that has no way to Xen Orchestra.
     if ((spec.verb === 'xoprobe' || spec.verb === 'xosetup') && spec.params?.relay) {
@@ -6766,6 +6988,18 @@ export class CoordinatorCore {
       (x) => (x && typeof x === 'object' ? x : { ok: false, error: { code: 'refused' }, text: 'The minting Worker gave no answer.' }),
       (e) => ({ ok: false, error: { code: 'minter_unreachable' }, text: `The minting Worker did not answer: ${/** @type {Error} */ (e).message}.` }),
     );
+    // WHO MAY START AS EACH MEMBER, read off the answer on its way to the box
+    // (`memberCustody`, above). The box checks the signature; this does not,
+    // because nothing here is granted by it.
+    if (r.ok && Array.isArray(r.payload?.members)) {
+      /** @type {Map<string, string[]>} */
+      const custody = new Map();
+      for (const m of r.payload.members.slice(0, 512)) {
+        if (!m || !MEMBER_ID_RE.test(String(m.id)) || !Array.isArray(m.may)) continue;
+        custody.set(String(m.id), m.may.slice(0, 64).map((/** @type {unknown} */ a) => String(a).toLowerCase()));
+      }
+      this.memberCustody = custody;
+    }
     answer(r.ok
       ? { ok: true, payload: r.payload, signature: r.signature, text: String(r.text || '') }
       : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') });

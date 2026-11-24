@@ -514,11 +514,13 @@ function show() {
 var SIGNER = ${scriptJson(signer)};
 // WHAT IT MAY HAVE THIS PAGE SEND, and nothing else: its GitHub sign-in and
 // its vault requests, both sealed to the minter; the list of machines, to
-// approve one and to pick where a Claude sign-in is made; and that sign-in's
-// own request, which it signs. Not a general relay: a signing page that could
-// have this credential start or stop anything would be a second door to the
-// fleet that nobody reviewed as one.
-var RELAYS = { 'POST /api/github/device': true, 'POST /api/vault': true, 'GET /api/hosts/enrolled': true, 'POST /api/intent': true };
+// approve one and to pick where a Claude sign-in is made; that sign-in's own
+// request, which it signs; and the list of members, which everybody in the
+// fleet reads, so it can show a name beside each member whose vault this
+// person manages. It reads that list and changes nothing on it. Not a general
+// relay: a signing page that could have this credential start or stop
+// anything would be a second door to the fleet that nobody reviewed as one.
+var RELAYS = { 'POST /api/github/device': true, 'POST /api/vault': true, 'GET /api/hosts/enrolled': true, 'POST /api/intent': true, 'GET /api/members': true };
 var RELAYED_VERBS = ['setuptoken'];
 var signerWin = null;
 var signerReady = false;

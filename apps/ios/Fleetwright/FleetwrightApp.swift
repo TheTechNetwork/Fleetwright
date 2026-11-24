@@ -404,6 +404,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 // Let it in is on the card for one it cannot settle by itself
                 // (HoldersAskingView).
                 if kind == "holder-join" { return openMachines() }
+                // A MANAGER CHANGED THIS PERSON'S VAULT: Credentials, where
+                // what they changed is listed and the switch that allows it is.
+                if kind == "vault-custody" { return openCredentials() }
                 // A POOL XEN ORCHESTRA NO LONGER SHOWS, or one it shows again.
                 // Reconnect on a lost one opens the reconnect for it, starting
                 // from the machine that noticed (`hostId`), and Face ID is the
@@ -488,6 +491,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     @MainActor
     private func openMachines() {
         NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["machines": true])
+    }
+
+    /// And for a manager's change to this person's vault: FleetApp opens You
+    /// on Credentials.
+    @MainActor
+    private func openCredentials() {
+        NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["you": "credentials"])
     }
 
     /// And for a pool: FleetApp opens Machines on that pool's page.

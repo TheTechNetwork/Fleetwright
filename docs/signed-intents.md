@@ -177,6 +177,7 @@ with what a coordinator forging it could do:
 | `exchange`, `link`, `renew`, finishing a sign-in | write a credential into a person's row | delegated: the phone signs a delegation when it finishes the sign-in, for one provider, that box and ten minutes, and the coordinator carries it to the box (built) |
 | `vmctl stop` and `provision`, keeping machines ready | stop or make machines from a person's pool | delegated: the phone signs two when the person sets "keep N ready", making machines from that image and ending machines, for a month, signed again daily (built) |
 | a runner's held `start` | start a session on a runner | delegated: the phone signs, with the `provision`, a delegation for that start's title, brief, mode and task on any box, for an hour (built) |
+| a member's name, role and instructions on a `start` (`memberName`, `memberRole`, `memberBrief`, [members.md](./members.md)) | change what a member's session is told when it opens | unsigned by design: they are the coordinator's record. The start itself, with which member and which task, is signed or delegated by somebody the minter lists for that member, and a box refuses it otherwise whatever its mode |
 | a page through a machine (`browse` frames, [browse.md](./browse.md)), naming whose it is | open a running, contained session's ports as the person who started it, and on a box whose owner turned them on, its listed names and the web, for somebody it says administers the box | unsigned, not yet delegated: the frames are not intents, so the box checks the session is that person's and running, and pins for its own rules, but takes the person from the coordinator. A phone-signed delegation for the socket would close it (not built) |
 
 ## Who may do what
@@ -657,9 +658,12 @@ signed for that machine, the second carrying a key the page made, so the
 sign-in comes back sealed to the page. Nothing `/me` sends is signed any more.
 It used to send the page each change to an account, to link on machines, and
 every machine now refuses a person's link (the vault holds it), so that went,
-and a `/me` from before is told so rather than left waiting. `/me` carries four
+and a `/me` from before is told so rather than left waiting. `/me` carries five
 requests for the page and no others: `/api/github/device`, `/api/vault`,
-`GET /api/hosts/enrolled`, and `/api/intent` for `setuptoken` alone.
+`GET /api/hosts/enrolled`, `/api/intent` for `setuptoken` alone, and
+`GET /api/members`, which everybody in the fleet reads, for the name beside
+each member whose vault the person manages ([members.md](./members.md)). The
+page reads that list and cannot write it.
 
 **What it does not stop.** The coordinator serves `/me`, which carries
 everything the page sends, so it can drop or delay it, and it answers the list
@@ -675,7 +679,11 @@ list, unusable, until it is removed from the app under You, Devices.
 `test/sign-page.test.js` runs all of it in Chromium against the real minter,
 the coordinator's callbacks and `/me`: listing, approving a machine, a named
 secret, a Claude sign-in made on a machine, GitHub and Cloudflare, and that
-nothing `/me` carried held a secret in the clear.
+nothing `/me` carried held a secret in the clear. It also runs two people on
+two signing pages: a person turning their managers' custody on and reading
+what a manager changed, and a manager opening an agent member's vault, where
+a secret, a machine's approval and a Claude sign-in each land in the member's
+vault and not their own.
 
 `docs/security.md` changes in step: SEC-COORD-2 moves from aspirational to
 observed after phase 1, and to enforced only after phase 3 is the default.

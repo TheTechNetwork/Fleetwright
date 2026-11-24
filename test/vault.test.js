@@ -153,21 +153,22 @@ async function minter(extra = {}) {
     return String((await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: GITHUB_REPLY_AAD, sealed: r.sealed })).accessToken);
   };
 
-  /** A phone's request, sealed as the phone seals it: Eli's, or `person`'s. @param {Record<string, unknown>} body @param {{ email?: string, as?: string, at?: number, to?: string, github?: string, person?: string }} [o] */
+  /** A phone's request, sealed as the phone seals it: Eli's, or `person`'s. @param {Record<string, unknown>} body @param {{ email?: string, as?: string, at?: number, to?: string, github?: string, person?: string, admin?: boolean }} [o] */
   const phone = async (body, o = {}) => {
     const reply = await newSealKey();
     const person = o.person ?? ELI;
     const github = o.github ?? (await signIn(o.to ?? deposit.publicKey, person));
     const sealed = await seal({ to: o.to ?? deposit.publicKey, aad: VAULT_REQUEST_AAD, payload: { v: 1, github, email: person, at: o.at ?? Date.now(), reply: reply.publicKey, ...body } });
-    const r = await call('/vault/device', { sealed, email: o.as ?? o.email ?? person });
+    // `admin` is the coordinator's word for who administers the fleet, beside the seal.
+    const r = await call('/vault/device', { sealed, email: o.as ?? o.email ?? person, ...(o.admin === undefined ? {} : { admin: o.admin }) });
     if (r.ok) r.answer = await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: VAULT_REPLY_AAD, sealed: r.sealed });
     return r;
   };
 
-  /** A box asking, signed with its key, with who is in the fleet beside it when `members` is given. @param {{ publicJwk: any, privateJwk: any }} keys @param {{ at?: number, tamper?: boolean, members?: unknown }} [o] */
+  /** A box asking, signed with its key, with who is in the fleet beside it when `members` is given. @param {{ publicJwk: any, privateJwk: any }} keys @param {{ at?: number, tamper?: boolean, members?: unknown, accepts?: string[] }} [o] */
   const box = async (keys, o = {}) => {
     const reply = await newSealKey();
-    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: keys.publicJwk.x, y: keys.publicJwk.y }, at: o.at ?? Date.now(), reply: reply.publicKey };
+    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: keys.publicJwk.x, y: keys.publicJwk.y }, at: o.at ?? Date.now(), reply: reply.publicKey, ...(o.accepts ? { accepts: o.accepts } : {}) };
     const signature = await sign(keys.privateJwk, signingInput('vault-box', o.tamper ? { ...request, at: request.at + 1 } : request));
     const r = await call('/vault/box', { request, signature, ...('members' in o ? { members: o.members } : {}) });
     if (r.ok) r.answer = await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: VAULT_BOX_AAD, sealed: r.sealed });
@@ -1103,7 +1104,7 @@ async function signingFleet(t, { requireSigned = false } = {}) {
     };
     return { grant, sig: await sign(iphone.privateJwk, delegationSigningInput(grant)), kid };
   };
-  return { m, core, box, dir, served, start, poisonList, delegate, iphone };
+  return { m, core, box, dir, served, start, poisonList, delegate, iphone, stub, kid };
 }
 
 test('a box checks the signature on an intent with keys the minter signed, which the coordinator carries and cannot add to', async (t) => {
@@ -1935,4 +1936,504 @@ test('a refusal after the refresh token ran out by its own lifetime is this flee
   assert.doesNotMatch(told, /outside the fleet/);
   // Still good when refused: something else ended it.
   assert.equal(renewalVerdict([{ ...good, refreshUntil: Date.parse('2026-10-27T00:00:00Z') }, refused])?.kind, 'outside');
+});
+
+// ── Members' vaults (docs/members.md) ───────────────────────────────────────
+
+/**
+ * A minter with Eli and Dana signed in on a phone each, a signing key filed
+ * for each (which is what makes an address somebody's here), and Eli the
+ * organization's first admin. `at` hands out request times in order, since
+ * the tree refuses a change not newer than the one it holds.
+ */
+async function orgMinter(/** @type {import('node:test').TestContext} */ t) {
+  const m = await minter();
+  t.after(m.restore);
+  let clock = Date.now() - 60_000;
+  const at = () => (clock += 10);
+  /** @param {string} person @param {Record<string, unknown>} body @param {Record<string, unknown>} [o] */
+  const as = (person, body, o = {}) => m.phone(body, { person, at: at(), ...o });
+  for (const person of [ELI, DANA]) {
+    assert.equal((await as(person, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'a phone' })).ok, true);
+  }
+  assert.equal((await as(ELI, { op: 'orgadmin', address: ELI }, { admin: true })).ok, true);
+  /** Eli, Dana under Eli, and the agent Debbie under Dana, as Eli files them. */
+  const tree = async () => {
+    assert.equal((await as(ELI, { op: 'orgmember', id: 'eli', kind: 'person', address: ELI })).ok, true);
+    assert.equal((await as(ELI, { op: 'orgmember', id: 'dana', kind: 'person', address: DANA, reportsTo: 'eli' })).ok, true);
+    assert.equal((await as(ELI, { op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'dana' })).ok, true);
+  };
+  return { m, as, tree };
+}
+
+test('the first org admin files themselves, only with the fleet’s word and a key of their own, and the last one stays', async (t) => {
+  const m = await minter();
+  t.after(m.restore);
+  // No signing key filed: the address is nobody's here yet, whatever the coordinator says.
+  const unbound = await m.phone({ op: 'orgadmin', address: ELI }, { admin: true });
+  assert.equal(unbound.error?.code, 'not_bound');
+  assert.equal((await m.phone({ op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'iPhone' })).ok, true);
+  // Bound, and the coordinator does not say they administer the fleet.
+  assert.equal((await m.phone({ op: 'orgadmin', address: ELI }, { admin: false })).error?.code, 'not_admin');
+  assert.equal((await m.phone({ op: 'orgadmin', address: ELI })).error?.code, 'not_admin');
+  // Nor somebody else in their name.
+  assert.equal((await m.phone({ op: 'orgadmin', address: DANA }, { admin: true })).error?.code, 'not_admin');
+  const first = await m.phone({ op: 'orgadmin', address: ELI }, { admin: true });
+  assert.equal(first.ok, true, first.text);
+  assert.deepEqual(first.answer.admins, [ELI]);
+
+  // AFTER THAT THE COORDINATOR'S WORD GIVES NOTHING: Dana, vouched for as an
+  // admin, is not one here, and is added only once her address is hers.
+  assert.equal((await m.phone({ op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'Pixel' }, { person: DANA })).ok, true);
+  assert.equal((await m.phone({ op: 'orgadmin', address: DANA }, { person: DANA, admin: true })).error?.code, 'not_admin');
+  assert.equal((await m.phone({ op: 'orgadmin', address: 'nobody@example.com' })).error?.code, 'not_bound');
+  assert.equal((await m.phone({ op: 'orgadmin', address: ELI, remove: true })).error?.code, 'last_admin');
+  assert.equal((await m.phone({ op: 'orgadmin', address: DANA })).ok, true);
+  assert.equal((await m.phone({ op: 'orgadmin', address: ELI, remove: true }, { person: DANA })).ok, true);
+  const seen = await m.phone({ op: 'org' });
+  assert.deepEqual(seen.answer.admins, [DANA]);
+  assert.deepEqual(seen.answer.you, { admin: false, bound: true });
+});
+
+test('the tree is changed by an org admin anywhere and by a manager inside their own team, and not by replay', async (t) => {
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  // Eli filed Debbie, so he is its first custodian; Dana manages it by the tree.
+  const seen = (await as(DANA, { op: 'org' })).answer;
+  assert.deepEqual(seen.members.find((/** @type {any} */ x) => x.id === 'debbie'), { id: 'debbie', kind: 'agent', reportsTo: 'dana', managers: [], custodians: [ELI], may: [ELI, DANA] });
+  assert.deepEqual(seen.members.find((/** @type {any} */ x) => x.id === 'dana').may, [DANA], 'a person is theirs alone until they allow it');
+  assert.deepEqual(seen.you, { admin: false, bound: true });
+
+  // A MANAGER, inside her team: a new member under hers, and a move within it.
+  const filed = await as(DANA, { op: 'orgmember', id: 'jason', kind: 'agent', reportsTo: 'debbie' });
+  assert.equal(filed.ok, true, filed.text);
+  assert.deepEqual(filed.answer.may, [DANA, ELI], 'whoever files an agent is its first custodian');
+  assert.equal((await as(DANA, { op: 'orgmember', id: 'jason', kind: 'agent', reportsTo: 'dana' })).ok, true);
+  // AND REFUSED AT ITS EDGE: out of the team, a root, her own place, her manager's, extra managers.
+  for (const [body, code] of /** @type {Array<[any, string]>} */ ([
+    [{ id: 'jason', kind: 'agent', reportsTo: null }, 'not_manager'],
+    [{ id: 'jason', kind: 'agent', reportsTo: 'eli' }, 'not_manager'],
+    [{ id: 'solo', kind: 'agent' }, 'not_manager'],
+    [{ id: 'dana', kind: 'person', address: DANA, reportsTo: null }, 'not_manager'],
+    [{ id: 'eli', kind: 'person', address: ELI, reportsTo: 'dana' }, 'not_manager'],
+    [{ id: 'debbie', kind: 'agent', reportsTo: 'dana', managers: ['friend@example.com'] }, 'not_admin'],
+    [{ id: 'jason', remove: true, kind: 'agent' }, undefined],
+  ])) {
+    const r = await as(DANA, { op: 'orgmember', ...body });
+    assert.equal(r.error?.code, code, JSON.stringify(body));
+  }
+  // The tree's own rules hold for an admin too.
+  assert.match((await as(ELI, { op: 'orgmember', id: 'eli', kind: 'person', address: ELI, reportsTo: 'debbie' })).text, /already reports up to eli/);
+  assert.match((await as(ELI, { op: 'orgmember', id: 'debbie', kind: 'person', address: 'd@example.com' })).text, /does not change kind/);
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'dana', remove: true })).error?.code, 'has_reports');
+  // A change older than the one held is a replay, and so is a removed member's older add.
+  const old = Date.now() - 5 * 60_000;
+  assert.equal((await m.phone({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: null }, { at: old })).error?.code, 'stale');
+  assert.equal((await m.phone({ op: 'orgmember', id: 'jason', kind: 'agent', reportsTo: 'debbie' }, { at: old })).error?.code, 'stale');
+});
+
+test('custody of an agent follows the tree at once, and its own custodians are changed only by one of them', async (t) => {
+  const { as, tree } = await orgMinter(t);
+  await tree();
+  // Dana manages Debbie, so she opens its vault. A member the vault has not been told about opens for nobody.
+  assert.equal((await as(DANA, { op: 'list', for: 'debbie' })).ok, true);
+  assert.equal((await as(DANA, { op: 'list', for: 'ghost' })).error?.code, 'no_member');
+  // MOVED OUT OF HER TEAM: her custody ends with the change, not at some later sweep.
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' })).ok, true);
+  const out = await as(DANA, { op: 'list', for: 'debbie' });
+  assert.equal(out.error?.code, 'not_custodian');
+  assert.match(out.text, /They are eli@example.com; one of them can add you/);
+  assert.equal((await as(DANA, { op: 'put', name: 'secret:TOKEN', value: 'x', for: 'debbie' })).error?.code, 'not_custodian');
+  // And she cannot name herself.
+  assert.equal((await as(DANA, { op: 'custodian', member: 'debbie', address: DANA })).error?.code, 'not_custodian');
+
+  // A CUSTODIAN ADDS ONE, who then holds it whatever the tree says.
+  assert.equal((await as(ELI, { op: 'custodian', member: 'debbie', address: 'nobody@example.com' })).error?.code, 'not_bound');
+  assert.equal((await as(ELI, { op: 'custodian', member: 'debbie', address: DANA })).ok, true);
+  assert.equal((await as(DANA, { op: 'list', for: 'debbie' })).ok, true);
+  // The last one stays; with two, either removes the other.
+  assert.equal((await as(DANA, { op: 'custodian', member: 'debbie', address: ELI, remove: true })).ok, true);
+  assert.equal((await as(DANA, { op: 'custodian', member: 'debbie', address: DANA, remove: true })).error?.code, 'last_custodian');
+  // Eli still manages it by the tree (it reports to him), and that custody is the tree's to end.
+  assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).ok, true);
+  assert.match((await as(DANA, { op: 'custodian', member: 'debbie', address: ELI, remove: true })).text, /comes from the tree/);
+  assert.match((await as(ELI, { op: 'custodian', member: 'dana', address: ELI })).text, /Nobody is made a custodian of a person after whoever added them/);
+});
+
+test('a custodian keeps things in the member’s vault and not their own, and a box is given it only when approved for it and able to file it', async (t) => {
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  const kept = await as(ELI, { op: 'put', name: 'claude', value: `sk-ant-oat01-${'d'.repeat(40)}`, for: 'debbie' });
+  assert.equal(kept.ok, true, kept.text);
+  assert.match(kept.text, /Kept debbie’s Claude login/);
+  assert.equal((await as(DANA, { op: 'put', name: 'secret:DEPLOY_KEY', value: 'debbie-deploy', for: 'debbie' })).ok, true);
+  assert.equal((await as(ELI, { op: 'put', name: 'secret:MINE', value: 'elis-own' })).ok, true);
+  // FILED UNDER THE MEMBER'S PRINCIPAL, and nothing of it under either custodian.
+  assert.ok(m.rows.get('gh:member:debbie')?.sealed);
+  assert.equal(m.rows.get('gh:42'), undefined, 'Eli’s own vault holds no Claude login');
+  assert.deepEqual(Object.keys(m.rows.get('v:member:debbie').items), ['secret:DEPLOY_KEY']);
+  assert.deepEqual((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.map((/** @type {any} */ i) => i.name), ['claude', 'secret:DEPLOY_KEY']);
+  assert.deepEqual((await as(ELI, { op: 'list' })).answer.items.map((/** @type {any} */ i) => i.name), ['secret:MINE']);
+  // What the engines after Claude Code will keep is named, and not kept yet.
+  for (const name of ['codex', 'copilot', 'apikey:openrouter']) {
+    const r = await as(ELI, { op: 'put', name, value: 'x', for: 'debbie' });
+    assert.equal(r.error?.code, 'not_kept_yet', name);
+  }
+  // A custodian holds the vault's items and machines, and none of what is a person's alone.
+  assert.equal((await as(ELI, { op: 'custody', allow: true, for: 'debbie' })).error?.code, 'bad_params');
+
+  // APPROVED PER VAULT: this box for Debbie's, and for nothing of Eli's.
+  const boxKeys = await generateKeyPair();
+  const granted = await as(ELI, { op: 'grant', hostKey: boxKeys.publicJwk, label: 'ops-box', for: 'debbie' });
+  assert.equal(granted.ok, true, granted.text);
+  assert.equal(m.rows.get('v:42').grants[await boxKeyHash(boxKeys.publicJwk)], undefined);
+  // A box from before members is handed none, which it would file under no name.
+  assert.deepEqual((await m.box(boxKeys, { members: [ELI, DANA] })).answer.accounts, []);
+  const given = await m.box(boxKeys, { members: [ELI, DANA], accepts: ['members'] });
+  assert.equal(given.ok, true, given.text);
+  assert.equal(given.answer.accounts.length, 1);
+  const account = given.answer.accounts[0];
+  assert.deepEqual({ email: account.email, principal: account.principal, member: account.member }, { email: '', principal: 'member:debbie', member: 'debbie' });
+  assert.deepEqual(account.items.map((/** @type {any} */ i) => [i.name, i.value]), [['secret:DEPLOY_KEY', 'debbie-deploy'], ['claude', `sk-ant-oat01-${'d'.repeat(40)}`]]);
+  assert.doesNotMatch(JSON.stringify(given.answer), /elis-own/);
+  // Served while somebody who may act for it is in the fleet, and not after.
+  assert.equal((await m.box(boxKeys, { members: [DANA], accepts: ['members'] })).answer.accounts.length, 1);
+  assert.deepEqual((await m.box(boxKeys, { members: ['someone-else@example.com'], accepts: ['members'] })).answer.accounts, []);
+  // `accepts` is signed with the rest: adding it on the way is a bad signature.
+  const reply = await newSealKey();
+  const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: boxKeys.publicJwk.x, y: boxKeys.publicJwk.y }, at: Date.now(), reply: reply.publicKey };
+  const signature = await sign(boxKeys.privateJwk, signingInput('vault-box', request));
+  assert.equal((await m.binding.vault('box', { request: { ...request, accepts: ['members'] }, signature, members: [ELI] })).error?.code, 'bad_signature');
+  // Removed from the box, by a custodian.
+  assert.equal((await as(DANA, { op: 'revoke', key: await boxKeyHash(boxKeys.publicJwk), for: 'debbie' })).ok, true);
+  assert.deepEqual((await m.box(boxKeys, { members: [ELI, DANA], accepts: ['members'] })).answer.accounts, []);
+});
+
+test('two boxes asking at once renew a member’s refresh token once, under the member’s own lock', async (t) => {
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  // A member's GitHub sign-in is whichever account its custodians choose: there is no "same person" to hold it to.
+  const connected = await as(ELI, { op: 'connect', provider: 'github', code: 'goodcode123', verifier: 'v'.repeat(64), redirectUri: 'https://fleet.test/oauth/github/callback', for: 'debbie' });
+  assert.equal(connected.ok, true, connected.text);
+  const a = await generateKeyPair();
+  const b = await generateKeyPair();
+  await as(ELI, { op: 'grant', hostKey: a.publicJwk, label: 'a', for: 'debbie' });
+  await as(ELI, { op: 'grant', hostKey: b.publicJwk, label: 'b', for: 'debbie' });
+  const before = m.calls.refresh;
+  const [one, two] = await Promise.all([m.box(a, { accepts: ['members'] }), m.box(b, { accepts: ['members'] })]);
+  assert.equal(m.calls.refresh - before, 1, 'one rotation, however many boxes asked');
+  for (const r of [one, two]) assert.equal(r.answer.accounts[0].principal, 'member:debbie');
+  await m.box(a, { accepts: ['members'] });
+  assert.equal(m.calls.refresh - before, 1);
+});
+
+test('whoever adds a person the vault has not met manages their credentials, with no switch, and nobody gets that by filing a record for somebody already there', async (t) => {
+  // ASKED FOR: "if a manager created the member they should be able to
+  // manage it." docs/members.md, "Custodians of a person member".
+  const m = await minter();
+  t.after(m.restore);
+  let clock = Date.now() - 60_000;
+  /** @param {string} person @param {Record<string, unknown>} body @param {Record<string, unknown>} [o] */
+  const as = (person, body, o = {}) => m.phone(body, { person, at: (clock += 10), ...o });
+  const listKey = async (/** @type {string} */ person) => {
+    const key = (await generateKeyPair()).publicJwk;
+    assert.equal((await as(person, { op: 'devicekey', key, label: 'a phone' })).ok, true);
+    return key;
+  };
+  await listKey(ELI);
+  assert.equal((await as(ELI, { op: 'orgadmin', address: ELI }, { admin: true })).ok, true);
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'eli', kind: 'person', address: ELI })).ok, true);
+
+  // ELI ADDS DANA, who has never signed in here: he is her custodian, and is told so.
+  const added = await as(ELI, { op: 'orgmember', id: 'dana', kind: 'person', address: DANA, reportsTo: 'eli' });
+  assert.equal(added.ok, true, added.text);
+  assert.equal(added.text, `Filed dana. You added ${DANA}, so you manage their credentials from their first sign-in, and they are shown that before they keep anything. Their other managers wait until ${DANA} allows it.`);
+  assert.deepEqual(added.answer.may, [DANA, ELI], 'the list a box checks a start as her against');
+  // There is no vault to hold until she has signed in.
+  assert.equal((await as(ELI, { op: 'list', for: 'dana' })).error?.code, 'no_vault');
+
+  // SHE SIGNS IN, and is shown who manages what she keeps before she keeps anything.
+  const danaKey = await listKey(DANA);
+  const first = (await as(DANA, { op: 'list' })).answer.custody;
+  assert.deepEqual([first.custodians, first.managers, first.allow], [[ELI], [], false]);
+  // NO SWITCH: he keeps, lists and approves a machine for her vault, and she reads what he did.
+  const kept = await as(ELI, { op: 'put', name: 'secret:FOR_DANA', value: 'v1', for: 'dana' });
+  assert.equal(kept.ok, true, kept.text);
+  assert.ok(m.rows.get('v:43').items['secret:FOR_DANA'], 'in her vault and not his');
+  assert.deepEqual((await as(DANA, { op: 'list' })).answer.custody.log.map((/** @type {any} */ e) => [e.by, e.op, e.name]), [[ELI, 'put', 'secret:FOR_DANA']]);
+  const boxKeys = await generateKeyPair();
+  assert.equal((await as(ELI, { op: 'grant', hostKey: boxKeys.publicJwk, label: 'ops-box', for: 'dana' })).ok, true);
+  // THE VAULT IS STILL HERS: she forgets what it keeps, and her switch is hers and not his.
+  assert.equal((await as(DANA, { op: 'forget', name: 'secret:FOR_DANA' })).ok, true);
+  assert.equal((await as(ELI, { op: 'custody', allow: true, for: 'dana' })).error?.code, 'bad_params');
+  // Her record filed again later, he is still the one who added her.
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'dana', kind: 'person', address: DANA, reportsTo: 'eli' })).ok, true);
+  assert.deepEqual((await as(ELI, { op: 'org' })).answer.members.find((/** @type {any} */ x) => x.id === 'dana').custodians, [ELI]);
+
+  // IT ENDS WITH WHOEVER HOLDS IT, OR AN ORG ADMIN, and nobody is added after the first.
+  assert.match((await as(ELI, { op: 'custodian', member: 'dana', address: 'sam@example.com' })).text, /Nobody is made a custodian of a person after whoever added them/);
+  assert.equal((await as(DANA, { op: 'custodian', member: 'dana', address: ELI, remove: true })).error?.code, 'not_admin', 'not hers to end: she forgets what she keeps instead');
+  const gave = await as(ELI, { op: 'custodian', member: 'dana', address: ELI, remove: true });
+  assert.equal(gave.text, `${ELI} no longer manages ${DANA}’s credentials. Their managers hold them only once ${DANA} allows it.`);
+  assert.equal((await as(ELI, { op: 'list', for: 'dana' })).error?.code, 'custody_not_allowed');
+  assert.deepEqual((await as(DANA, { op: 'list' })).answer.custody.custodians, []);
+
+  // SOMEBODY ALREADY HERE IS NOT REACHED BY A RECORD THAT NAMES THEM. Taking
+  // her record out and filing it again is the cheapest way to try, and she
+  // keeps her own sign-ins by now, so it makes him nothing. Not even in the
+  // gap after a lost phone, when no key of hers is listed.
+  assert.equal((await as(DANA, { op: 'devicekey', key: danaKey, remove: true })).ok, true);
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'dana', remove: true })).ok, true);
+  const again = await as(ELI, { op: 'orgmember', id: 'dana', kind: 'person', address: DANA, reportsTo: 'eli' });
+  assert.equal(again.text, `Filed dana. ${DANA} already keeps their own sign-ins here, so managing them is theirs to allow, under You › Credentials.`);
+  assert.deepEqual(again.answer.may, [DANA]);
+  await listKey(DANA);
+  assert.equal((await as(ELI, { op: 'list', for: 'dana' })).error?.code, 'custody_not_allowed');
+  // And it is whoever adds them, admin or not: a person Dana adds to her own team is hers to manage.
+  const sam = await as(DANA, { op: 'orgmember', id: 'sam', kind: 'person', address: 'sam@example.com', reportsTo: 'dana' });
+  assert.deepEqual(sam.answer.may, ['sam@example.com', DANA]);
+
+  // NOR BY A RECORD FOR AN ADDRESS THEY HAVE NOT USED YET. Eli keeps his own
+  // sign-ins already. Dana, a team lead, files a member at a second address
+  // of his before he has listed a key under it. When his account does, the
+  // vault has met him, and what he kept is not hers.
+  assert.equal((await as(ELI, { op: 'put', name: 'secret:ELIS_OWN', value: 'his' })).ok, true);
+  const WORK = 'eli.work@example.com';
+  const pre = await as(DANA, { op: 'orgmember', id: 'eli-work', kind: 'person', address: WORK, reportsTo: 'dana' });
+  assert.deepEqual(pre.answer.may, [WORK, DANA], 'nobody is there yet, so the record says she added them');
+  await listKey(WORK);
+  assert.equal((await as(DANA, { op: 'list', for: 'eli-work' })).error?.code, 'custody_not_allowed');
+  assert.equal((await as(ELI, { op: 'org' })).answer.members.find((/** @type {any} */ x) => x.id === 'eli-work').custodians.length, 0);
+  // A RECORD POINTED AT SOMEBODY ELSE names a different person: Dana, who
+  // added Sam, is not thereby the custodian of whoever the record names next.
+  const moved = await as(ELI, { op: 'orgmember', id: 'sam', kind: 'person', address: 'pat@example.com', reportsTo: 'dana' });
+  assert.deepEqual(moved.answer.may, ['pat@example.com', ELI]);
+});
+
+test('a manager holds a person’s vault only once that person allows it, and the person reads what was done', async (t) => {
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  // Eli manages Dana by the tree, and she was here before he filed her. Her
+  // vault is hers until she says otherwise.
+  const before = await as(ELI, { op: 'put', name: 'secret:FOR_DANA', value: 'v1', for: 'dana' });
+  assert.equal(before.error?.code, 'custody_not_allowed');
+  assert.match(before.text, /has not let their managers manage their credentials/);
+  // Nobody but her turns it on: before, he is refused like any other request for her vault.
+  assert.equal((await as(ELI, { op: 'custody', allow: true, for: 'dana' })).error?.code, 'custody_not_allowed');
+  const on = await as(DANA, { op: 'custody', allow: true });
+  assert.equal(on.ok, true, on.text);
+  // And after, the switch itself is still hers alone.
+  assert.equal((await as(ELI, { op: 'custody', allow: false, for: 'dana' })).error?.code, 'bad_params');
+  // Her own request "for" her own member is just her own.
+  assert.equal((await as(DANA, { op: 'list', for: 'dana' })).answer.custody.allow, true);
+
+  const kept = await as(ELI, { op: 'put', name: 'secret:FOR_DANA', value: 'v1', for: 'dana' });
+  assert.equal(kept.ok, true, kept.text);
+  // IN HER VAULT, and she is told: outside the seal for her phone, and beside the vault where she reads it.
+  assert.ok(m.rows.get('v:43').items['secret:FOR_DANA']);
+  assert.deepEqual(kept.notify, { email: DANA, text: `${ELI} kept secret:FOR_DANA in your vault, as one of your managers.` });
+  const hers = (await as(DANA, { op: 'list' })).answer;
+  assert.deepEqual(hers.custody.managers, [ELI]);
+  assert.equal(hers.custody.member, 'dana');
+  assert.deepEqual(hers.custody.log.map((/** @type {any} */ e) => [e.by, e.op, e.name]), [[ELI, 'put', 'secret:FOR_DANA']]);
+  // A box he approves for her vault files it under HER address, and is served while SHE is in the fleet.
+  const boxKeys = await generateKeyPair();
+  assert.equal((await as(ELI, { op: 'grant', hostKey: boxKeys.publicJwk, label: 'ops-box', for: 'dana' })).ok, true);
+  assert.equal((await m.box(boxKeys, { members: [ELI, DANA] })).answer.accounts[0].email, DANA);
+  assert.deepEqual((await m.box(boxKeys, { members: [ELI] })).answer.accounts, []);
+  // Her signing keys and delegations stay hers alone.
+  assert.equal((await as(ELI, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, for: 'dana' })).error?.code, 'bad_params');
+  // She manages nobody above her: Eli's vault is not hers to open, allowed or not.
+  assert.equal((await as(ELI, { op: 'custody', allow: true })).ok, true);
+  assert.equal((await as(DANA, { op: 'list', for: 'eli' })).error?.code, 'not_custodian');
+
+  // TURNED OFF, by her: refused again at the next request, and what was kept stays hers.
+  assert.equal((await as(DANA, { op: 'custody', allow: false })).ok, true);
+  assert.equal((await as(ELI, { op: 'forget', name: 'secret:FOR_DANA', for: 'dana' })).error?.code, 'custody_not_allowed');
+  assert.ok(m.rows.get('v:43').items['secret:FOR_DANA'].sealed);
+});
+
+test('the signed key list says who may start as each member, and the coordinator’s list can only take away', async (t) => {
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  const boxKeys = await generateKeyPair();
+  const pinned = (await m.lookup()).signing;
+  const listed = async (/** @type {string[]} */ members) => {
+    const r = await m.keys(boxKeys, { members });
+    assert.equal(r.ok, true, r.text);
+    assert.equal(await verify(pinned, r.signature, signingInput('vault-keys-answer', r.payload)), true, 'signed by the key a box pins');
+    return r.payload.members;
+  };
+  assert.deepEqual(await listed([ELI, DANA]), [
+    { id: 'dana', kind: 'person', email: DANA, may: [DANA] },
+    { id: 'debbie', kind: 'agent', may: [DANA, ELI] },
+    { id: 'eli', kind: 'person', email: ELI, may: [ELI] },
+  ]);
+  // Once Dana allows it, her manager is on her list.
+  assert.equal((await as(DANA, { op: 'custody', allow: true })).ok, true);
+  assert.deepEqual((await listed([ELI, DANA])).find((/** @type {any} */ x) => x.id === 'dana').may, [DANA, ELI]);
+  // Left off the fleet's list, a custodian is on nobody's: the member stays listed, with whoever is left.
+  assert.deepEqual((await listed([DANA])).find((/** @type {any} */ x) => x.id === 'debbie').may, [DANA]);
+  assert.deepEqual((await listed(['someone-else@example.com'])).find((/** @type {any} */ x) => x.id === 'debbie').may, []);
+});
+
+test('a member’s ended sign-in is told to every custodian, on their own phones, and a manager’s change to a person’s vault to that person', async (t) => {
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  /** @type {any[]} */
+  const sends = [];
+  const clock = { now: Date.now() };
+  const core = new CoordinatorCore({
+    minter: /** @type {any} */ (m.binding),
+    push: /** @type {any} */ ({ async send(/** @type {any[]} */ devices, /** @type {any} */ message) { sends.push({ to: devices.map((d) => d.actor), message }); return { sent: devices.length, dead: [] }; } }),
+    now: () => clock.now,
+  });
+  for (const [email, admin, token] of /** @type {Array<[string, boolean, string]>} */ ([[ELI, true, 'a'], [DANA, false, 'b'], ['ops@example.com', true, 'c']])) {
+    const { client } = /** @type {any} */ (await core.clients.issue(`phone (${email})`, { admin, email }));
+    await core.registerDevice({ platform: 'ios', token: token.repeat(64), clientId: client.id, actor: `fleet:${email}` });
+  }
+  core.setMember(null, 'debbie', { name: 'Debbie', kind: 'agent', role: 'software engineer' });
+
+  // A whole sign-in in Debbie's vault, then ended on claude.ai.
+  const made = claudeSignInFor('debbie-ended');
+  assert.equal((await as(ELI, { op: 'put', name: 'claude', signIn: made, for: 'debbie' })).ok, true);
+  assert.equal(await core.checkClaudeSignIns(), 0);
+  revokeClaude(made.oauth.accessToken);
+  cancelClaudeSignIns();
+  m.rows.delete('claude-checked');
+  clock.now += 16 * 60_000;
+  assert.equal(await core.checkClaudeSignIns(), 1);
+  assert.equal(sends.length, 1);
+  // Its custodians' own phones: Eli and Dana, and not the other admin, who is neither.
+  assert.deepEqual(sends[0].to.sort(), [`fleet:${DANA}`, `fleet:${ELI}`]);
+  assert.match(sends[0].message.title, /^Debbie’s Claude sign-in /);
+  assert.match(sends[0].message.body, /Sign it in to Claude again from your phone or the signing page\./);
+  assert.ok(core.events.some((e) => e.event === 'claude.ended' && /^member:debbie: /.test(String(e.text))));
+
+  // AND A MANAGER'S CHANGE TO A PERSON'S VAULT is told to that person alone,
+  // through the coordinator's own relay, which also says who administers the fleet.
+  sends.length = 0;
+  assert.equal((await as(DANA, { op: 'custody', allow: true })).ok, true);
+  const reply = await newSealKey();
+  const sealed = await seal({ to: (await m.lookup()).key, aad: VAULT_REQUEST_AAD, payload: { v: 1, github: await m.signIn(), email: ELI, at: Date.now(), reply: reply.publicKey, op: 'put', name: 'secret:FROM_ELI', value: 'x', for: 'dana' } });
+  const relayed = await core.vaultDevice({ email: ELI, admin: true }, { sealed });
+  assert.equal(relayed.ok, true, relayed.text);
+  assert.equal('notify' in relayed, false, 'who was told is not handed back to the asker');
+  assert.deepEqual(sends.map((s) => [s.to, s.message.title]), [[[`fleet:${DANA}`], 'A manager changed your vault']]);
+  assert.match(sends[0].message.body, /eli@example\.com kept secret:FROM_ELI in your vault, as one of your managers\./);
+  assert.ok(core.events.some((e) => e.event === 'vault.custody'));
+});
+
+test('a box starts a session as a member only for somebody the minter lists, who signed for it, and runs it on the member’s sign-ins', async (t) => {
+  // The whole path: the tree and the custodians in the minter, the member in
+  // the coordinator, a signed start from a phone, the box's own check, and
+  // what it hands the session manager. On a box that takes unsigned work, so
+  // every refusal below is the member check's own.
+  const { m, core, box, stub, iphone, kid } = await signingFleet(t);
+  // Eli's phone listed its key in signingFleet. Dana's lists one now.
+  const pixel = await generateKeyPair();
+  assert.equal((await m.phone({ op: 'devicekey', key: pixel.publicJwk, label: 'Dana’s Pixel' }, { person: DANA })).ok, true);
+  const danaKid = await boxKeyHash({ kty: 'EC', crv: 'P-256', x: pixel.publicJwk.x, y: pixel.publicJwk.y });
+  await core.issueClient({ email: DANA }, 'phone');
+  let clock = Date.now() - 30_000;
+  const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
+  await filed({ op: 'orgadmin', address: ELI });
+  await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
+  await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
+  await filed({ op: 'put', name: 'claude', value: `sk-ant-oat01-${'d'.repeat(40)}`, for: 'debbie' });
+  assert.equal(core.setMember(null, 'debbie', { name: 'Debbie', kind: 'agent', role: 'software engineer', instructions: 'Write small pull requests.' }).ok, true);
+
+  let n = 0;
+  /** A start from a phone. @param {{ who?: string, key?: any, keyId?: string, params: any, unsigned?: boolean }} o */
+  const start = async (o) => {
+    const who = o.who ?? ELI;
+    const id = `member-intent-${String(++n).padStart(4, '0')}`;
+    const issuedAt = Date.now();
+    const sig = await sign((o.key ?? iphone).privateJwk, intentSigningInput({ actor: who, id, issuedAt, params: o.params, verb: 'start' }, 'ops-box'));
+    return core.dispatch({ verb: 'start', params: o.params, id, actor: who, requester: { email: who, admin: false }, preferHost: 'ops-box', ...(o.unsigned ? {} : { sig, kid: o.keyId ?? kid, issuedAt }) });
+  };
+
+  // NO LIST YET, so the coordinator passes it on, and the box, which holds none, starts nobody as a member.
+  const early = await start({ params: { name: 'too-early', member: 'debbie', task: 'Fix the login bug.' } });
+  assert.equal(early.error?.code, 'member_unchecked');
+  assert.match(String(early.text), /holds no list from the vault of who may start a session as a member/);
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  assert.deepEqual(core.memberCustody?.get('debbie'), [ELI], 'the coordinator read the list on its way to the box');
+
+  // SIGNED BY A CUSTODIAN: started as the member's own account, with the instructions and the task as one first message.
+  stub.bodies.length = 0;
+  const ok = await start({ params: { name: 'as-debbie', member: 'debbie', task: 'Fix the login bug.' } });
+  assert.equal(ok.ok, true, ok.text);
+  const sent = stub.bodies.at(-1);
+  assert.equal(sent.actor, 'fleet:debbie@members.invalid', 'who it runs as is the member, never the asker');
+  assert.equal(sent.startedBy, `fleet:${ELI}`);
+  assert.deepEqual([sent.member, sent.memberName, sent.memberRole], ['debbie', 'Debbie', 'software engineer']);
+  assert.equal(sent.task, 'Write small pull requests.\n\n----------\n\nFix the login bug.');
+  assert.match(String(sent.command), /^\/new as-debbie\b/);
+  assert.doesNotMatch(String(sent.command), /--archive|members\.invalid/);
+
+  // NOT ON THE MINTER'S LIST: Dana signs with her own listed key, and is refused by the box, with who is.
+  core.memberCustody = null; // the coordinator's copy aside, so this is the box's answer
+  const stranger = await start({ who: DANA, key: pixel, keyId: danaKid, params: { name: 'danas-try', member: 'debbie', task: 'x' } });
+  assert.equal(stranger.error?.code, 'not_custodian');
+  assert.match(String(stranger.text), /dana@example\.com may not start a session as Debbie\. The vault lists eli@example\.com\. Nothing was started\./);
+  // UNSIGNED, naming a custodian: this box takes unsigned work, and not this.
+  const unsigned = await start({ params: { name: 'forged', member: 'debbie', task: 'x' }, unsigned: true });
+  assert.equal(unsigned.error?.code, 'signature_required');
+  assert.match(String(unsigned.text), /runs on Debbie’s sign-ins, so ops-box starts one only when eli@example\.com signed for it or delegated it/);
+  // Eli again, so the count below is of two starts that ran and none of the refused ones.
+  const again = await start({ params: { name: 'again', member: 'debbie', task: 'x' } });
+  assert.equal(again.ok, true);
+  // A MEMBER THE VAULT WAS NEVER TOLD ABOUT, though the coordinator has a record of it.
+  core.setMember(null, 'ghost', { name: 'Ghost', kind: 'agent', role: 'x' });
+  assert.equal((await start({ params: { name: 'ghostly', member: 'ghost', task: 'x' } })).error?.code, 'no_member');
+  // AND NOBODY ASKS AS THE MEMBER'S OWN ACCOUNT, signed or not, member start or not.
+  const impostor = await core.dispatch({ verb: 'start', params: { name: 'impostor' }, actor: 'debbie@members.invalid', preferHost: 'ops-box' });
+  assert.equal(impostor.error?.code, 'not_a_person');
+  assert.equal(stub.bodies.filter((b) => /^\/new /.test(String(b.command))).length, 2, 'only the two custodian-signed starts reached the session manager');
+
+  // ADDED AS A CUSTODIAN, Dana starts one once the box has the next list.
+  await filed({ op: 'custodian', member: 'debbie', address: DANA });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true);
+  const now = await start({ who: DANA, key: pixel, keyId: danaKid, params: { name: 'danas-own', member: 'debbie', task: 'Review the fix.' } });
+  assert.equal(now.ok, true, now.text);
+  assert.equal(stub.bodies.at(-1).startedBy, `fleet:${DANA}`);
+  assert.equal(stub.bodies.at(-1).actor, 'fleet:debbie@members.invalid');
+});
+
+test('a box asks for members’ vaults by saying it takes them, files one under the member’s own account, and nothing else answers for it', async (t) => {
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  assert.equal((await as(ELI, { op: 'put', name: 'claude', value: `sk-ant-oat01-${'d'.repeat(40)}`, for: 'debbie' })).ok, true);
+  assert.equal((await as(ELI, { op: 'put', name: 'secret:DEPLOY_KEY', value: 'debbie-deploy', for: 'debbie' })).ok, true);
+  assert.equal((await as(ELI, { op: 'put', name: 'claude', value: `sk-ant-oat01-${'e'.repeat(40)}` })).ok, true);
+  const boxKeys = await generateKeyPair();
+  for (const whose of [{ for: 'debbie' }, {}]) assert.equal((await as(ELI, { op: 'grant', hostKey: boxKeys.publicJwk, label: 'ops-box', ...whose })).ok, true);
+
+  const stateDir = mkdtempSync(join(tmpdir(), 'fw-member-vault-'));
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+  const cfg = /** @type {any} */ ({ stateDir, sandbox: true });
+  // What this version of a box signs: `accepts`, with the rest.
+  const given = await m.box(boxKeys, { members: [ELI, DANA], accepts: ['members'] });
+  const { applyVault } = await import('../src/core/vault-store.js');
+  assert.equal(applyVault(cfg, given.answer).ok, true);
+
+  // THE MEMBER'S ACCOUNT, and its own token: never the custodian's, who approved the same box for his own.
+  const asDebbie = pickCredentialSource(cfg, 'fleet:debbie@members.invalid');
+  assert.equal(asDebbie.account, 'debbie@members.invalid');
+  assert.equal(readFileSync(String(asDebbie.tokenFile), 'utf8').trim(), `sk-ant-oat01-${'d'.repeat(40)}`);
+  assert.equal(readFileSync(String(pickCredentialSource(cfg, `fleet:${ELI}`).tokenFile), 'utf8').trim(), `sk-ant-oat01-${'e'.repeat(40)}`);
+  assert.equal(vaultSecret(cfg, 'debbie@members.invalid', 'DEPLOY_KEY'), 'debbie-deploy');
+  assert.equal(vaultSecret(cfg, ELI, 'DEPLOY_KEY'), null);
+
+  // NO FALLBACK: a member with nothing on this box is refused by name, and is not run on anybody else's.
+  const none = pickCredentialSource(cfg, 'fleet:jason@members.invalid');
+  assert.equal(none.source, null);
+  assert.equal(none.tokenFile, undefined);
+  assert.match(String(none.why), /jason@members\.invalid keeps no Claude login in their vault that this box was given/);
+
+  // An answer that names the members' domain as a PERSON's address is not believed: only a principal files there.
+  applyVault(cfg, { accounts: [{ email: 'debbie@members.invalid', login: 'x', items: [{ name: 'claude', value: `sk-ant-oat01-${'x'.repeat(40)}`, expiresAt: null }], problems: [] }] });
+  assert.equal(pickCredentialSource(cfg, 'fleet:debbie@members.invalid').source, null);
+  assert.equal(pickCredentialSource(cfg, 'fleet:debbie@members.invalid').tokenFile, undefined);
 });

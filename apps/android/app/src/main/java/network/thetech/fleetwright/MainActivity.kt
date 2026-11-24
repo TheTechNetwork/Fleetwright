@@ -157,7 +157,19 @@ class MainActivity : ComponentActivity() {
         notifiedSetup.value = setupNamedBy(intent)
         notifiedHolder.value = holderNamedBy(intent)
         notifiedPool.value = poolNamedBy(intent)
+        if (custodyNamedBy(intent)) notifiedCustody.value += 1
     }
+
+    /**
+     * A manager changed this person's vault, from a tapped notification:
+     * You opens on Credentials, where what they changed is listed and the
+     * switch that allows it is. A count and not a flag, so a second tap
+     * opens it again. It carries no session name, so it is never taken for
+     * a session below.
+     */
+    private val notifiedCustody = mutableStateOf(0)
+
+    private fun custodyNamedBy(intent: Intent?): Boolean = intent?.getStringExtra("kind") == "vault-custody"
 
     /**
      * The hypervisor setup a tapped progress notification was about
@@ -273,6 +285,7 @@ class MainActivity : ComponentActivity() {
         notifiedSetup.value = setupNamedBy(intent)
         notifiedHolder.value = holderNamedBy(intent)
         notifiedPool.value = poolNamedBy(intent)
+        if (custodyNamedBy(intent)) notifiedCustody.value += 1
 
         // A fleet app that cannot tell you a session is waiting has lost its
         // main reason to exist, so this is asked as soon as there is a fleet.
@@ -307,6 +320,7 @@ class MainActivity : ComponentActivity() {
                     notifiedSetup = notifiedSetup.value,
                     notifiedHolder = notifiedHolder.value,
                     notifiedPool = notifiedPool.value,
+                    notifiedCustody = notifiedCustody.value,
                 )
             }
         }
@@ -339,6 +353,7 @@ fun FleetScreen(
     notifiedSetup: String? = null,
     notifiedHolder: String? = null,
     notifiedPool: PoolTap? = null,
+    notifiedCustody: Int = 0,
 ) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
@@ -516,6 +531,7 @@ fun FleetScreen(
                     profile = request.profile,
                     secret = request.secret,
                     task = request.task,
+                    member = request.member,
                 )
                 // BY WHAT THE FLEET SAID, not by whether it answered: a refusal
                 // is an answer, and "Session ready" over "unknown (connected, no
@@ -571,6 +587,14 @@ fun FleetScreen(
     // A pool's own machine asking to join, tapped: Machines, where it is first.
     LaunchedEffect(notifiedHolder) {
         if (notifiedHolder != null) tab = "machines"
+    }
+    // A manager's change to this person's vault, tapped: You, on Credentials.
+    var openYou by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(notifiedCustody) {
+        if (notifiedCustody > 0) {
+            openYou = "credentials"
+            tab = "you"
+        }
     }
     // A hypervisor setup's progress notification, tapped: Machines, with the
     // job's progress open, rather than whatever was on screen last.
@@ -818,6 +842,14 @@ fun FleetScreen(
                     signedIn = false
                 },
                 modifier = inner,
+                opening = openYou,
+                onOpened = { openYou = null },
+                // A START FROM A MEMBER'S PAGE is sent like any other, and
+                // its answer is on Sessions, where a start's answer always is.
+                onStart = { request ->
+                    tab = "sessions"
+                    startInBackground(request)
+                },
             )
             else -> PullToRefreshBox(
                 isRefreshing = refreshing,
@@ -1126,7 +1158,9 @@ private fun SessionCard(
             session.hostId?.let { "on $it" },
             session.workspace,
             session.age,
-            session.account?.takeIf { it != "shared" },
+            // STARTED AS A MEMBER: whose it runs as, in place of the account,
+            // which for an agent is an address nobody holds.
+            session.asMember ?: session.account?.takeIf { it != "shared" },
             session.contextLine,
         )
         if (context.isNotEmpty()) {

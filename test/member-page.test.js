@@ -95,7 +95,9 @@ test('it opens the vault where the fleet has a signing page, carries only what t
   // carries may be: that page could otherwise have this browser's credential
   // start or stop sessions, which nobody reviewed it as a door for.
   const relays = [...String(/var RELAYS = \{([^}]*)\};/.exec(withSigner)?.[1]).matchAll(/'([A-Z]+ [^']+)': true/g)].map((m) => m[1]);
-  assert.deepEqual(relays.sort(), ['GET /api/hosts/enrolled', 'POST /api/github/device', 'POST /api/intent', 'POST /api/vault']);
+  // The members list is read, for the names beside the vaults a person
+  // manages, and never written: no PUT, DELETE or import is on the list.
+  assert.deepEqual(relays.sort(), ['GET /api/hosts/enrolled', 'GET /api/members', 'POST /api/github/device', 'POST /api/intent', 'POST /api/vault']);
   assert.match(withSigner, /var RELAYED_VERBS = \['setuptoken'\];/);
 
   const without = get(MEMBER_PATH).body;

@@ -28,6 +28,16 @@
 //    approves or removes the machines that are given it. Every request is
 //    sealed to the minter and every answer sealed back to a key made here
 //    for it, so what the vault holds is never readable on the way;
+//  - OPENS A MEMBER'S VAULT FOR WHOEVER MAY ACT FOR IT (docs/members.md): the
+//    same view, pointed at the member, every request for what a vault keeps
+//    carrying `for: <member id>` inside the seal, so whose vault is opened
+//    stays the minter's to decide. My team lists the members the vault says
+//    this person may act for, each with whether it is signed in to Claude;
+//    an agent's custodians are added and removed here; and a person sees who
+//    added them and so manages what they keep, who their other managers
+//    are, lets those in or not, and reads what any of them changed. Whoever
+//    added a person gives that up from the person's page here.
+//    The tree itself is filed from the phones and never from here;
 //  - keeps a Claude sign-in made on a machine (`setuptoken`, `kind: login`):
 //    it signs both halves for that one machine, holds the key the sign-in
 //    comes back sealed to, and puts it in the vault. A Claude sign-in is the
@@ -52,7 +62,7 @@
 // TALKING TO `/me`. The page is opened by `/me` as a popup and speaks to it
 // with postMessage, to and from the fleet's origin only. The page has no
 // fleet credential of its own: what it sends the coordinator goes through
-// `/me`, which adds its credential, and only to the four routes `/me` will
+// `/me`, which adds its credential, and only to the five routes `/me` will
 // carry for it (member-page.js, RELAYS). What reaches the minter is sealed,
 // so `/me` carries bytes it cannot read.
 //
@@ -244,6 +254,39 @@ var SIGNER = {};
     return name;
   };
   S.SECRET_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+
+  // WHOSE VAULT A REQUEST OPENS (docs/members.md). The ops that read or
+  // change what a vault keeps carry the member the view is for. The ones
+  // that are the person's alone, their keys, the tree and the switch that
+  // lets managers in, never do. A request that names a vault itself keeps
+  // it, null for the person's own included: a sign-in that took minutes is
+  // kept where it was started, whatever is showing by then.
+  S.MEMBER_OPS = ['list', 'put', 'forget', 'test', 'connect', 'grant', 'revoke'];
+  S.vaultFor = function (op, extra, viewing) {
+    if (S.MEMBER_OPS.indexOf(op) < 0) return null;
+    var named = extra && Object.prototype.hasOwnProperty.call(extra, 'for') ? extra['for'] : viewing;
+    return named ? String(named) : null;
+  };
+  // MY TEAM, as the vault says it: every member this address may act for,
+  // and not the person's own member.
+  S.team = function (org, email) {
+    return ((org && org.members) || []).filter(function (m) {
+      return Boolean(m) && typeof m.id === 'string' && Array.isArray(m.may) && m.may.indexOf(email) >= 0 && !(m.kind === 'person' && m.email === email);
+    });
+  };
+  // WHAT A MANAGER DID to a person's vault, as that person reads it: who,
+  // what, and the name of the thing. Never a value, because the vault logs
+  // none.
+  S.custodyLine = function (e) {
+    var by = String((e && e.by) || 'Somebody');
+    var op = e && e.op;
+    if (op === 'grant') return by + ' approved a machine';
+    if (op === 'revoke') return by + ' removed a machine';
+    var what = S.itemLabel(String((e && e.name) || '')) || 'something';
+    if (op === 'put' || op === 'connect') return by + ' kept ' + what;
+    if (op === 'forget') return by + ' removed ' + what;
+    return by + ' changed ' + what;
+  };
 })(SIGNER);
 `;
 
@@ -266,6 +309,14 @@ const SIGN_MAIN = String.raw`
   var gh = null;          // { accessToken, login }: this window's GitHub sign-in, in memory only
   var vault = null;       // what the vault last said it holds
   var hosts = null;       // the fleet's machines, as /me relayed them; null is not read yet
+  var view = null;        // the member the vault shown is for, { id, kind, name }; null is yourself
+  var org = null;         // the organization as the vault holds it; null is not read
+  var names = null;       // each member's name as the fleet lists it: to show, never to decide by
+  var claudeOf = Object.create(null);   // member id to whether its vault keeps a Claude sign-in, as it said for this drawing of My team
+  var checking = Object.create(null);   // member ids being asked that now
+  var teamRows = Object.create(null);   // member id to its row under My team, as drawn
+  var loads = 0;          // the latest reading of a vault; an older one stops, so two vaults are never drawn as one
+  var draws = 0;          // the same, for the machines, which are drawn across several waits
   var relays = {};
   var opener = window.opener;
 
@@ -317,7 +368,14 @@ const SIGN_MAIN = String.raw`
     // THE CARD THAT ASKS: a vault with no Claude sign-in, which is what will
     // refuse a session an hour from now. Only once the vault has said so.
     $('vault').className = 'card' + (vault && !kept('claude') ? ' asking' : '');
+    $('vault-title').textContent = owner('Your') + ' vault';
+    $('vault-back').hidden = !view;
+    $('machines-lede').textContent = (view
+      ? 'A machine is given what ' + view.name + '’s vault keeps only once it is approved here, for this vault and no other.'
+      : 'A machine is given what your vault keeps only once you approve it here.') +
+      ' Before you approve one, check that its fingerprint matches what fleetwright-sidecar identity prints on that machine.';
     $('machines-card').hidden = !gh || !vault;
+    $('team-card').hidden = !gh || !vault || Boolean(view) || !team().length;
   }
 
   function ready() { post({ type: 'ready', v: 1, kid: device ? device.kid : null, email: device ? device.email : null }); }
@@ -420,7 +478,7 @@ const SIGN_MAIN = String.raw`
     try { await store('delete'); } catch (e) {}
     device = null;
     gh = null;
-    vault = null;
+    shut();
     tell('This browser’s key is gone from here. It stays on the minter’s list until it is removed from the app under You, Devices, and nothing can sign with it, because its private half was only ever here.');
     render();
     ready();
@@ -432,17 +490,26 @@ const SIGN_MAIN = String.raw`
    * One request to the vault, sealed to the minter, the answer sealed back to
    * a key made for it. A refusal throws its sentence; a GitHub sign-in the
    * minter no longer takes closes the vault, so the next click opens it again.
+   *
+   * WHOSE VAULT is the one piece of state every request reads (S.vaultFor):
+   * the member the view is for, or the person's own. It is read here, before
+   * anything is waited for, so a request is for the vault that was showing
+   * when it was asked.
    */
   async function vaultAsk(op, extra, email) {
     if (!gh) throw new Error('Open your vault first.');
+    var whose = S.vaultFor(op, extra, view && view.id);
+    var token = gh.accessToken;
+    var from = email || device.email;
     var reply = await S.newSealKey();
-    var payload = { v: 1, github: gh.accessToken, email: email || device.email, op: op, at: Date.now(), reply: reply.publicKey };
-    Object.keys(extra || {}).forEach(function (k) { payload[k] = extra[k]; });
+    var payload = { v: 1, github: token, email: from, op: op, at: Date.now(), reply: reply.publicKey };
+    Object.keys(extra || {}).forEach(function (k) { if (k !== 'for') payload[k] = extra[k]; });
+    if (whose) payload['for'] = whose;
     var r = await relay('POST', '/api/vault', { sealed: await S.seal(await minterKey(), S.VAULT_REQUEST_AAD, payload) });
     var b = r.body || {};
     if (!b.ok) {
       var code = b.error && b.error.code;
-      if (code === 'not_github' || code === 'not_a_device') { gh = null; vault = null; render(); }
+      if (code === 'not_github' || code === 'not_a_device') { gh = null; shut(); render(); }
       throw new Error(b.text || 'The vault did not answer.');
     }
     return { answer: await S.open(reply, S.VAULT_REPLY_AAD, b.sealed), text: String(b.text || '') };
@@ -450,21 +517,55 @@ const SIGN_MAIN = String.raw`
 
   $('vault-open').addEventListener('click', function () {
     var p = begin('github');
-    if (p) signInWithGithub(p).then(load).then(function () { tell(''); }, function (e) { tell(e.message, true); }).then(prepare);
+    if (p) signInWithGithub(p).then(function () { return load(); }).then(function () { tell(''); }, function (e) { tell(e.message, true); }).then(prepare);
   });
 
-  /** What the vault holds and which machines there are, read again. */
-  async function load() {
-    var r = await vaultAsk('list', {});
+  /**
+   * What the vault holds and which machines there are, read again: the
+   * person's own, or the member's the view is for. Given a list already
+   * read, by whoever changed the view, it does not ask for it again.
+   */
+  async function load(got) {
+    var turn = ++loads;
+    var r = got;
+    var closed = '';
+    if (!r) {
+      try {
+        r = await vaultAsk('list', {});
+      } catch (e) {
+        // A MEMBER'S VAULT THAT NO LONGER OPENS for this person, because the
+        // tree moved or its owner turned their managers out, is closed here
+        // too, and the vault's own sentence says why. Only once the person's
+        // own vault has answered: until then the rows stay the member's.
+        if (!view || !gh || turn !== loads) throw e;
+        var own;
+        try { own = await vaultAsk('list', { 'for': null }); } catch (again) { throw e; }
+        if (turn !== loads) return;
+        point(null);
+        turn = ++loads;
+        r = own;
+        closed = e.message;
+      }
+    }
+    if (turn !== loads) return;
     vault = r.answer || { items: [], grants: [] };
     hosts = null;
     try {
       var h = await relay('GET', '/api/hosts/enrolled');
       if (h.body && h.body.ok && Array.isArray(h.body.hosts)) hosts = h.body.hosts;
     } catch (e) { hosts = null; }
-    $('vault-who').textContent = 'Opened as ' + (vault.login || gh.login) + ' on GitHub. This window holds that sign-in until you close it.';
+    await readOrg();
+    if (turn !== loads || !gh || !vault) return;
+    $('vault-who').textContent = !view ? 'Opened as ' + (vault.login || gh.login) + ' on GitHub. This window holds that sign-in until you close it.'
+      : 'Filed with the vault as ' + view.id + '. ' + (view.kind === 'agent'
+        ? 'You are managing its credentials as one of its custodians. What you keep here goes in its vault, and none of it in yours.'
+        : (addedBy(view.id).indexOf(device && device.email) >= 0
+          ? 'You are managing their credentials because you added them.'
+          : 'You are managing their credentials as one of their managers, because they allowed it.')
+          + ' What you keep here goes in their vault and none of it in yours, and they are told each thing you change.');
     await draw();
     render();
+    if (closed) tell(closed, true);
   }
 
   function item(name) { return ((vault && vault.items) || []).filter(function (x) { return x.name === name; })[0] || null; }
@@ -482,6 +583,11 @@ const SIGN_MAIN = String.raw`
       if (x.name.indexOf('hypervisor:') === 0) box.appendChild(hypervisorRow(x));
     });
     box.appendChild(newSecretRow());
+    var custody = !view && vault && vault.custody;
+    if (custody && custody.member && (arr(custody.custodians).length || arr(custody.managers).length)) box.appendChild(managersRow(custody));
+    if (view && view.kind === 'agent') box.appendChild(custodiansRow(orgMember(view.id)));
+    if (view && view.kind !== 'agent' && addedBy(view.id).indexOf(device && device.email) >= 0) box.appendChild(addedRow());
+    drawTeam();
     await drawMachines();
   }
 
@@ -490,7 +596,8 @@ const SIGN_MAIN = String.raw`
   function row(title, state, on) {
     var r = el('div', 'item');
     r.appendChild(el('h3', null, title));
-    r.appendChild(el('p', 'state' + (on ? ' on' : ''), state));
+    var stated = el('p', 'state' + (on ? ' on' : ''), state);
+    r.appendChild(stated);
     var actions = el('div', 'actions');
     r.appendChild(actions);
     var step = el('div', 'step');
@@ -499,7 +606,7 @@ const SIGN_MAIN = String.raw`
     var said = el('p', 'say');
     said.setAttribute('role', 'status');
     r.appendChild(said);
-    var made = { el: r, title: title, actions: actions, step: step, said: said };
+    var made = { el: r, title: title, state: stated, actions: actions, step: step, said: said };
     // What the last change on this row came to, said where it was asked for:
     // the rows are drawn again from the vault's answer, and this is that row.
     if (lastSaid && lastSaid.title === title) note(made, lastSaid.text);
@@ -541,7 +648,7 @@ const SIGN_MAIN = String.raw`
     button(r.actions, 'Forget', null, function () {
       r.step.hidden = false;
       r.step.textContent = '';
-      r.step.appendChild(el('p', null, 'Forget ' + S.itemLabel(name) + '? Machines you approved stop being given it when they next ask.'));
+      r.step.appendChild(el('p', null, 'Forget ' + S.itemLabel(name) + '? Machines ' + (view ? 'approved for ' + view.name : 'you approved') + ' stop being given it when they next ask.'));
       var a = el('div', 'actions');
       button(a, 'Forget it', 'primary', function () {
         r.step.hidden = true;
@@ -554,7 +661,7 @@ const SIGN_MAIN = String.raw`
 
   function claudeRow() {
     var x = item('claude');
-    var state = !x ? 'Not kept. A session you start is refused until it is.'
+    var state = !x ? 'Not kept. A session ' + (view ? 'started as ' + view.name : 'you start') + ' is refused until it is.'
       : x.kind === 'login' ? 'Kept: a whole sign-in, which Remote Control needs.'
         : 'Kept: a setup-token. Sessions run on it; Remote Control does not.';
     var r = row('Claude', state, Boolean(x));
@@ -566,18 +673,21 @@ const SIGN_MAIN = String.raw`
 
   function providerRow(name) {
     var x = item(name);
-    var r = row(S.itemLabel(name), x ? 'Kept, for the machines you approve.' : 'Not kept.', Boolean(x));
+    var r = row(S.itemLabel(name), x ? 'Kept, for the machines ' + (view ? 'approved for ' + view.name : 'you approve') + '.' : 'Not kept.', Boolean(x));
     if (x) { testButton(r, name); forgetButton(r, name); }
     var offered = name === 'github' || Boolean(CFG.cloudflare);
     if (offered) {
       button(r.actions, x ? 'Sign in again' : 'Sign in with ' + S.itemLabel(name), x ? null : 'primary', function () {
         var p = begin(name);
         if (!p) return;
-        change(r, 'Waiting for ' + S.itemLabel(name) + '. Sign in there, and this page keeps it when you come back.', async function () {
+        // The sign-in is made in another window and takes as long as it
+        // takes, so whose vault keeps it is settled now, at the click.
+        var whose = view ? view.id : null;
+        change(r, 'Waiting for ' + S.itemLabel(name) + '. Sign in there' + (view ? ' as the account ' + view.name + ' should use' : '') + ', and this page keeps it when you come back.', async function () {
           try {
             var code = await codeFor(name, p.state);
             note(r, 'Keeping it.');
-            var t = await vaultAsk('connect', { provider: name, code: code, verifier: p.verifier, redirectUri: REDIRECT[name] });
+            var t = await vaultAsk('connect', { provider: name, code: code, verifier: p.verifier, redirectUri: REDIRECT[name], 'for': whose });
             return t.text;
           } finally { prepare(); }
         });
@@ -587,7 +697,7 @@ const SIGN_MAIN = String.raw`
   }
 
   function secretRow(x) {
-    var r = row(S.itemLabel(x.name), 'Kept. A session you start on a machine you approved can be given it by name.', true);
+    var r = row(S.itemLabel(x.name), view ? 'Kept. A session started as ' + view.name + ' on a machine approved for this vault can be given it by name.' : 'Kept. A session you start on a machine you approved can be given it by name.', true);
     forgetButton(r, x.name);
     return r.el;
   }
@@ -690,6 +800,11 @@ const SIGN_MAIN = String.raw`
   }
 
   async function startOn(r, host) {
+    // WHOSE VAULT KEEPS IT is settled at this click and carried to the end:
+    // the sign-in is made on a machine and takes minutes, and a member's must
+    // never land in the vault of whoever made it.
+    var whose = view ? view.id : null;
+    var where = owner();
     r.step.textContent = '';
     r.step.appendChild(el('p', 'lede', 'Starting a Claude sign-in on ' + host + '.'));
     var b;
@@ -728,10 +843,10 @@ const SIGN_MAIN = String.raw`
           var reply = await S.newSealKey();
           var done = await sendSigned(host, { kind: 'login', code: c, reply: reply.publicKey });
           var made = await S.open(reply, S.SETUP_TOKEN_AAD, done.sealed);
-          note(r, 'Keeping it in your vault.');
+          note(r, 'Keeping it in ' + where + ' vault.');
           // A HOST FROM BEFORE IT makes a setup-token where it was asked for
           // a sign-in; that is kept as what it is, and the row says which.
-          var t = made && made.signIn ? await vaultAsk('put', { name: 'claude', signIn: made.signIn }) : await vaultAsk('put', { name: 'claude', value: String((made && made.token) || '') });
+          var t = made && made.signIn ? await vaultAsk('put', { name: 'claude', signIn: made.signIn, 'for': whose }) : await vaultAsk('put', { name: 'claude', value: String((made && made.token) || ''), 'for': whose });
           r.step.hidden = true;
           return t.text;
         } finally { go.disabled = false; }
@@ -743,6 +858,7 @@ const SIGN_MAIN = String.raw`
   // ---- machines ------------------------------------------------------------------
 
   async function drawMachines() {
+    var turn = ++draws;
     var box = $('machines');
     box.textContent = '';
     var grants = {};
@@ -755,6 +871,8 @@ const SIGN_MAIN = String.raw`
       if (!jwk || jwk.kty !== 'EC' || jwk.crv !== 'P-256') continue;
       var key = { kty: 'EC', crv: 'P-256', x: String(jwk.x), y: String(jwk.y) };
       var hash = await S.keyId(key);
+      // A newer drawing, or a view that changed hands, has these rows now.
+      if (turn !== draws) return;
       seen[hash] = true;
       box.appendChild(machineRow(h.hostId, hash, key, grants[hash] || null));
     }
@@ -766,7 +884,7 @@ const SIGN_MAIN = String.raw`
 
   function machineRow(name, hash, key, grant) {
     var state = !grant ? 'Not approved. Fingerprint ' + S.fingerprint(hash) + '.'
-      : (grant.only && grant.only.length ? 'Approved for ' + grant.only.map(S.itemLabel).join(', ') + ' only.' : 'Approved to hold your credentials.') + ' Fingerprint ' + S.fingerprint(hash) + '.' + (key ? '' : ' Not enrolled in this fleet any more.');
+      : (grant.only && grant.only.length ? 'Approved for ' + grant.only.map(S.itemLabel).join(', ') + ' only.' : 'Approved to hold ' + owner() + ' credentials.') + ' Fingerprint ' + S.fingerprint(hash) + '.' + (key ? '' : ' Not enrolled in this fleet any more.');
     var r = row(name, state, Boolean(grant));
     if (grant) {
       button(r.actions, 'Remove', null, function () {
@@ -777,6 +895,302 @@ const SIGN_MAIN = String.raw`
         change(r, 'Approving ' + name + '.', function () { return vaultAsk('grant', { hostKey: key, label: name }).then(function (t) { return t.text; }); });
       });
     }
+    return r.el;
+  }
+
+  // ---- a member's vault, for whoever may act for it ------------------------------
+  //
+  // The same view, pointed somewhere else (docs/members.md). The vault
+  // decides whose it opens, from the tree it holds, and this page only ever
+  // asks: every request for what a vault keeps carries the member the view
+  // is for (vaultAsk), and none of the rows above is written twice.
+
+  function team() { return device ? S.team(org, device.email) : []; }
+  function orgMember(id) { return ((org && org.members) || []).filter(function (m) { return m && m.id === id; })[0] || null; }
+  function nameOf(id) { return (names && names[id]) || id; }
+
+  // WHOSE THE VIEW IS, where a sentence says so: "your" for the person's own
+  // vault, the member's name for a member's.
+  function owner(own) { return view ? view.name + '’s' : (own || 'your'); }
+
+  // THE VIEW CHANGES HANDS IN ONE PLACE, and the rows drawn for the last
+  // vault go in the same breath. A row left on the page would send what it
+  // was clicked for to the vault now showing, which is not the one it was
+  // read from.
+  function point(m) {
+    view = m;
+    vault = null;
+    loads += 1;
+    draws += 1;
+    ['items', 'machines', 'team', 'vault-who'].forEach(function (id) { $(id).textContent = ''; });
+    render();
+  }
+
+  // THE VAULT CLOSED: nothing read from it is kept, and the next one opened
+  // is the person's own.
+  function shut() {
+    point(null);
+    org = null;
+    names = null;
+    claudeOf = Object.create(null);
+  }
+
+  // A VIEW THAT CHANGED HANDS SAYS SO. The heading takes the focus, so a
+  // keyboard or a screen reader is told whose vault this now is, and what
+  // changed fades in once, which nobody who asked for less motion is shown.
+  function arrived() {
+    ['vault-body', 'machines'].forEach(function (id) {
+      var e = $(id);
+      e.classList.remove('swap');
+      void e.offsetWidth;
+      e.classList.add('swap');
+    });
+    $('vault-title').focus();
+  }
+
+  // THE ORGANIZATION AS THE VAULT HOLDS IT, which is what decides whose
+  // vaults this person may open. Never the coordinator's tree: all the page
+  // takes from the fleet is each member's name, to show beside the id the
+  // vault knows it by, and only once the vault has listed somebody to name.
+  // A vault from before members has no tree to give, and then nothing here
+  // is shown.
+  async function readOrg() {
+    try { org = (await vaultAsk('org', {})).answer || null; } catch (e) { org = null; }
+    if (names || (!view && !team().length)) return;
+    try {
+      var m = await relay('GET', '/api/members');
+      if (!m.body || !m.body.ok || !Array.isArray(m.body.members)) return;
+      var read = Object.create(null);
+      m.body.members.forEach(function (x) {
+        if (x && typeof x.id === 'string' && typeof x.name === 'string' && x.name.trim()) read[x.id] = x.name.trim().slice(0, 80);
+      });
+      names = read;
+    } catch (e) {}
+  }
+
+  // ---- my team -------------------------------------------------------------------
+
+  // EVERY DRAWING ASKS AGAIN. Somebody else may have signed a member in, or
+  // out, since the last one, and a row that kept its last answer would be
+  // saying something this page no longer knows.
+  function drawTeam() {
+    var box = $('team');
+    box.textContent = '';
+    teamRows = Object.create(null);
+    claudeOf = Object.create(null);
+    if (view) return;
+    var waiting = [];
+    team().map(function (x) { return { id: x.id, kind: x.kind === 'agent' ? 'agent' : 'person', name: nameOf(x.id) }; })
+      .sort(function (a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; })
+      .forEach(function (m) {
+        var r = row(m.name, '', false);
+        teamRows[m.id] = r;
+        var text = m.kind === 'agent' ? 'Open its credentials' : 'Open their credentials';
+        button(r.actions, text, null, function () { openMember(m); }).setAttribute('aria-label', text + ': ' + m.name);
+        paint(m);
+        box.appendChild(r.el);
+        waiting.push(m);
+      });
+    // Four at a time, so a large team is not a hundred requests at once.
+    function next() { var m = waiting.shift(); if (m) check(m).then(next); }
+    for (var i = 0; i < 4; i++) next();
+  }
+
+  // WHETHER A MEMBER IS SIGNED IN TO CLAUDE, asked of its own vault. Three
+  // answers and never two: a vault that refused, or was not reached, has not
+  // said the member is signed out, and the row says what it did say.
+  function paint(m) {
+    var r = teamRows[m.id];
+    if (!r) return;
+    var c = claudeOf[m.id];
+    var kind = (m.kind === 'agent' ? 'Agent' : 'Person') + (m.name === m.id ? '' : ' (' + m.id + ')') + '. ';
+    r.state.textContent = kind + (!c ? 'Asking whether ' + m.name + ' is signed in to Claude.' : c.on === null ? 'Not checked.' : c.on ? 'Signed in to Claude.' : 'Not signed in.');
+    r.state.className = 'state' + (c && c.on ? ' on' : '');
+    note(r, c && c.on === null ? c.why : '', true);
+  }
+
+  async function check(m) {
+    if (checking[m.id]) return;
+    checking[m.id] = true;
+    try {
+      var got = await vaultAsk('list', { 'for': m.id });
+      claudeOf[m.id] = { on: ((got.answer && got.answer.items) || []).some(function (x) { return x && x.name === 'claude'; }), why: '' };
+    } catch (e) {
+      claudeOf[m.id] = { on: null, why: e.message };
+    }
+    delete checking[m.id];
+    paint(m);
+  }
+
+  // The member's vault is read first, and the view changes hands only once
+  // it has answered: a refusal is said on the member's row, with the
+  // person's own vault still showing.
+  async function openMember(m) {
+    tell('');
+    if (teamRows[m.id]) note(teamRows[m.id], 'Opening ' + m.name + '’s vault.');
+    var got;
+    try {
+      got = await vaultAsk('list', { 'for': m.id });
+    } catch (e) {
+      claudeOf[m.id] = { on: null, why: e.message };
+      paint(m);
+      return;
+    }
+    point(m);
+    await load(got);
+    arrived();
+  }
+
+  $('vault-back').addEventListener('click', async function () {
+    tell('');
+    try {
+      var got = await vaultAsk('list', { 'for': null });
+      point(null);
+      await load(got);
+      arrived();
+    } catch (e) {
+      tell(e.message, true);
+    }
+  });
+
+  // ---- who else may manage a vault -------------------------------------------------
+
+  function when(at) {
+    var d = new Date(Number(at));
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function arr(x) { return Array.isArray(x) ? x : []; }
+  /** Whoever added a person member, as the vault's tree lists them, or nobody. */
+  function addedBy(id) {
+    var node = orgMember(id);
+    return node && node.kind !== 'agent' ? arr(node.custodians) : [];
+  }
+
+  // WHO MANAGES WHAT A PERSON KEEPS, said to that person. Whoever added them
+  // does, with no switch, and that is said first and is not theirs to end, so
+  // nothing is drawn to end it with. Every other manager waits on THE
+  // PERSON'S OWN SWITCH, and nobody else's: off until they turn it on here or
+  // on their phone, and theirs to turn off. Under both, what any of them
+  // changed, which the vault writes down itself because the message to the
+  // person's phone is the coordinator's to drop.
+  function managersRow(c) {
+    var added = arr(c.custodians);
+    var others = arr(c.managers);
+    var said = [];
+    if (added.length) said.push(added.join(', ') + ' added you, and manages your credentials.');
+    if (others.length) said.push(others.join(', ') + (c.allow ? ' can manage your credentials.' : ' cannot manage your credentials.'));
+    var r = row('Your managers', said.join(' '), Boolean(added.length || c.allow));
+    r.step.hidden = false;
+    if (added.length) r.step.appendChild(el('p', 'lede', 'They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. They or an org admin can end this, and you can still remove anything your vault keeps.'));
+    if (others.length) {
+      var label = el('label', 'check');
+      var box = el('input');
+      box.type = 'checkbox';
+      box.checked = Boolean(c.allow);
+      label.appendChild(box);
+      label.appendChild(el('span', null, added.length ? 'Let my other managers manage my credentials' : 'Let my managers manage my credentials'));
+      r.actions.appendChild(label);
+      box.addEventListener('change', async function () {
+        var allow = box.checked;
+        box.disabled = true;
+        await change(r, allow ? 'Letting your managers in.' : 'Closing your vault to your managers.', function () { return vaultAsk('custody', { allow: allow }).then(function (t) { return t.text; }); });
+        // Still on the page only when the vault refused: the box goes back to
+        // what the vault holds.
+        box.checked = Boolean(c.allow);
+        box.disabled = false;
+      });
+      r.step.appendChild(el('p', 'lede', 'They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. You can turn this off.'));
+    }
+    r.step.appendChild(el('h4', null, 'What they changed'));
+    var log = (Array.isArray(c.log) ? c.log.slice() : []).sort(function (a, b) { return Number(b.at) - Number(a.at); });
+    if (!log.length) {
+      r.step.appendChild(el('p', 'state', 'Nothing yet.'));
+    } else {
+      var list = el('ul');
+      log.forEach(function (e) {
+        var d = when(e.at);
+        var li = el('li', null, S.custodyLine(e) + (d ? ', ' : ''));
+        if (d) {
+          var t = el('time', null, d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }));
+          t.dateTime = d.toISOString();
+          li.appendChild(t);
+        }
+        list.appendChild(li);
+      });
+      r.step.appendChild(list);
+    }
+    return r.el;
+  }
+
+  // WHOEVER ADDED A PERSON GIVES UP MANAGING WHAT THEY KEEP, here as on the
+  // phones. Drawn only for the one who holds it (C-2); an org admin ends
+  // somebody else's from the Org screen on a phone. Once it is given up the
+  // vault stops opening this view, and load() closes it with the vault's
+  // own sentence.
+  function addedRow() {
+    var id = view.id;
+    var me = device.email;
+    var r = row('You added them', 'You manage ' + view.name + '’s credentials because you added them. Giving that up leaves them to their own switch, like their other managers.', true);
+    // ASKED ONCE MORE, on the row, because it is not given back: nobody is
+    // made a person's custodian after whoever added them.
+    button(r.actions, 'Stop managing their credentials', null, function () {
+      r.step.hidden = false;
+      r.step.textContent = '';
+      r.step.appendChild(el('p', null, 'Stop managing their credentials? This is not given back. After it, managing their credentials is theirs to allow, as it is for their other managers.'));
+      var a = el('div', 'actions');
+      button(a, 'Stop managing', 'primary', function () {
+        r.step.hidden = true;
+        change(r, 'Giving that up.', function () { return vaultAsk('custodian', { member: id, address: me, remove: true }).then(function (t) { return t.text; }); });
+      });
+      button(a, 'Keep managing', null, function () { r.step.hidden = true; });
+      r.step.appendChild(a);
+    });
+    return r.el;
+  }
+
+  // AN AGENT'S CUSTODIANS, as the vault lists them: its own, which one of
+  // them adds and removes here, and its managers, who are custodians for as
+  // long as the tree says so and are not this page's to remove.
+  function custodiansRow(node) {
+    var id = view.id;
+    var name = view.name;
+    if (!node) return row('Custodians', 'The vault did not say who they are just now. Go back to your vault and open this one again in a moment.', false).el;
+    var r = row('Custodians', 'They can keep, test and remove what ' + name + '’s vault holds, approve machines for it, and start sessions as ' + name + '.', false);
+    var own = Array.isArray(node.custodians) ? node.custodians : [];
+    var list = el('ul');
+    (Array.isArray(node.may) ? node.may : []).forEach(function (a) {
+      var mine = own.indexOf(a) >= 0;
+      var li = el('li', 'who');
+      li.appendChild(el('span', null, a + (device && a === device.email ? ' (you)' : '') + (mine ? '' : ', for as long as they manage ' + name)));
+      if (mine) {
+        button(li, 'Remove', null, function () {
+          change(r, 'Removing ' + a + '.', function () { return vaultAsk('custodian', { member: id, address: a, remove: true }).then(function (t) { return t.text; }); });
+        }).setAttribute('aria-label', 'Remove ' + a + ' as a custodian');
+      }
+      list.appendChild(li);
+    });
+    r.step.hidden = false;
+    r.step.appendChild(list);
+    var form = el('form', 'step');
+    form.noValidate = true;
+    var label = el('label', 'lede', 'Add a custodian by their fleet address');
+    var address = field('Add a custodian by their fleet address', 'email');
+    address.id = 'custodian-address';
+    address.placeholder = 'name@example.com';
+    label.htmlFor = address.id;
+    form.appendChild(label);
+    form.appendChild(address);
+    var go = el('button', null, 'Add custodian');
+    go.type = 'submit';
+    form.appendChild(go);
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var a = address.value.trim().toLowerCase();
+      if (!a) { note(r, 'Nothing to add yet.', true); return; }
+      change(r, 'Adding ' + a + '.', function () { return vaultAsk('custodian', { member: id, address: a }).then(function (t) { return t.text; }); });
+    });
+    r.step.appendChild(form);
     return r.el;
   }
 
@@ -846,6 +1260,7 @@ const SIGN_STYLE = `
   --t-greeting: 1.625rem; --t-section: 1.1875rem; --t-body: 1rem; --t-body-small: 0.875rem;
   --s-page: 26px; --s-group: 22px; --s-group-tight: 16px; --s-inside: 12px; --s-inside-tight: 8px; --s-hair: 4px;
   --r-card-small: 18px; --r-row: 14px;
+  --m-standard: 250ms;
   --bg: #0b0d10; --card: #12151a; --inner: #171b22;
   --ink: #e6e9ef; --ink-dim: #8b93a3;
   --accent: #5b8bef; --accent-deep: #3866d6;
@@ -881,6 +1296,11 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .item { padding: var(--s-inside) 0; border-top: 1px solid var(--ring); }
 .item:first-child { border-top: none; padding-top: 0; }
 h3 { font-size: var(--t-body); margin: 0; overflow-wrap: anywhere; }
+h4 { font-size: var(--t-body-small); margin: var(--s-inside-tight) 0 0; }
+ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-inside-tight); }
+li { font-size: var(--t-body-small); overflow-wrap: anywhere; }
+/* Who may act for a vault, one a line: the address, then what can be done about it. */
+li.who { display: flex; gap: var(--s-inside-tight); flex-wrap: wrap; align-items: center; justify-content: space-between; }
 .state { color: var(--ink-dim); font-size: var(--t-body-small); margin: var(--s-hair) 0 0; }
 .state.on { color: var(--ok); }
 .step { display: grid; gap: var(--s-inside-tight); margin-top: var(--s-inside); }
@@ -889,6 +1309,12 @@ input {
   font: var(--t-body)/1 var(--font); min-height: 44px; width: 100%; padding: 0 var(--s-inside);
   border-radius: var(--r-row); border: 1px solid var(--ink-dim); background: var(--inner); color: var(--ink);
 }
+label { display: block; }
+/* A switch is its whole line, so a thumb has the 44px a button has. */
+.check { display: flex; gap: var(--s-inside-tight); align-items: center; min-height: 44px; cursor: pointer; }
+input[type=checkbox] { width: 1.25rem; height: 1.25rem; min-height: 0; padding: 0; margin: 0; flex: none; accent-color: var(--accent-deep); cursor: pointer; }
+input:disabled { opacity: 0.6; cursor: default; }
+#vault-back { margin-bottom: var(--s-inside); }
 button.chip { font-weight: 400; font-size: var(--t-body-small); }
 button, .btn {
   font: 600 var(--t-body)/1 var(--font); min-height: 44px; padding: 0 var(--s-group-tight);
@@ -904,6 +1330,9 @@ button.link { background: none; border: none; color: var(--accent); padding: 0 v
 .say.bad { color: var(--bad); }
 footer { color: var(--ink-dim); font-size: var(--t-body-small); margin-top: var(--s-group); }
 [hidden] { display: none !important; }
+/* A view that changed hands fades in once. Nothing travels, and somebody who asked for less motion gets none. */
+@keyframes swap { from { opacity: 0; } }
+@media (prefers-reduced-motion: no-preference) { .swap { animation: swap var(--m-standard) ease-out; } }
 @media (forced-colors: active) { .card, button, .btn, input { border: 1px solid; } }
 `;
 
@@ -994,21 +1423,28 @@ export async function signerRoutes(req, deps) {
 </section>
 
 <section id="vault" class="card" hidden>
-  <h2>Your vault</h2>
+  <h2 id="vault-title" tabindex="-1">Your vault</h2>
   <div id="vault-closed">
     <p>Your Claude sign-in, GitHub, Cloudflare and named secrets, kept once and given to the machines you approve. Opening it takes a GitHub sign-in as you, which this window holds until it is closed.</p>
     <button class="primary" id="vault-open">Sign in with GitHub and open it</button>
   </div>
   <div id="vault-body" hidden>
     <p class="lede" id="vault-who"></p>
+    <button id="vault-back" hidden>Back to your vault</button>
     <div id="items"></div>
   </div>
 </section>
 
 <section id="machines-card" class="card" hidden>
   <h2>Machines</h2>
-  <p class="lede">A machine is given what your vault keeps only once you approve it here. Before you approve one, check that its fingerprint matches what fleetwright-sidecar identity prints on that machine.</p>
+  <p class="lede" id="machines-lede">A machine is given what your vault keeps only once you approve it here. Before you approve one, check that its fingerprint matches what fleetwright-sidecar identity prints on that machine.</p>
   <div id="machines"></div>
+</section>
+
+<section id="team-card" class="card" hidden>
+  <h2>My team</h2>
+  <p class="lede">The members whose credentials you may manage. Each has a vault of its own, and what you keep there is never kept in yours.</p>
+  <div id="team"></div>
 </section>
 
 <section id="listed" class="card" hidden>

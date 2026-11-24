@@ -54,7 +54,75 @@ internal class PhoneVault(private val settings: Settings) {
         NONE,
     }
 
-    data class Contents(val items: List<Item>, val grants: List<Grant>)
+    /**
+     * [custody], for a person's own vault: whether their managers may manage
+     * it, who those managers are, and what they changed. Null for a member's
+     * vault opened by a custodian, and from a vault older than the organization.
+     */
+    data class Contents(val items: List<Item>, val grants: List<Grant>, val custody: Custody? = null)
+
+    /**
+     * Who else may manage a person's vault, as the vault itself holds it
+     * (docs/members.md, "Custodians of a person member"). [member] is the
+     * person's own member, by id, or null when the vault's tree has none for them.
+     * [custodians] is whoever added this person, and so manages what they
+     * keep with no switch asked; it is empty from a vault older than the
+     * rule, which is also the truth there. [managers] are their other
+     * managers, who wait on [allow].
+     */
+    data class Custody(
+        val allow: Boolean,
+        val member: String?,
+        val custodians: List<String>,
+        val managers: List<String>,
+        val log: List<Change>,
+    ) {
+        /** One thing a manager did, by name and never by value. */
+        data class Change(val at: Long, val by: String, val op: String, val name: String?)
+    }
+
+    /**
+     * The organization as the vault holds it: its admins, this person's
+     * standing there, and each member's place and who may act for it. The
+     * vault's own copy of the tree, which the fleet's list is never shown as
+     * (docs/members.md, "A member's vault"). [youBound] is whether the vault
+     * knows this address as this GitHub account's.
+     */
+    data class Org(val admins: List<String>, val youAdmin: Boolean, val youBound: Boolean, val members: List<OrgMember>) {
+        fun member(id: String): OrgMember? = members.firstOrNull { it.id == id }
+    }
+
+    /**
+     * One member's place in the vault's tree. [custodians] are an agent
+     * member's own; for a person, whoever added them when the vault had not
+     * met them before. [custody], for a person, is
+     * "allowed", "off" or "no_vault", and null for an agent. [may] is
+     * everybody who may act for this member's vault now.
+     */
+    data class OrgMember(
+        val id: String,
+        val kind: String,
+        val email: String?,
+        val reportsTo: String?,
+        val managers: List<String>,
+        val custodians: List<String>,
+        val custody: String?,
+        val may: List<String>,
+    )
+
+    /**
+     * [extra] with the member whose vault this request opens, when it is not
+     * the asker's own: the vault's `for` (src/fleet/minter/vault.js).
+     */
+    private fun aimed(extra: JSONObject, member: String?): JSONObject =
+        if (member.isNullOrBlank()) extra else extra.put("for", member)
+
+    private fun strings(array: JSONArray?): List<String> =
+        (0 until (array?.length() ?: 0)).mapNotNull { i -> array?.optString(i)?.takeIf { it.isNotBlank() } }
+
+    /** A string the answer carries, or null for a missing one and for JSON's null. */
+    private fun textOrNull(o: JSONObject, key: String): String? =
+        if (o.isNull(key)) null else o.optString(key).takeIf { it.isNotBlank() }
 
     /** Seal one request, relay it, open the answer. */
     private suspend fun ask(fleet: Fleet, op: String, extra: JSONObject = JSONObject()): Pair<String, JSONObject> {
@@ -75,11 +143,24 @@ internal class PhoneVault(private val settings: Settings) {
         return r.optString("text") to answer
     }
 
-    suspend fun list(fleet: Fleet): Contents {
-        val (_, answer) = ask(fleet, "list")
+    suspend fun list(fleet: Fleet, member: String? = null): Contents {
+        val (_, answer) = ask(fleet, "list", aimed(JSONObject(), member))
         val items = answer.optJSONArray("items")
         val grants = answer.optJSONArray("grants")
+        val custody = answer.optJSONObject("custody")?.let { c ->
+            val log = c.optJSONArray("log")
+            Custody(
+                allow = c.optBoolean("allow", false),
+                member = textOrNull(c, "member"),
+                custodians = strings(c.optJSONArray("custodians")),
+                managers = strings(c.optJSONArray("managers")),
+                log = (0 until (log?.length() ?: 0)).mapNotNull { i ->
+                    log?.optJSONObject(i)?.let { Custody.Change(it.optLong("at"), it.optString("by"), it.optString("op"), textOrNull(it, "name")) }
+                },
+            )
+        }
         return Contents(
+            custody = custody,
             items = (0 until (items?.length() ?: 0)).mapNotNull { i ->
                 items?.optJSONObject(i)?.let { Item(it.optString("name"), it.optLong("at"), it.optString("kind").ifBlank { null }) }
             },
@@ -95,11 +176,30 @@ internal class PhoneVault(private val settings: Settings) {
         )
     }
 
-    suspend fun keepSecret(fleet: Fleet, name: String, value: String): Result<String> = runCatching {
+    suspend fun keepSecret(fleet: Fleet, name: String, value: String, member: String? = null): Result<String> = runCatching {
         val n = name.trim()
         require(SECRET_NAME.matches(n)) { "A secret's name is up to 64 letters, digits, dots, dashes and underscores." }
         require(value.isNotEmpty()) { "The secret is empty." }
-        ask(fleet, "put", JSONObject().put("name", "secret:$n").put("value", value)).first
+        ask(fleet, "put", aimed(JSONObject().put("name", "secret:$n").put("value", value), member)).first
+    }
+
+    /**
+     * Keep a Claude login in a MEMBER'S vault: a setup-token, or the whole
+     * sign-in one of the fleet's machines made. A person's own goes through
+     * PhoneGitHub.depositClaudeLogin, as it always did; this is the same
+     * thing as a vault request, because only a vault request can say whose
+     * vault it is for.
+     */
+    suspend fun keepClaude(fleet: Fleet, token: String?, signIn: JSONObject?, member: String): Result<String> = runCatching {
+        val extra = JSONObject().put("name", "claude")
+        if (signIn != null) {
+            extra.put("signIn", signIn)
+        } else {
+            val value = token.orEmpty().trim()
+            require(value.isNotEmpty()) { "The token is empty." }
+            extra.put("value", value)
+        }
+        ask(fleet, "put", aimed(extra, member)).first
     }
 
     /**
@@ -116,8 +216,8 @@ internal class PhoneVault(private val settings: Settings) {
         ask(fleet, "put", JSONObject().put("name", name).put("value", record)).first
     }
 
-    suspend fun forget(fleet: Fleet, name: String): Result<String> = runCatching {
-        ask(fleet, "forget", JSONObject().put("name", name)).first
+    suspend fun forget(fleet: Fleet, name: String, member: String? = null): Result<String> = runCatching {
+        ask(fleet, "forget", aimed(JSONObject().put("name", name), member)).first
     }
 
     /**
@@ -125,14 +225,14 @@ internal class PhoneVault(private val settings: Settings) {
      * service it is for (vault.js, testItem). Anything short of accepted,
      * cannot tell included, comes back as a failure, so it is drawn as one.
      */
-    suspend fun test(fleet: Fleet, name: String): Result<String> = runCatching {
-        val (text, answer) = ask(fleet, "test", JSONObject().put("name", name))
+    suspend fun test(fleet: Fleet, name: String, member: String? = null): Result<String> = runCatching {
+        val (text, answer) = ask(fleet, "test", aimed(JSONObject().put("name", name), member))
         if (answer.optString("state") != "accepted") error(text)
         text
     }
 
     /** Sign in to GitHub or Cloudflare for the vault: this phone runs the page, the minter keeps the result. */
-    suspend fun connect(context: Context, fleet: Fleet, provider: String): Result<String> = runCatching {
+    suspend fun connect(context: Context, fleet: Fleet, provider: String, member: String? = null): Result<String> = runCatching {
         val start = if (provider == "github") fleet.githubDeviceStart() else fleet.cloudflareDeviceStart()
         if (start.optBoolean("ok") != true) error(start.optString("text").ifBlank { "Your fleet cannot start that sign-in." })
         val back = if (provider == "github") {
@@ -158,13 +258,13 @@ internal class PhoneVault(private val settings: Settings) {
         ask(
             fleet,
             "connect",
-            JSONObject().put("provider", provider).put("code", back.code).put("verifier", back.verifier).put("redirectUri", back.redirectUri),
+            aimed(JSONObject().put("provider", provider).put("code", back.code).put("verifier", back.verifier).put("redirectUri", back.redirectUri), member),
         ).first
     }
 
-    suspend fun approve(fleet: Fleet, host: Fleet.Host): Result<String> = runCatching {
+    suspend fun approve(fleet: Fleet, host: Fleet.Host, member: String? = null): Result<String> = runCatching {
         val key = host.publicJwk ?: error("${host.hostId} cannot be approved yet. Update your fleet first.")
-        ask(fleet, "grant", JSONObject().put("hostKey", key).put("label", host.hostId)).first
+        ask(fleet, "grant", aimed(JSONObject().put("hostKey", key).put("label", host.hostId), member)).first
     }
 
     /** A pool's own machine, approved for its pool's record and nothing else of this person's (the vault's `only`). */
@@ -173,8 +273,81 @@ internal class PhoneVault(private val settings: Settings) {
         ask(fleet, "grant", JSONObject().put("hostKey", jwk).put("label", hostId).put("only", JSONArray().put("hypervisor:$address"))).first
     }
 
-    suspend fun remove(fleet: Fleet, grant: Grant): Result<String> = runCatching {
-        ask(fleet, "revoke", JSONObject().put("key", grant.key)).first
+    suspend fun remove(fleet: Fleet, grant: Grant, member: String? = null): Result<String> = runCatching {
+        ask(fleet, "revoke", aimed(JSONObject().put("key", grant.key), member)).first
+    }
+
+    /** The vault's own copy of the organization's tree, and who may act for each member. */
+    suspend fun org(fleet: Fleet): Result<Org> = runCatching {
+        val (_, answer) = ask(fleet, "org")
+        val you = answer.optJSONObject("you")
+        val members = answer.optJSONArray("members")
+        Org(
+            admins = strings(answer.optJSONArray("admins")),
+            youAdmin = you?.optBoolean("admin", false) == true,
+            youBound = you?.optBoolean("bound", false) == true,
+            members = (0 until (members?.length() ?: 0)).mapNotNull { i ->
+                members?.optJSONObject(i)?.let { m ->
+                    OrgMember(
+                        id = m.optString("id"),
+                        kind = m.optString("kind"),
+                        email = textOrNull(m, "email"),
+                        reportsTo = textOrNull(m, "reportsTo"),
+                        managers = strings(m.optJSONArray("managers")),
+                        custodians = strings(m.optJSONArray("custodians")),
+                        custody = textOrNull(m, "custody"),
+                        may = strings(m.optJSONArray("may")),
+                    )
+                }
+            },
+        )
+    }
+
+    /**
+     * Add an admin of the organization in the vault, or remove one. The
+     * first is somebody who administers the fleet filing themselves.
+     */
+    suspend fun fileOrgAdmin(fleet: Fleet, address: String, remove: Boolean = false): Result<String> = runCatching {
+        val extra = JSONObject().put("address", address)
+        if (remove) extra.put("remove", true)
+        ask(fleet, "orgadmin", extra).first
+    }
+
+    /**
+     * File one member's place in the vault's tree, or take it out. Custody
+     * of the member's vault follows what is filed here, and nothing the
+     * fleet's own list says. A missing `reportsTo` is the top of the tree.
+     */
+    suspend fun fileOrgMember(
+        fleet: Fleet,
+        id: String,
+        kind: String,
+        address: String?,
+        reportsTo: String?,
+        managers: List<String>? = null,
+        remove: Boolean = false,
+    ): Result<String> = runCatching {
+        val extra = JSONObject().put("id", id).put("kind", kind)
+        if (!reportsTo.isNullOrBlank()) extra.put("reportsTo", reportsTo)
+        if (!address.isNullOrBlank()) extra.put("address", address)
+        if (managers != null) extra.put("managers", JSONArray(managers))
+        if (remove) extra.put("remove", true)
+        ask(fleet, "orgmember", extra).first
+    }
+
+    /**
+     * Add one of an agent member's own custodians, or remove one. The last
+     * one stays, and the vault says so.
+     */
+    suspend fun setCustodian(fleet: Fleet, member: String, address: String, remove: Boolean = false): Result<String> = runCatching {
+        val extra = JSONObject().put("member", member).put("address", address)
+        if (remove) extra.put("remove", true)
+        ask(fleet, "custodian", extra).first
+    }
+
+    /** Let this person's managers manage their own vault, or stop. */
+    suspend fun setCustody(fleet: Fleet, allow: Boolean): Result<String> = runCatching {
+        ask(fleet, "custody", JSONObject().put("allow", allow)).first
     }
 
     /**
@@ -257,6 +430,31 @@ internal class PhoneVault(private val settings: Settings) {
             "github", "cloudflare" ->
                 "Machines you approved stop being given it. Getting it back means signing in again."
             else -> "Machines you approved stop being given it. Getting it back means typing it in again."
+        }
+
+        /**
+         * The same, for a member's vault a custodian is changing: whose
+         * sessions stop, by the member's name. The same sentences as iOS.
+         */
+        fun forgetting(name: String, who: String): String =
+            if (name == "claude") "Sessions started as $who stop using it. Getting it back means adding it again."
+            else "Machines approved for $who stop being given it. Getting it back means adding it again."
+
+        /**
+         * One thing a manager did to this person's vault, as a row: who,
+         * what they did to which item, and when. A machine approved or
+         * removed is said as that, with no item. The same words as iOS.
+         */
+        fun custodyLine(change: Custody.Change, whenSaid: String): String {
+            val what = change.name?.let { label(it) }.orEmpty()
+            val did = when (change.op) {
+                "put", "connect" -> "kept $what"
+                "forget" -> "removed $what"
+                "grant" -> "approved a machine"
+                "revoke" -> "removed a machine"
+                else -> change.op
+            }
+            return "${change.by} ${did.trim()} · $whenSaid"
         }
 
         /** How a vault item is named to a person. */

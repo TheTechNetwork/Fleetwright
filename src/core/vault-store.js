@@ -51,6 +51,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, unlink
 import path from 'node:path';
 
 import { normaliseEmail, emailFromActor, rowForActor, operatorAccount, HOST_ROW } from './accounts.js';
+import { memberOfPrincipal, accountOfMember, memberOfAccount } from '../fleet/protocol/members.js';
 import { PROVIDERS } from './connectors.js';
 
 /** A named secret's name, as secret-store.js accepts one. */
@@ -189,8 +190,13 @@ export function applyVault(cfg, bundle) {
   /** @type {string[]} */
   const claudeChanged = [];
   for (const a of accounts) {
-    const email = normaliseEmail(a?.email);
-    if (!email || !Array.isArray(a?.items)) continue;
+    // AN AGENT MEMBER'S VAULT comes with a principal and no address, and is
+    // filed under the one address nobody holds (protocol/members.js,
+    // accountOfMember), so every reader below finds it as it finds a
+    // person's. An answer naming that address for a person is not believed.
+    const member = memberOfPrincipal(a?.principal);
+    const email = member ? accountOfMember(member) : normaliseEmail(a?.email);
+    if (!email || !Array.isArray(a?.items) || (!member && memberOfAccount(email))) continue;
     /** @type {Record<string, HeldItem>} */
     const items = {};
     for (const i of a.items) {

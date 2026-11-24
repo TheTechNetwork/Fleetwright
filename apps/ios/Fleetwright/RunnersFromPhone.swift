@@ -130,8 +130,18 @@ struct PhoneGitHubSignIn: View {
 ///
 /// The same sentences as Android (YourVault.kt), which
 /// test/runners-from-phone-in-apps.test.js holds them to.
+///
+/// POINTED AT A MEMBER'S VAULT, when one is given (docs/members.md): the same
+/// rows, with every request naming that member, for one of its custodians.
+/// Its machines are approved from here, one page each with the key to
+/// compare, because a member has no machine page of its own to do it from.
 struct YourVault: View {
     let settings: Settings
+    /// The member whose vault this is, or nil for this person's own.
+    var member: Fleet.Member? = nil
+    /// Told what the vault answered each time it is listed, so the screen
+    /// around this can draw what else the answer carries without asking twice.
+    var onListed: (PhoneVault.Contents) -> Void = { _ in }
     @State private var contents: PhoneVault.Contents?
     @State private var boxes: [Fleet.Host] = []
     @State private var secretName = ""
@@ -143,6 +153,9 @@ struct YourVault: View {
     @State private var forgetting: String?
 
     private var vault: PhoneVault { PhoneVault(settings: settings) }
+    private var fleet: Fleet { Fleet(settings: settings) }
+    /// The member every request here is for, by id, or nil for this person's own vault.
+    private var whose: String? { member?.id }
 
     /// The fingerprints of boxes still in this fleet, worked out here from
     /// their keys, never the ones the fleet lists beside them.
@@ -181,7 +194,8 @@ struct YourVault: View {
     }
 
     var body: some View {
-        Text("Saved once, for your sessions on the machines you approve.")
+        Text(member.map { "Saved once, for sessions started as \($0.name), on the machines approved below." }
+             ?? "Saved once, for your sessions on the machines you approve.")
             .fleetType(.label)
             .foregroundStyle(Design.Palette.inkDim)
             .task { await reload() }
@@ -190,11 +204,11 @@ struct YourVault: View {
                                 titleVisibility: .visible) {
                 Button("Forget", role: .destructive) {
                     if let name = forgetting {
-                        act { try await vault.forget(Fleet(settings: settings), name: name) }
+                        act { try await vault.forget(fleet, name: name, for: whose) }
                     }
                 }
             } message: {
-                Text(PhoneVault.forgetting(forgetting ?? ""))
+                Text(member.map { PhoneVault.forgetting(forgetting ?? "", for: $0.name) } ?? PhoneVault.forgetting(forgetting ?? ""))
             }
 
         if let kept = contents {
@@ -227,7 +241,7 @@ struct YourVault: View {
                         .foregroundStyle(Design.Palette.inkDim)
                     if PhoneVault.isTestable(item.name) {
                         Button("Test") {
-                            act { try await vault.test(Fleet(settings: settings), name: item.name) }
+                            act { try await vault.test(fleet, name: item.name, for: whose) }
                         }
                         .accessibilityLabel("Test \(PhoneVault.label(item.name))")
                         .disabled(busy)
@@ -250,14 +264,18 @@ struct YourVault: View {
         // so a machine can make the token here too, rather than a paste field
         // that wanted a computer from somebody holding a phone. Its own Forget
         // went: it was a second button doing what Forget Claude above does.
-        ClaudeSetup(settings: settings) { Task { await reload() } }
+        if let member {
+            ClaudeSetup(settings: settings, member: member) { Task { await reload() } }
+        } else {
+            ClaudeSetup(settings: settings) { Task { await reload() } }
+        }
 
         Button("Add GitHub") {
-            act { try await vault.connect(Fleet(settings: settings), provider: "github") }
+            act { try await vault.connect(fleet, provider: "github", for: whose) }
         }
         .disabled(busy)
         Button("Add Cloudflare") {
-            act { try await vault.connect(Fleet(settings: settings), provider: "cloudflare") }
+            act { try await vault.connect(fleet, provider: "cloudflare", for: whose) }
         }
         .disabled(busy)
 
@@ -269,7 +287,7 @@ struct YourVault: View {
             .autocorrectionDisabled()
         Button("Save secret") {
             act {
-                let text = try await vault.keepSecret(Fleet(settings: settings), name: secretName, value: secretValue)
+                let text = try await vault.keepSecret(fleet, name: secretName, value: secretValue, for: whose)
                 secretName = ""
                 secretValue = ""
                 return text
@@ -292,13 +310,37 @@ struct YourVault: View {
                     .fleetType(.labelMono)
                     .foregroundStyle(Design.Palette.inkDim)
                 Button("Remove", role: .destructive) {
-                    act { try await vault.remove(Fleet(settings: settings), grant: grant) }
+                    act { try await vault.remove(fleet, grant: grant, for: whose) }
                 }
                 .disabled(busy)
             }
-            Text("Approve a machine from its page.")
-                .fleetType(.label)
-                .foregroundStyle(Design.Palette.inkDim)
+            if let member {
+                // A MEMBER'S MACHINES ARE APPROVED FROM HERE. Each opens the
+                // same approval a machine's own page shows, with the key this
+                // phone worked out to compare, and only a machine the fleet
+                // listed a key for is offered (C-2).
+                Text("Approve a machine for \(member.name):")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+                ForEach(boxes.filter { $0.publicJwk != nil }) { box in
+                    NavigationLink(box.hostId) {
+                        Form {
+                            Section {
+                                VaultApproval(settings: settings, host: box, member: member)
+                            }
+                        }
+                        .scrollContentBackground(.hidden)
+                        .background(Design.Palette.bg)
+                        .listRowBackground(Design.Palette.card)
+                        .navigationTitle(box.hostId)
+                        .navigationBarTitleDisplayMode(.inline)
+                    }
+                }
+            } else {
+                Text("Approve a machine from its page.")
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
         }
 
         if !result.isBlank {
@@ -311,9 +353,10 @@ struct YourVault: View {
 
     @MainActor
     private func reload() async {
-        let fleet = Fleet(settings: settings)
         do {
-            contents = try await vault.list(fleet)
+            let listed = try await vault.list(fleet, for: whose)
+            contents = listed
+            onListed(listed)
         } catch {
             failed = true
             result = error.localizedDescription
@@ -353,9 +396,15 @@ struct YourVault: View {
 ///
 /// Drawn only for a permanent box the fleet has a key for, and only once this
 /// phone is signed in to GitHub, which is how the vault knows whose it is.
+///
+/// FOR A MEMBER'S VAULT when one is given, opened from that member's
+/// credentials: the same comparison, and the approval is a grant in that
+/// vault and nowhere else (docs/members.md, "Box approval is per vault").
 struct VaultApproval: View {
     let settings: Settings
     let host: Fleet.Host
+    /// The member whose vault this machine is approved for, or nil for this person's own.
+    var member: Fleet.Member? = nil
     @State private var grant: PhoneVault.Grant?
     @State private var loaded = false
     @State private var busy = false
@@ -378,13 +427,13 @@ struct VaultApproval: View {
                         // pool's own machine let in for its one record, and the
                         // page said "Approved" over it as if it held the whole
                         // vault (eighth audit).
-                        LabeledContent("Your credentials") {
+                        LabeledContent(member.map { "\($0.name)'s credentials" } ?? "Your credentials") {
                             Text(grant.only.isEmpty ? "Approved" : "Only " + grant.only.map(PhoneVault.label).joined(separator: ", "))
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.ok)
                         }
                         Button("Remove", role: .destructive) {
-                            act { try await vault.remove(Fleet(settings: settings), grant: grant) }
+                            act { try await vault.remove(Fleet(settings: settings), grant: grant, for: member?.id) }
                         }
                         .disabled(busy)
                     } else {
@@ -396,7 +445,7 @@ struct VaultApproval: View {
                             .foregroundStyle(Design.Palette.ink)
                             .textSelection(.enabled)
                         Button("Approve") {
-                            act { try await vault.approve(Fleet(settings: settings), host: host) }
+                            act { try await vault.approve(Fleet(settings: settings), host: host, for: member?.id) }
                         }
                         .disabled(busy)
                     }
@@ -419,7 +468,7 @@ struct VaultApproval: View {
     @MainActor
     private func reload() async {
         do {
-            let contents = try await vault.list(Fleet(settings: settings))
+            let contents = try await vault.list(Fleet(settings: settings), for: member?.id)
             // The whole key hash, as the minter names the grant, not its
             // sixteen-character start.
             let whole = host.publicJwk.map(PhoneVault.keyHash)

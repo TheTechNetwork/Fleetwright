@@ -32,8 +32,15 @@ func claudeKept(_ settings: Settings) async -> ClaudeKept {
 /// chosen. The same view in both, so the words cannot drift apart.
 ///
 /// Rows for a Form section; the caller supplies the section.
+///
+/// FOR A MEMBER, when one is given (docs/members.md): the same rows, kept in
+/// that member's vault by one of its custodians and never in this person's
+/// own. The sentences name the member, because "my Claude login" over
+/// somebody else's vault would be a claim about the wrong one.
 struct ClaudeSetup: View {
     let settings: Settings
+    /// The member whose vault this keeps it in, or nil for this person's own.
+    var member: Fleet.Member? = nil
     /// Told once the minter has kept it, so the place showing this can stop.
     var onKept: () -> Void = {}
 
@@ -54,6 +61,11 @@ struct ClaudeSetup: View {
 
     private var phone: PhoneGitHub { PhoneGitHub(settings: settings) }
 
+    /// The save button's words: whose login it is. The same on Android.
+    private var saveLabel: String {
+        member.map { "Save \($0.name)'s Claude login" } ?? "Save my Claude login"
+    }
+
     var body: some View {
         if !phone.signedIn {
             Text("Sign in to GitHub first.")
@@ -61,7 +73,8 @@ struct ClaudeSetup: View {
                 .foregroundStyle(Design.Palette.inkDim)
             PhoneGitHubSignIn(settings: settings)
         } else {
-            Text("Sessions run on your Claude subscription. Add it once.")
+            Text(member.map { "Sessions started as \($0.name) run on the Claude sign-in saved here. Add it once." }
+                 ?? "Sessions run on your Claude subscription. Add it once.")
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.inkDim)
                 .task { await loadMachines() }
@@ -77,7 +90,7 @@ struct ClaudeSetup: View {
                 SecureField("Code from the sign-in page", text: $code)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Button(busy ? "Saving…" : "3. Save my Claude login") { Task { await keepFromMachine() } }
+                Button(busy ? "Saving…" : member == nil ? "3. Save my Claude login" : "3. \(saveLabel)") { Task { await keepFromMachine() } }
                     .disabled(busy || code.isBlank)
                 Button("Cancel", role: .cancel) {
                     self.page = nil
@@ -112,12 +125,17 @@ struct ClaudeSetup: View {
                 SecureField("Token from claude setup-token", text: $draft)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Button(busy ? "Saving…" : "Save my Claude login") {
+                Button(busy ? "Saving…" : saveLabel) {
                     Task {
                         busy = true
                         defer { busy = false }
                         do {
-                            result = try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: draft)
+                            if let member {
+                                result = try await PhoneVault(settings: settings)
+                                    .keepClaude(Fleet(settings: settings), token: draft, signIn: nil, for: member.id)
+                            } else {
+                                result = try await phone.depositClaudeLogin(Fleet(settings: settings), claudeToken: draft)
+                            }
                             failed = false
                             draft = ""
                             onKept()
@@ -175,7 +193,7 @@ struct ClaudeSetup: View {
         let sending = code.trimmingCharacters(in: .whitespacesAndNewlines)
         code = ""
         do {
-            result = try await phone.keepFromMachine(Fleet(settings: settings), host: pageHost, code: sending)
+            result = try await phone.keepFromMachine(Fleet(settings: settings), host: pageHost, code: sending, for: member?.id)
             failed = false
             page = nil
             onKept()

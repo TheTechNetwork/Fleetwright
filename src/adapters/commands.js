@@ -53,6 +53,11 @@
  *   A NAME, never the value: the value is a file on this box the session reads
  *   at runtime over the hook socket, and a caller that could supply it would be
  *   handing a durable credential to that agent. See src/core/secret-store.js
+ * @property {string} [member]     the member a start runs as, by id, when it
+ *   was started as one (docs/members.md). `actor` is then that member's account
+ * @property {string} [memberName]  that member's name, for the record
+ * @property {string} [memberRole]  and its role
+ * @property {string} [startedBy]   who asked for a member's session, as `fleet:<address>`
  * @property {string} [ticket]     a coordinator-minted dispatch ticket, for
  *   `/provision`. A credential, so it travels as a field rather than on the
  *   command line — see src/core/redact.js for why that distinction exists
@@ -976,6 +981,18 @@ export const COMMANDS = {
         archive,
         boxSecrets,
       });
+      // AS A MEMBER (docs/members.md): `actor` is the member's account, so
+      // the session is the member's, on its sign-ins, by everything above.
+      // What the record adds is which member, and who asked for it, which is
+      // what lets that person and the member's managers see and stop it.
+      if (r.ok && r.session?.name && typeof ctx.member === 'string') {
+        ctx.sessions.registry.upsert(r.session.name, {
+          member: ctx.member,
+          memberName: ctx.memberName ?? null,
+          memberRole: ctx.memberRole ?? null,
+          startedBy: ctx.startedBy ?? null,
+        });
+      }
       let text = r.message;
       if (r.ok && archive) text += `\nIt is pushed to ${archive}, on a branch of its own, before it stops and every ten minutes while it runs.`;
       // SAID EITHER WAY, the box default included. A start that took the

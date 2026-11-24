@@ -78,6 +78,8 @@ import { probeClaude } from '../../core/claude-token-probe.js';
 import { claudeSignIn, claudeRenewals, describeRenewals, freshClaude, checkClaude } from './claude-login.js';
 import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
 import { HYPERVISOR_PREFIX, HYPERVISOR_ADDRESS_RE, splitHypervisorItem } from '../protocol/hypervisor-name.js';
+import { memberOfPrincipal } from '../protocol/members.js';
+import { ORG_OPS, runOrgOp, resolveFor, logCustody, ownCustody, membersForBoxes, loadTree, mayActFor, dropAddedBy } from './org.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
 export const OAUTH_PROVIDERS = Object.freeze({
@@ -127,6 +129,39 @@ export const SECRET_PREFIX = 'secret:';
  * which the box reads with too.
  */
 export { HYPERVISOR_PREFIX, HYPERVISOR_ADDRESS_RE, splitHypervisorItem };
+
+/**
+ * ITEM KINDS A LATER ENGINE NEEDS, named now so the field for them exists and
+ * nothing else can take the names (docs/members.md, "Later kinds"): a Codex
+ * sign-in, a Copilot token, and an API key by provider. NONE IS KEPT YET.
+ * Each is refused as not kept yet, which is a different answer from a name a
+ * vault has never heard of, and the one a person holding such a key needs.
+ */
+export const FUTURE_ITEM_KINDS = Object.freeze(['codex', 'copilot', 'apikey:']);
+
+/** @param {string} name */
+const isFutureKind = (name) => FUTURE_ITEM_KINDS.some((k) => (k.endsWith(':') ? name.startsWith(k) : name === k));
+
+/**
+ * A vault's id: a person's GitHub account id, or an agent member's principal
+ * (`member:<id>`). Every row a vault has is keyed by it.
+ *
+ * @param {string} id
+ */
+const isVaultId = (id) => /^[0-9]{1,20}$/.test(id) || memberOfPrincipal(id) !== null;
+
+/** What a custodian's request changes in a vault, and so what is written to its log. */
+const CUSTODY_LOGGED = Object.freeze(['put', 'forget', 'connect', 'grant', 'revoke']);
+
+/**
+ * A vault's sentences say "your". Said to a custodian about a member's vault
+ * they are the member's, so the few nouns those sentences use are renamed.
+ *
+ * @param {string} text @param {string} whose
+ */
+function forMember(text, whose) {
+  return String(text ?? '').replace(/\b[Yy]our (Claude login|Claude sign-in|vault|credentials|sign-in|login|runners|repositories)\b/g, `${whose}’s $1`);
+}
 
 /** How large a named secret may be. A key file, not a database. */
 const MAX_SECRET = 8192;
@@ -344,17 +379,22 @@ export async function answerClaudeCheck(_ask, config) {
   const ended = [];
   /** @type {import('./claude-login.js').ClaudeRefused[]} */
   const refused = [];
+  const tree = await loadTree(store);
   for (const k of (await store.list({ prefix: 'gh:' })).keys()) {
     const userId = k.slice(3);
-    if (!/^[0-9]{1,20}$/.test(userId)) continue;
+    if (!isVaultId(userId)) continue;
     // ONE AT A TIME, each under its person's lock: a check renewing alongside
     // a box renewing the same sign-in would rotate one refresh token twice.
     const one = await withLock(`row:${userId}`, () => checkClaude(store, key, userId, { fetchImpl, now })).catch((/** @type {any} */ e) => {
       console.warn(`minter: could not ask after ${userId}'s Claude sign-in: ${e?.message || e}`);
       return null;
     });
-    if (one && 'refusedAccess' in one) refused.push(one);
-    else if (one) ended.push(one);
+    // A MEMBER'S SIGN-IN IS TOLD TO EVERY CUSTODIAN: it has no address of its
+    // own, so `tell` is who to tell, as this Worker holds them now.
+    const member = memberOfPrincipal(userId);
+    const said = one && member ? { ...one, member, tell: await mayActFor(store, tree, member) } : one;
+    if (said && 'refusedAccess' in said) refused.push(said);
+    else if (said) ended.push(said);
   }
   // `refused` beside `ended`, not in it: a coordinator from before it would
   // tell those people their sign-in was ended, and it was not.
@@ -379,7 +419,11 @@ async function loadKey(config) {
 
 /** @param {any} row */
 function emptyRow(row) {
-  return { login: String(row?.login || ''), items: { ...(row?.items || {}) }, grants: { ...(row?.grants || {}) } };
+  return {
+    login: String(row?.login || ''), items: { ...(row?.items || {}) }, grants: { ...(row?.grants || {}) },
+    // Whether this person's managers may manage it (org.js), kept with the row it is about.
+    ...(row?.custody && typeof row.custody === 'object' ? { custody: { allow: row.custody.allow === true, at: Number(row.custody.at) || 0 } } : {}),
+  };
 }
 
 /** @param {unknown} s */
@@ -434,35 +478,123 @@ export async function answerVaultDevice(ask, config) {
   // which a box they later removed, or a session on it, still holds.
   if (!(await deviceSignedIn(await config.store?.get(`${SIGNIN_PREFIX}${who.userId}`), github, now()))) return notADevice;
 
-  const result = await withLock(`row:${who.userId}`, () => runDeviceOp(inside, { ...config, fetchImpl, now }, key, who, email, at));
-  if (!result.ok) return result;
+  const store = /** @type {VaultStore} */ (config.store);
+  // THE ORGANIZATION'S TREE AND ITS CUSTODIANS (org.js), one change at a
+  // time. `admin` is the coordinator's word for who administers the fleet,
+  // read at one moment only: when nobody administers the organization here
+  // yet and the first admin files themselves.
+  if (ORG_OPS.includes(inside.op)) {
+    const done = await withLock('org', () => runOrgOp(inside, { store, email, who, at, fleetAdmin: a.admin === true }));
+    if (!done.ok) return done;
+    return { ok: true, sealed: await seal({ to: reply, aad: VAULT_REPLY_AAD, payload: done.answer ?? {} }), text: done.text, ...(inside.op === 'org' ? {} : { changed: true }) };
+  }
+  // FOR A MEMBER'S VAULT, when the request names one (docs/members.md): an
+  // agent's own, or a person's whose manager this is and who allowed it.
+  // Whose vault is opened is decided here, from the tree and the custodians
+  // this Worker holds, and from nothing the coordinator said.
+  /** @type {{ userId: string, login: string }} */
+  let vault = who;
+  /** @type {Acting|null} */
+  let acting = null;
+  if (inside.for !== undefined && inside.for !== null && inside.for !== '') {
+    const whose = await resolveFor(store, inside.for, email, who);
+    if (!whose.ok) return whose;
+    if (!whose.own) ({ vault, acting } = whose);
+  }
+
+  const result = await withLock(`row:${vault.userId}`, () => runDeviceOp(inside, { ...config, fetchImpl, now }, key, vault, email, at, acting));
+  if (!result.ok) return acting ? { ...result, text: forMember(result.text, acting.member) } : result;
   const sealedBack = await seal({ to: reply, aad: VAULT_REPLY_AAD, payload: result.answer ?? {} });
+  // WHAT A CUSTODIAN CHANGED, written beside the vault for its owner to read,
+  // and for a person's vault said outside the seal too, so the coordinator
+  // can tell their phone. The log is this Worker's; the push can be dropped
+  // by a dishonest coordinator, which is why the log exists.
+  /** @type {{ notify?: { email: string, text: string } }} */
+  let told = {};
+  if (acting && CUSTODY_LOGGED.includes(inside.op)) {
+    const name = String(inside.name ?? inside.provider ?? (inside.op === 'grant' || inside.op === 'revoke' ? 'a machine' : '')).slice(0, 96);
+    await logCustody(store, vault.userId, { at, by: acting.by, op: inside.op, name });
+    if (acting.kind === 'person') told = { notify: { email: acting.owner, text: custodySentence(acting.by, inside.op, name) } };
+  }
   // WHETHER IT CHANGED ANYTHING A BOX HOLDS, outside the seal, so the
   // coordinator can tell the boxes to ask now rather than at their next ten
   // minutes. A list changes nothing; everything else may (a test renews what
   // is due, and a box's key list rides the same ask). Never what changed.
-  return { ok: true, sealed: sealedBack, text: result.text, ...(inside.op === 'list' ? {} : { changed: true }) };
+  return { ok: true, sealed: sealedBack, text: acting ? forMember(result.text, acting.member) : result.text, ...(inside.op === 'list' ? {} : { changed: true }), ...told };
+}
+
+/** @typedef {{ by: string, member: string, kind: 'person'|'agent', owner: string }} Acting  a custodian, and whose vault they opened */
+
+/**
+ * What a person is told a custodian did to their vault. Names, never values.
+ *
+ * @param {string} by @param {string} op @param {string} name
+ */
+function custodySentence(by, op, name) {
+  const what = name === 'claude' ? 'your Claude login' : name || 'something';
+  if (op === 'put' || op === 'connect') return `${by} kept ${what} in your vault, as one of your managers.`;
+  if (op === 'forget') return `${by} removed ${what} from your vault, as one of your managers.`;
+  if (op === 'grant') return `${by} approved a machine to hold your credentials, as one of your managers.`;
+  return `${by} removed a machine from the ones that hold your credentials, as one of your managers.`;
 }
 
 /**
  * @param {any} inside @param {VaultConfig & { fetchImpl: typeof fetch, now: () => number }} config
  * @param {{ privateKey: CryptoKey, publicKey: string }} key
- * @param {{ userId: string, login: string }} who @param {string} email @param {number} at
+ * @param {{ userId: string, login: string }} who  WHOSE VAULT: the asker's own, or the member's a custodian opened
+ * @param {string} email  the asker's fleet address
+ * @param {number} at
+ * @param {Acting|null} [acting]  set when a custodian opened somebody else's vault (org.js, resolveFor)
  * @returns {Promise<{ ok: true, answer?: any, text: string } | { ok: false, error: { code: string }, text: string }>}
  */
-async function runDeviceOp(inside, config, key, who, email, at) {
+async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
   const store = /** @type {VaultStore} */ (config.store);
   const row = emptyRow(await store.get(`v:${who.userId}`));
   row.login = who.login || row.login;
   const save = () => store.put(`v:${who.userId}`, row);
   const name = String(inside.name ?? '');
+  // THE FLEET ACCOUNT THE VAULT IS FILED UNDER: the asker's own, a person's
+  // whose manager opened it, or none for an agent, which has no address.
+  const owner = acting ? acting.owner : email;
 
   if (inside.op === 'list') {
+    if (acting) {
+      // A MEMBER'S, for its custodian: what it keeps and which machines hold
+      // it. No device keys, which are the asker's own and listed there.
+      return { ok: true, answer: { ...(await describe(row, store, who.userId)), for: acting.member }, text: `${acting.member}’s vault.` };
+    }
     const devices = await store.get(`${DEVICE_KEYS_PREFIX}${email}`);
     return {
       ok: true,
-      answer: { ...(await describe(row, store, who.userId)), devices: liveKeys(devices).map((k) => ({ ...k, yours: devices?.github === who.userId })) },
+      answer: {
+        ...(await describe(row, store, who.userId)),
+        devices: liveKeys(devices).map((k) => ({ ...k, yours: devices?.github === who.userId })),
+        // WHO ELSE MAY MANAGE THIS VAULT, and what they did (org.js).
+        custody: await ownCustody(store, email, who.userId, row),
+      },
       text: `${who.login}’s vault.`,
+    };
+  }
+
+  // WHAT IS THE ASKER'S ALONE: their signing keys, their delegations, and the
+  // switch that lets managers in. A custodian of somebody's vault holds its
+  // items and its machines, and none of these.
+  if (acting && ['devicekey', 'revokedelegation', 'custody'].includes(inside.op)) {
+    return refuse('bad_params', 'Signing keys, delegations and who may manage a vault belong to the person themselves, and are changed from their own device.');
+  }
+
+  // WHETHER THIS PERSON'S MANAGERS MAY MANAGE THEIR VAULT (org.js). Off until
+  // they turn it on, from their own device, and theirs to turn off again.
+  if (inside.op === 'custody') {
+    if (row.custody && Number(row.custody.at) >= at) return refuse('stale', 'That setting has a newer change than this one. Nothing was changed.');
+    row.custody = { allow: inside.allow === true, at };
+    await save();
+    return {
+      ok: true,
+      answer: { allow: row.custody.allow },
+      text: row.custody.allow
+        ? 'Your managers can now keep, test and remove what your vault holds, approve machines for it, and start sessions as you. Each thing they change is listed here.'
+        : 'Your managers can no longer manage your vault. What they kept stays until you remove it.',
     };
   }
 
@@ -497,6 +629,13 @@ async function runDeviceOp(inside, config, key, who, email, at) {
         github: who.userId, login: who.login, keys: next.filter((k) => !dropped.has(k.kid)),
         ...(kept?.github === who.userId && Array.isArray(kept.revoked) ? { revoked: kept.revoked } : {}),
       });
+      // THIS ACCOUNT'S FIRST KEY UNDER THIS ADDRESS, and it has a vault
+      // already: whoever added a person member at this address did not add
+      // somebody new, and does not get what this account kept before
+      // (org.js, dropAddedBy; docs/members.md, "Custodians of a person member").
+      if (!remove && kept?.github !== who.userId && (await store.get(`v:${who.userId}`))) {
+        await withLock('org', () => dropAddedBy(store, email));
+      }
       return {
         ok: true,
         answer: { kid },
@@ -538,7 +677,10 @@ async function runDeviceOp(inside, config, key, who, email, at) {
     const kind = itemKind(name);
     if (kind === 'claude') {
       const what = inside.op === 'forget' ? null : inside.signIn !== undefined ? { signIn: inside.signIn } : String(inside.value ?? '');
-      return putClaude(store, key, who, email, at, what, config.fetchImpl);
+      return putClaude(store, key, who, owner, at, what, config.fetchImpl);
+    }
+    if (isFutureKind(name)) {
+      return refuse('not_kept_yet', `${name.slice(0, 80)} is not kept yet. A vault will hold it once Fleetwright runs the engine that needs it (docs/members.md).`);
     }
     if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor') {
       return refuse('bad_name', 'A value put in a vault is a named secret (secret:NAME), a hypervisor’s token or a Claude token. GitHub and Cloudflare are kept by signing in.');
@@ -595,7 +737,9 @@ async function runDeviceOp(inside, config, key, who, email, at) {
       // would hand their access to this person's boxes.
       const whose = await githubUser({ token: String(got.accessToken), fetchImpl: config.fetchImpl });
       if (!whose.ok) return refuse('not_github', `GitHub would not say whose that sign-in is: ${whose.message}.`);
-      if (whose.userId !== who.userId) {
+      // A member's own vault is not a GitHub account, so there is no "same
+      // person" to hold it to: its custodians choose the account it works as.
+      if (!memberOfPrincipal(who.userId) && whose.userId !== who.userId) {
         return refuse('not_yours', `That sign-in is to ${whose.login}, and this vault is ${who.login}’s. Sign in to GitHub as ${who.login}.`);
       }
       account = whose.login;
@@ -628,7 +772,10 @@ async function runDeviceOp(inside, config, key, who, email, at) {
     if (only && (!only.length || only.length > MAX_GRANT_ONLY || only.some((n) => !itemKind(n)))) {
       return refuse('bad_params', 'A box approved for some of your vault is approved for items it names, by their names.');
     }
-    row.grants[hash] = { at, jwk, email, label: boxLabel, ...(only ? { only: [...new Set(only)] } : {}) };
+    // `email` is the fleet account the vault is filed under, which is what a
+    // box files it under too; `by` is the custodian who approved it, when it
+    // was not the vault's own person.
+    row.grants[hash] = { at, jwk, email: owner, label: boxLabel, ...(only ? { only: [...new Set(only)] } : {}), ...(acting ? { by: acting.by } : {}) };
     await save();
     await withLock(`box:${hash}`, async () => {
       const index = (await store.get(`box:${hash}`)) || { accounts: {} };
@@ -895,7 +1042,12 @@ export async function answerVaultBox(ask, config) {
   if (Math.abs(now() - at) > DEPOSIT_MAX_AGE_MS) return refuse('stale', 'That request is more than ten minutes old. The box’s clock is wrong, or it is a replay.');
   // SIGNED BY THE KEY IT NAMES. Replaying a genuine request gets an answer
   // sealed to the box's own one-request key, which only the box can open.
-  const payload = { v: 1, hostKey: jwk, at, reply: String(req.reply) };
+  // WHAT THE BOX SAYS IT UNDERSTANDS, signed with the rest: `members` is a
+  // member's vault, filed under a principal and no address. A box from before
+  // them sends none and is never handed one, which it would file under no
+  // name (docs/members.md).
+  const accepts = Array.isArray(req.accepts) ? [...new Set(req.accepts.map(String))].filter((x) => /^[a-z]{1,24}$/.test(x)).sort().slice(0, 8) : null;
+  const payload = { v: 1, hostKey: jwk, at, reply: String(req.reply), ...(accepts ? { accepts } : {}) };
   if (!(await verify(jwk, signature, signingInput('vault-box', payload)))) {
     return refuse('bad_signature', 'That request is not signed by the key it names.');
   }
@@ -908,9 +1060,19 @@ export async function answerVaultBox(ask, config) {
 
   /** @type {Array<{ email: string, login: string, items: Array<{ name: string, value: string, expiresAt: number|null }>, problems: string[] }>} */
   const accounts = [];
+  const tree = accepts?.includes('members') ? await loadTree(store) : null;
   for (const userId of Object.keys(index.accounts || {})) {
-    if (!/^[0-9]{1,20}$/.test(userId)) continue;
-    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now }, members));
+    if (!isVaultId(userId)) continue;
+    const member = memberOfPrincipal(userId);
+    /** @type {string[]|null} */
+    let custodians = null;
+    if (member) {
+      // A MEMBER'S VAULT, for a box that takes one, while the member is still
+      // in the tree held here.
+      if (!tree?.has(member)) continue;
+      custodians = await mayActFor(store, tree, member);
+    }
+    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now }, members, custodians));
     if (one) accounts.push(one);
   }
   const sealed = await seal({ to: String(req.reply), aad: VAULT_BOX_AAD, payload: { at: now(), accounts } });
@@ -951,16 +1113,20 @@ function hypervisorItemForGrant(name, grant, only) {
  * @param {VaultConfig & { fetchImpl: typeof fetch, now: () => number }} config
  * @param {Set<string>|null} members  who is in the fleet, or null from a
  *   coordinator that does not say (answerVaultBox)
+ * @param {string[]|null} [custodians]  for an agent member's vault, who may act for it now
  */
-async function itemsFor(userId, hash, jwk, store, key, config, members) {
+async function itemsFor(userId, hash, jwk, store, key, config, members, custodians = null) {
   const row = emptyRow(await store.get(`v:${userId}`));
   const grant = row.grants[hash];
   if (!grant || grant.revoked || grant.jwk?.x !== jwk.x || grant.jwk?.y !== jwk.y) return null;
   // BEFORE ANYTHING IS OPENED OR RENEWED: a removed person's refresh token is
   // not rotated for a box that will not be given the result. A grant has
   // named its fleet account since grants began, so one naming nobody is
-  // nobody's on the list.
-  if (members && !members.has(normaliseEmail(grant.email))) return null;
+  // nobody's on the list. AN AGENT MEMBER has no account of its own to be in
+  // the fleet: it is served while somebody who may act for it is.
+  if (custodians) {
+    if (members && !custodians.some((a) => members.has(a))) return null;
+  } else if (members && !members.has(normaliseEmail(grant.email))) return null;
   /** @type {Array<{ name: string, value: string, expiresAt: number|null, login?: Record<string, unknown>, account?: Record<string, unknown> }>} */
   const items = [];
   /** @type {string[]} */
@@ -1015,6 +1181,8 @@ async function itemsFor(userId, hash, jwk, store, key, config, members) {
       items.push({ name: 'claude', value: held.bearer, expiresAt: null });
     }
   }
+  // A MEMBER'S, filed on the box under its principal and no address.
+  if (custodians) return { email: '', principal: userId, member: memberOfPrincipal(userId), login: row.login || userId, items, problems };
   return { email: String(grant.email || ''), login: row.login, items, problems };
 }
 
@@ -1089,7 +1257,12 @@ export async function answerVaultKeys(ask, config) {
     const revoked = (Array.isArray(row.revoked) ? row.revoked : []).filter((/** @type {any} */ r) => Number(r?.until) >= t).map((/** @type {any} */ r) => String(r.id));
     people.push({ email, keys, ...(revoked.length ? { revoked } : {}) });
   }
-  const payload = { v: 1, at: now(), host: await boxKeyHash(jwk), people };
+  // AND WHO MAY START A SESSION AS EACH MEMBER (org.js): what a box checks a
+  // member start against, in the same signed answer and for the same reason,
+  // so a coordinator cannot name a custodian. Every member, with nobody
+  // listed for one whose custodians have all left the fleet.
+  const orgMembers = await membersForBoxes(store, new Set(listed.map(normaliseEmail).filter(Boolean)));
+  const payload = { v: 1, at: now(), host: await boxKeyHash(jwk), people, members: orgMembers };
   return {
     ok: true,
     payload,

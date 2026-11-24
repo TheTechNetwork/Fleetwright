@@ -67,6 +67,16 @@ where to allow it. A call for `update`, which the delegation never covers, is
 refused with where to do it instead: the machine's page in the app, or
 `fleetwright-sidecar update` on the box.
 
+## The organization
+
+Two tools are not generated from a verb, because their subject is the fleet's
+own record and no host's ([members.md](./members.md)): `fleet_members` lists
+the organization as a tree and says which members the caller may start a
+session as, and `fleet_member` adds, changes or removes one member's record.
+`fleet_start` takes `member`. An MCP client changes records only. Custody of a
+member's vault is filed by a person from the app or the signing page, with
+their own sign-in inside the request, which no MCP client holds.
+
 ## What is not exposed, and why that is a policy rather than a lock
 
 ```

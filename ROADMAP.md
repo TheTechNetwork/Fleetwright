@@ -235,6 +235,21 @@ Not today. But it decides the shape of anything new that needs configuring:
 
 ---
 
+## 8. The organization
+
+The fleet as an organization: members by role, people and agents treated the
+same, work handed to the right member. Built in order, one step a pull
+request.
+
+| feature | status | where |
+|---|---|---|
+| **Members and the org chart** | **built; the apps compile in CI only, and none of it has run against a real phone and box** | [`docs/members.md`](docs/members.md). A member is a person or an agent with a role, a place in a tree, standing instructions and a vault of its own. Managing comes from the tree, never from a role. Custody of a member's vault is held by the minter on its own copy of the tree; whoever adds a person the vault had not met manages their credentials, and every other manager holds a person's vault only once that person allows it. `start` takes `member` (protocol 19): the box checks the asker against the minter's signed list and runs the session on the member's sign-ins. `fleet_members`, `fleet_member`, the Org screen on both phones, member Credentials on the signing page |
+| Tasks and delegation | wanted | a task above sessions, with one assignee, a lock, a branch and a record of every handoff; `fleet_delegate` |
+| Engines and limit handoff | wanted | an adapter a member's engine runs behind: Claude Code as today, an ACP adapter, Codex's app server; on a limit, a handoff note and the member's next engine |
+| Auto and manual routing | wanted | a pinned member, then the owner's rules by work type, then a pick among allowed members or a prompt on the phone |
+| Budgets and approvals | wanted | `budgetUsdMonth` is stored by step one and enforced by nothing yet |
+| Paid API models, then sandbox machines | wanted | API keys as vault items (the names are held: `apikey:`), and a sandbox host type |
+
 ## Readiness review, November 2026
 
 A code review of `main` at abc1031, read-only and from the newcomer's chair,

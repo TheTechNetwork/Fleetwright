@@ -47,6 +47,7 @@ import { verifyActionsToken, DEFAULT_ACTIONS_AUDIENCES, verifyAppleNotification,
 import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
+import { membersRoute } from '../../src/fleet/coordinator/org-members.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { resource } from '../../src/core/resources.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
@@ -206,6 +207,7 @@ export class Coordinator {
     this.core.runnerTickets.restore(state.runnerTickets || []);
     this.core.runnerRepos.restore(state.runnerRepos);
     this.core.linkedRepos.restore(state.linkedRepos);
+    this.core.org.restore(state.orgMembers);
     this.core.restoreRunnerStarts(state.runnerStarts);
     this.core.restoreStandby(state.vmStandby);
     this.core.restoreHolderJoins(state.holderJoins);
@@ -310,6 +312,8 @@ export class Coordinator {
         // runner to join — see the Worker's copy.
         runnerRepos: this.core.runnerRepos.serialise(),
         linkedRepos: this.core.linkedRepos.serialise(),
+        // One value here; one row a member in the Worker (org-members.js).
+        orgMembers: this.core.org.serialise(),
         runnerStarts: this.core.serialiseRunnerStarts(),
         vmStandby: this.core.serialiseStandby(),
         holderJoins: this.core.serialiseHolderJoins(),
@@ -1277,6 +1281,12 @@ export class Coordinator {
         const r = this.core.clearLinkedRepo(requesterFor(client), role);
         return json(res, r.ok ? 200 : 400, r);
       }
+    }
+
+    // The organization's members — see the Worker's copy.
+    if (p === '/api/members' || p.startsWith('/api/members/')) {
+      const answer = await membersRoute(this.core, req.method, p, requesterFor(client), () => readJson(req));
+      if (answer) return json(res, answer.status, answer.body);
     }
 
     if (p === '/api/runner-repo') {

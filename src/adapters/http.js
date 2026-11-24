@@ -525,10 +525,13 @@ export class HttpAdapter {
       // sidecar that already validated.
       /** @type {Record<string, string>} */
       const meta = {};
-      /** @type {Array<['title'|'brief', number]>} */
+      /** @type {Array<['title'|'brief'|'memberName'|'memberRole', number]>} */
       const FIELDS = [
         ['title', TITLE_MAX],
         ['brief', BRIEF_MAX],
+        // A member's name and role, as the coordinator's record has them.
+        ['memberName', 80],
+        ['memberRole', 60],
       ];
       for (const [field, max] of FIELDS) {
         if (body[field] === undefined || body[field] === null) continue;
@@ -617,6 +620,11 @@ export class HttpAdapter {
         // because a value validated only by its usual caller is validated only
         // until there are two.
         ['hostLabels', /^[A-Za-z0-9][A-Za-z0-9_.,-]{0,1023}$/],
+        // AS A MEMBER (docs/members.md): which member a session runs as, and
+        // who asked for it, for the record. Who it runs as is `actor`, which
+        // the sidecar set after checking the asker against the minter's list.
+        ['member', /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/],
+        ['startedBy', /^fleet:[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,63}$/],
       ])) {
         if (body[field] === undefined || body[field] === null) continue;
         if (typeof body[field] !== 'string' || !re.test(body[field])) {

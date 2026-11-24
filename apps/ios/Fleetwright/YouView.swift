@@ -15,10 +15,13 @@ import UserNotifications
 /// editing it by accident is how every request starts going somewhere else.
 ///
 /// Each finished piece of setup is one row: Credentials, Temporary machines,
-/// Linked repositories, Devices, Siri and Shortcuts. What only an admin can do (People) is drawn
+/// Linked repositories, Organization, Devices, Siri and Shortcuts. What only an admin can do (People) is drawn
 /// for an admin and nobody else.
 struct YouView: View {
     let settings: Settings
+    /// The page a notification asked to open, by name: "credentials", when a
+    /// manager changed this person's vault. Pushed here and cleared by going back.
+    @Binding var opening: String?
 
     @State private var signInResult = ""
     @State private var signingIn = false
@@ -33,6 +36,9 @@ struct YouView: View {
     /// How many roles this person has linked a repository for, once the
     /// fleet has said; nil until then, and the row is not drawn.
     @State private var linkedCount: Int?
+    /// How many members the organization has, once the fleet has said; nil
+    /// until then and from a fleet older than members, and the row is not drawn.
+    @State private var orgCount: Int?
     // Eggs.swift: taps on the build line. Not saved, so leaving You hides it again.
     @State private var buildTaps = 0
 
@@ -73,6 +79,18 @@ struct YouView: View {
                         } label: {
                             LabeledContent("Linked repositories") {
                                 Text(describeLinkedRepos(linkedCount)).fleetType(.label)
+                            }
+                        }
+                    }
+                    // WHO DOES WHAT HERE, for everybody in the fleet: the
+                    // members, the tree they sit in, and for a manager their
+                    // team (docs/members.md). Drawn only once the list answered.
+                    if let orgCount {
+                        NavigationLink {
+                            OrgView(settings: settings)
+                        } label: {
+                            LabeledContent("Organization") {
+                                Text(describeOrganization(orgCount)).fleetType(.label)
                             }
                         }
                     }
@@ -124,6 +142,7 @@ struct YouView: View {
         .background(Design.Palette.bg)
         .listRowBackground(Design.Palette.card)
         .navigationTitle("You")
+        .navigationDestination(item: $opening) { _ in CredentialsHome(settings: settings) }
         .task(id: settings.credential) { await loadRunners() }
         .task { await readPushKeyDoubt() }
     }
@@ -316,6 +335,11 @@ struct YouView: View {
         }
         if let linked = try? await Fleet(settings: settings).linkedRepos(), linked.ok != false {
             linkedCount = linked.links?.count ?? 0
+        }
+        // Only from an answer that carries the list: a fleet older than
+        // members answers without one, and "no members yet" would be a claim.
+        if let org = try? await Fleet(settings: settings).members(), org.ok != false, let list = org.members {
+            orgCount = list.count
         }
     }
 

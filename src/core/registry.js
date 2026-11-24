@@ -30,6 +30,10 @@ import { log } from '../log.js';
  * @property {string|null} [brief]         a sentence of context, written by a person at start
  * @property {string|null} [profile]       the NAME of the profile it was started with, never its content — the watcher reads it to say whose "back at its prompt" is news
  * @property {boolean} [tasked]          whether it was started on a task in words (protocol v7) — a flag for the same watcher, never the words
+ * @property {string|null} [member]      the member it runs as, by id, when it was started as one (docs/members.md); `createdBy` is then that member's account
+ * @property {string|null} [memberName]  that member's name, as the coordinator's record had it
+ * @property {string|null} [memberRole]  and its role
+ * @property {string|null} [startedBy]   who asked for a member's session, as `fleet:<address>`
  * @property {string|null} [secret]        the NAME of the secret it was granted at start, never its value — the credential broker reads it to scope a runtime fetch to what was granted
  * @property {boolean|null} [boxSecrets]   whether this box's own named secrets may answer that fetch, as the coordinator decided from who administers the box (protocol v14); null when nobody said, which for a fleet session is no (secret-store.js boxSecretsServed)
  * @property {string|null} [account]       whose Claude account was seeded: an email, or "shared"

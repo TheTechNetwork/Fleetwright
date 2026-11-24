@@ -11,6 +11,31 @@ The top section is the version the apps are built at, and
 `scripts/release-notes.mjs` reads this file, so what is written here is what
 reaches TestFlight, Play and the GitHub release.
 
+## Next
+
+Not in a release yet. This section moves under the next version's heading
+when that version is cut.
+
+- **The fleet has an organization.** Under You, Organization lists the
+  fleet's members as a tree: people and AI agents, each with a role and who
+  they report to. An admin adds and edits members, and a team lead edits
+  their own team.
+- **An agent member has its own sign-ins.** Its custodians sign it in to
+  Claude, GitHub and Cloudflare from its Credentials, approve the machines
+  that may hold them, and are told when Claude ends its sign-in.
+- **Start a session as a member.** New session has an "As" choice for the
+  members you may start as. The session runs on that member's sign-ins,
+  opens with its instructions, and goes where that member runs. Machines
+  need updating first: one from before this is refused, not run on your own
+  sign-ins.
+- **Whoever adds you manages your credentials; your other managers only if
+  you let them.** An admin or manager who adds a person to the organization
+  manages that person's credentials from their first sign-in, and You,
+  Credentials says who that is before you keep anything. That holds only for
+  somebody new: a record made for a person who already keeps their own
+  sign-ins gives nobody anything. For every other manager there is a switch,
+  off until you turn it on. Either way there is a list of what they changed.
+
 ## 0.4.16 — 2026-11-04
 
 **Sign in with Apple no longer looks ready before it is, the App Store page

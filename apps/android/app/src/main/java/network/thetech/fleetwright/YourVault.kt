@@ -47,9 +47,16 @@ import kotlinx.coroutines.launch
  *
  * The same sentences as iOS (YourVault in RunnersFromPhone.swift), which
  * test/runners-from-phone-in-apps.test.js holds them to.
+ *
+ * POINTED AT A MEMBER'S VAULT, when one is given (docs/members.md): the same
+ * rows, with every request naming that member, for one of its custodians.
+ * Its machines are approved from here, one page each with the key to
+ * compare, because a member has no machine page of its own to do it from.
+ * [onListed] is told what the vault answered each time it is listed, so the
+ * screen around this can draw what else the answer carries without asking twice.
  */
 @Composable
-internal fun YourVault(settings: Settings) {
+internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListed: (PhoneVault.Contents) -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val vault = remember { PhoneVault(settings) }
@@ -62,11 +69,18 @@ internal fun YourVault(settings: Settings) {
     var failed by remember { mutableStateOf(false) }
     // The item a Forget is waiting on, until the dialog is answered.
     var forgetting by remember { mutableStateOf<String?>(null) }
+    // The machine whose approval for this member's vault is open, if any.
+    var approving by remember { mutableStateOf<Fleet.Host?>(null) }
+    // The member every request here is for, by id, or null for this person's own vault.
+    val whose = member?.id
 
     suspend fun reload() {
         val fleet = Fleet(settings)
-        runCatching { vault.list(fleet) }
-            .onSuccess { contents = it }
+        runCatching { vault.list(fleet, whose) }
+            .onSuccess {
+                contents = it
+                onListed(it)
+            }
             .onFailure {
                 failed = true
                 result = it.message ?: "Your credentials did not load."
@@ -93,11 +107,11 @@ internal fun YourVault(settings: Settings) {
         AlertDialog(
             onDismissRequest = { forgetting = null },
             title = { Text("Forget ${PhoneVault.label(name)}?") },
-            text = { Text(PhoneVault.forgetting(name)) },
+            text = { Text(member?.let { PhoneVault.forgetting(name, it.name) } ?: PhoneVault.forgetting(name)) },
             confirmButton = {
                 TextButton(onClick = {
                     forgetting = null
-                    act { vault.forget(Fleet(settings), name) }
+                    act { vault.forget(Fleet(settings), name, whose) }
                 }) { Text("Forget") }
             },
             dismissButton = { TextButton(onClick = { forgetting = null }) { Text("Cancel") } },
@@ -113,8 +127,20 @@ internal fun YourVault(settings: Settings) {
     fun status(item: PhoneVault.Item): String =
         if (item.name == "claude" && item.kind == "token") "No Remote Control" else "Saved"
 
+    // A MEMBER'S MACHINE, OPENED TO APPROVE IT: the same approval a machine's
+    // own page shows, with the key this phone worked out to compare.
+    val opened = approving
+    if (member != null && opened != null) {
+        FullScreen(title = opened.hostId, onDismiss = { approving = null }) {
+            VaultApproval(settings, opened, member)
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-        Hint("Saved once, for your sessions on the machines you approve.")
+        Hint(
+            member?.let { "Saved once, for sessions started as ${it.name}, on the machines approved below." }
+                ?: "Saved once, for your sessions on the machines you approve.",
+        )
 
         val kept = contents
         if (kept == null) {
@@ -152,7 +178,7 @@ internal fun YourVault(settings: Settings) {
                     if (PhoneVault.isTestable(item.name)) {
                         TextButton(
                             enabled = !busy,
-                            onClick = { act { vault.test(Fleet(settings), item.name) } },
+                            onClick = { act { vault.test(Fleet(settings), item.name, whose) } },
                             modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Test ${PhoneVault.label(item.name)}" },
                         ) { Text("Test") }
                     }
@@ -170,12 +196,16 @@ internal fun YourVault(settings: Settings) {
         // so a machine can make the token here too, rather than a paste field
         // that wanted a computer from somebody holding a phone. Its own Forget
         // went: it was a second button doing what Forget Claude above does.
-        ClaudeSetup(settings) { scope.launch { reload() } }
+        if (member != null) {
+            ClaudeSetup(settings, member) { scope.launch { reload() } }
+        } else {
+            ClaudeSetup(settings) { scope.launch { reload() } }
+        }
 
-        OutlinedButton(enabled = !busy, onClick = { act { vault.connect(context, Fleet(settings), "github") } }) {
+        OutlinedButton(enabled = !busy, onClick = { act { vault.connect(context, Fleet(settings), "github", whose) } }) {
             Text("Add GitHub")
         }
-        OutlinedButton(enabled = !busy, onClick = { act { vault.connect(context, Fleet(settings), "cloudflare") } }) {
+        OutlinedButton(enabled = !busy, onClick = { act { vault.connect(context, Fleet(settings), "cloudflare", whose) } }) {
             Text("Add Cloudflare")
         }
 
@@ -198,7 +228,7 @@ internal fun YourVault(settings: Settings) {
             enabled = !busy && secretName.isNotBlank() && secretValue.isNotEmpty(),
             onClick = {
                 act {
-                    vault.keepSecret(Fleet(settings), secretName, secretValue).onSuccess {
+                    vault.keepSecret(Fleet(settings), secretName, secretValue, whose).onSuccess {
                         secretName = ""
                         secretValue = ""
                     }
@@ -235,9 +265,19 @@ internal fun YourVault(settings: Settings) {
                     fontFamily = FontFamily.Monospace,
                     color = Design.Palette.inkDim.now,
                 )
-                TextButton(enabled = !busy, onClick = { act { vault.remove(Fleet(settings), grant) } }) { Text("Remove") }
+                TextButton(enabled = !busy, onClick = { act { vault.remove(Fleet(settings), grant, whose) } }) { Text("Remove") }
             }
-            Hint("Approve a machine from its page.")
+            if (member != null) {
+                // A MEMBER'S MACHINES ARE APPROVED FROM HERE. Each opens the
+                // same approval a machine's own page shows, and only a
+                // machine the fleet listed a key for is offered (C-2).
+                Hint("Approve a machine for ${member.name}:")
+                boxes.filter { it.publicJwk != null }.forEach { box ->
+                    OpenRow(box.hostId) { approving = box }
+                }
+            } else {
+                Hint("Approve a machine from its page.")
+            }
         }
 
         if (result.isNotBlank()) {
@@ -255,9 +295,13 @@ internal fun YourVault(settings: Settings) {
  *
  * Drawn only for a permanent box the fleet has a key for, and only once this
  * phone is signed in to GitHub, which is how the vault knows whose it is.
+ *
+ * FOR A MEMBER'S VAULT when one is given, opened from that member's
+ * credentials: the same comparison, and the approval is a grant in that
+ * vault and nowhere else (docs/members.md, "Box approval is per vault").
  */
 @Composable
-internal fun VaultApproval(settings: Settings, host: Fleet.Host) {
+internal fun VaultApproval(settings: Settings, host: Fleet.Host, member: Fleet.Member? = null) {
     val scope = rememberCoroutineScope()
     val vault = remember { PhoneVault(settings) }
     if (!PhoneGitHub(settings).signedIn) return
@@ -269,7 +313,7 @@ internal fun VaultApproval(settings: Settings, host: Fleet.Host) {
     var failed by remember { mutableStateOf(false) }
 
     suspend fun reload() {
-        runCatching { vault.list(Fleet(settings)) }
+        runCatching { vault.list(Fleet(settings), member?.id) }
             // The whole key hash, as the minter names the grant, not its
             // sixteen-character start.
             .onSuccess { c ->
@@ -311,19 +355,21 @@ internal fun VaultApproval(settings: Settings, host: Fleet.Host) {
                 // ONLY WHAT IT WAS GIVEN: a grant scoped by `only` was shown as
                 // "Approved" over the whole vault (eighth audit).
                 Text(
-                    if (held.only.isEmpty()) "Your credentials: Approved"
+                    if (member != null && held.only.isEmpty()) "${member.name}'s credentials: Approved"
+                    else if (member != null) "${member.name}'s credentials: only ${held.only.joinToString(", ") { PhoneVault.label(it) }}"
+                    else if (held.only.isEmpty()) "Your credentials: Approved"
                     else "Your credentials: only ${held.only.joinToString(", ") { PhoneVault.label(it) }}",
                     style = Design.Style.bodySmall,
                     color = Design.Palette.ok.now,
                 )
-                TextButton(enabled = !busy, onClick = { act { vault.remove(Fleet(settings), held) } }) { Text("Remove") }
+                TextButton(enabled = !busy, onClick = { act { vault.remove(Fleet(settings), held, member?.id) } }) { Text("Remove") }
             }
             else -> {
                 Hint("Check this matches fleetwright-sidecar identity on the machine before approving.")
                 SelectionContainer {
                     Text(fingerprint, style = Design.Style.label, fontFamily = FontFamily.Monospace, color = Design.Palette.ink.now)
                 }
-                OutlinedButton(enabled = !busy, onClick = { act { vault.approve(Fleet(settings), host) } }) { Text("Approve") }
+                OutlinedButton(enabled = !busy, onClick = { act { vault.approve(Fleet(settings), host, member?.id) } }) { Text("Approve") }
             }
         }
         if (result.isNotBlank()) {

@@ -57,6 +57,11 @@ struct StartRequest {
     /// And a group network beside it, to reach the other machines started
     /// in the same group; nil for none.
     var group: String? = nil
+    /// THE MEMBER IT RUNS AS, by id, or nil for the person themselves
+    /// (docs/members.md). With one set, `platform` is nil: a member's
+    /// session is not sent to a temporary machine, which holds its owner's
+    /// sign-in only.
+    var member: String? = nil
 }
 
 /// The machines the New session sheet can ask for, by the operating system a
@@ -121,8 +126,18 @@ private let vmImageTag = "vm:"
 struct StartSheet: View {
     let settings: Settings
     let onStart: (StartRequest) -> Void
+    /// The member this start is for, when the sheet was opened from that
+    /// member's page: the button there already said whom, so As offers that
+    /// member and nobody else.
+    var asMember: Fleet.Member? = nil
 
     @Environment(\.dismiss) private var dismiss
+    /// The members this person may start a session as, from the fleet's own
+    /// list. Empty until it answers and when there are none, and then
+    /// nothing asks As whom (C-2).
+    @State private var startAs: [Fleet.Member] = []
+    /// The member chosen under As, by id; empty is the person themselves.
+    @State private var member = ""
     @State private var brief = ""
     @State private var task = ""
     @State private var title = ""
@@ -180,6 +195,48 @@ struct StartSheet: View {
     @State private var vmGroup = ""
     /// In a lab of its own: "open", "closed", or empty for none.
     @State private var vmLab = ""
+
+    /// Whom the session runs as, by id: the member this sheet was opened
+    /// for, or the one chosen under As. Empty is the person themselves.
+    private var chosenMember: String { asMember?.id ?? member }
+
+    /// The members As offers: the one this sheet was opened for, or every
+    /// one the fleet says this person may start as.
+    private var asChoices: [Fleet.Member] { asMember.map { [$0] } ?? startAs }
+
+    /// Choose whom it runs as. A member's session is not sent to a new
+    /// machine, so one chosen under Where is put back to wherever fits.
+    private func chooseAs(_ id: String) {
+        member = id
+        if !id.isEmpty, chosenPlatform != nil { host = "" }
+    }
+
+    /// One choice under As: the name, the role under it, and a mark on the
+    /// one chosen, said to VoiceOver as well as drawn.
+    private func asRow(id: String, name: String, role: String?) -> some View {
+        Button { chooseAs(id) } label: {
+            HStack(spacing: Design.Space.insideTight) {
+                VStack(alignment: .leading, spacing: Design.Space.hair) {
+                    Text(name)
+                        .fleetType(.body)
+                        .foregroundStyle(Design.Palette.ink)
+                    if let role, !role.isEmpty {
+                        Text(role)
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                    }
+                }
+                Spacer(minLength: 0)
+                if chosenMember == id {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Design.Palette.accent)
+                        .accessibilityLabel("Chosen")
+                }
+            }
+            .contentShape(Rectangle())
+            .frame(minHeight: 44)
+        }
+    }
 
     /// The operating system when a new machine is chosen, else nil: "vm" for
     /// one from your hypervisor.
@@ -446,6 +503,27 @@ struct StartSheet: View {
                     }
                 }
 
+                // AS WHOM, above Where because it decides where: a member's
+                // session runs on that member's sign-ins and goes where its
+                // custodians approved. Asked only of somebody the fleet says
+                // may start as a member, and Yourself is first and chosen.
+                if !asChoices.isEmpty {
+                    Section {
+                        if asMember == nil { asRow(id: "", name: "Yourself", role: nil) }
+                        ForEach(asChoices) { choice in
+                            asRow(id: choice.id, name: choice.name, role: choice.role)
+                        }
+                    } header: {
+                        Text("As").fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
+                    } footer: {
+                        if let chosen = asChoices.first(where: { $0.id == chosenMember }) {
+                            Text("Runs on \(chosen.name)'s sign-ins, on a machine its custodians approved.")
+                                .fleetType(.label)
+                                .foregroundStyle(Design.Palette.inkDim)
+                        }
+                    }
+                }
+
                 // Only shown when there is a choice to make. One host is not a
                 // decision, and a picker with one entry is furniture. A fleet
                 // that can start a machine always has a choice: here, or a new
@@ -455,17 +533,23 @@ struct StartSheet: View {
                         Picker("Host", selection: $host) {
                             Text("Wherever fits").tag("")
                             ForEach(hosts, id: \.self) { h in Text(h).tag(h) }
-                            // FROM YOUR OWN HYPERVISOR, first among the new
-                            // machines: up in a minute or two, and billed to
-                            // nobody. Asked for: "Still can't run sessions on it".
-                            ForEach(images) { image in
-                                Text(standby?.template == image.template && (standby?.ready ?? 0) > 0
-                                     ? "\(image.label), ready now" : image.label)
-                                    .tag(vmImageTag + image.template)
-                            }
-                            if canStartMachine {
-                                ForEach(newMachineChoices, id: \.platform) { choice in
-                                    Text(choice.label).tag(newMachineTag + choice.platform)
+                            // A NEW MACHINE IS FOR A PERSON'S OWN SESSION. One
+                            // started as a member goes to a machine that member's
+                            // custodians approved, so with a member chosen none of
+                            // these is offered (C-2).
+                            if chosenMember.isEmpty {
+                                // FROM YOUR OWN HYPERVISOR, first among the new
+                                // machines: up in a minute or two, and billed to
+                                // nobody. Asked for: "Still can't run sessions on it".
+                                ForEach(images) { image in
+                                    Text(standby?.template == image.template && (standby?.ready ?? 0) > 0
+                                         ? "\(image.label), ready now" : image.label)
+                                        .tag(vmImageTag + image.template)
+                                }
+                                if canStartMachine {
+                                    ForEach(newMachineChoices, id: \.platform) { choice in
+                                        Text(choice.label).tag(newMachineTag + choice.platform)
+                                    }
                                 }
                             }
                         }
@@ -654,6 +738,12 @@ struct StartSheet: View {
                 offeredHosts = ((try? await fleet.fleetHosts()) ?? [])
                     .filter { $0.holder != true && ($0.takesSessions ?? ($0.state == "healthy")) }
                 hosts = offeredHosts.map(\.hostId)
+                // WHOM THIS PERSON MAY START AS, from the fleet's own list.
+                // A failure offers nobody, and the start is their own.
+                if asMember == nil, let org = try? await fleet.members(), org.ok != false {
+                    let allowed = org.you?.startAs ?? []
+                    startAs = (org.members ?? []).filter { allowed.contains($0.id) }
+                }
                 // A THROW IS NOT AN EMPTY FLEET. Hosts too old to know the verb
                 // refuse it by name, and so does a coordinator that has not been
                 // updated — treating either as "no profiles" would quietly hide
@@ -760,7 +850,8 @@ struct StartSheet: View {
         }
         let trimmedBrief = brief.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTask = task.trimmingCharacters(in: .whitespacesAndNewlines)
-        let platform = chosenPlatform
+        // A member's session is never sent to a new machine.
+        let platform = chosenMember.isEmpty ? chosenPlatform : nil
         onStart(StartRequest(
             title: finalTitle.isEmpty ? nil : finalTitle,
             brief: trimmedBrief.isEmpty ? nil : trimmedBrief,
@@ -780,7 +871,8 @@ struct StartSheet: View {
             network: chosenImage == nil ? nil
                 : !vmLab.isEmpty ? chosenImage?.freeLab(open: vmLab == "open")?.id
                 : vmNetwork.isEmpty ? nil : vmNetwork,
-            group: chosenImage == nil || vmGroup.isEmpty || !vmLab.isEmpty ? nil : vmGroup
+            group: chosenImage == nil || vmGroup.isEmpty || !vmLab.isEmpty ? nil : vmGroup,
+            member: chosenMember.isEmpty ? nil : chosenMember
         ))
         dismiss()
     }

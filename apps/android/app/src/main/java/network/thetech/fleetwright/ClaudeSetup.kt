@@ -59,10 +59,15 @@ internal suspend fun claudeKept(settings: Settings): ClaudeKept {
  * keep one was a field deep under Credentials. This is that field where it is
  * needed: on Sessions after sign-in, and in New session for a new machine. The
  * same words as iOS, held equal by test/claude-setup-in-apps.test.js.
+ *
+ * FOR A MEMBER, when one is given (docs/members.md): the same rows, kept in
+ * that member's vault by one of its custodians and never in this person's
+ * own. The sentences name the member, because "my Claude login" over
+ * somebody else's vault would be a claim about the wrong one.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
+internal fun ClaudeSetup(settings: Settings, member: Fleet.Member? = null, onKept: () -> Unit = {}) {
     val scope = rememberCoroutineScope()
     val phone = remember { PhoneGitHub(settings) }
     val uri = LocalUriHandler.current
@@ -81,6 +86,8 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
     var page by remember { mutableStateOf<String?>(null) }
     var pageHost by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
+    // The save button's words: whose login it is. The same on iOS.
+    val saveLabel = member?.let { "Save ${it.name}'s Claude login" } ?: "Save my Claude login"
 
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         val signedIn = remember(generation) { phone.signedIn }
@@ -92,7 +99,10 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                 machines = Fleet(settings).fleetHosts().filter { it.state != "offline" }.map { it.hostId }.sorted()
                 if (machine.isBlank()) machine = machines.firstOrNull().orEmpty()
             }
-            Hint("Sessions run on your Claude subscription. Add it once.")
+            Hint(
+                member?.let { "Sessions started as ${it.name} run on the Claude sign-in saved here. Add it once." }
+                    ?: "Sessions run on your Claude subscription. Add it once.",
+            )
             val opened = page
             if (opened != null) {
                 // A MACHINE IS MAKING IT. The page opened by itself; the button
@@ -124,7 +134,7 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                                 busy = true
                                 val sending = code
                                 code = ""
-                                val r = phone.keepFromMachine(Fleet(settings), pageHost, sending)
+                                val r = phone.keepFromMachine(Fleet(settings), pageHost, sending, member?.id)
                                 failed = r.isFailure
                                 result = r.getOrElse { it.message ?: "$pageHost did not sign you in." }
                                 if (r.isSuccess) {
@@ -135,7 +145,7 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                             }
                         },
                         modifier = Modifier.heightIn(min = 48.dp),
-                    ) { Text(if (busy) "Saving…" else "3. Save my Claude login") }
+                    ) { Text(if (busy) "Saving…" else if (member == null) "3. Save my Claude login" else "3. $saveLabel") }
                     TextButton(onClick = { page = null; code = "" }, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text("Cancel")
                     }
@@ -206,7 +216,11 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                     onClick = {
                         scope.launch {
                             busy = true
-                            val r = phone.depositClaudeLogin(Fleet(settings), draft)
+                            val r = if (member != null) {
+                                PhoneVault(settings).keepClaude(Fleet(settings), draft, null, member.id)
+                            } else {
+                                phone.depositClaudeLogin(Fleet(settings), draft)
+                            }
                             failed = r.isFailure
                             result = r.getOrElse { it.message ?: "Your fleet did not save it." }
                             if (r.isSuccess) {
@@ -217,7 +231,7 @@ internal fun ClaudeSetup(settings: Settings, onKept: () -> Unit = {}) {
                         }
                     },
                     modifier = Modifier.heightIn(min = 48.dp),
-                ) { Text(if (busy) "Saving…" else "Save my Claude login") }
+                ) { Text(if (busy) "Saving…" else saveLabel) }
             }
         }
         if (result.isNotBlank()) {

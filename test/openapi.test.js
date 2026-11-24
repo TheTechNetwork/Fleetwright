@@ -55,7 +55,7 @@ function bodyFor(path) {
 
 /** A path with its parameters filled in, so it can actually be requested. */
 function concrete(path, ids = {}) {
-  const id = path.startsWith('/api/runner-tokens') ? ids.runnerTokenId : path.startsWith('/api/enroll/') ? ids.pinId : ids.clientId;
+  const id = path.startsWith('/api/runner-tokens') ? ids.runnerTokenId : path.startsWith('/api/enroll/') ? ids.pinId : path.startsWith('/api/members/') ? ids.memberId : ids.clientId;
   return path
     .replace('{hostId}', ids.hostId || 'some-host')
     .replace('{id}', id || 'some-id')
@@ -80,7 +80,9 @@ async function seed(core) {
   const { client: runner } = await core.runnerTokens.issue('a repository', {});
   core.enrollment.mint({ purpose: 'host' });
   const [pin] = core.enrollment.outstanding();
-  return { hostId: 'seeded-host', clientId: client.id, email: 'invited@example.com', runnerTokenId: runner.id, pinId: pin.id };
+  // A member, so its DELETE is routed to something that exists (docs/members.md).
+  core.setMember(null, 'seeded-member', { name: 'Seeded', kind: 'agent', role: 'tester' });
+  return { memberId: 'seeded-member', hostId: 'seeded-host', clientId: client.id, email: 'invited@example.com', runnerTokenId: runner.id, pinId: pin.id };
 }
 
 /** The Worker, wired to a real Durable Object rather than a stub. */
