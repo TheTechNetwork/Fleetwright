@@ -76,8 +76,17 @@ lock before it sends the start to a box, so of two people who press Start at
 once the second is refused, in words that name the session, the box and since
 when. The lock is confirmed with the session's name when the box answers, and
 dropped if the box refuses. A box that does not answer in time leaves it held
-for five minutes: its session is taken up the moment the box speaks of it, and
-otherwise the start is taken not to have happened.
+for five minutes past the time its answer was waited for: its session is
+taken up the moment the box speaks of it, and otherwise the start is taken
+not to have happened and the task can be started again.
+
+**Only the box a start was sent to is heard about a task.** After that hold
+the coordinator still keeps which box the unanswered start went to, for a
+day, and that box alone can take the task up: a session that did start may
+work for hours before it first comes back. No other box's word about a task
+is taken, with or without a result. Any connected box's used to be, so one
+that had never been sent a task could name it (ids count up) and have its
+own words filed as the assignee's result.
 
 **The lock follows the box's word.** It ends when that box says the session
 ended or failed, when the box's own list of sessions no longer has it, when

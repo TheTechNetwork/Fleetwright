@@ -98,6 +98,7 @@ export const RESULT_FOOTER =
  * @property {'off'|'manual'|'auto'} [routing]  this task's own routing mode; absent follows the fleet's (docs/routing.md)
  * @property {import('./routing.js').Route} [route]  the last routing decision about it
  * @property {TaskLock|null} lock
+ * @property {{ hostId: string, member: string, by: string, at: number }} [sent]  the box a start went to and never answered from (expireLock); the coordinator's own, never sent to a client
  * @property {TaskResult|null} result
  * @property {Handoff[]} handoffs
  * @property {string} createdBy
@@ -351,7 +352,29 @@ export function lockTask(task, { member, branch, hostId, by, at }) {
       ? `${task.id} has come back and is waiting for somebody to accept it or reopen it.`
       : `${task.id} is ${task.state}.`);
   }
-  return { ok: true, task: { ...task, lock: { session: null, hostId, member, by, at }, updatedAt: at } };
+  // A new start is the one that counts: which box an earlier, unanswered
+  // one was sent to (`sent`, below) is forgotten with this.
+  const { sent: _earlier, ...rest } = task;
+  return { ok: true, task: { ...rest, lock: { session: null, hostId, member, by, at }, updatedAt: at } };
+}
+
+/**
+ * A start's lock ran out with no answer from its box (the coordinator's
+ * sweep). The lock goes, and WHICH BOX IT WAS SENT TO is kept, because that
+ * box may have started the session all the same and is the only one whose
+ * word about this task is taken up afterwards (`confirmLock`, and
+ * org-tasks.js `onSession`). Any box used to be: one that was never sent the
+ * task could say a session of its own had come back with a result for it,
+ * and that became the task's result under the assignee's name.
+ *
+ * @param {Task} task
+ * @param {{ at: number }} when
+ * @returns {Task}
+ */
+export function expireLock(task, { at }) {
+  if (!task.lock || task.lock.session) return task;
+  const { hostId, member, by } = task.lock;
+  return { ...releaseLock(task, { by, at, quiet: true }), sent: { hostId, member, by, at: task.lock.at } };
 }
 
 /**
@@ -365,8 +388,9 @@ export function lockTask(task, { member, branch, hostId, by, at }) {
  */
 export function confirmLock(task, { session, hostId, member, by, at }) {
   const lock = task.lock ?? { session: null, hostId, member: member ?? task.assignee ?? '', by: by ?? '', at };
+  const { sent: _spent, ...rest } = task;
   return {
-    ...task,
+    ...rest,
     state: 'working',
     lock: { ...lock, session, hostId },
     handoffs: handed(task, { at, by: lock.by, kind: 'started', to: lock.member, session, hostId }),
