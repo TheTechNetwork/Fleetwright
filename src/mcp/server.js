@@ -130,7 +130,7 @@ export function backAtPrompt(session) {
 }
 
 /**
- * The machine images this person can start a VM from, as `fleet_status`
+ * The VM images this person can start a machine from, as `fleet_status`
  * prints them under the hosts.
  *
  * `provision` for platform `vm` or `lab` asks for a `template` "as status
@@ -151,15 +151,15 @@ export function backAtPrompt(session) {
  */
 function describeVmImages(images) {
   if (!Array.isArray(images)) {
-    return 'Machine images: could not ask the coordinator which images you can start a VM from.';
+    return 'VM images: could not ask the coordinator which images you can start a VM from.';
   }
   if (!images.length) {
     return (
-      'Machine images: none. No connected box holds a hypervisor token of yours that offers one, ' +
+      'VM images: none. No connected box holds a hypervisor token of yours that offers one, ' +
       'so fleet_provision cannot make a vm or lab machine for you yet.'
     );
   }
-  const lines = ['Machine images you can start a VM from (fleet_provision platform `vm`, `template` = the id):'];
+  const lines = ['VM images (fleet_provision platform `vm`, `template` = the id):'];
   for (const i of images) {
     if (!i || typeof i.template !== 'string') continue;
     const kind = i.kind === 'proxmox' ? 'Proxmox VE' : i.kind === 'xo' ? 'Xen Orchestra' : 'hypervisor';
@@ -736,7 +736,7 @@ export class McpServer {
       'the same on GitHub\u2019s larger machine, billed by the minute; it is refused unless the person allowed',
       'larger machines for their runner repository, and the refusal says how.',
       'A machine from the person\u2019s own hypervisor is platform `vm`: fleet_status with no name lists the',
-      'machine images they can start one from, each with the id `template` takes.',
+      'VM images they can start one from, each with the id `template` takes.',
       '',
       'Watching one that is actually working:',
       '  1. fleet_start with a `task` (or a `profile`), naming a host or a tag for a kind of machine',
@@ -999,6 +999,12 @@ export class McpServer {
       if (here) return here;
     }
 
+    // ASKED NOW, ANSWERED BELOW: the fleet-wide status also ends with the
+    // person's VM images (describeVmImages), and that request goes out beside
+    // the fan-out rather than after it, so it costs no wait of its own.
+    // #vmImages never rejects; it answers null when it cannot say.
+    const vmImages = tool.verb === 'status' && !params.name ? this.#vmImages() : null;
+
     /** @type {any} */
     let reply;
     try {
@@ -1091,12 +1097,12 @@ export class McpServer {
       if (still) reply = { ...reply, text: `${reply?.text ?? ''}\n\n${still}` };
     }
 
-    // AND THE MACHINE IMAGES, on the fleet-wide answer only: the one id
-    // `provision` for a vm needs and nothing else printed (describeVmImages).
-    // Asked of the coordinator beside the fan-out rather than inside it,
-    // because hosts do not know whose pools are whose and the snapshot does.
-    if (reply?.ok !== false && tool.verb === 'status' && !params.name) {
-      reply = { ...reply, text: `${reply?.text ?? ''}\n\n${describeVmImages(await this.#vmImages())}` };
+    // AND THE VM IMAGES, on the fleet-wide answer only: the one id `provision`
+    // for a vm needs and nothing else printed (describeVmImages). Asked of the
+    // coordinator rather than the hosts, because hosts do not know whose pools
+    // are whose and the snapshot does; started above, beside the fan-out.
+    if (vmImages && reply?.ok !== false) {
+      reply = { ...reply, text: `${reply?.text ?? ''}\n\n${describeVmImages(await vmImages)}` };
     }
 
     const failed = reply?.ok === false;
@@ -1195,7 +1201,7 @@ export class McpServer {
   }
 
   /**
-   * The machine images this credential's person can start a VM from, from the
+   * The VM images this credential's person can start a machine from, from the
    * coordinator's own snapshot (`/api/hosts`, core.js vmImagesFor), the same
    * list New session › Where draws on the phones. Null when it cannot say:
    * the route refused, an older coordinator without the field, or no answer.
