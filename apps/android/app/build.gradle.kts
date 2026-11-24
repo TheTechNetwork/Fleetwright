@@ -85,7 +85,20 @@ val googleWebClientId: String? = run {
 
 android {
   namespace = "network.thetech.fleetwright"
-  compileSdk = 37
+  // 37.1, AND SAID AS A MINOR LEVEL. Compose 1.13 refuses to be compiled
+  // against less ("requires libraries and applications that depend on it to
+  // compile against version 37.1 or later"), which is how the androidx update
+  // stopped building: `compileSdk = 37` is 37.0. The platform every builder
+  // installs was already `android-37.1` (android.yml, codeql.yml), so this is
+  // the number catching up with the SDK and not a new SDK.
+  //
+  // What the app is compiled against, and nothing about what it runs on or
+  // opts into: `targetSdk` and `minSdk` below are unchanged.
+  compileSdk {
+    version = release(37) {
+      minorApiLevel = 1
+    }
+  }
 
   defaultConfig {
     applicationId = "network.thetech.fleetwright"
