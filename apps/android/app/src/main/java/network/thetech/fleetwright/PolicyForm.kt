@@ -128,7 +128,7 @@ internal fun PolicyForm(
             enabled = enabled,
             title = if (there == null) "Build the edge router on it" else "Keep the edge router on it",
             line = when {
-                there == null -> "2 vCPU · 2 GiB · 3 GiB disk · 470 MB download"
+                there == null -> "2 vCPU · 4 GiB · 3 GiB disk · 470 MB download"
                 there.running -> "Running" + (there.sr?.let { " · disk on $it" } ?: "")
                 else -> "Stopped · Apply starts it" + (there.sr?.let { " · disk on $it" } ?: "")
             },
