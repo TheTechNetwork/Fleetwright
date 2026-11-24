@@ -57,6 +57,8 @@ object ReasonWords {
         "host_busy" to "Machine busy",
         "at_capacity" to "Machine full",
         "stale_placement" to "Out of date. Ask again",
+        "needs_approval" to "Needs approval",
+        "over_budget" to "Over budget",
         "name_unavailable" to "Name in use",
         "ambiguous_host" to "Which machine?",
         "no_host_matches" to "No machine with those tags",
@@ -93,7 +95,13 @@ object ReasonWords {
      */
     val ACTIVITY: Map<String, String> = mapOf(
         "intent" to "Asked for",
+        "approval.answered" to "Approval answered",
+        "approval.asked" to "Approval asked",
+        "approval.used" to "Approval used",
         "browse.opened" to "Page through a machine",
+        "budget.over" to "Over budget",
+        "budget.warn" to "Budget nearly spent",
+        "budgets.changed" to "Budget rules changed",
         "claude.ended" to "Claude login ended",
         "claude.refused" to "Claude login refused",
         "claude.deposited" to "Claude token saved",

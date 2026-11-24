@@ -495,6 +495,11 @@ struct Fleet {
         /// reason as everything above: a screen that decided from the sentence
         /// would decide from this week's wording.
         var error: Refusal?
+        /// The approval a start is waiting on, when the fleet refused it for
+        /// want of one (`needs_approval`, docs/budgets.md). Nil on every
+        /// other reply, on a start refused outright at a budget
+        /// (`over_budget`), and from a fleet older than approvals.
+        var approval: Approval?
 
         struct Refusal: Codable, Hashable {
             let code: String?
@@ -997,7 +1002,9 @@ struct Fleet {
         let instructions: String?
         let engines: [Engine]?
         let hosts: Placement?
-        /// Stored, and enforced by nothing yet.
+        /// A monthly budget, in dollars at API prices. The fleet counts
+        /// against it, and what happens when it is passed is the fleet's
+        /// setting (docs/budgets.md).
         let budgetUsdMonth: Double?
 
         struct Engine: Codable, Hashable {
@@ -1324,6 +1331,139 @@ struct Fleet {
     /// start. With none, the fleet places it where the member runs.
     func startOnTask(_ params: [String: String], host: String? = nil) async throws -> Reply {
         try await intent("start", params: params, host: host)
+    }
+
+    /// What the fleet does at a member's budget, and what else it asks a
+    /// person about before a start (docs/budgets.md). An admin writes it and
+    /// everybody reads it.
+    struct BudgetSettings: Codable, Hashable {
+        /// "off", "ask" or "refuse".
+        let budgets: String?
+        /// Whether a member start that skips permission prompts is asked about.
+        let dangerous: Bool?
+        /// The kinds of work whose tasks are asked about, at most 20.
+        let workTypes: [String]?
+        /// Who changed it last, and when. Nil on a fleet that never set it.
+        let updatedBy: String?
+        let updatedAt: Double?
+    }
+
+    /// What one member has spent this month, as the fleet says it.
+    ///
+    /// THE SENTENCE AND NOT THE FIGURES. The fleet sends the dollars beside
+    /// `words` and this does not read them: the sentence says "At least"
+    /// when a session reported no cost, and a line rebuilt here from a
+    /// number would say a floor as a total (C-5). So there is no field a
+    /// screen could rebuild one from.
+    struct MemberSpend: Codable, Hashable {
+        let member: String?
+        /// Whether what was counted is at or past the member's budget.
+        let over: Bool?
+        let words: String?
+    }
+
+    /// The answer to reading the budgets and to changing the setting.
+    /// `settings` is nil when the answer carried none: a refusal, which has
+    /// `text`, or a fleet older than budgets, which has neither. `members`
+    /// lists only the members this person may see the spending of.
+    struct BudgetsReply: Codable {
+        let ok: Bool?
+        let settings: BudgetSettings?
+        let members: [MemberSpend]?
+        let you: Standing?
+        let text: String?
+
+        struct Standing: Codable, Hashable {
+            let admin: Bool?
+        }
+    }
+
+    func budgets() async throws -> BudgetsReply {
+        try JSONDecoder().decode(BudgetsReply.self, from: try await get("/api/budgets"))
+    }
+
+    /// Change what a budget does and what needs approval, as an admin. All
+    /// three are sent, because the page that sends them shows all three.
+    func setBudgetSettings(budgets: String, dangerous: Bool, workTypes: [String]) async throws -> BudgetsReply {
+        let body: [String: Any] = ["budgets": budgets, "dangerous": dangerous, "workTypes": workTypes]
+        return try JSONDecoder().decode(BudgetsReply.self, from: try await send("PUT", "/api/budgets/settings", body: body))
+    }
+
+    /// A start that waits for a person (docs/budgets.md, "An approval"):
+    /// who asked, as which member, on which task, why, and where it stands.
+    ///
+    /// READ FIELD BY FIELD, AND NEVER REFUSED. One rides on a start's reply
+    /// beside the fleet's sentence, and a reply that failed to decode over
+    /// the shape of an approval would lose that sentence. A field that is
+    /// absent or of another shape is nil here.
+    struct Approval: Codable, Hashable, Identifiable {
+        let id: String
+        let member: String?
+        let memberName: String?
+        let task: String?
+        let reasons: [Reason]?
+        let askedBy: String?
+        let askedAt: Double?
+        /// "waiting", "approved", "declined", "used" or "expired".
+        let state: String?
+        let decidedBy: String?
+        let note: String?
+        /// Whether it is this person's to answer. The fleet's word, and the
+        /// only thing Approve and Decline are drawn from (C-2).
+        let mayAnswer: Bool?
+        /// The whole of it as one sentence, as the fleet wrote it.
+        let words: String?
+
+        /// One reason a start needs approval, with the fleet's sentence for it.
+        struct Reason: Codable, Hashable {
+            let kind: String?
+            let text: String?
+        }
+
+        init(from decoder: Decoder) throws {
+            let keyed = try? decoder.container(keyedBy: CodingKeys.self)
+            id = ((try? keyed?.decodeIfPresent(String.self, forKey: .id)) ?? nil) ?? ""
+            member = (try? keyed?.decodeIfPresent(String.self, forKey: .member)) ?? nil
+            memberName = (try? keyed?.decodeIfPresent(String.self, forKey: .memberName)) ?? nil
+            task = (try? keyed?.decodeIfPresent(String.self, forKey: .task)) ?? nil
+            reasons = (try? keyed?.decodeIfPresent([Reason].self, forKey: .reasons)) ?? nil
+            askedBy = (try? keyed?.decodeIfPresent(String.self, forKey: .askedBy)) ?? nil
+            askedAt = (try? keyed?.decodeIfPresent(Double.self, forKey: .askedAt)) ?? nil
+            state = (try? keyed?.decodeIfPresent(String.self, forKey: .state)) ?? nil
+            decidedBy = (try? keyed?.decodeIfPresent(String.self, forKey: .decidedBy)) ?? nil
+            note = (try? keyed?.decodeIfPresent(String.self, forKey: .note)) ?? nil
+            mayAnswer = (try? keyed?.decodeIfPresent(Bool.self, forKey: .mayAnswer)) ?? nil
+            words = (try? keyed?.decodeIfPresent(String.self, forKey: .words)) ?? nil
+        }
+    }
+
+    /// The approvals this person asked for and the ones they may answer,
+    /// newest first. `approvals` is nil when the answer carried no list: a
+    /// refusal, which has `text`, or a fleet older than approvals.
+    struct ApprovalsReply: Codable {
+        let ok: Bool?
+        let approvals: [Approval]?
+        let text: String?
+    }
+
+    /// The answer to answering one. A refusal carries `text` and no approval.
+    struct ApprovalReply: Codable {
+        let ok: Bool?
+        let approval: Approval?
+        let text: String?
+    }
+
+    func approvals() async throws -> ApprovalsReply {
+        try JSONDecoder().decode(ApprovalsReply.self, from: try await get("/api/approvals"))
+    }
+
+    /// Approve or decline one start. `answer` is "approve" or "decline", and
+    /// a note goes only when there is one. Who may answer is the fleet's to
+    /// check, and its refusal is a sentence.
+    func answerApproval(id: String, answer: String, note: String? = nil) async throws -> ApprovalReply {
+        var body: [String: Any] = ["answer": answer]
+        if let note, !note.isBlank { body["note"] = note }
+        return try JSONDecoder().decode(ApprovalReply.self, from: try await post("/api/approvals/\(id)", body: body))
     }
 
     /// Where to start a runner from this phone, and the ticket to start it with.

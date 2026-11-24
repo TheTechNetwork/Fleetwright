@@ -415,6 +415,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 if kind == "task", let taskId = info["taskId"] as? String, taskPageId(taskPagePrefix + taskId) != nil {
                     return open(task: taskId)
                 }
+                // A START WAITING ON THIS PERSON, OR THEIR OWN ASK ANSWERED
+                // (docs/budgets.md), opens Approvals, where the ones waiting
+                // on them are first with Approve and Decline.
+                if kind == "approval" { return openApprovals() }
+                // A MEMBER NEAR OR PAST ITS BUDGET opens that member's page,
+                // where This month is. The id is the payload's, so it is
+                // read as a member's id or not at all (memberPageId).
+                if kind == "budget", let member = info["member"] as? String, memberPageId(memberPagePrefix + member) != nil {
+                    return open(member: member)
+                }
                 // A POOL XEN ORCHESTRA NO LONGER SHOWS, or one it shows again.
                 // Reconnect on a lost one opens the reconnect for it, starting
                 // from the machine that noticed (`hostId`), and Face ID is the
@@ -513,6 +523,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     @MainActor
     private func open(task id: String) {
         NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["you": taskPagePrefix + id])
+    }
+
+    /// And for a start that waits on a person, or an ask that was answered:
+    /// FleetApp opens You on Approvals.
+    @MainActor
+    private func openApprovals() {
+        NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["you": approvalsPage])
+    }
+
+    /// And for a member near or past its budget: FleetApp opens You on that
+    /// member's page.
+    @MainActor
+    private func open(member id: String) {
+        NotificationCenter.default.post(name: .notificationOpened, object: nil, userInfo: ["you": memberPagePrefix + id])
     }
 
     /// And for a pool: FleetApp opens Machines on that pool's page.

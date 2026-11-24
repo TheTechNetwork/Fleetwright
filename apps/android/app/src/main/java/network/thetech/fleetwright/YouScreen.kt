@@ -67,9 +67,11 @@ fun YouScreen(
     modifier: Modifier = Modifier,
     /**
      * The page a notification asked to open, by name: "credentials", when a
-     * manager changed this person's vault, or "task:" and a task's id, when
-     * one waits for this person to choose its member. Opened once, then
-     * [onOpened].
+     * manager changed this person's vault; "task:" and a task's id, when
+     * one waits for this person to choose its member; "approvals", when a
+     * start waits on this person or their own ask was answered; or
+     * "member:" and a member's id, when it is near or past its budget.
+     * Opened once, then [onOpened].
      */
     opening: String? = null,
     onOpened: () -> Unit = {},
@@ -160,7 +162,15 @@ fun YouScreen(
             onStart = onStart,
         )
     }
+    // A MEMBER'S PAGE, asked for by id from a notification about its budget:
+    // the Organization, with that member's page open over it.
+    memberPageId(open)?.let { id ->
+        OrgScreen(settings, onDismiss = { open = null }, onStart = onStart, opening = id)
+    }
     when (open) {
+        // APPROVALS, where the one a notification was about is first if it
+        // waits on this person.
+        APPROVALS_PAGE -> ApprovalsScreen(settings, onDismiss = { open = null }, onStart = onStart)
         "credentials" -> CredentialsScreen(settings, onDismiss = { open = null })
         "temporary" -> TemporaryMachinesSheet(settings, onDismiss = { open = null })
         "linked" -> LinkedReposSheet(settings, onDismiss = { open = null })

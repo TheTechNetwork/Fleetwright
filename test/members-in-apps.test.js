@@ -34,7 +34,7 @@ test('the words about the organization are the same on both phones', () => {
     // A member's page.
     'Reports to',
     'Its sessions open with these.',
-    'Stored. Nothing enforces it yet.',
+    'Dollars a month, at API prices. Approvals decides what happens when it is passed.',
     'Start a session as ',
     "'s credentials",
     // Custody is the vault's answer, and the page says when it has none.

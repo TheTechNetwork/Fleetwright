@@ -182,6 +182,12 @@ struct FleetView: View {
     /// quotes, which is drawn as it always was. Set beside every `status` a
     /// refusal can set.
     @State private var statusTitle: String?
+    /// A START YOUR FLEET REFUSED AT A BUDGET OR FOR WANT OF APPROVAL
+    /// (docs/budgets.md), with the start that was sent, so the same one can
+    /// be sent again. Drawn in the status card's place while its sentence is
+    /// still the status, and gone with it.
+    @State private var refusedStart: RefusedStart?
+    @State private var lastStart: StartRequest?
     @State private var busy = false
     @State private var showingStart = false
     /// Counted rather than flagged, so the same feedback twice in a row is
@@ -267,12 +273,23 @@ struct FleetView: View {
                     // THE COORDINATOR'S OWN WORDS, on an inner surface rather
                     // than a card: this is evidence quoted from somewhere else,
                     // and it should not look like something this screen said.
+                    // A START THAT WAITS FOR APPROVAL, OR STOPPED AT A BUDGET,
+                    // is its sentence in full and what can be done about it
+                    // (RefusedStartView). It wears the attention ring only
+                    // when the approval is this person's to give: that is
+                    // the one card here asking them something.
                     // A REFUSAL LEADS WITH ITS TITLE (statusTitle), the one to
                     // three words for its code, and keeps the sentence under
                     // Details, collapsed: the row says the verdict, the
                     // mechanism waits to be asked for (docs/design-system.md,
                     // Words). Same as Android.
-                    if let statusTitle {
+                    if let refusedStart, let lastStart, refusedStart.text == status {
+                        RefusedStartView(settings: settings, refused: refusedStart) { startInBackground(lastStart) }
+                            .fleetCard(radius: Design.Radius.row, padding: Design.Space.inside,
+                                       ring: refusedStart.mine != nil ? Design.Palette.attention.opacity(0.55) : Design.Palette.ring,
+                                       fill: Design.Palette.inner)
+                            .fleetRow()
+                    } else if let statusTitle {
                         VStack(alignment: .leading, spacing: Design.Space.hair) {
                             Text(statusTitle)
                                 .fleetType(.body)
@@ -637,6 +654,9 @@ struct FleetView: View {
         status = request.profile == nil && request.task == nil
             ? "Starting a session. It will come up idle, waiting for you."
             : "Starting a session. You will get a notification when it is ready."
+        // Kept, so a start that waits for approval can be sent again as it was.
+        refusedStart = nil
+        lastStart = request
         Task {
             do {
                 let reply = try await Fleet(settings: settings).start(
@@ -654,6 +674,7 @@ struct FleetView: View {
                 await MainActor.run {
                     status = text
                     statusTitle = reply.ok == false ? reply.refusedStartTitle : nil
+                    refusedStart = RefusedStart(reply)
                 }
                 // BY WHAT THE FLEET SAID, not by whether it answered. A refusal
                 // is an answer, and "Session ready" over "unknown (connected,

@@ -69,7 +69,13 @@ import org.json.JSONObject
  * test/members-in-apps.test.js.
  */
 @Composable
-internal fun OrgScreen(settings: Settings, onDismiss: () -> Unit, onStart: (StartRequest) -> Unit = {}) {
+internal fun OrgScreen(
+    settings: Settings,
+    onDismiss: () -> Unit,
+    onStart: (StartRequest) -> Unit = {},
+    /** A member whose page a notification asked for, by id: opened over the list once it has loaded. */
+    opening: String? = null,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // Three states, each said: asking (neither set), answered, and failed with
@@ -85,10 +91,16 @@ internal fun OrgScreen(settings: Settings, onDismiss: () -> Unit, onStart: (Star
     val signIns = remember { mutableStateMapOf<String, MemberSignIn>() }
     // The member whose page is open, by id, so the page draws the record as
     // the list last had it.
-    var opened by remember { mutableStateOf<String?>(null) }
+    var opened by remember { mutableStateOf(opening) }
     var adding by remember { mutableStateOf(false) }
     // The fleet's routing is open, on its own page.
     var routing by remember { mutableStateOf(false) }
+    // Approvals is open, and how many wait on this person, once the fleet
+    // has said. Null until then, after a failure and from a fleet older
+    // than approvals, and then the row says nothing beside its name:
+    // unknown is not none.
+    var approvals by remember { mutableStateOf(false) }
+    var approvalsWaiting by remember { mutableStateOf<Int?>(null) }
     // Every member as a file, once an admin asked for them.
     var files by remember { mutableStateOf(listOf<Fleet.MemberFile>()) }
     var importText by remember { mutableStateOf("") }
@@ -121,6 +133,10 @@ internal fun OrgScreen(settings: Settings, onDismiss: () -> Unit, onStart: (Star
         members = list
         you = got.you
         answered = true
+        // HOW MANY APPROVALS WAIT ON THIS PERSON, for the row. Only from an
+        // answer that carries the list: anything else leaves it unknown.
+        approvalsWaiting = Fleet(settings).approvals().getOrNull()
+            ?.takeIf { it.ok != false }?.approvals?.count { approvalWaitsOnYou(it) }
         // ASK EACH TEAM MEMBER'S VAULT whether it holds a Claude sign-in. One
         // at a time, because each is a request this phone seals and the vault
         // answers under one lock. A vault that refuses, or cannot be asked
@@ -175,6 +191,18 @@ internal fun OrgScreen(settings: Settings, onDismiss: () -> Unit, onStart: (Star
     // WHICH MEMBER A TASK GOES TO when nobody was given it (docs/routing.md):
     // the fleet's setting, which everybody reads and an admin sets.
     if (routing) RoutingScreen(settings, members = members, onDismiss = { routing = false })
+    // THE STARTS THAT WAIT FOR A PERSON (docs/budgets.md). Closing it asks
+    // again, so the count beside its row is what is waiting now.
+    if (approvals) {
+        ApprovalsScreen(
+            settings,
+            onDismiss = {
+                approvals = false
+                asked++
+            },
+            onStart = onStart,
+        )
+    }
 
     FullScreen(title = "Organization", onDismiss = onDismiss) {
         val why = failed
@@ -213,6 +241,10 @@ internal fun OrgScreen(settings: Settings, onDismiss: () -> Unit, onStart: (Star
                     ) { opened = row.member.id }
                 }
                 if (canAdd) OpenRow("Add a member") { adding = true }
+                // The row is for everybody: it also lists a person's own
+                // asks. How many wait on this one is beside the name when
+                // any do.
+                OpenRow("Approvals", value = approvalsWaiting?.let { describeApprovals(it) }) { approvals = true }
                 // The row is for everybody, and its page draws a control
                 // only for an admin.
                 OpenRow("Routing") { routing = true }
@@ -510,6 +542,9 @@ private fun MemberPage(
         // from a fleet older than them.
         if (member.engines.isNotEmpty()) MemberFact("Engines", engineListWords(member.engines))
         member.tag?.takeIf { it.isNotBlank() }?.let { MemberFact("Machine tag", it) }
+        // THIS MONTH, in the fleet's sentence, and only for a member the
+        // fleet lists for this person (MemberSpendLine).
+        MemberSpendLine(settings, member.id)
 
         // WHAT ITS SESSIONS OPEN WITH. Read here and changed under Edit; in a
         // frame of its own that scrolls, because four kilobytes of
@@ -825,7 +860,7 @@ private fun MemberForm(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth(),
         )
-        Hint("Stored. Nothing enforces it yet.")
+        Hint("Dollars a month, at API prices. Approvals decides what happens when it is passed.")
 
         if (isAdmin) {
             OutlinedTextField(
