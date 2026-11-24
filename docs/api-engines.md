@@ -67,8 +67,9 @@ OpenRouter also sets the variable OpenCode's documentation names.
 **A key is never said back.** How a turn ended is the engine's own words,
 and a provider that quotes a key in its refusal would otherwise put it in a
 notification. The runner takes any value it was handed out of everything it
-reports or prints, and the sandbox driver does the same with a provider's
-answer.
+reports or prints: the turn's ending, the agent's own words in the pane,
+and the engine's error output, which is where a handoff note is cut from.
+The sandbox driver does the same with a provider's answer.
 
 ### Off until an operator says so, per provider
 
@@ -160,7 +161,9 @@ timeout, which the phone shows as a machine that never joined.
   and metadata naming the fleet's machine and its owner. Sent with an
   idempotency key made from the ticket, so a retry does not make two.
 - **Extend** and **end**: the provider's timeout and delete. Restart and
-  resize are refused in words: a sandbox has neither.
+  resize are refused in words: a sandbox has neither. A box that also holds
+  a pool of the same person's asks the provider even while that pool is out
+  of reach, so a rented machine can always be ended.
 - **Gone when the provider says so.** A machine that enrolled and is no
   longer among the provider's sandboxes is retired at the box's next look,
   as a VM its pool no longer has is. A provider that did not answer says
@@ -182,7 +185,9 @@ renting a machine, and the page that offers one says so before it is made.
 
 A box uses sandbox items only when `FLEETWRIGHT_SANDBOX_PROVIDERS` names the
 provider. With it unset the box does not ask the vault for them, holds none
-and reports none, and no screen offers one.
+and reports none, and no screen offers one. A box needs no hypervisor to
+hold a provider: one that holds only a provider's key looks at it and
+reports it.
 
 ## Where it shows
 

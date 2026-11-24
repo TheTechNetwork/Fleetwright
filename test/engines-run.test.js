@@ -437,6 +437,36 @@ test('a provider that quotes the key back in its refusal does not put the key in
   assert.ok(!printed.join('').includes(KEY), 'and nothing it printed in the pane');
 });
 
+test('an engine that prints the key, in its answer or on its error output, does not put it in the pane a handoff note is cut from', async (t) => {
+  const KEY = 'sk-or-v1-0011223344556677';
+  const model = 'openrouter/anthropic/claude-sonnet-5.5';
+  const { socket, home } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: KEY }));
+  const server = acpServer({
+    session: { configOptions: modelOption(model) },
+    set: (m) => ({ result: { configOptions: modelOption(m.params.value) } }),
+    prompt: (send, m) => {
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `Using key ${KEY} to call the provider.` } } } });
+      send({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } });
+    },
+  });
+  const { PassThrough } = await import('node:stream');
+  const stderr = new PassThrough();
+  /** @type {any} */ (server.child).stderr = stderr;
+  /** @type {string[]} */
+  const pane = [];
+  /** @type {string[]} */
+  const errors = [];
+  const done = run({ engine: 'opencode', model, mode: 'safe', prompt: 'Go.' }, {
+    socket, home, cwd: '/work', env: { PATH: '/usr/bin' }, out: (/** @type {string} */ s) => pane.push(s), err: (/** @type {string} */ s) => errors.push(s), stdin: typed(), spawnEngine: () => server.child,
+  });
+  stderr.write(`WARN provider rejected Authorization: Bearer ${KEY}\nsecond `);
+  stderr.end('half');
+  await done;
+  assert.match(pane.join(''), /Using key \[withheld\] to call the provider\./);
+  assert.ok(!pane.join('').includes(KEY));
+  assert.equal(errors.join(''), 'WARN provider rejected Authorization: Bearer [withheld]\nsecond half');
+});
+
 test('a provider OpenCode’s documentation names no variable for is filed in its key file alone, and a Copilot model is still Copilot’s', (t) => {
   const home = mkdtempSync(path.join(os.tmpdir(), 'engine-stage-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));

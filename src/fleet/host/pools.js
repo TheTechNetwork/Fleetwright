@@ -53,6 +53,15 @@ export class Pools {
   }
 
   /**
+   * Whether this box holds anything a machine can be made from: a pool, a
+   * cluster, or a sandbox provider's key. What the sidecar asks before it
+   * looks or reports, so a box holding only a provider still does both.
+   */
+  get holdsAny() {
+    return this.xo.held.size > 0 || this.pve.held.size > 0 || this.sandbox.held.size > 0;
+  }
+
+  /**
    * What each pool and cluster was last seen as, for edge-watch.js, which
    * reads whether this box reached it (`reachable`).
    */
@@ -98,10 +107,12 @@ export class Pools {
   }
 
   /**
-   * The hypervisors' answer, unless they say the machine is not theirs and
-   * this box holds a sandbox provider of the person's too. `unreachable`
-   * from a hypervisor is kept over the provider's "not there", for the
-   * reason it is between the two hypervisors.
+   * The hypervisors' answer, unless they could not say the machine is
+   * theirs and this box holds a sandbox provider of the person's too. A
+   * hypervisor that could not be reached has not said whose the machine is,
+   * so the provider is still asked: a sandbox must be endable while a pool
+   * is down. `unreachable` from a hypervisor is kept over the provider's
+   * "not there", for the reason it is between the two hypervisors.
    *
    * @template {{ ok: boolean, notHere?: boolean, unreachable?: boolean }} R
    * @param {string} owner @param {() => Promise<R>} hypervisors @param {() => Promise<R>} sandbox
@@ -110,7 +121,7 @@ export class Pools {
   async #orSandbox(owner, hypervisors, sandbox) {
     if (!this.sandbox.holdsFor(owner)) return hypervisors();
     const a = await hypervisors();
-    if (a.ok || !a.notHere) return a;
+    if (a.ok || !(a.notHere || a.unreachable)) return a;
     const b = await sandbox();
     return b.ok || !b.notHere || !a.unreachable ? b : a;
   }

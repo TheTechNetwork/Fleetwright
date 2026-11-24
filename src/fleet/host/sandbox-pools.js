@@ -209,7 +209,11 @@ export class SandboxPools {
   async #machines(h) {
     // FOUND BY THEIR OWN MARK: the account may hold sandboxes this fleet
     // never made, and those are not machines of anybody's here.
-    const r = await this.#call(h.record, 'GET', `/v2/sandboxes?metadata=${encodeURIComponent(`fleetwright=1&owner=${h.owner}`)}&limit=100`);
+    // The filter is itself a query string, so the address is encoded inside
+    // it before the whole is encoded as a parameter: an address with a plus
+    // or an ampersand in it would otherwise match nothing, and that person's
+    // machines would look gone and could not be ended.
+    const r = await this.#call(h.record, 'GET', `/v2/sandboxes?metadata=${encodeURIComponent(`fleetwright=1&owner=${encodeURIComponent(h.owner)}`)}&limit=100`);
     if (r.status !== 200 || !Array.isArray(r.body)) throw new Error(this.#why(r));
     return r.body
       .filter((/** @type {any} */ s) => s && typeof s.sandboxID === 'string' && NAME_RE.test(String(s.metadata?.name ?? '')) && String(s.metadata?.owner ?? '') === h.owner)

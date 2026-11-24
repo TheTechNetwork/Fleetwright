@@ -120,6 +120,18 @@ test('the report is the shape a hypervisor’s is: the templates as images, the 
   assert.equal(pools.hasImage('sam@example.com', image), false);
 });
 
+test('a person whose address has a plus in it is still found among the provider’s sandboxes', async (t) => {
+  // The list is filtered by a query string inside a query string.
+  const PLUS = 'eli+fleet@example.com';
+  const provider = await e2b(t);
+  const pools = new SandboxPools({ providers: ['e2b'], base: { e2b: provider.base }, now: () => Date.UTC(2026, 10, 24, 12) });
+  pools.adopt([{ email: PLUS, items: [item()] }]);
+  assert.equal((await pools.make(ask({ owner: PLUS, template: sandboxImageId('e2b', 'fleetwright-linux') }))).ok, true);
+  await pools.refresh();
+  assert.deepEqual(pools.report()[0].machines.map((/** @type {any} */ m) => m.name), ['vm-a1b2c3d4e5f6']);
+  assert.equal((await pools.control({ owner: PLUS, name: 'vm-a1b2c3d4e5f6', action: 'stop' })).ok, true);
+});
+
 test('make starts the template with the ticket and the fleet’s address, for the minutes asked, under a key that makes a retry the same machine', async (t) => {
   const { pools, requests, sandboxes, image } = await driver(t);
   const made = await pools.make(ask({ template: image, minutes: 45 }));
@@ -225,4 +237,49 @@ test('behind the one seam: an image goes to the driver that has it, and a machin
   assert.equal(pools.kindOf(`${ELI} e2b`), 'sandbox');
   // What the seam hands the hub has no provider's key in it.
   assert.deepEqual(pools.adopt([{ email: ELI, items: [item()] }]), [{ email: ELI, items: [] }]);
+});
+
+test('a sandbox machine can be ended while the same person’s hypervisor is out of reach', async (t) => {
+  // A pool that did not answer has not said whose the machine is. Taken as
+  // the answer, it left a rented machine running that nobody could end.
+  const { pools: sandbox, sandboxes, image } = await driver(t);
+  const down = () => /** @type {any} */ ({
+    held: new Map([[`${ELI} xo.lan`, { owner: ELI, record: {} }]]), seen: new Map(), adopt: (/** @type {any} */ a) => a, report: () => [], refresh: async () => {},
+    hasImage: () => false, holdsFor: () => true,
+    make: async () => ({ ok: false, text: 'This machine manages no pool of yours with that machine image.' }),
+    control: async () => ({ ok: false, unreachable: true, text: 'Your pools could not be reached from here: xo.lan (no answer)' }),
+    handLogin: async () => ({ ok: false, unreachable: true, text: 'Your pools could not be reached from here: xo.lan (no answer)' }),
+  });
+  const none = () => /** @type {any} */ ({ ...down(), held: new Map(), holdsFor: () => false });
+  const pools = new Pools({ xo: down(), pve: none(), sandbox });
+  assert.equal((await pools.make(ask({ template: image }))).ok, true);
+  assert.equal((await pools.control({ owner: ELI, name: 'vm-a1b2c3d4e5f6', action: 'stop' })).ok, true);
+  assert.equal(sandboxes.length, 0, 'the provider was asked, and ended it');
+  // A machine neither has: the pool that could not be reached is still the thing to say.
+  assert.match((await pools.control({ owner: ELI, name: 'vm-000000000000', action: 'stop' })).text, /^Your pools could not be reached from here/);
+});
+
+test('a box that holds only a sandbox provider says so in its report, with no hypervisor beside it', async (t) => {
+  // The sidecar looked and reported only while it held a pool or a cluster,
+  // so a provider on its own was held, never asked and never offered.
+  const { Sidecar } = await import('../src/fleet/host/sidecar.js');
+  const { HubClient } = await import('../src/fleet/host/hub-client.js');
+  const { startStubHub } = await import('./helpers/stub-hub.js');
+  const { XoPools } = await import('../src/fleet/host/xo-pools.js');
+  const { PvePools } = await import('../src/fleet/host/pve-pools.js');
+  const { pools: sandbox, image } = await driver(t);
+  const pools = new Pools({ xo: new XoPools({}), pve: new PvePools({}), sandbox });
+  assert.equal(pools.held.size, 0, 'no pool and no cluster');
+  assert.equal(pools.holdsAny, true);
+  const stub = await startStubHub({});
+  t.after(() => stub.close());
+  const sidecar = new Sidecar({
+    hub: new HubClient({ baseUrl: stub.baseUrl, token: null, readTimeoutMs: 2000 }),
+    transport: /** @type {any} */ ({ origin: 'https://fleet.example', send: () => true, on() {}, start() {}, stop() {}, close() {} }),
+    hostId: 'deb132', labels: [], healthIntervalMs: 0, watch: false, logger: { debug() {}, info() {}, warn() {}, error() {} }, xoPools: /** @type {any} */ (pools),
+  });
+  const health = /** @type {any} */ (await sidecar.health());
+  assert.deepEqual(health.xo.map((/** @type {any} */ e) => [e.kind, e.provider, e.images.map((/** @type {any} */ i) => i.id)]), [['sandbox', 'E2B', [image]]]);
+  assert.ok(!JSON.stringify(health).includes(KEY));
+  assert.equal(new Pools({ xo: new XoPools({}), pve: new PvePools({}), sandbox: new SandboxPools({ providers: ['e2b'] }) }).holdsAny, false, 'and one that holds nothing reports nothing');
 });

@@ -49,6 +49,13 @@ test('a member may name an OpenCode model on either provider, by that providerâ€
   assert.equal(line, `claude-code,opencode=${OR}`);
   assert.equal(ENGINES_PARAM_RE.test(line), true);
   assert.deepEqual(decodeEngines(line), { ok: true, engines: list });
+  // Three long names that each pass on their own and do not fit the line a
+  // machine takes are refused where the member is written, not at every start.
+  const long = /** @type {any} */ (checkEngines([{ engine: 'claude-code', model: 'c'.repeat(80) }, { engine: 'codex', model: 'd'.repeat(80) }, { engine: 'opencode', model: `openrouter/${'a'.repeat(40)}/${'b'.repeat(40)}/${'c'.repeat(27)}` }]));
+  assert.equal(long.ok, false);
+  assert.match(long.text, /too long together: written as one line they are 3\d\d characters, and a machine takes 300/);
+  const fits = /** @type {any} */ (checkEngines([{ engine: 'claude-code', model: 'c'.repeat(80) }, { engine: 'codex', model: 'd'.repeat(80) }, { engine: 'opencode', model: `openrouter/${'a'.repeat(40)}/${'b'.repeat(20)}` }]));
+  assert.equal(fits.ok && ENGINES_PARAM_RE.test(encodeEngines(fits.engines)), true);
 });
 
 test('an engine runs on its own sign-in, or on the key of the provider its model names', () => {

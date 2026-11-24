@@ -94,13 +94,42 @@ export function withhold(value) {
   if (v.length >= 12 && !/\s/.test(v)) withheld.add(v);
 }
 
+/** The same text with every value this runner was handed taken out. */
+export function hide(text) {
+  let said = String(text);
+  for (const secret of withheld) said = said.split(secret).join('[withheld]');
+  return said;
+}
+
 /** One printable line, bounded. An engine's error is its own words and could be anything. */
 export function line(value, max = 200) {
   if (value === undefined || value === null) return null;
-  let said = String(value);
-  for (const secret of withheld) said = said.split(secret).join('[withheld]');
-  const s = said.split('\n')[0].replace(/[^\x20-\x7e]/g, '').trim();
+  const s = hide(value).split('\n')[0].replace(/[^\x20-\x7e]/g, '').trim();
   return s ? s.slice(0, max) : null;
+}
+
+/**
+ * Pass an engine's own error output on to this process's, a line at a time,
+ * with anything this runner was handed taken out. It was inherited, which
+ * put whatever the engine or its provider printed straight into the pane,
+ * and the pane's last lines are what a handoff note copies into the
+ * workspace and commits (docs/engines.md, "At a limit").
+ */
+function relayErrors(stream, to) {
+  if (!stream || typeof stream.on !== 'function') return;
+  let held = '';
+  stream.setEncoding?.('utf8');
+  stream.on('data', (chunk) => {
+    held += String(chunk);
+    const at = held.lastIndexOf('\n');
+    if (at < 0) return;
+    to(hide(held.slice(0, at + 1)));
+    held = held.slice(at + 1);
+  });
+  stream.on('end', () => {
+    if (held) to(hide(held));
+    held = '';
+  });
 }
 
 /** A turn's end in the one shape, from whatever an adapter worked out. */
@@ -543,7 +572,10 @@ export async function run(args, io = {}) {
   const home = io.home ?? homedir();
   const cwd = io.cwd ?? process.cwd();
   const env = io.env ?? process.env;
-  const out = io.out ?? ((text) => process.stdout.write(text));
+  const write = io.out ?? ((text) => process.stdout.write(text));
+  // EVERYTHING THE PANE IS SHOWN PASSES HERE, the agent's own words included:
+  // an agent that echoes its key is as much a leak as a provider that does.
+  const out = (/** @type {string} */ text) => write(hide(text));
   const note = (/** @type {string} */ text) => out(`\n[fleetwright] ${text}\n`);
   const report = (/** @type {any} */ turn) => post(socket, '/internal/session-event', { event: 'TurnEnded', detail: turn.reason, turn });
   const spec = RUNS[args.engine];
@@ -569,7 +601,8 @@ export async function run(args, io = {}) {
     let child;
     try {
       // The key's variable, when there is one, for the engine's process and nothing else of this session's.
-      child = (io.spawnEngine ?? spawn)(command[0], spec.command.slice(1), { cwd, env: staged.env ? { ...env, ...staged.env } : env, stdio: ['pipe', 'pipe', 'inherit'] });
+      child = (io.spawnEngine ?? spawn)(command[0], spec.command.slice(1), { cwd, env: staged.env ? { ...env, ...staged.env } : env, stdio: ['pipe', 'pipe', 'pipe'] });
+      relayErrors(child.stderr, io.err ?? ((s) => process.stderr.write(s)));
     } catch (e) {
       return { failed: ended(args.engine, 'error', { detail: `could not start ${command[0]}: ${e?.message ?? e}` }) };
     }

@@ -129,6 +129,13 @@ export function checkEngines(input) {
     }
     out.push({ engine: id, ...(model ? { model } : {}) });
   }
+  // THE WHOLE LIST TRAVELS AS ONE LINE on a start (`memberEngines`), and a
+  // box takes a line of at most 300 characters. Three long model names can
+  // pass each on its own and not fit together, and a record that every
+  // start would then be refused for is refused here, where it is written.
+  if (encodeEngines(out).length > MAX_ENGINES_LINE) {
+    return refuse(`Those engines’ model names are too long together: written as one line they are ${encodeEngines(out).length} characters, and a machine takes ${MAX_ENGINES_LINE}. Shorten a model’s name or name fewer engines.`);
+  }
   return { ok: true, engines: out };
 }
 
@@ -145,6 +152,8 @@ export function encodeEngines(engines) {
   return engines.map(choiceText).join(',');
 }
 
+/** How long `memberEngines` may be, as a box from protocol 21 on checks it. */
+export const MAX_ENGINES_LINE = 300;
 /** What `memberEngines` may be, as a whole. The box reads it with `decodeEngines`, which checks each choice. */
 export const ENGINES_PARAM_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]/=,-]{0,299}$/;
 

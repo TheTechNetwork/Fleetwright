@@ -658,7 +658,7 @@ export class Sidecar {
     this.edgeWatch?.start();
     if (this.pools && this.poolIntervalMs > 0) {
       this.poolTimer = setInterval(() => {
-        if (this.pools?.held.size) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
+        if (this.pools && this.#holdsAny()) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
       }, this.poolIntervalMs);
       this.poolTimer.unref?.();
     }
@@ -1953,7 +1953,7 @@ export class Sidecar {
       // written nowhere (xo-pools.js). Then looked at, and the health frame
       // that says what they have goes out when that is done.
       const accounts = this.pools ? this.pools.adopt(said.accounts) : said.accounts;
-      if (this.pools?.held.size) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
+      if (this.pools && this.#holdsAny()) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
       const r = await this.hub.vault({ accounts }).catch((e) => ({ ok: false, text: /** @type {Error} */ (e).message }));
       if (r.ok) this.log.info(`sidecar: vault: ${r.text}`);
       else this.log.warn(`sidecar: fleetwright did not take the vault's answer: ${r.text}`);
@@ -2089,12 +2089,32 @@ export class Sidecar {
     });
   }
 
+  /**
+   * Whether this box holds anything a machine can be made from. The seam
+   * (pools.js) counts a sandbox provider's key; a bare hypervisor driver,
+   * which a test may hand in, counts its own.
+   */
+  #holdsAny() {
+    const p = /** @type {any} */ (this.pools);
+    return Boolean(p && (typeof p.holdsAny === 'boolean' ? p.holdsAny : p.held?.size));
+  }
+
   /** The API providers this box's hub last said it may bill to. @type {string[]} */
   apiProviders = [];
+  /** Whether the last vault request asked for API keys, or null before any and once a change has been acted on. @type {boolean|null} */
+  askedForKeys = null;
 
   /** Keep what the hub says of its API providers, held to short strings. @param {unknown} said @returns {string[]} */
   #noteApiProviders(said) {
     this.apiProviders = Array.isArray(said) ? said.filter((/** @type {unknown} */ p) => typeof p === 'string' && /^[a-z0-9-]{1,40}$/.test(p)).slice(0, 8) : [];
+    // WHAT THIS BOX ACCEPTS HAS CHANGED SINCE IT LAST ASKED THE VAULT. A box
+    // that asked before its hub had answered asked for no keys, and the
+    // answer it then filed held none, so the keys it had kept were dropped
+    // until the next ask ten minutes on. Asked again in a moment instead.
+    if (this.askedForKeys !== null && this.askedForKeys !== this.apiProviders.length > 0) {
+      this.askedForKeys = null;
+      this.#vaultChangedSoon();
+    }
     return this.apiProviders;
   }
 
@@ -2114,6 +2134,7 @@ export class Sidecar {
     // turned on: a box that bills nobody is handed no key (docs/api-engines.md).
     // And `sandboxes`, only while it has a sandbox provider turned on: the
     // record is a provider's whole account, held here in memory and nowhere else.
+    this.askedForKeys = this.apiProviders.length > 0;
     const accepts = [...(this.apiProviders.length ? ['apikeys'] : []), 'engines', 'members', ...(/** @type {any} */ (this.pools)?.sandbox?.takes ? ['sandboxes'] : [])];
     const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at: Date.now(), reply: publicKey, accepts };
     let signature;
@@ -2380,7 +2401,7 @@ export class Sidecar {
       // answering or not, because making a machine is this process's and not
       // the hub's. Absent when it holds none, so an older coordinator sees
       // nothing new.
-      ...(this.pools?.held.size
+      ...(this.pools && this.#holdsAny()
         ? {
             xo: this.pools.report().map(({ problem, ...seen }) => {
               const edges = this.edgeWatch?.reportFor(seen.owner, seen.address);
