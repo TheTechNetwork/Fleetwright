@@ -705,6 +705,11 @@ private fun MachinePage(
                 }
             }
             if (h != null) HealthLines(h)
+            // WHAT IT RUNS (docs/engines.md): "Runs: Claude Code, Codex". A
+            // machine that says nothing about engines runs Claude Code alone
+            // and is said to; one that has reported nothing at all gets no
+            // line. Same words as iOS (HostView).
+            h?.let { machineRunsLine(it) }?.let { Hint(it) }
             // THE GAP, in the attention colour: the one line that says the
             // machine is not running what it holds. Same sentence as iOS, held
             // equal by test/restart-waiting.test.js.

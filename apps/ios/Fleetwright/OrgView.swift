@@ -391,6 +391,22 @@ struct MemberView: View {
             if let types = shown.workTypes, !types.isEmpty {
                 LabeledContent("Work types") { Text(types.joined(separator: ", ")).fleetType(.label) }
             }
+            // WHAT RUNS IT, in the order to try: "Claude Code, then Codex
+            // (gpt-5.1-codex)". Stacked, because three engines with their
+            // models do not fit beside a label. Nothing is drawn for a
+            // record with no engines, from a fleet older than them.
+            if !shown.engineChoices.isEmpty {
+                VStack(alignment: .leading, spacing: Design.Space.hair) {
+                    Text("Engines")
+                        .fleetType(.body)
+                        .foregroundStyle(Design.Palette.ink)
+                    Text(engineListWords(shown.engineChoices))
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .accessibilityElement(children: .combine)
+            }
             if let tag = shown.hosts?.tag, !tag.isEmpty {
                 LabeledContent("Machine tag") { Text(tag).fleetType(.label) }
             }
@@ -700,7 +716,9 @@ struct MemberForm: View {
     @State private var about: String
     @State private var workTypes: String
     @State private var instructions: String
-    @State private var model: String
+    /// What runs it, in the order to try (docs/engines.md). Never empty:
+    /// a new member starts on Claude Code, as one that names none does.
+    @State private var engines: [EngineChoice]
     @State private var tag: String
     @State private var budget: String
     @State private var managers: String
@@ -726,7 +744,8 @@ struct MemberForm: View {
         _about = State(initialValue: existing?.description ?? "")
         _workTypes = State(initialValue: (existing?.workTypes ?? []).joined(separator: ", "))
         _instructions = State(initialValue: existing?.instructions ?? "")
-        _model = State(initialValue: existing?.engines?.first?.model ?? "")
+        let named = existing?.engineChoices ?? []
+        _engines = State(initialValue: named.isEmpty ? [EngineChoice(engine: engineDefault, model: nil)] : named)
         _tag = State(initialValue: existing?.hosts?.tag ?? "")
         _budget = State(initialValue: (existing?.budgetUsdMonth).map { memberBudgetText($0) } ?? "")
         _managers = State(initialValue: (existing?.managers ?? []).joined(separator: ", "))
@@ -800,10 +819,18 @@ struct MemberForm: View {
                 Text("Its sessions open with these, before the task.")
             }
 
+            // WHAT RUNS IT, as an ordered list (MemberEnginesEditor): the
+            // one model field this had could name Claude Code's model and
+            // nothing else.
             Section {
-                field("Model", text: $model, prompt: "Optional")
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+                MemberEnginesEditor(engines: $engines)
+            } header: {
+                orgSectionHead("Engines")
+            } footer: {
+                Text("A session starts on the first of these its machine runs, and moves to the next when one stops at its limit.")
+            }
+
+            Section {
                 field("Machine tag", text: $tag, prompt: "Optional")
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -830,8 +857,10 @@ struct MemberForm: View {
             }
 
             Section {
+                // Not sent with no engine, or with an OpenCode that names
+                // no model: the row under Engines says what is missing.
                 Button(busy ? "Saving…" : "Save") { Task { await save() } }
-                    .disabled(busy || name.isBlank || role.isBlank)
+                    .disabled(busy || name.isBlank || role.isBlank || memberEnginesToSend(engines).list == nil)
                 if !result.isBlank {
                     Text(result)
                         .fleetType(.label)
@@ -888,10 +917,15 @@ struct MemberForm: View {
                 ? email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 : (existing?.email ?? "")
         }
-        var engine: [String: String] = ["engine": "claude-code"]
-        let modelName = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !modelName.isEmpty { engine["model"] = modelName }
-        fields["engines"] = [engine]
+        // THE LIST, IN ITS ORDER, and never an empty one or an OpenCode
+        // with no model, whatever pressed Save. The rest of the rules are
+        // your fleet's, and its refusal is the sentence under the button.
+        let sending = memberEnginesToSend(engines)
+        guard let list = sending.list else {
+            result = sending.problem ?? "A member has at least one engine."
+            return
+        }
+        fields["engines"] = list
         var placement: [String: String] = [:]
         let tagName = tag.trimmingCharacters(in: .whitespacesAndNewlines)
         if !tagName.isEmpty { placement["tag"] = tagName }

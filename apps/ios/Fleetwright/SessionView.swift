@@ -138,6 +138,20 @@ struct SessionView: View {
             }
             .listRowBackground(Design.Palette.card)
 
+            // THE ENGINE IT IS ON, of the ones its member names: which one,
+            // each move to the next with why, and how its last turn ended
+            // (docs/engines.md). Only for a session whose machine named its
+            // engines. One that named none is Claude Code, as before, and
+            // has no section: nothing is not "no engine".
+            if session.engineChoices != nil {
+                Section {
+                    SessionEngineLines(session: session)
+                } header: {
+                    sectionHead("Engine")
+                }
+                .listRowBackground(Design.Palette.card)
+            }
+
             if let prompt = session.prompt, let options = prompt.options, !options.isEmpty {
                 Section {
                     if let question = prompt.question, !question.isEmpty {

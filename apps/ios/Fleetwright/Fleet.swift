@@ -102,6 +102,45 @@ struct Fleet {
         /// session with no task is not "no task yet".
         let taskId: String?
         let taskBranch: String?
+        /// WHICH ENGINE IT IS ON, of the ones its member names, and how its
+        /// last turn ended (docs/engines.md): the list it was started with,
+        /// in order, which one its pane is on now, each move from one to the
+        /// next, oldest first, and the last turn's ending. All nil for a
+        /// session whose machine named no engines, which is Claude Code as
+        /// before, and then nothing is drawn. The words are in Engines.swift.
+        let engines: [Engine]?
+        let engineAt: Int?
+        let engineLog: [EngineMove]?
+        let turn: Turn?
+
+        /// Every field optional, though a machine always sends the engine:
+        /// a field the decoder insisted on would fail the whole list over
+        /// one line on one page.
+        struct Engine: Codable, Hashable {
+            let engine: String?
+            let model: String?
+        }
+
+        /// One move from an engine to the member's next. `reason` is why
+        /// the first one stopped: `limit`, `auth` or `model`.
+        struct EngineMove: Codable, Hashable {
+            let at: Double?
+            let from: String?
+            let to: String?
+            let reason: String?
+        }
+
+        /// How its last turn ended. `reason` is one of `done`, `limit`,
+        /// `auth`, `model`, `refused`, `cut`, `cancelled` and `error`;
+        /// `resetsAt` is when a limit lifts, in epoch milliseconds, when the
+        /// engine said.
+        struct Turn: Codable, Hashable {
+            let engine: String?
+            let reason: String?
+            let detail: String?
+            let model: String?
+            let resetsAt: Double?
+        }
 
         /// "as Debbie", for a session started as a member, or nil for one a
         /// person started as themselves. Drawn where the account would be:
@@ -1088,6 +1127,17 @@ struct Fleet {
             /// the session, never "released"; nil is a coordinator that did
             /// not say, and then nothing is claimed either way.
             let connected: Bool?
+            /// Why its session stopped, when it came back with no result and
+            /// its turn did not simply end (docs/engines.md): which engine,
+            /// the reason, and when a limit lifts if the engine said. Nil
+            /// when the turn ended, and from a fleet older than engines.
+            let stopped: Stopped?
+
+            struct Stopped: Codable, Hashable {
+                let engine: String?
+                let reason: String?
+                let resetsAt: Double?
+            }
         }
 
         /// What came back: the session's own account of the work. Named
@@ -1108,7 +1158,9 @@ struct Fleet {
             let at: Double?
             let by: String?
             /// "created", "assigned", "started", "returned", "released",
-            /// "accepted", "reopened", "cancelled" or "delegated".
+            /// "accepted", "reopened", "cancelled" or "delegated", and
+            /// "engine" for a session that moved to its member's next
+            /// engine: then `from` and `to` are engines and `note` is why.
             let kind: String?
             let from: String?
             let to: String?
@@ -3090,6 +3142,13 @@ struct Fleet {
             let hosts: [String]?
         }
 
+        /// The engines this machine runs (docs/engines.md). Nil with the
+        /// rest of its health present is a machine from before engines, and
+        /// it runs Claude Code alone: said as that, never as unknown
+        /// (machineRunsLine). A `var` with a default for the reason
+        /// `permissions` is one.
+        var engines: [String]? = nil
+
         /// Mirrors `waiting` in the host's `/updates` reply.
         struct Waiting: Codable, Hashable {
             struct App: Codable, Hashable {
@@ -3154,7 +3213,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
-                permissions: permissions, browse: browse,
+                permissions: permissions, browse: browse, engines: engines,
             )
         }
 
@@ -3164,7 +3223,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: pinned,
                 sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
-                permissions: permissions, browse: browse,
+                permissions: permissions, browse: browse, engines: engines,
             )
         }
 
@@ -3178,7 +3237,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: labels, setLabels: setLabels, logs: logs, houseRules: houseRules, admins: admins,
-                permissions: permissions, browse: browse,
+                permissions: permissions, browse: browse, engines: engines,
             )
         }
 
@@ -3194,7 +3253,7 @@ struct Fleet {
                 loggedIn: loggedIn, claudeAccounts: claudeAccounts, runnerAuth: runnerAuth, running: running,
                 maxSessions: maxSessions, bin: bin, channel: channel, channelPinned: channelPinned,
                 sandbox: sandbox, sandboxed: sandboxed, sandboxedWhy: sandboxedWhy, sandboxedAlso: sandboxedAlso, labels: all, setLabels: set, logs: logs, houseRules: houseRules, admins: admins,
-                permissions: permissions, browse: browse,
+                permissions: permissions, browse: browse, engines: engines,
             )
         }
     }

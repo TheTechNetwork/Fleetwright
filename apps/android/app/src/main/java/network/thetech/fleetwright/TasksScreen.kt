@@ -652,6 +652,14 @@ internal fun TaskPage(
                         color = Design.Palette.ink.now,
                     )
                 }
+                // WHY IT STOPPED, when its engine said and the turn did not
+                // simply end (docs/engines.md): at a limit with no engine
+                // left, say, which is why the task has not come back.
+                lock.stopped?.let { stopped ->
+                    engineTurnWords(stopped.engine, stopped.reason, resetsAt = stopped.resetsAt)?.let { why ->
+                        Hint(why, color = Design.Palette.attention.now)
+                    }
+                }
             }
 
             // WHAT CAME BACK, as the session wrote it.
@@ -1209,6 +1217,9 @@ fun taskHandoffWords(handoff: Fleet.OrgTask.Handoff, roster: List<Fleet.Member>)
         "reopened" -> "Reopened$note"
         "cancelled" -> "Cancelled$note"
         "delegated" -> "Delegated ${handoff.task ?: "a task"} to $to"
+        // Its session moved to the member's next engine: here `from` and
+        // `to` are engines and the note is why the first one stopped.
+        "engine" -> engineMoveWords(handoff.from, handoff.to, handoff.note)
         else -> handoff.kind ?: "A change with no name"
     }
 }

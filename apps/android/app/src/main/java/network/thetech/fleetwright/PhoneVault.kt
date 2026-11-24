@@ -27,8 +27,13 @@ internal class PhoneVault(private val settings: Settings) {
      * `kind`, for Claude: `login`, the sign-in Remote Control needs, or `token`,
      * a setup-token that runs sessions only. Null for anything else, and from a
      * minter from before it said.
+     *
+     * `heldBy`, for a Codex sign-in: the machine that holds it, by the name
+     * its approval has. A Codex sign-in is given to one machine and no other,
+     * so null on a kept one is "no machine has asked for it yet"
+     * (docs/engines.md, "Credentials"). Null for anything else.
      */
-    data class Item(val name: String, val at: Long, val kind: String? = null)
+    data class Item(val name: String, val at: Long, val kind: String? = null, val heldBy: String? = null)
 
     /**
      * One box this person approved. [key] is the whole SHA-256 of the box's
@@ -150,7 +155,7 @@ internal class PhoneVault(private val settings: Settings) {
         return Contents(
             custody = custody,
             items = (0 until (items?.length() ?: 0)).mapNotNull { i ->
-                items?.optJSONObject(i)?.let { Item(it.optString("name"), it.optLong("at"), it.optString("kind").ifBlank { null }) }
+                items?.optJSONObject(i)?.let { Item(it.optString("name"), it.optLong("at"), it.optString("kind").ifBlank { null }, textOrNull(it, "heldBy")) }
             },
             grants = (0 until (grants?.length() ?: 0)).mapNotNull { i ->
                 grants?.optJSONObject(i)?.let {
@@ -188,6 +193,21 @@ internal class PhoneVault(private val settings: Settings) {
             extra.put("value", value)
         }
         ask(fleet, "put", aimed(extra, member)).first
+    }
+
+    /**
+     * Keep the sign-in an engine other than Claude Code runs on
+     * (docs/engines.md, "Credentials"): `codex`, the whole text of the
+     * `auth.json` that `codex login` writes, or `copilot`, one GitHub Copilot
+     * token. Kept the way a named secret is, under its own name, and the
+     * vault checks what it is: its refusal is a sentence, shown as it came.
+     * A Codex file is sent as it was pasted, never trimmed here, because the
+     * vault reads it whole.
+     */
+    suspend fun keepEngineSignIn(fleet: Fleet, name: String, value: String, member: String? = null): Result<String> = runCatching {
+        require(name in ENGINE_VAULT_ITEMS) { "$name is not an engine's sign-in." }
+        require(value.isNotBlank()) { "Nothing to keep yet." }
+        ask(fleet, "put", aimed(JSONObject().put("name", name).put("value", value), member)).first
     }
 
     /**
@@ -417,6 +437,8 @@ internal class PhoneVault(private val settings: Settings) {
                 "Your sessions stop using it. Getting it back means adding it again."
             "github", "cloudflare" ->
                 "Machines you approved stop being given it. Getting it back means signing in again."
+            "codex", "copilot" ->
+                "Machines you approved stop being given it. Getting it back means pasting it again."
             else -> "Machines you approved stop being given it. Getting it back means typing it in again."
         }
 
@@ -450,6 +472,8 @@ internal class PhoneVault(private val settings: Settings) {
             name == "claude" -> "Claude"
             name == "github" -> "GitHub"
             name == "cloudflare" -> "Cloudflare"
+            name == "codex" -> "Codex sign-in"
+            name == "copilot" -> "GitHub Copilot token"
             name.startsWith("secret:") -> name.removePrefix("secret:")
             else -> name
         }

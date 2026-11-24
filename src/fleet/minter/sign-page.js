@@ -247,11 +247,36 @@ var SIGNER = {};
     if (name === 'claude') return 'Claude';
     if (name === 'github') return 'GitHub';
     if (name === 'cloudflare') return 'Cloudflare';
+    if (name === 'codex') return 'Codex sign-in';
+    if (name === 'copilot') return 'GitHub Copilot token';
     if (name.indexOf('secret:') === 0) return name.slice(7);
     if (name.indexOf('hypervisor:') === 0) return 'Hypervisor at ' + name.slice(11);
     return name;
   };
   S.SECRET_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+
+  // THE SIGN-INS THE ENGINES BESIDE CLAUDE CODE RUN ON (docs/engines.md,
+  // "Credentials"): the vault's item for each engine, by the names it keeps
+  // them under. Codex runs on a codex item, OpenCode on a copilot one.
+  S.ENGINE_ITEMS = ['codex', 'copilot'];
+  S.ENGINE_ITEM_OF = { codex: 'codex', opencode: 'copilot' };
+  // WHICH OF THE TWO A VAULT'S VIEW OFFERS: the ones an engine of whoever
+  // the vault belongs to runs on, and any it already keeps, so a kept one
+  // can always be forgotten. A Codex row for a member with no Codex engine
+  // would be a button for nothing.
+  S.engineItems = function (engines, kept) {
+    var runs = Array.isArray(engines) ? engines : [];
+    var has = Array.isArray(kept) ? kept : [];
+    return S.ENGINE_ITEMS.filter(function (item) {
+      return has.indexOf(item) >= 0 || runs.some(function (e) { return Object.prototype.hasOwnProperty.call(S.ENGINE_ITEM_OF, e) && S.ENGINE_ITEM_OF[e] === item; });
+    });
+  };
+  // WHICH MACHINE HOLDS A KEPT CODEX SIGN-IN. It is given to one machine and
+  // no other, so the row says which, or that none has asked for it yet. The
+  // same words as both phones (test/engines-in-apps.test.js).
+  S.heldLine = function (heldBy) {
+    return heldBy ? 'Held by ' + String(heldBy) : 'Not handed to a machine yet';
+  };
 
   // WHOSE VAULT A REQUEST OPENS (docs/members.md). The ops that read or
   // change what a vault keeps carry the member the view is for. The ones
@@ -310,6 +335,7 @@ const SIGN_MAIN = String.raw`
   var view = null;        // the member the vault shown is for, { id, kind, name }; null is yourself
   var org = null;         // the organization as the vault holds it; null is not read
   var names = null;       // each member's name as the fleet lists it: to show, never to decide by
+  var runsOn = null;      // each member's engines as the fleet lists them: which sign-ins to offer a row for, never who may keep one
   var claudeOf = Object.create(null);   // member id to whether its vault keeps a Claude sign-in, as it said for this drawing of My team
   var checking = Object.create(null);   // member ids being asked that now
   var teamRows = Object.create(null);   // member id to its row under My team, as drawn
@@ -573,6 +599,9 @@ const SIGN_MAIN = String.raw`
     box.appendChild(claudeRow());
     box.appendChild(providerRow('github'));
     if (CFG.cloudflare || kept('cloudflare')) box.appendChild(providerRow('cloudflare'));
+    S.engineItems(enginesShown(), ((vault && vault.items) || []).map(function (x) { return x.name; })).forEach(function (name) {
+      box.appendChild(engineRow(name));
+    });
     ((vault && vault.items) || []).forEach(function (x) {
       if (x.name.indexOf('secret:') === 0) box.appendChild(secretRow(x));
       if (x.name.indexOf('hypervisor:') === 0) box.appendChild(hypervisorRow(x));
@@ -690,6 +719,60 @@ const SIGN_MAIN = String.raw`
     return r.el;
   }
 
+  // AN ENGINE'S SIGN-IN (docs/engines.md, "Credentials"): the Codex sign-in
+  // or the GitHub Copilot token. Kept the way a named secret is, pasted
+  // here and never shown again, and the vault says what was wrong with a
+  // paste it refuses.
+  //
+  // THE CODEX SIGN-IN GOES TO ONE MACHINE, because Codex renews it there
+  // and a renewal ends every other copy. So the row says which machine
+  // holds it and that pasting it again moves it, and where it is pasted it
+  // says the paste is itself a copy of a file still on somebody's computer.
+  //
+  // NO TEST BUTTON: the vault does not try these, and a button whose only
+  // answer is that it did not look is a button for nothing. A sign-in that
+  // has ended is said on the session that found it so.
+  function engineRow(name) {
+    var x = item(name);
+    var codex = name === 'codex';
+    var when = x && Number(x.at) > 0 ? new Date(Number(x.at)) : null;
+    var state = !x ? 'Not kept.' : 'Kept' + (when ? ' since ' + when.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '') + '.';
+    if (x && codex) state += ' ' + S.heldLine(x.heldBy) + '.';
+    var r = row(S.itemLabel(name), state, Boolean(x));
+    // Under what is kept and not in its colour: this is how it works, not
+    // whether it is there.
+    if (codex) r.el.insertBefore(el('p', 'state', 'Goes to one machine. Pasting it again moves it.'), r.actions);
+    button(r.actions, x ? 'Replace' : 'Keep', x ? null : 'primary', function () { pasteEngine(r, name, Boolean(x)); });
+    if (x) forgetButton(r, name);
+    return r.el;
+  }
+
+  // WHAT IS PASTED IS IN THE FIELD AND NOWHERE ELSE, and the field is
+  // emptied whatever the vault answers, as a named secret's is.
+  function pasteEngine(r, name, replacing) {
+    r.step.hidden = !r.step.hidden;
+    if (r.step.hidden) return;
+    r.step.textContent = '';
+    var codex = name === 'codex';
+    r.step.appendChild(el('p', 'lede', codex ? 'Paste the whole of ~/.codex/auth.json, the file codex login leaves.' : 'Paste one GitHub Copilot token. OpenCode runs on it.'));
+    if (codex) r.step.appendChild(el('p', null, 'What you paste is a copy. Whichever of the two renews first ends the other.'));
+    var form = el('form', 'step');
+    var value = codex ? area('The auth.json file') : field('The GitHub Copilot token', 'password');
+    form.appendChild(value);
+    var go = el('button', 'primary', replacing ? 'Replace it' : 'Keep it');
+    go.type = 'submit';
+    form.appendChild(go);
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var v = value.value;
+      value.value = '';
+      if (!v.trim()) { note(r, 'Nothing to keep yet.', true); return; }
+      change(r, 'Keeping it.', function () { return vaultAsk('put', { name: name, value: v }).then(function (t) { return t.text; }); });
+    });
+    r.step.appendChild(form);
+    value.focus();
+  }
+
   function secretRow(x) {
     var r = row(S.itemLabel(x.name), view ? 'Kept. A session started as ' + view.name + ' on a machine approved for this vault can be given it by name.' : 'Kept. A session you start on a machine you approved can be given it by name.', true);
     forgetButton(r, x.name);
@@ -732,6 +815,18 @@ const SIGN_MAIN = String.raw`
   function field(label, type) {
     var f = el('input');
     f.type = type;
+    f.autocomplete = 'off';
+    f.spellcheck = false;
+    f.setAttribute('autocapitalize', 'off');
+    f.setAttribute('aria-label', label);
+    f.placeholder = label;
+    return f;
+  }
+  // Many lines, for a file: a one-line field would show the start of an
+  // auth.json and hide whether the rest arrived.
+  function area(label) {
+    var f = el('textarea');
+    f.rows = 6;
     f.autocomplete = 'off';
     f.spellcheck = false;
     f.setAttribute('autocapitalize', 'off');
@@ -926,6 +1021,7 @@ const SIGN_MAIN = String.raw`
     point(null);
     org = null;
     names = null;
+    runsOn = null;
     claudeOf = Object.create(null);
   }
 
@@ -948,18 +1044,42 @@ const SIGN_MAIN = String.raw`
   // vault knows it by, and only once the vault has listed somebody to name.
   // A vault from before members has no tree to give, and then nothing here
   // is shown.
+  //
+  // AND EACH MEMBER'S ENGINES, from the same answer (docs/engines.md): they
+  // say which of the two engine sign-ins a vault's view offers a row for,
+  // and nothing else. Whether one is kept is still the vault's to decide.
+  // The person's own member counts as somebody to name, since their own
+  // vault is where their own engines' sign-ins go.
   async function readOrg() {
     try { org = (await vaultAsk('org', {})).answer || null; } catch (e) { org = null; }
-    if (names || (!view && !team().length)) return;
+    if (names || (!view && !team().length && !ownMember())) return;
     try {
       var m = await relay('GET', '/api/members');
       if (!m.body || !m.body.ok || !Array.isArray(m.body.members)) return;
       var read = Object.create(null);
+      var runs = Object.create(null);
       m.body.members.forEach(function (x) {
         if (x && typeof x.id === 'string' && typeof x.name === 'string' && x.name.trim()) read[x.id] = x.name.trim().slice(0, 80);
+        if (x && typeof x.id === 'string' && Array.isArray(x.engines)) {
+          runs[x.id] = x.engines.map(function (e) { return e && typeof e.engine === 'string' ? e.engine : ''; });
+        }
       });
       names = read;
+      runsOn = runs;
     } catch (e) {}
+  }
+
+  // THE PERSON'S OWN MEMBER, as their own vault names it, or null: in a
+  // member's view, and for somebody the vault's tree has no member for.
+  function ownMember() {
+    var c = !view && vault && vault.custody;
+    return c && typeof c.member === 'string' && c.member ? c.member : null;
+  }
+  // THE ENGINES OF WHOEVER THE VAULT SHOWN BELONGS TO, as the fleet lists
+  // them, or none when it has not said.
+  function enginesShown() {
+    var id = view ? view.id : ownMember();
+    return (id && runsOn && runsOn[id]) || [];
   }
 
   // ---- my team -------------------------------------------------------------------
@@ -1259,6 +1379,11 @@ input {
   font: var(--t-body)/1 var(--font); min-height: 44px; width: 100%; padding: 0 var(--s-inside);
   border-radius: var(--r-row); border: 1px solid var(--ink-dim); background: var(--inner); color: var(--ink);
 }
+/* A pasted file, in the same frame a field has. It grows downwards only, so it never runs past the card on a phone. */
+textarea {
+  font: var(--t-body)/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 8rem; width: 100%; padding: var(--s-inside-tight) var(--s-inside);
+  border-radius: var(--r-row); border: 1px solid var(--ink-dim); background: var(--inner); color: var(--ink); resize: vertical;
+}
 label { display: block; }
 /* A switch is its whole line, so a thumb has the 44px a button has. */
 .check { display: flex; gap: var(--s-inside-tight); align-items: center; min-height: 44px; cursor: pointer; }
@@ -1283,7 +1408,7 @@ footer { color: var(--ink-dim); font-size: var(--t-body-small); margin-top: var(
 /* A view that changed hands fades in once. Nothing travels, and somebody who asked for less motion gets none. */
 @keyframes swap { from { opacity: 0; } }
 @media (prefers-reduced-motion: no-preference) { .swap { animation: swap var(--m-standard) ease-out; } }
-@media (forced-colors: active) { .card, button, .btn, input { border: 1px solid; } }
+@media (forced-colors: active) { .card, button, .btn, input, textarea { border: 1px solid; } }
 `;
 
 const CALLBACK_STYLE = 'body{font:16px/1.5 -apple-system,system-ui,sans-serif;margin:3rem auto;max-width:32rem;padding:0 1rem}';

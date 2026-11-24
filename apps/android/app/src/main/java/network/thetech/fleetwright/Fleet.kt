@@ -144,7 +144,40 @@ class Fleet(
          */
         val taskId: String? = null,
         val taskBranch: String? = null,
+        /**
+         * WHICH ENGINE IT IS ON, of the ones its member names, and how its
+         * last turn ended (docs/engines.md): the list it was started with,
+         * in order, which one its pane is on now, each move from one to the
+         * next, oldest first, and the last turn's ending. [engines] is null
+         * for a session whose machine named none, which is Claude Code as
+         * before, and then nothing is drawn. The words are in Engines.kt.
+         */
+        val engines: List<EngineChoice>? = null,
+        val engineAt: Int? = null,
+        val engineLog: List<EngineMove> = emptyList(),
+        val turn: Turn? = null,
     ) {
+        /** One move from an engine to the member's next. [reason] is why the first one stopped: `limit`, `auth` or `model`. */
+        data class EngineMove(val at: Long?, val from: String?, val to: String?, val reason: String?)
+
+        /**
+         * How its last turn ended. [reason] is one of `done`, `limit`, `auth`,
+         * `model`, `refused`, `cut`, `cancelled` and `error`; [resetsAt] is
+         * when a limit lifts, in epoch milliseconds, when the engine said.
+         */
+        data class Turn(val engine: String?, val reason: String?, val detail: String?, val model: String?, val resetsAt: Long?)
+
+        /**
+         * The engine's name for the session's row, only when it is not
+         * Claude Code: every row would otherwise say the same thing and
+         * mean nothing.
+         */
+        val engineOnRow: String? get() {
+            val at = engineAt ?: return null
+            val id = engines?.getOrNull(at)?.engine ?: return null
+            return if (id == ENGINE_DEFAULT) null else engineName(id)
+        }
+
         /**
          * "as Debbie", for a session started as a member, or null for one a
          * person started as themselves. Drawn where the account would be: a
@@ -731,6 +764,13 @@ class Fleet(
          * then neither Open a port nor Browse is drawn (C-2).
          */
         val browse: Browse? = null,
+        /**
+         * The engines this machine runs (docs/engines.md). Null is a machine
+         * that has reported nothing about itself, which is unknown. A list,
+         * empty included, is one that has: empty is a machine from before
+         * engines, and it runs Claude Code alone ([machineEngines]).
+         */
+        val engines: List<String>? = null,
         /**
          * The host's own answer to "is there something to apply", and the only
          * one that is right for every kind of box. Null from a host too old to
@@ -1744,8 +1784,11 @@ class Fleet(
         val description: String? = null,
         val workTypes: List<String> = emptyList(),
         val instructions: String? = null,
-        /** Its engine's model, when one is named. */
-        val model: String? = null,
+        /**
+         * What runs it, in the order to try (docs/engines.md). Empty from a
+         * fleet older than engines, and then nothing is drawn about them.
+         */
+        val engines: List<EngineChoice> = emptyList(),
         /** The machine tag that places it, or null. */
         val tag: String? = null,
         /** Stored, and enforced by nothing yet. */
@@ -1841,7 +1884,7 @@ class Fleet(
             description = text("description"),
             workTypes = memberStrings(o.optJSONArray("workTypes")),
             instructions = text("instructions"),
-            model = o.optJSONArray("engines")?.optJSONObject(0)?.optString("model")?.takeIf { it.isNotBlank() && it != "null" },
+            engines = parseEngineChoices(o.optJSONArray("engines")),
             tag = o.optJSONObject("hosts")?.optString("tag")?.takeIf { it.isNotBlank() && it != "null" },
             // Null when absent, never optDouble's NaN or a 0 nobody set.
             budgetUsdMonth = if (o.has("budgetUsdMonth") && !o.isNull("budgetUsdMonth")) o.optDouble("budgetUsdMonth").takeIf { !it.isNaN() } else null,
@@ -1906,7 +1949,16 @@ class Fleet(
              * not say, and then nothing is claimed either way.
              */
             val connected: Boolean?,
-        )
+            /**
+             * Why its session stopped, when it came back with no result and
+             * its turn did not simply end (docs/engines.md): which engine,
+             * the reason, and when a limit lifts if the engine said. Null
+             * when the turn ended, and from a fleet older than engines.
+             */
+            val stopped: Stopped? = null,
+        ) {
+            data class Stopped(val engine: String?, val reason: String?, val resetsAt: Long?)
+        }
 
         /** What came back: the session's own account of the work. */
         data class Returned(
@@ -1925,7 +1977,9 @@ class Fleet(
             val by: String?,
             /**
              * "created", "assigned", "started", "returned", "released",
-             * "accepted", "reopened", "cancelled" or "delegated".
+             * "accepted", "reopened", "cancelled" or "delegated", and
+             * "engine" for a session that moved to its member's next
+             * engine: then [from] and [to] are engines and [note] is why.
              */
             val kind: String?,
             val from: String?,
@@ -2037,6 +2091,13 @@ class Fleet(
                     // `has` first: a missing field read as false would be
                     // "its machine is not connected", which nobody said.
                     connected = if (l.has("connected") && !l.isNull("connected")) l.optBoolean("connected") else null,
+                    stopped = l.optJSONObject("stopped")?.let { s ->
+                        OrgTask.Lock.Stopped(
+                            engine = text(s, "engine"),
+                            reason = text(s, "reason"),
+                            resetsAt = longOrNull(s, "resetsAt")?.takeIf { it > 0 },
+                        )
+                    },
                 )
             },
             result = o.optJSONObject("result")?.let { r ->
@@ -3954,6 +4015,14 @@ class Fleet(
                             } ?: emptyList(),
                         )
                     },
+                    // NULL ONLY WHEN THE MACHINE REPORTED NOTHING. With its
+                    // health present and no list in it, it is a machine from
+                    // before engines, and the empty list says so.
+                    engines = health?.let { reported ->
+                        reported.optJSONArray("engines")?.let { arr ->
+                            (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() && it != "null" } }
+                        } ?: emptyList()
+                    },
                     // `has` first, for the same reason as appPending: a
                     // coordinator too old to say is not one that said no.
                     takesSessions = o.takeIf { it.has("takesSessions") && !it.isNull("takesSessions") }?.optBoolean("takesSessions"),
@@ -4128,6 +4197,34 @@ class Fleet(
                 memberName = o.optString("memberName").takeIf { it.isNotBlank() && it != "null" },
                 taskId = o.optString("taskId").takeIf { it.isNotBlank() && it != "null" },
                 taskBranch = o.optString("taskBranch").takeIf { it.isNotBlank() && it != "null" },
+                // NULL WHEN ITS MACHINE NAMED NO ENGINES, and an empty list
+                // the same: that session is Claude Code, as before, and
+                // nothing about an engine is drawn for it.
+                engines = parseEngineChoices(o.optJSONArray("engines")).takeIf { it.isNotEmpty() },
+                // `has` first: optInt would read a missing index as 0, which
+                // is "on its first engine", and nobody said so.
+                engineAt = if (o.has("engineAt") && !o.isNull("engineAt")) o.optInt("engineAt", -1).takeIf { it >= 0 } else null,
+                engineLog = o.optJSONArray("engineLog")?.let { log ->
+                    (0 until log.length()).mapNotNull { i ->
+                        log.optJSONObject(i)?.let { m ->
+                            Session.EngineMove(
+                                at = longOrNull(m, "at")?.takeIf { it > 0 },
+                                from = m.optString("from").takeIf { it.isNotBlank() && it != "null" },
+                                to = m.optString("to").takeIf { it.isNotBlank() && it != "null" },
+                                reason = m.optString("reason").takeIf { it.isNotBlank() && it != "null" },
+                            )
+                        }
+                    }
+                } ?: emptyList(),
+                turn = o.optJSONObject("turn")?.let { t ->
+                    Session.Turn(
+                        engine = t.optString("engine").takeIf { it.isNotBlank() && it != "null" },
+                        reason = t.optString("reason").takeIf { it.isNotBlank() && it != "null" },
+                        detail = t.optString("detail").takeIf { it.isNotBlank() && it != "null" },
+                        model = t.optString("model").takeIf { it.isNotBlank() && it != "null" },
+                        resetsAt = longOrNull(t, "resetsAt")?.takeIf { it > 0 },
+                    )
+                },
             )
         }
     }

@@ -1187,6 +1187,9 @@ private fun SessionCard(
             // STARTED AS A MEMBER: whose it runs as, in place of the account,
             // which for an agent is an address nobody holds.
             session.asMember ?: session.account?.takeIf { it != "shared" },
+            // WHICH ENGINE, only when it is not Claude Code: on a fleet that
+            // runs nothing else this would be the same word on every row.
+            session.engineOnRow,
             session.contextLine,
         )
         if (context.isNotEmpty()) {

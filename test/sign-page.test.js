@@ -745,7 +745,8 @@ test('in a browser: a custodian opens a member’s vault from My team and keeps 
           return reply(r);
         }
         if (u.pathname === '/api/hosts/enrolled') return reply({ ok: true, hosts: [{ hostId: 'box1', fingerprint: boxHash.slice(0, 16), publicJwk: boxJwk, revokedAt: null }] });
-        // THE FLEET'S OWN LIST, which the page takes names from and nothing else.
+        // THE FLEET'S OWN LIST, which the page takes names from, and each member's
+        // engines only to choose which sign-in rows to offer.
         if (u.pathname === '/api/members') {
           return reply({ ok: true, members: [{ id: 'eli', name: 'Eli', kind: 'person' }, { id: 'dana', name: 'Dana', kind: 'person' }, { id: 'debbie', name: 'Debbie', kind: 'agent' }], you: { admin: email === ELI } });
         }
