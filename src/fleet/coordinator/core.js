@@ -6015,19 +6015,20 @@ export class CoordinatorCore {
       const after = this.budgets.spendOf(member.id);
       if (after !== before) changed = true;
       if (!crossed || !after) continue;
-      const said = crossed === 'over'
+      const over = crossed === 'over';
+      const said = over
         ? `${member.name} has passed its budget: ${spendWords(after, member.budgetUsdMonth)}`
         : `${member.name} has spent four fifths of its budget: ${spendWords(after, member.budgetUsdMonth)}`;
-      this.record({ event: crossed === 'over' ? 'budget.over' : 'budget.warn', actor: member.createdBy ?? null, text: said });
+      this.record({ event: over ? 'budget.over' : 'budget.warn', actor: member.createdBy ?? null, text: said });
       const phones = this.#phonesAbout(member.id);
       if (this.push && phones.length) {
-        const next = crossed === 'over'
+        const next = over
           ? { off: 'Its sessions go on; budgets stop nothing on this fleet.', ask: 'Its sessions go on. Its next start waits for approval.', refuse: 'Its sessions go on. Its next start is refused until the month turns or the budget is raised.' }[this.budgets.settings.budgets]
           : '';
         void this.push.send(phones, {
-          title: crossed === 'over' ? `${member.name} is over budget` : `${member.name} is near its budget`,
+          title: over ? `${member.name} is over budget` : `${member.name} is near its budget`,
           body: `${spendWords(after, member.budgetUsdMonth)}${next ? ` ${next}` : ''}`,
-          data: { event: crossed === 'over' ? 'budget.over' : 'budget.warn', kind: 'budget', name: '', hostId: '', url: '', member: member.id },
+          data: { event: over ? 'budget.over' : 'budget.warn', kind: 'budget', name: '', hostId: '', url: '', member: member.id },
         }).catch(() => {});
       }
     }
