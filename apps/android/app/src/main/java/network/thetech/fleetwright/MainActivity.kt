@@ -158,6 +158,24 @@ class MainActivity : ComponentActivity() {
         notifiedHolder.value = holderNamedBy(intent)
         notifiedPool.value = poolNamedBy(intent)
         if (custodyNamedBy(intent)) notifiedCustody.value += 1
+        notifiedTask.value = taskNamedBy(intent)
+    }
+
+    /**
+     * A task waiting for a member to be chosen, from a tapped notification,
+     * by id, or null: You opens on that task's page, where the members to
+     * choose among are buttons (docs/routing.md). It carries no session
+     * name, so it is never taken for a session below.
+     *
+     * THE ID IS HELD TO A TASK'S SHAPE (taskPageId): this activity is
+     * exported, so another app can start it with the same extras, and the id
+     * goes into a request's path.
+     */
+    private val notifiedTask = mutableStateOf<String?>(null)
+
+    private fun taskNamedBy(intent: Intent?): String? {
+        if (intent?.getStringExtra("kind") != "task") return null
+        return taskPageId(TASK_PAGE_PREFIX + intent.getStringExtra("taskId").orEmpty())
     }
 
     /**
@@ -286,6 +304,7 @@ class MainActivity : ComponentActivity() {
         notifiedHolder.value = holderNamedBy(intent)
         notifiedPool.value = poolNamedBy(intent)
         if (custodyNamedBy(intent)) notifiedCustody.value += 1
+        notifiedTask.value = taskNamedBy(intent)
 
         // A fleet app that cannot tell you a session is waiting has lost its
         // main reason to exist, so this is asked as soon as there is a fleet.
@@ -321,6 +340,7 @@ class MainActivity : ComponentActivity() {
                     notifiedHolder = notifiedHolder.value,
                     notifiedPool = notifiedPool.value,
                     notifiedCustody = notifiedCustody.value,
+                    notifiedTask = notifiedTask.value,
                 )
             }
         }
@@ -354,6 +374,7 @@ fun FleetScreen(
     notifiedHolder: String? = null,
     notifiedPool: PoolTap? = null,
     notifiedCustody: Int = 0,
+    notifiedTask: String? = null,
 ) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
@@ -603,6 +624,14 @@ fun FleetScreen(
     LaunchedEffect(notifiedCustody) {
         if (notifiedCustody > 0) {
             openYou = "credentials"
+            tab = "you"
+        }
+    }
+    // A task waiting for a member to be chosen, tapped: You, on that task's
+    // page, where the members to choose among are.
+    LaunchedEffect(notifiedTask) {
+        if (notifiedTask != null) {
+            openYou = TASK_PAGE_PREFIX + notifiedTask
             tab = "you"
         }
     }

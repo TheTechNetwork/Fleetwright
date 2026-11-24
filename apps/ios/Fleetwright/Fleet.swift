@@ -1112,6 +1112,35 @@ struct Fleet {
         let createdBy: String?
         let createdAt: Double?
         let updatedAt: Double?
+        /// This task's own routing mode: "auto", "manual" or "off"
+        /// (docs/routing.md). Nil follows the fleet's setting, and is what a
+        /// fleet older than routing sends.
+        var routing: String?
+        /// The last routing decision about it, or nil when it was never
+        /// routed. Read, never written: the fleet decides and writes it down.
+        var route: Route?
+
+        /// How the fleet last decided whose this task is, as it wrote it on
+        /// the task. Every field is optional, so a decision from a newer
+        /// fleet still loads and is said as far as this build knows it.
+        struct Route: Codable, Hashable {
+            /// "pinned", "rule", "only", "model", "person", "waiting" or "nobody".
+            let how: String?
+            /// Who it chose, or nil for nobody.
+            let member: String?
+            /// The mode it ran under: "manual" or "auto".
+            let mode: String?
+            /// The members it chose among, by id, at most twelve.
+            let candidates: [String]?
+            /// How many candidates are not listed.
+            let more: Int?
+            /// One sentence the fleet wrote: the rule, or what is being asked.
+            let why: String?
+            /// The address that was asked, while `how` is "waiting".
+            let asked: String?
+            let at: Double?
+            let by: String?
+        }
 
         /// The session working on it. `session` is nil between a start
         /// being sent and its box answering.
@@ -1161,6 +1190,8 @@ struct Fleet {
             /// "accepted", "reopened", "cancelled" or "delegated", and
             /// "engine" for a session that moved to its member's next
             /// engine: then `from` and `to` are engines and `note` is why.
+            /// "routed" is a routing decision: `to` is who it chose, or nil,
+            /// and `note` is how it decided (docs/routing.md).
             let kind: String?
             let from: String?
             let to: String?
@@ -1220,6 +1251,63 @@ struct Fleet {
         var body: [String: Any] = ["action": action]
         if let note, !note.isBlank { body["note"] = note }
         return try JSONDecoder().decode(TaskReply.self, from: try await post("/api/tasks/\(id)/act", body: body))
+    }
+
+    /// Route a task now, or answer which member it goes to (docs/routing.md).
+    ///
+    /// WITH NO MEMBER the fleet decides, under the task's own mode or its
+    /// own. WITH ONE this is a person's answer: an assignment by hand, which
+    /// the fleet checks as one and writes down as the answer to its question.
+    func routeTask(id: String, member: String? = nil) async throws -> TaskReply {
+        var body: [String: Any] = [:]
+        if let member, !member.isEmpty { body["member"] = member }
+        return try JSONDecoder().decode(TaskReply.self, from: try await post("/api/tasks/\(id)/route", body: body))
+    }
+
+    /// The fleet's routing record: a mode, and one rule a kind of work
+    /// (docs/routing.md). An admin writes it and everybody reads it.
+    struct Routing: Codable, Hashable {
+        /// "off", "manual" or "auto".
+        let mode: String?
+        let rules: [Rule]?
+        /// Who changed it last, and when. Nil on a fleet that never set it.
+        let updatedBy: String?
+        let updatedAt: Double?
+
+        /// One kind of work, and the member it goes to.
+        struct Rule: Codable, Hashable {
+            let workType: String
+            let member: String
+        }
+    }
+
+    /// The answer to reading the routing record and to changing it.
+    /// `routing` is nil when the answer carried none: a refusal, which has
+    /// `text`, or a fleet older than routing, which has neither.
+    struct RoutingReply: Codable {
+        let ok: Bool?
+        let routing: Routing?
+        /// Whether a pick among several members can be the fleet's model's.
+        let model: Bool?
+        let you: Standing?
+        let text: String?
+
+        struct Standing: Codable, Hashable {
+            let admin: Bool?
+        }
+    }
+
+    func routing() async throws -> RoutingReply {
+        try JSONDecoder().decode(RoutingReply.self, from: try await get("/api/routing"))
+    }
+
+    /// Change the fleet's routing, as an admin. THE WHOLE LIST OF RULES IS
+    /// SENT, because the fleet replaces the list it has with the one it is
+    /// given: a rule left out is a rule removed.
+    func setRouting(mode: String, rules: [Routing.Rule]) async throws -> RoutingReply {
+        let list: [[String: String]] = rules.map { ["workType": $0.workType, "member": $0.member] }
+        let body: [String: Any] = ["mode": mode, "rules": list]
+        return try JSONDecoder().decode(RoutingReply.self, from: try await send("PUT", "/api/routing", body: body))
     }
 
     /// Start a session on a task (docs/tasks.md, "Starting on a task").

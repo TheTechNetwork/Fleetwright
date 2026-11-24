@@ -1931,7 +1931,42 @@ class Fleet(
         val result: Returned? = null,
         /** Every change of hands, oldest first. */
         val handoffs: List<Handoff> = emptyList(),
+        /**
+         * This task's own routing mode: "auto", "manual" or "off"
+         * (docs/routing.md). Null follows the fleet's setting, and is what
+         * a fleet older than routing sends.
+         */
+        val routing: String? = null,
+        /**
+         * The last routing decision about it, or null when it was never
+         * routed. Read, never written: the fleet decides and writes it down.
+         */
+        val route: Route? = null,
     ) {
+        /**
+         * How the fleet last decided whose this task is, as it wrote it on
+         * the task. Everything is nullable or empty, so a decision from a
+         * newer fleet still loads and is said as far as this build knows it.
+         */
+        data class Route(
+            /** "pinned", "rule", "only", "model", "person", "waiting" or "nobody". */
+            val how: String? = null,
+            /** Who it chose, or null for nobody. */
+            val member: String? = null,
+            /** The mode it ran under: "manual" or "auto". */
+            val mode: String? = null,
+            /** The members it chose among, by id, at most twelve. */
+            val candidates: List<String> = emptyList(),
+            /** How many candidates are not listed. */
+            val more: Int = 0,
+            /** One sentence the fleet wrote: the rule, or what is being asked. */
+            val why: String? = null,
+            /** The address that was asked, while [how] is "waiting". */
+            val asked: String? = null,
+            val at: Long? = null,
+            val by: String? = null,
+        )
+
         /**
          * The session working on it. [session] is null between a start
          * being sent and its box answering.
@@ -1980,6 +2015,8 @@ class Fleet(
              * "accepted", "reopened", "cancelled" or "delegated", and
              * "engine" for a session that moved to its member's next
              * engine: then [from] and [to] are engines and [note] is why.
+             * "routed" is a routing decision: [to] is who it chose, or
+             * null, and [note] is how it decided (docs/routing.md).
              */
             val kind: String?,
             val from: String?,
@@ -2046,6 +2083,90 @@ class Fleet(
             if (!note.isNullOrBlank()) body.put("note", note)
             parseTaskReply(post("/api/tasks/$id/act", body))
         }
+    }
+
+    /**
+     * Route a task now, or answer which member it goes to (docs/routing.md).
+     *
+     * WITH NO MEMBER the fleet decides, under the task's own mode or its
+     * own. WITH ONE this is a person's answer: an assignment by hand, which
+     * the fleet checks as one and writes down as the answer to its question.
+     */
+    suspend fun routeTask(id: String, member: String? = null): Result<TaskReply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject()
+            if (!member.isNullOrBlank()) body.put("member", member)
+            parseTaskReply(post("/api/tasks/$id/route", body))
+        }
+    }
+
+    /** One kind of work, and the member it goes to. */
+    data class RoutingRule(val workType: String, val member: String)
+
+    /**
+     * The fleet's routing record: a mode, and one rule a kind of work
+     * (docs/routing.md). An admin writes it and everybody reads it.
+     */
+    data class Routing(
+        /** "off", "manual" or "auto". */
+        val mode: String,
+        val rules: List<RoutingRule>,
+        /** Who changed it last, and when. Null on a fleet that never set it. */
+        val updatedBy: String?,
+        val updatedAt: Long?,
+    )
+
+    /**
+     * The answer to reading the routing record and to changing it.
+     * [routing] is null when the answer carried none: a refusal, which has
+     * [text], or a fleet older than routing, which has neither. [model] is
+     * whether a pick among several members can be the fleet's model's, and
+     * [admin] whether this person may change the record: null when the
+     * answer did not say, which the answer to a change does not.
+     */
+    data class RoutingReply(val ok: Boolean?, val routing: Routing?, val model: Boolean?, val admin: Boolean?, val text: String?)
+
+    suspend fun routing(): Result<RoutingReply> = withContext(Dispatchers.IO) {
+        runCatching { parseRoutingReply(get("/api/routing")) }
+    }
+
+    /**
+     * Change the fleet's routing, as an admin. THE WHOLE LIST OF RULES IS
+     * SENT, because the fleet replaces the list it has with the one it is
+     * given: a rule left out is a rule removed.
+     */
+    suspend fun setRouting(mode: String, rules: List<RoutingRule>): Result<RoutingReply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val list = JSONArray()
+            rules.forEach { list.put(JSONObject().put("workType", it.workType).put("member", it.member)) }
+            parseRoutingReply(send("PUT", "/api/routing", JSONObject().put("mode", mode).put("rules", list)))
+        }
+    }
+
+    private fun parseRoutingReply(json: JSONObject): RoutingReply {
+        fun flag(from: JSONObject?, key: String): Boolean? =
+            if (from != null && from.has(key) && !from.isNull(key)) from.optBoolean(key) else null
+        return RoutingReply(
+            ok = flag(json, "ok"),
+            routing = json.optJSONObject("routing")?.let { r ->
+                val rules = r.optJSONArray("rules")
+                Routing(
+                    mode = r.optString("mode").takeIf { it.isNotBlank() && it != "null" } ?: "off",
+                    rules = (0 until (rules?.length() ?: 0)).mapNotNull { i ->
+                        rules?.optJSONObject(i)?.let { rule ->
+                            val workType = rule.optString("workType")
+                            val member = rule.optString("member")
+                            if (workType.isBlank() || member.isBlank()) null else RoutingRule(workType, member)
+                        }
+                    },
+                    updatedBy = if (r.isNull("updatedBy")) null else r.optString("updatedBy").takeIf { it.isNotBlank() },
+                    updatedAt = longOrNull(r, "updatedAt")?.takeIf { it > 0 },
+                )
+            },
+            model = flag(json, "model"),
+            admin = flag(json.optJSONObject("you"), "admin"),
+            text = json.optString("text").takeIf { it.isNotBlank() && it != "null" },
+        )
     }
 
     /**
@@ -2124,6 +2245,21 @@ class Fleet(
                         task = text(h, "task"),
                     )
                 }
+            },
+            routing = text(o, "routing"),
+            route = o.optJSONObject("route")?.let { r ->
+                val among = r.optJSONArray("candidates")
+                OrgTask.Route(
+                    how = text(r, "how"),
+                    member = text(r, "member"),
+                    mode = text(r, "mode"),
+                    candidates = (0 until (among?.length() ?: 0)).mapNotNull { i -> among?.optString(i)?.takeIf { it.isNotBlank() } },
+                    more = r.optInt("more", 0).coerceAtLeast(0),
+                    why = text(r, "why"),
+                    asked = text(r, "asked"),
+                    at = longOrNull(r, "at")?.takeIf { it > 0 },
+                    by = text(r, "by"),
+                )
             },
         )
     }

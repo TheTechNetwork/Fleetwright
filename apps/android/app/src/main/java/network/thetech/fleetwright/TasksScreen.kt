@@ -32,6 +32,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -47,10 +49,11 @@ import org.json.JSONObject
  * to a member they act for.
  *
  * THE ONES THAT CAME BACK ARE FIRST, because those are asking a question:
- * accept this, or reopen it. Then the ones being worked on, then the open
- * ones. Every row is the same shape, and what state a task is in is said in
- * words on its row; the returned ones also take the attention colour, which
- * the design system keeps for whatever is asking.
+ * accept this, or reopen it. With them come the ones waiting for a member
+ * to be chosen (docs/routing.md), which ask one too. Then the ones being
+ * worked on, then the open ones. Every row is the same shape, and what
+ * state a task is in is said in words on its row; the ones asking also take
+ * the attention colour, which the design system keeps for whatever is asking.
  *
  * FINISHED TASKS ARE NOT ASKED FOR UNTIL SOMEBODY OPENS Finished. A fleet
  * keeps 500 tasks with their briefs and results, and a list that opened on
@@ -86,6 +89,8 @@ internal fun TasksScreen(settings: Settings, onDismiss: () -> Unit, onStart: (St
     var opened by remember { mutableStateOf<String?>(null) }
     var made by remember { mutableStateOf<Fleet.OrgTask?>(null) }
     var adding by remember { mutableStateOf(false) }
+    // This person's fleet address, so a question put to them says "you".
+    val me = remember { taskMe(settings) }
 
     LaunchedEffect(asked) {
         failed = null
@@ -109,7 +114,10 @@ internal fun TasksScreen(settings: Settings, onDismiss: () -> Unit, onStart: (St
             }
             unfinished += list
         }
-        tasks = unfinished
+        // THE ONES ASKING SOMETHING COME FORWARD, in the order they were
+        // asked for: what came back, then the open ones waiting for a member
+        // to be chosen. The rest keep their order under them.
+        tasks = unfinished.filter { taskAsks(it) } + unfinished.filterNot { taskAsks(it) }
         answered = true
         // NAMES ARE THE ORGANIZATION'S. Without them every row still says
         // whose it is, by id.
@@ -189,7 +197,7 @@ internal fun TasksScreen(settings: Settings, onDismiss: () -> Unit, onStart: (St
             !answered -> Hint("Loading…")
             else -> {
                 if (tasks.isEmpty()) Hint("No unfinished tasks. New task makes one.")
-                tasks.forEach { task -> TaskRow(task, members) { opened = task.id } }
+                tasks.forEach { task -> TaskRow(task, members, me) { opened = task.id } }
                 OpenRow("New task") { adding = true }
 
                 // DONE AND CANCELLED, behind one row, asked for when it is opened.
@@ -218,7 +226,7 @@ internal fun TasksScreen(settings: Settings, onDismiss: () -> Unit, onStart: (St
                         done == null -> Hint("Loading…")
                         else -> {
                             if (done.isEmpty()) Hint("No finished tasks.")
-                            done.forEach { task -> TaskRow(task, members) { opened = task.id } }
+                            done.forEach { task -> TaskRow(task, members, me) { opened = task.id } }
                         }
                     }
                 }
@@ -231,11 +239,13 @@ internal fun TasksScreen(settings: Settings, onDismiss: () -> Unit, onStart: (St
  * One task in a list: the title, its id and whose it is, and its state in
  * words, with 48dp of target whatever the type size. Every row is this shape
  * whatever the state, so a row that looks different means something: the
- * attention colour is on a task that came back and on nothing else, and the
- * words under it say the same thing to somebody who cannot see the colour.
+ * attention colour is on a task that is asking (it came back, or it waits
+ * for a member to be chosen) and on nothing else, and the words under it say
+ * the same thing to somebody who cannot see the colour. [me] is this
+ * person's fleet address, so a question put to them says "you".
  */
 @Composable
-private fun TaskRow(task: Fleet.OrgTask, roster: List<Fleet.Member>, onClick: () -> Unit) {
+private fun TaskRow(task: Fleet.OrgTask, roster: List<Fleet.Member>, me: String, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -250,14 +260,14 @@ private fun TaskRow(task: Fleet.OrgTask, roster: List<Fleet.Member>, onClick: ()
             // A CHANGE OF STATE IS NEWS, and reads as a change: the words
             // crossfade, which is the one movement animations-off keeps.
             AnimatedContent(
-                targetState = taskStateWords(task),
+                targetState = taskStateWords(task, me),
                 transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
                 label = "task state",
             ) { words ->
                 Text(
                     words,
                     style = Design.Style.label,
-                    color = if (task.state == "returned") Design.Palette.attention.now else Design.Palette.inkDim.now,
+                    color = if (taskAsks(task)) Design.Palette.attention.now else Design.Palette.inkDim.now,
                 )
             }
         }
@@ -297,6 +307,28 @@ private fun TaskChoice(name: String, role: String?, selected: Boolean, onPick: (
 }
 
 /**
+ * One member the fleet is choosing among, as a button: the name, the role
+ * under it, the full width and 48dp tall. Drawn as the page's other actions
+ * are, so it reads as something to press, and the name takes the button's
+ * own colour, which is the one the design keeps for what can be pressed.
+ * Pressing it is the answer, and TalkBack is told so.
+ */
+@Composable
+private fun TaskCandidate(name: String, role: String?, enabled: Boolean, onPick: () -> Unit) {
+    val says = if (role.isNullOrBlank()) "Choose $name" else "Choose $name, $role"
+    OutlinedButton(
+        onClick = onPick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { contentDescription = says },
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(name, style = Design.Style.body)
+            if (!role.isNullOrBlank()) Text(role, style = Design.Style.label, color = Design.Palette.inkDim.now)
+        }
+    }
+}
+
+/**
  * A field's count, once it is worth saying. Over the limit it takes the
  * error colour, and the line itself says how far over: never the colour alone.
  */
@@ -322,6 +354,13 @@ private fun TaskCount(line: String?, over: Boolean) {
  * finished. A refusal is still possible, since somebody else can act first,
  * and then the fleet's own sentence is what the page shows.
  *
+ * HOW IT WAS ROUTED IS THE FLEET'S SENTENCE (docs/routing.md), under whose
+ * it is. While the fleet waits for a person to say which member, the members
+ * it is choosing among are buttons under the task's head, before the brief,
+ * because that is the question the page is asking. Route it is drawn only
+ * for an open task nobody holds, with no member, that is not already waiting
+ * and whose own routing is not off.
+ *
  * WHAT A SESSION SAID IS SHOWN AS WHAT A SESSION SAID. The branch is what
  * sessions are told, never a link: nothing checks that it exists. The result
  * is the session's own account, and the page says so under it.
@@ -342,6 +381,8 @@ internal fun TaskPage(
 ) {
     val scope = rememberCoroutineScope()
     val fleet = remember { Fleet(settings) }
+    // This person's fleet address, so a question put to them says "you".
+    val me = remember { taskMe(settings) }
     // The task as the fleet last sent it. Null until it answers, when the
     // page was opened with only an id, and after the fleet says there is no
     // such task for this person.
@@ -428,6 +469,24 @@ internal fun TaskPage(
             start = r.start
             if (now.lock?.session.isNullOrBlank()) lockSession = null
             onChanged()
+        }
+    }
+
+    /**
+     * Ask for the task to be routed now, or, with a member, answer which one
+     * it goes to. Either way what the fleet said is the page's line.
+     */
+    fun sendRoute(member: String?) {
+        scope.launch {
+            busy = true
+            result = ""
+            fleet.routeTask(id, member)
+                .onSuccess { answered(it) }
+                .onFailure {
+                    failed = true
+                    result = it.message ?: "that did not work"
+                }
+            busy = false
         }
     }
 
@@ -568,17 +627,20 @@ internal fun TaskPage(
             // THE STATE, IN WORDS, under the title and before anything else.
             // A change crossfades (animations-off keeps that one).
             AnimatedContent(
-                targetState = taskStateWords(shown),
+                targetState = taskStateWords(shown, me),
                 transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
                 label = "task state",
             ) { words ->
                 Text(
                     words,
                     style = Design.Style.body,
-                    color = if (shown.state == "returned") Design.Palette.attention.now else Design.Palette.ink.now,
+                    color = if (taskAsks(shown)) Design.Palette.attention.now else Design.Palette.ink.now,
                 )
             }
             TaskFact("Assigned to", taskMemberName(shown.assignee, roster) ?: "Nobody")
+            // HOW IT CAME TO BE WHOSE IT IS, or why it is nobody's: the
+            // fleet's last routing decision, in the fleet's own sentence.
+            shown.route?.let { route -> TaskFact("Routing", routeWords(route, roster)) }
             shown.workType?.takeIf { it.isNotBlank() }?.let { TaskFact("Kind of work", it) }
             shown.parent?.takeIf { it.isNotBlank() }?.let { TaskFact("Delegated from", it) }
             // WHAT ITS SESSIONS ARE TOLD, never a link and never a fact: a
@@ -594,6 +656,26 @@ internal fun TaskPage(
                 Hint("Could not reach your fleet. This is the task as the list last had it.", color = Design.Palette.bad.now)
                 SelectionContainer { Hint(why) }
                 OutlinedButton(onClick = { asked++ }) { Text("Try again") }
+            }
+
+            // WHICH MEMBER, while the fleet waits for a person to say: the
+            // ones it is choosing among, each a button with the member's
+            // name and its role under it, and Somebody else, which opens the
+            // Reassign picker for anybody the list does not have. Offered
+            // where Reassign is, on an open task nobody holds, since an
+            // answer is an assignment by hand (C-2). A PRESS IS THE ANSWER:
+            // Reassign can change it again, so it asks nothing first.
+            val route = shown.route
+            if (route != null && route.how == "waiting" && shown.assignee.isNullOrBlank() && shown.lock == null && shown.state == "open") {
+                SectionHead("Choose a member")
+                route.candidates.forEach { candidate ->
+                    TaskCandidate(
+                        name = taskMemberName(candidate, roster) ?: candidate,
+                        role = roster.firstOrNull { it.id == candidate }?.role,
+                        enabled = !busy,
+                    ) { sendRoute(candidate) }
+                }
+                OpenRow("Somebody else") { reassigning = true }
             }
 
             // THE BRIEF, in a frame of its own that scrolls: 2400 bytes of
@@ -698,6 +780,16 @@ internal fun TaskPage(
             // released or comes back first.
             if (shown.lock == null && shown.state == "open") {
                 OpenRow("Reassign") { reassigning = true }
+            }
+            // ROUTE IT, only where the fleet would route one: an open task
+            // nobody holds, with no member, that is not already waiting on a
+            // person, and whose own routing is not off, which the fleet
+            // refuses whatever its setting is. Edit is where that is turned
+            // back on. Whether the fleet's own routing is on is its to say.
+            if (shown.lock == null && shown.state == "open" && shown.assignee.isNullOrBlank() && shown.route?.how != "waiting" && shown.routing != "off") {
+                OutlinedButton(onClick = { sendRoute(null) }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("Route it")
+                }
             }
             // ACCEPT is a person's judgement of a result, so it is offered
             // only where there is one waiting.
@@ -949,8 +1041,18 @@ private fun TaskReopenPage(
  * over: a brief the fleet would refuse is not sent to find that out.
  *
  * WHOSE IT IS, when it is made, is chosen from the members this person may
- * hand work to, or Nobody. After that it changes hands under Reassign, which
- * is refused while a session holds the task, so Edit does not offer it.
+ * hand work to, or Nobody, or left to the fleet (docs/routing.md). After
+ * that it changes hands under Reassign, which is refused while a session
+ * holds the task, so Edit does not offer it.
+ *
+ * LET THE FLEET CHOOSE asks how, once it is picked: as the fleet is set,
+ * which sends nothing about routing, or this task's own mode. Edit has the
+ * task's own mode as a choice of its own, with Off beside the other two.
+ *
+ * NOBODY MEANS NOBODY. A fleet whose routing is on routes every task made
+ * with no member, so a task made for Nobody is sent with its own routing
+ * off, which holds whatever the fleet is set to, and the form says what that
+ * means under the choice.
  */
 @Composable
 private fun TaskForm(
@@ -966,6 +1068,8 @@ private fun TaskForm(
     var title by remember { mutableStateOf(existing?.title.orEmpty()) }
     var brief by remember { mutableStateOf(existing?.brief.orEmpty()) }
     var assignee by remember { mutableStateOf("") }
+    // The task's own routing mode, or empty to follow the fleet's setting.
+    var routing by remember { mutableStateOf(existing?.routing.orEmpty()) }
     var repo by remember { mutableStateOf(existing?.repo.orEmpty()) }
     var workType by remember { mutableStateOf(existing?.workType.orEmpty()) }
     var busy by remember { mutableStateOf(false) }
@@ -999,9 +1103,34 @@ private fun TaskForm(
         if (creating) {
             Text("Assignee", style = Design.Style.label, color = Design.Palette.inkDim.now)
             TaskChoice("Nobody", role = null, selected = assignee.isEmpty()) { assignee = "" }
+            // WHAT NOBODY MEANS, while it is the choice: the task is sent
+            // with its own routing off.
+            if (assignee.isEmpty()) Hint("It stays with nobody until somebody assigns it or changes its routing.")
+            TaskChoice("Let the fleet choose", role = null, selected = assignee == TASK_FLEET_CHOOSES) { assignee = TASK_FLEET_CHOOSES }
+            // HOW, only once the fleet is to choose. Off is not here: a task
+            // nobody is to be chosen for is Nobody.
+            if (assignee == TASK_FLEET_CHOOSES) {
+                Text("How", style = Design.Style.label, color = Design.Palette.inkDim.now)
+                TaskChoice(ROUTING_AS_FLEET, role = null, selected = routing.isEmpty()) { routing = "" }
+                TaskChoice(routingModeName("manual"), role = null, selected = routing == "manual") { routing = "manual" }
+                TaskChoice(routingModeName("auto"), role = null, selected = routing == "auto") { routing = "auto" }
+            }
             taskAssignable(members, you).forEach { member ->
                 TaskChoice(member.name, role = member.role, selected = assignee == member.id) { assignee = member.id }
             }
+        } else {
+            // THE TASK'S OWN MODE, which holds for this task whatever the
+            // fleet's is. Changing it routes nothing by itself.
+            Text("Routing", style = Design.Style.label, color = Design.Palette.inkDim.now)
+            TaskChoice(ROUTING_AS_FLEET, role = null, selected = routing.isEmpty()) { routing = "" }
+            ROUTING_MODES.forEach { mode ->
+                TaskChoice(routingModeName(mode), role = null, selected = routing == mode) { routing = mode }
+            }
+            // A mode from a newer fleet stays what it is (C-5).
+            if (routing.isNotEmpty() && routing !in ROUTING_MODES) {
+                TaskChoice(routing, role = null, selected = true) { }
+            }
+            Hint("This task’s own setting, used when it is routed.")
         }
 
         OutlinedTextField(
@@ -1039,9 +1168,25 @@ private fun TaskForm(
                         .put("workType", workType.trim().lowercase())
                     val fleet = Fleet(settings)
                     val sent = if (existing != null) {
+                        // Sent empty as well as set: empty is how a task
+                        // follows the fleet's setting again.
+                        fields.put("routing", routing)
                         fleet.changeTask(existing.id, fields)
                     } else {
-                        if (assignee.isNotEmpty()) fields.put("assignee", assignee)
+                        // WHAT IS SENT ABOUT ROUTING, by whose it is to be.
+                        // The fleet choosing: the mode that was named, and
+                        // nothing for "As your fleet is set". Nobody: off,
+                        // always, so the task stays with nobody on a fleet
+                        // whose routing is on; a fleet from before routing
+                        // passes the field over. A member: the member, and
+                        // no mode.
+                        if (assignee == TASK_FLEET_CHOOSES) {
+                            if (routing.isNotEmpty()) fields.put("routing", routing)
+                        } else if (assignee.isEmpty()) {
+                            fields.put("routing", "off")
+                        } else {
+                            fields.put("assignee", assignee)
+                        }
                         fleet.createTask(fields)
                     }
                     sent
@@ -1099,8 +1244,12 @@ fun taskCountLine(count: Int, limit: Int, unit: String): String? = when {
  * AN OUTCOME OR A STATE THIS BUILD HAS NEVER MET IS SHOWN AS ITSELF, and a
  * task that came back with no result attached says only that it came back:
  * nothing is put in the place of an answer the fleet did not send (C-5).
+ *
+ * A TASK WAITING FOR A MEMBER TO BE CHOSEN says who is being asked: "you",
+ * when the fleet asked this person ([me], their fleet address), and nobody
+ * by name otherwise, since anybody who could assign it can answer.
  */
-fun taskStateWords(task: Fleet.OrgTask): String = when (task.state) {
+fun taskStateWords(task: Fleet.OrgTask, me: String = ""): String = when (task.state) {
     "returned" -> when (val outcome = task.result?.outcome) {
         "done" -> "Came back: done"
         "blocked" -> "Came back: blocked"
@@ -1119,6 +1268,12 @@ fun taskStateWords(task: Fleet.OrgTask): String = when (task.state) {
         val host = task.lock?.hostId
         when {
             !host.isNullOrBlank() -> "Open, a session is starting on $host"
+            taskWaitsForMember(task) ->
+                if (me.isNotEmpty() && task.route?.asked?.lowercase() == me) {
+                    "Open, waiting for you to choose a member"
+                } else {
+                    "Open, waiting for a member to be chosen"
+                }
             task.assignee.isNullOrBlank() -> "Open, assigned to nobody"
             else -> "Open"
         }
@@ -1220,6 +1375,9 @@ fun taskHandoffWords(handoff: Fleet.OrgTask.Handoff, roster: List<Fleet.Member>)
         // Its session moved to the member's next engine: here `from` and
         // `to` are engines and the note is why the first one stopped.
         "engine" -> engineMoveWords(handoff.from, handoff.to, handoff.note)
+        // A routing decision: the note is how it was decided, and `to` is
+        // whom it chose, when it chose somebody (docs/routing.md).
+        "routed" -> routedHandoffWords(handoff.note, taskMemberName(handoff.to, roster))
         else -> handoff.kind ?: "A change with no name"
     }
 }
@@ -1237,6 +1395,26 @@ fun taskAssignable(members: List<Fleet.Member>, you: Fleet.Standing?): List<Flee
     val allowed = (you?.manages.orEmpty() + you?.startAs.orEmpty()).toSet()
     return members.filter { it.id in allowed }
 }
+
+/** The name a notification gives a task's page among the pages under You: "task:t12". */
+const val TASK_PAGE_PREFIX = "task:"
+
+private val TASK_PAGE_ID = Regex("[A-Za-z0-9]{1,24}")
+
+/**
+ * The task a page name asks for, or null when it names something else.
+ *
+ * THE ID CAME FROM A NOTIFICATION'S EXTRAS, which any app can send this one,
+ * and ends up in a request's path. So it is held to what a task's id is: a
+ * few letters and digits, and nothing that could name another path.
+ */
+fun taskPageId(page: String?): String? {
+    if (page == null || !page.startsWith(TASK_PAGE_PREFIX)) return null
+    return page.removePrefix(TASK_PAGE_PREFIX).takeIf { TASK_PAGE_ID.matches(it) }
+}
+
+/** This person's fleet address, as the fleet writes whom it asked. */
+fun taskMe(settings: Settings): String = settings.signedInAs.trim().lowercase()
 
 /**
  * The row under You: how many tasks have come back and are waiting on

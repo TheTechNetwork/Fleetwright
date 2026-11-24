@@ -239,8 +239,10 @@ class Messaging : FirebaseMessagingService() {
          * `kind` (`holder-join`). This carried `name` alone, so a tap on one
          * the app drew — every answerable one, and once a phone has a push key
          * every sealed one — opened the app on whatever it showed last.
+         * `taskId` rides with `kind` `task`: a task waiting for a member to
+         * be chosen, which opens that task's page (docs/routing.md).
          */
-        private val OPEN_KEYS = listOf("event", "name", "hostId", "kind")
+        private val OPEN_KEYS = listOf("event", "name", "hostId", "kind", "taskId")
 
         /** Tapping the notification itself: open the app where it is about. */
         fun openIntent(context: Context, data: Map<String, String>, id: Int): PendingIntent {

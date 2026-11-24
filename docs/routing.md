@@ -67,6 +67,12 @@ fleet's is, because a person asked for it on that one task. So a fleet that
 is `off` routes only the tasks somebody marked, and a fleet that is `auto`
 leaves alone the one task marked `off`.
 
+**"Nobody" is that mark.** A phone's New task offers a member, "Let the
+fleet choose", and "Nobody". Nobody sends `routing: "off"` with the task, so
+it stays with nobody on a fleet that routes, which is what the word says. A
+task made through the API or MCP with no assignee and no `routing` follows
+the fleet's mode.
+
 - `off`: nothing is routed. A task with nobody stays with nobody.
 - `manual`: the rules and the only-one case assign by themselves. A pick
   among several is always a person's.
