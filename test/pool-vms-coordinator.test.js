@@ -1074,9 +1074,12 @@ test('how a pool’s edge routers are reaches its owner from the freshest box wa
       ],
       heardAt: 1_700_000_100_000,
       problem: null,
+      // What it has and what it needs, in bytes.
+      memory: 2 * 1024 ** 3,
+      needs: 4 * 1024 ** 3,
       ...extra,
     },
-    { name: 'fleetwright-edge-b', address: 'not an address', reached: false, role: 'leader', dns: 'yes', gateway: null, leases: -1, delay: '~', loss: 101, answered: -1, blocked: 2.5, since: 0, topBlocked: 'none', problem: 'connect ECONNREFUSED\u0007', ssh: 'nope' },
+    { name: 'fleetwright-edge-b', memory: '2 GiB', needs: -1, address: 'not an address', reached: false, role: 'leader', dns: 'yes', gateway: null, leases: -1, delay: '~', loss: 101, answered: -1, blocked: 2.5, since: 0, topBlocked: 'none', problem: 'connect ECONNREFUSED\u0007', ssh: 'nope' },
     { name: 'somebody-else', reached: true },
   ];
   const events = [
@@ -1119,10 +1122,14 @@ test('how a pool’s edge routers are reaches its owner from the freshest box wa
       ],
       heardAt: 1_700_000_100_000,
       problem: null,
+      memory: 2 * 1024 ** 3,
+      needs: 4 * 1024 ** 3,
     },
     // What could not be read comes through as cannot tell, never as a value.
-    { name: 'fleetwright-edge-b', address: null, reached: false, role: null, dns: null, gateway: null, leases: null, delay: null, loss: null, answered: null, blocked: null, since: null, topBlocked: null, heardAt: null, problem: 'connect ECONNREFUSED' },
+    { name: 'fleetwright-edge-b', address: null, reached: false, role: null, dns: null, gateway: null, leases: null, delay: null, loss: null, answered: null, blocked: null, since: null, topBlocked: null, heardAt: null, problem: 'connect ECONNREFUSED', memory: null, needs: null },
   ]);
+  // A box from before it said how much memory a router has says nothing of it, which is not "none" (C-5).
+  assert.deepEqual(fleet({ old: { xo: watched(1, { memory: undefined, needs: undefined }) } }).core.snapshot(eli).vmEdges[0].routers.map((/** @type {any} */ r) => [r.memory, r.needs]), [[null, null], [null, null]]);
   assert.equal(fleet({ old: { xo: [{ ...holding(ELI)[0], edges: { at: 1, routers: routers(), events } }] } }).core.snapshot(eli).vmEdges[0].listening, null, 'a box from before it said is cannot tell');
   assert.deepEqual(e.events.map((/** @type {any} */ v) => [v.kind, v.text.length]), [['carp', 29], ['dns', 240]], 'a kind not on the list is dropped, and a line is bounded');
   assert.deepEqual(core.snapshot(sam).vmEdges.map((/** @type {any} */ v) => v.address), ['other.lan']);
