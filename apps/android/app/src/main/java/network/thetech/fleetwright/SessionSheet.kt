@@ -79,6 +79,12 @@ fun SessionSheet(
      * button is not drawn (C-2).
      */
     onOpenPort: (() -> Unit)? = null,
+    /**
+     * The task this session is work on, opened by id (docs/tasks.md). Null
+     * where this sheet was itself opened from that task's page, and then
+     * the way back is Done and no button is drawn.
+     */
+    onTask: ((String) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
@@ -219,6 +225,17 @@ fun SessionSheet(
                             color = if (session.archiveOk == false) Design.Palette.bad.now else Design.Palette.inkDim.now,
                         )
                     }
+                }
+                // THE TASK THIS SESSION IS WORK ON, and the way to it: the
+                // brief it was given, whose it is, and what came back
+                // (docs/tasks.md). Drawn only for a session its box says was
+                // started on one.
+                val taskId = session.taskId
+                if (taskId != null && onTask != null) {
+                    OutlinedButton(
+                        onClick = { onTask(taskId) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Task $taskId") }
                 }
 
                 val prompt = session.prompt

@@ -126,6 +126,8 @@ enum ReasonWords {
         "runner.started": "Runner started",
         "runner.token": "Runner token",
         "runner.token-refused": "Runner token refused",
+        "task.released": "Task released",
+        "task.returned": "Task came back",
         "test": "Test notification",
         "vault.changed": "Vault changed",
         "vault.custody": "A manager changed your vault",

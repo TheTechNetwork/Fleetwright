@@ -34,6 +34,8 @@ import { log } from '../log.js';
  * @property {string|null} [memberName]  that member's name, as the coordinator's record had it
  * @property {string|null} [memberRole]  and its role
  * @property {string|null} [startedBy]   who asked for a member's session, as `fleet:<address>`
+ * @property {string|null} [taskId]      the fleet's task this session is work on, when it is (docs/tasks.md)
+ * @property {string|null} [taskBranch]  the branch that task's sessions are told
  * @property {string|null} [secret]        the NAME of the secret it was granted at start, never its value — the credential broker reads it to scope a runtime fetch to what was granted
  * @property {boolean|null} [boxSecrets]   whether this box's own named secrets may answer that fetch, as the coordinator decided from who administers the box (protocol v14); null when nobody said, which for a fleet session is no (secret-store.js boxSecretsServed)
  * @property {string|null} [account]       whose Claude account was seeded: an email, or "shared"

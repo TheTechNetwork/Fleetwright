@@ -97,6 +97,10 @@ const BOUNDED = {
   // The decision model's day of spend and its windows: a ten-minute and an
   // hour's window, and MAX_DECIDE_WINDOW_ROWS of each.
   decide: 'src/fleet/coordinator/decide.js',
+  // The number the last task was given. One integer; the rows it numbers are
+  // one key each under `tasks:`, MAX_TASKS of them, each a checked record
+  // (test/tasks-coordinator.test.js measures the widest).
+  taskSeq: 'src/fleet/protocol/tasks.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */

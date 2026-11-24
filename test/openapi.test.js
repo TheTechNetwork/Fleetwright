@@ -55,7 +55,7 @@ function bodyFor(path) {
 
 /** A path with its parameters filled in, so it can actually be requested. */
 function concrete(path, ids = {}) {
-  const id = path.startsWith('/api/runner-tokens') ? ids.runnerTokenId : path.startsWith('/api/enroll/') ? ids.pinId : path.startsWith('/api/members/') ? ids.memberId : ids.clientId;
+  const id = path.startsWith('/api/runner-tokens') ? ids.runnerTokenId : path.startsWith('/api/enroll/') ? ids.pinId : path.startsWith('/api/members/') ? ids.memberId : path.startsWith('/api/tasks/') ? ids.taskId : ids.clientId;
   return path
     .replace('{hostId}', ids.hostId || 'some-host')
     .replace('{id}', id || 'some-id')
@@ -82,7 +82,11 @@ async function seed(core) {
   const [pin] = core.enrollment.outstanding();
   // A member, so its DELETE is routed to something that exists (docs/members.md).
   core.setMember(null, 'seeded-member', { name: 'Seeded', kind: 'agent', role: 'tester' });
-  return { memberId: 'seeded-member', hostId: 'seeded-host', clientId: client.id, email: 'invited@example.com', runnerTokenId: runner.id, pinId: pin.id };
+  // And a task, so the routes under its id are routed to one that exists
+  // (docs/tasks.md). Made in the store: a task says who made it, and the
+  // break-glass token these probes carry names nobody.
+  const made = core.tasks.create({ email: 'seed@example.com', admin: true, acts: [] }, { title: 'Seeded', brief: 'A task for the routes to find.' }, () => null);
+  return { taskId: made.ok ? made.task.id : 't1', memberId: 'seeded-member', hostId: 'seeded-host', clientId: client.id, email: 'invited@example.com', runnerTokenId: runner.id, pinId: pin.id };
 }
 
 /** The Worker, wired to a real Durable Object rather than a stub. */

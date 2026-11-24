@@ -134,6 +134,8 @@ object ReasonWords {
         "runner.started" to "Runner started",
         "runner.token" to "Runner token",
         "runner.token-refused" to "Runner token refused",
+        "task.released" to "Task released",
+        "task.returned" to "Task came back",
         "test" to "Test notification",
         "vault.changed" to "Vault changed",
         "vault.custody" to "A manager changed your vault",

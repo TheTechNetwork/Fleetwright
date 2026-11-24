@@ -56,6 +56,7 @@ import { cleanText, TITLE_MAX, BRIEF_MAX, TASK_MAX } from '../../core/text.js';
 import { SEAL_KEY_RE } from '../seal.js';
 import { delegationShape } from './intent-signature.js';
 import { MEMBER_ID_RE, MAX_INSTRUCTIONS } from './members.js';
+import { TASK_ID_RE, TASK_BRANCH_RE, TASK_REPO_RE } from './tasks.js';
 
 /** A device's P-256 signature over an intent as WebCrypto makes one: r || s, 64 bytes, base64url (intent-signature.js). */
 export const SIG_RE = /^[A-Za-z0-9_-]{86}$/;
@@ -492,8 +493,18 @@ export const PVESETUP_STEPS = Object.freeze([
 // An older host is never handed one: `member` dropped, the session would run
 // on the starter's own account and say it started, which is the one thing a
 // member start must never do, so the coordinator refuses rather than send it.
+//
+// v20, 24 Nov 2026: A SESSION ON A TASK. `start` takes `taskId`, `taskBranch`
+// and `taskRepo`: the session is one member's work on one task of the fleet's
+// (docs/tasks.md). The box adds which task and branch this is to the first
+// message, and where to write the result; keeps the task's id on the
+// session's record; and, when the session comes back to its prompt, reads
+// that result and sends it with `session.ready`. An older host is never
+// handed one: it would run the session, never say which task it was for and
+// never report a result, so the task's lock would end with nothing and the
+// task would never come back. The coordinator refuses rather than send it.
 /** @type {number} */
-export const PROTOCOL_VERSION = 19;
+export const PROTOCOL_VERSION = 20;
 
 /**
  * The GitHub images each runner platform may run on, newest first, and the
@@ -1001,6 +1012,43 @@ export const VERBS = Object.freeze({
       memberBrief: {
         type: 'raw', required: false, max: MAX_INSTRUCTIONS, since: 19, setBy: 'fleet',
         describe: 'Set by the fleet from the member’s instructions; anything sent here is replaced.',
+      },
+      // WHICH TASK THIS SESSION IS WORK ON (v20, docs/tasks.md). SIGNED, all
+      // three, with the words in `task` and the assignee in `member`: the
+      // person who starts a task's session signs the brief their device
+      // showed, the task it is for and the branch it is told. The coordinator
+      // checks them against its record and takes the task's lock; the box
+      // writes them into the first message and onto the session's record.
+      taskId: {
+        type: 'text',
+        required: false,
+        max: 10,
+        pattern: TASK_ID_RE,
+        shapeName: 'a task’s id, like t12',
+        since: 20,
+        describe:
+          'Start the session on this task of the fleet’s, by id (fleet_tasks lists them). It is started as the ' +
+          'task’s assignee, so `member` names them; `task` carries the task’s title and brief; and when the ' +
+          'session stops, what it wrote in RESULT.md comes back as the task’s result. One session works on a ' +
+          'task at a time.',
+      },
+      taskBranch: {
+        type: 'text',
+        required: false,
+        max: 60,
+        pattern: TASK_BRANCH_RE,
+        shapeName: 'the task’s branch, like task/t12-fix-the-login',
+        since: 20,
+        describe: 'The branch the task is worked on, as the task’s record has it. The session is told it; nothing checks a push.',
+      },
+      taskRepo: {
+        type: 'text',
+        required: false,
+        max: 140,
+        pattern: TASK_REPO_RE,
+        shapeName: 'a repository, written owner/repo',
+        since: 20,
+        describe: 'The repository the task’s branch is in, when the task names one.',
       },
     },
     mutating: true,

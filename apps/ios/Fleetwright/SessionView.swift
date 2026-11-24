@@ -126,6 +126,15 @@ struct SessionView: View {
                     }
                 }
                 .padding(.vertical, Design.Space.hair)
+                // THE TASK THIS SESSION IS WORK ON, and the way to it: the
+                // brief it was given, whose it is, and what came back
+                // (docs/tasks.md). Drawn only for a session its box says was
+                // started on one.
+                if let taskId = session.taskId, !taskId.isEmpty {
+                    NavigationLink("Task \(taskId)") {
+                        TaskView(settings: fleet.settings, id: taskId)
+                    }
+                }
             }
             .listRowBackground(Design.Palette.card)
 

@@ -263,6 +263,91 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     mutating: true,
   },
   {
+    // THE FLEET'S TASKS (docs/tasks.md), on the route the phones use: the
+    // record above sessions, which is the fleet's own and no host's.
+    name: 'fleet_tasks',
+    verb: null,
+    description:
+      'The fleet’s tasks that you may see: each a piece of work with a brief, one assignee, a branch, the ' +
+      'session working on it now, and the result when one came back. With `id`, one task in full: its ' +
+      'brief, its result as the session wrote it, and every time it changed hands. A result is the ' +
+      'session’s own account, and a branch is what the session was told: nothing here checked either.',
+    schema: {
+      id: { type: 'string', description: 'One task, by id, like t12. Leave out for the list.' },
+      state: { type: 'string', enum: ['open', 'working', 'returned', 'done', 'cancelled'], description: 'Only the tasks in this state. `returned` are the ones waiting on a judgement.' },
+    },
+    requires: [],
+    local: true,
+    coordinator: '/api/tasks',
+  },
+  {
+    // A WRITE to the fleet's own record, like fleet_member. It starts
+    // nothing: a session on a task is fleet_start with `taskId`, or
+    // fleet_delegate, and is a member start a custodian signs.
+    name: 'fleet_task',
+    verb: null,
+    description:
+      'Make a task, change one, hand it to another member, or act on one. With no `id` it makes a task from ' +
+      '`title` and `brief`. With `id` and fields it changes them; a new `assignee` is a handoff and is ' +
+      'refused while a session is working on the task. With `id` and `action` it releases the lock, accepts ' +
+      'a result that came back, reopens the task with a `note` the next session is told, or cancels it. ' +
+      'This starts and stops no session.',
+    schema: {
+      id: { type: 'string', description: 'The task to change or act on, like t12. Leave out to make a new one.' },
+      title: { type: 'string', description: 'One line that says what it is. Required for a new task.' },
+      brief: { type: 'string', description: 'What to do, where, and what to hand back. Required for a new task, and all its session gets: at most 2400 bytes.' },
+      assignee: { type: 'string', description: 'A member’s id (fleet_members lists them), or an empty string for nobody. They must be on your team or a member you may start as.' },
+      workType: { type: 'string', description: 'The kind of work, as a short lowercase name a member’s workTypes use.' },
+      repo: { type: 'string', description: 'The repository the work is in, written owner/repo.' },
+      parent: { type: 'string', description: 'For a new task: the task it is delegated from.' },
+      action: { type: 'string', enum: ['release', 'accept', 'reopen', 'cancel'], description: 'What to do to the task named by `id`.' },
+      note: { type: 'string', description: 'Why: with a new `assignee`, the handoff’s note; with `reopen`, what the next session is told (required). At most 300 bytes.' },
+    },
+    requires: [],
+    local: true,
+    coordinator: '/api/tasks',
+    mutating: true,
+  },
+  {
+    // THE WHOLE LOOP AS ONE TOOL (docs/tasks.md, "Delegating"): make the
+    // task, start its assignee on it, wait, and answer with what came back.
+    // Offered only where `start` is, because it starts a session.
+    name: 'fleet_delegate',
+    verb: null,
+    description:
+      'Hand a whole piece of work to another member and get the result back. It makes a task from `to`, ' +
+      '`title` and `brief`, starts a session on it as that member, on the member’s own sign-ins and ' +
+      'machine, waits for it to stop, and answers with the result packet: DONE, BLOCKED or FAILED, what the ' +
+      'session wrote, the branch it was told and where it ran. THE BRIEF IS ALL THE OTHER MEMBER GETS: ' +
+      'nothing of this conversation travels, so say what to do, where, and what to hand back. If the wait ' +
+      'runs out the work is still going: call again with `task` set to the id you were given. You must be ' +
+      'allowed to start a session as the member. The session is yours to stop with fleet_stop once you have ' +
+      'the result, and the task is accepted or reopened with fleet_task.',
+    schema: {
+      to: { type: 'string', description: 'The member to hand the work to, by id (fleet_members lists them and the work each takes).' },
+      title: { type: 'string', description: 'One line that says what the work is.' },
+      brief: { type: 'string', description: 'What to do, where, and what to hand back, written for somebody who has seen none of this conversation. At most 2400 bytes.' },
+      workType: { type: 'string', description: 'The kind of work, as a short lowercase name.' },
+      repo: { type: 'string', description: 'The repository the work is in, written owner/repo.' },
+      parent: { type: 'string', description: 'The task you are working on yourself, when this is a part of it.' },
+      task: { type: 'string', description: 'Instead of all the above: a task you delegated earlier, by id, to keep waiting for.' },
+      seconds: {
+        type: 'integer',
+        minimum: 5,
+        maximum: maxWaitSeconds,
+        description:
+          maxWaitSeconds < 900
+            ? `How long to wait for the result. This connection caps a single wait at ${maxWaitSeconds}s and then says so; call again with \`task\` to keep waiting.`
+            : 'How long to wait for the result before saying it is still being worked on.',
+      },
+    },
+    requires: [],
+    local: true,
+    coordinator: '/api/tasks',
+    mutating: true,
+    needs: 'start',
+  },
+  {
     name: 'fleet_read_log',
     verb: 'logs',
     description:
@@ -436,6 +521,9 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
     // the fleet to route a question the fleet itself answers.
     if (alias.coordinator) {
       if (deny.includes(alias.name.replace(/^fleet_/, '')) && !extra.has(alias.name.replace(/^fleet_/, ''))) continue;
+      // A coordinator tool that also asks a host for something is offered
+      // only where that verb is: fleet_delegate starts a session.
+      if (alias.needs && !tools.some((t) => t.verb === alias.needs)) continue;
       tools.push({
         name: alias.name,
         description: alias.description,

@@ -3576,6 +3576,286 @@ const OPENAPI = JSON.stringify({
         }
       }
     },
+    "/api/tasks": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "The tasks you may see",
+        "description": "A task is the record above sessions: a brief, one assignee, a branch, the session that holds its lock, its result and every change of hands (docs/tasks.md). You see the ones you made, the ones assigned to a member you act for, and all of them as an admin. Newest first.",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "open",
+                "working",
+                "returned",
+                "done",
+                "cancelled"
+              ]
+            },
+            "description": "Only the tasks in this state"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`tasks`"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Make a task",
+        "description": "Open, with a branch named from its id and title that never changes. Nothing runs until a session is started on it.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "brief"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120,
+                    "description": "One line that says what it is."
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "What to do, where, and what to hand back, as markdown. At most 2400 bytes: it is all the session gets, and it is short on purpose."
+                  },
+                  "workType": {
+                    "type": "string",
+                    "description": "The kind of work, a slug as on a member."
+                  },
+                  "repo": {
+                    "type": "string",
+                    "description": "The repository the work is in, written owner/repo."
+                  },
+                  "assignee": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "One member\u2019s id, or nobody. Assigning needs standing over that member: they are on your team, or you may start a session as them."
+                  },
+                  "parent": {
+                    "type": "string",
+                    "description": "The task this one is delegated from, which you must be able to see."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "the task, and `start`: what to sign to start a session on it, or null"
+          },
+          "400": {
+            "description": "the record does not read as a task, with the reason in `text`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "no signed-in identity, or no standing over the assignee"
+          },
+          "404": {
+            "description": "no such member, or no such parent that you can see"
+          },
+          "409": {
+            "description": "the fleet holds as many unfinished tasks as it keeps"
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "One task, and what to sign to start it",
+        "description": "`start` is the `start` verb\u2019s own parameters for a session on this task: `member`, `taskId`, `taskBranch`, `taskRepo` and the words as `task`. A device shows the words and signs exactly them. Null when nobody can start it now. A task you may not see answers as one that does not exist.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t[1-9][0-9]{0,8}$"
+            },
+            "description": "The task\u2019s id: `t` and a number"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`task` and `start`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "404": {
+            "description": "no task by that id that you can see"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Change a task, or hand it to another member",
+        "description": "Only the fields sent change. A new `assignee` is a handoff, written down with who did it and `note`, and is refused while a session holds the task.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t[1-9][0-9]{0,8}$"
+            },
+            "description": "The task\u2019s id: `t` and a number"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 120,
+                    "description": "One line that says what it is."
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "What to do, where, and what to hand back, as markdown. At most 2400 bytes: it is all the session gets, and it is short on purpose."
+                  },
+                  "workType": {
+                    "type": "string",
+                    "description": "The kind of work, a slug as on a member."
+                  },
+                  "repo": {
+                    "type": "string",
+                    "description": "The repository the work is in, written owner/repo."
+                  },
+                  "assignee": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "One member\u2019s id, or nobody. Assigning needs standing over that member: they are on your team, or you may start a session as them."
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "Why it changed hands. At most 300 bytes."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "the task, as saved"
+          },
+          "400": {
+            "description": "a field does not read, with the reason in `text`"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "no standing over the new assignee"
+          },
+          "404": {
+            "description": "no task by that id that you can see"
+          },
+          "409": {
+            "description": "a session holds it, or it is done or cancelled"
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}/act": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Release, accept, reopen or cancel a task",
+        "description": "`release` ends the lock a session holds and leaves the task open. `accept` takes a result that came back, and the task is done. `reopen` sends a returned or done task back to open, with a note the next session is told. `cancel` closes it. None of them stops a session: that is `stop`, asked of its box.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t[1-9][0-9]{0,8}$"
+            },
+            "description": "The task\u2019s id: `t` and a number"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "release",
+                      "accept",
+                      "reopen",
+                      "cancel"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "Required to reopen. At most 300 bytes."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "the task, as it is now"
+          },
+          "400": {
+            "description": "not one of the four, or a reopen with no note"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "404": {
+            "description": "no task by that id that you can see"
+          },
+          "409": {
+            "description": "the task is not in a state that action applies to"
+          }
+        }
+      }
+    },
     "/api/runner-repo": {
       "get": {
         "tags": [

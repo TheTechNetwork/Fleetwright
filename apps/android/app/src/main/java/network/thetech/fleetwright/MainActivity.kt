@@ -413,6 +413,8 @@ fun FleetScreen(
     // The session whose sheet is open: the state sentence, the pane watched,
     // Files, Output and Forget.
     var inspecting by remember { mutableStateOf<Fleet.Session?>(null) }
+    // The task whose page is open over a session's sheet, by id (docs/tasks.md).
+    var taskFor by remember { mutableStateOf<String?>(null) }
     // A RUNNING SESSION'S PORT, ON THIS PHONE (docs/browse.md): which port
     // is asked first, then the page opens on http://localhost:<port>/.
     var portFor by remember { mutableStateOf<Fleet.Session?>(null) }
@@ -523,16 +525,24 @@ fun FleetScreen(
         }
         scope.launch {
             val text = try {
-                val reply = fleet.start(
-                    title = request.title,
-                    brief = request.brief,
-                    mode = request.mode,
-                    host = request.host,
-                    profile = request.profile,
-                    secret = request.secret,
-                    task = request.task,
-                    member = request.member,
-                )
+                // ON A TASK: the fleet's own start parameters, signed and
+                // sent as it gave them, with the machine beside them
+                // (docs/tasks.md). Nothing of the request's own is put in.
+                val onTask = request.onTask
+                val reply = if (onTask != null) {
+                    fleet.startOnTask(onTask, host = request.host)
+                } else {
+                    fleet.start(
+                        title = request.title,
+                        brief = request.brief,
+                        mode = request.mode,
+                        host = request.host,
+                        profile = request.profile,
+                        secret = request.secret,
+                        task = request.task,
+                        member = request.member,
+                    )
+                }
                 // BY WHAT THE FLEET SAID, not by whether it answered: a refusal
                 // is an answer, and "Session ready" over "unknown (connected, no
                 // health report yet)" sent somebody looking for a session that
@@ -720,6 +730,20 @@ fun FleetScreen(
             scope.launch { claude = claudeKept(settings) }
         })
     }
+    // THE TASK A SESSION IS WORK ON, opened from that session's sheet. A
+    // start from its page closes both and is sent like any other.
+    taskFor?.let { id ->
+        TaskPage(
+            settings = settings,
+            id = id,
+            onDismiss = { taskFor = null },
+            onStart = { request ->
+                taskFor = null
+                inspecting = null
+                startInBackground(request)
+            },
+        )
+    }
     inspecting?.let { session ->
         SessionSheet(
             fleet = fleet,
@@ -728,6 +752,7 @@ fun FleetScreen(
             onDismiss = { inspecting = null },
             onChanged = { refresh(keepStatus = true) },
             onFiles = { browsing = session },
+            onTask = { id -> taskFor = id },
             // Only where the session's machine opens its sessions' ports (C-2).
             onOpenPort = if (binHosts.firstOrNull { it.hostId == session.hostId }?.opensSessionPorts == true) {
                 { portFor = session }
@@ -844,8 +869,9 @@ fun FleetScreen(
                 modifier = inner,
                 opening = openYou,
                 onOpened = { openYou = null },
-                // A START FROM A MEMBER'S PAGE is sent like any other, and
-                // its answer is on Sessions, where a start's answer always is.
+                // A START FROM A MEMBER'S PAGE OR A TASK'S is sent like any
+                // other, and its answer is on Sessions, where a start's
+                // answer always is.
                 onStart = { request ->
                     tab = "sessions"
                     startInBackground(request)

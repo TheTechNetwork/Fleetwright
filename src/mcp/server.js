@@ -24,6 +24,7 @@ import { dispatchRunner } from '../core/runners.js';
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
 import { oneLine, LABEL_RE } from '../core/text.js';
 import { hostReported, rcLink } from '../fleet/coordinator/core.js';
+import { packetWords, RESULT_FILE } from '../fleet/protocol/tasks.js';
 
 /**
  * MCP revisions this server understands, newest first.
@@ -127,6 +128,56 @@ export function backAtPrompt(session) {
   if (!Number.isFinite(readyAt) || readyAt <= 0) return false;
   const started = Number(session.createdAt ?? session.startedAt ?? 0);
   return readyAt > started;
+}
+
+/** What an older coordinator, with no tasks, is said to be. */
+const NO_TASKS = 'This coordinator does not keep tasks yet, so there are none to list, make or hand on.';
+
+/** When, to the minute, in UTC: a task's times are read by agents and people in different places. */
+const taskTime = (/** @type {unknown} */ at) => (Number(at) > 0 ? `${new Date(Number(at)).toISOString().replace('T', ' ').slice(0, 16)} UTC` : 'an unknown time');
+
+/**
+ * One task on one line: its id, state, title, whose it is, and what holds it.
+ *
+ * @param {any} t
+ */
+function taskLine(t) {
+  const state = t.state === 'returned' && t.result ? `returned: ${String(t.result.outcome).toUpperCase()}` : String(t.state);
+  const held = t.lock?.session ? ` · ${t.lock.session} on ${t.lock.hostId}${t.lock.connected === false ? ' (not connected)' : ''}` : '';
+  return `${t.id} [${state}] ${oneLine(t.title, 120)} → ${t.assignee || 'nobody'}${held}`;
+}
+
+/**
+ * One task as an agent needs it. `full` adds the brief, the result and every
+ * change of hands.
+ *
+ * @param {any} t @param {boolean} [full]
+ */
+function describeTask(t, full = false) {
+  if (!t || typeof t !== 'object') return 'The fleet sent no task.';
+  const lines = [taskLine(t), `Branch ${t.branch}${t.repo ? ` in ${t.repo}` : ''}, as its sessions are told. Nothing here checked that it exists.`];
+  if (t.lock) {
+    lines.push(
+      t.lock.session
+        ? `Held by ${t.lock.session} on ${t.lock.hostId} since ${taskTime(t.lock.at)}, started by ${t.lock.by}.` +
+          (t.lock.connected === false ? ` ${t.lock.hostId} is not connected, so the fleet cannot tell whether it is still working.` : '') +
+          (t.lock.readyAt ? ` It came back to its prompt at ${taskTime(t.lock.readyAt)} and wrote no ${RESULT_FILE}.` : '')
+        : `A session was asked for on ${t.lock.hostId} at ${taskTime(t.lock.at)} by ${t.lock.by}, and the box has not answered yet.`,
+    );
+  }
+  if (t.parent) lines.push(`Delegated from ${t.parent}.`);
+  if (!full) return lines.join('\n');
+  lines.push('', 'Brief:', String(t.brief ?? ''));
+  if (t.note) lines.push('', `Reopened: ${t.note}`);
+  if (t.result) lines.push('', 'Result, as the session wrote it:', packetWords(t));
+  if (Array.isArray(t.handoffs) && t.handoffs.length) {
+    lines.push('', 'Handoffs:');
+    for (const h of t.handoffs) {
+      const who = [h.from ? `from ${h.from}` : '', h.to ? `to ${h.to}` : '', h.session ? `${h.session}${h.hostId ? ` on ${h.hostId}` : ''}` : '', h.task ? `task ${h.task}` : ''].filter(Boolean).join(', ');
+      lines.push(`  ${taskTime(h.at)}  ${h.kind}${who ? ` (${who})` : ''} by ${h.by || 'the fleet'}${h.note ? `: ${oneLine(h.note, 300)}` : ''}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -914,7 +965,9 @@ export class McpServer {
       );
     }
 
-    const { host, tag, ...params } = args;
+    const { host, tag, ...given } = args;
+    // `let`, because a start on a task is filled in from the task (below).
+    let params = given;
 
     // THE SERVER ENFORCES ITS OWN SCHEMA. It declared `required` and
     // `additionalProperties: false` and checked neither, trusting the client to
@@ -955,6 +1008,10 @@ export class McpServer {
     // THE ORGANIZATION, read and written on its own route (docs/members.md).
     if (tool.name === 'fleet_members') return await this.#members();
     if (tool.name === 'fleet_member') return await this.#member(params);
+    // THE FLEET'S TASKS (docs/tasks.md): read, written, and handed on.
+    if (tool.name === 'fleet_tasks') return await this.#tasks(params);
+    if (tool.name === 'fleet_task') return await this.#task(params);
+    if (tool.name === 'fleet_delegate') return await this.#delegate(params);
     if (tool.coordinator) return await this.#coordinatorRead(tool.coordinator);
 
     // A LOCAL TOOL — the waiting happens here, not in the fleet.
@@ -1000,6 +1057,21 @@ export class McpServer {
     if (tool.verb === 'provision' && this.githubToken && !host && !tag) {
       const here = await this.#provisionHere(params);
       if (here) return here;
+    }
+
+    // A SESSION ON A TASK, named by its id alone (docs/tasks.md). The words,
+    // the assignee and the branch are the task's own, read from the fleet and
+    // sent as the start's parameters, so an agent names the task and does not
+    // retype its brief. What the caller did give is kept: a brief of its own
+    // is refused by the fleet only where it breaks the task's rules.
+    if (tool.verb === 'start' && typeof params.taskId === 'string' && params.taskId) {
+      const got = await this.#org('GET', `/api/tasks/${encodeURIComponent(params.taskId)}`, undefined, NO_TASKS);
+      if ('failed' in got) return got.failed;
+      if (got.body?.ok !== true) return this.#text(String(got.body?.text || 'The fleet did not find that task.'), true);
+      if (!got.body.start) {
+        return this.#text(`${describeTask(got.body.task)}\n\nNobody can start a session on it as it is: a task is started when it is open, assigned, and no session holds it.`, true);
+      }
+      params = { ...got.body.start, ...params };
     }
 
     // ASKED NOW, ANSWERED BELOW: the fleet-wide status also ends with the
@@ -1281,7 +1353,7 @@ export class McpServer {
    * @param {string} method @param {string} path @param {unknown} [body]
    * @returns {Promise<{ body: any, status: number } | { failed: any }>}
    */
-  async #org(method, path, body) {
+  async #org(method, path, body, absent = 'This coordinator does not keep an organization yet, so there are no members to list or change.') {
     let res;
     try {
       res = await this.fetch(`${this.coordinator}${path}`, {
@@ -1299,9 +1371,158 @@ export class McpServer {
       read = await res.json();
     } catch { /* not JSON: an older coordinator's 404 page, said below */ }
     if (res.status === 404 && typeof read?.text !== 'string') {
-      return { failed: this.#text('This coordinator does not keep an organization yet, so there are no members to list or change.') };
+      return { failed: this.#text(absent) };
     }
     return { body: read ?? {}, status: res.status };
+  }
+
+  /**
+   * The fleet's tasks, or one of them in full (docs/tasks.md).
+   *
+   * @param {Record<string, unknown>} params
+   */
+  async #tasks(params) {
+    if (params.id) {
+      const got = await this.#org('GET', `/api/tasks/${encodeURIComponent(String(params.id))}`, undefined, NO_TASKS);
+      if ('failed' in got) return got.failed;
+      if (got.body?.ok !== true) return this.#text(String(got.body?.text || 'The fleet did not find that task.'), true);
+      return this.#text(describeTask(got.body.task, true));
+    }
+    const got = await this.#org('GET', `/api/tasks${params.state ? `?state=${encodeURIComponent(String(params.state))}` : ''}`, undefined, NO_TASKS);
+    if ('failed' in got) return got.failed;
+    /** @type {any[]} */
+    const tasks = Array.isArray(got.body?.tasks) ? got.body.tasks : [];
+    if (!tasks.length) {
+      return this.#text(params.state ? `No task you can see is ${params.state}.` : 'There are no tasks you can see. fleet_task makes one, and fleet_delegate makes one and starts it.');
+    }
+    return this.#text(tasks.map((t) => taskLine(t)).join('\n'));
+  }
+
+  /**
+   * Make a task, change one, or act on one.
+   *
+   * @param {Record<string, unknown>} params
+   */
+  async #task(params) {
+    /** @param {{ body: any, status: number }} got */
+    const said = (got) => this.#text(
+      got.body?.ok === true && got.body.task ? `${got.body.text}\n\n${describeTask(got.body.task)}` : String(got.body?.text || 'The fleet refused it and did not say why.'),
+      got.body?.ok !== true,
+    );
+    /** @type {Record<string, unknown>} */
+    const fields = {};
+    for (const field of ['title', 'brief', 'workType', 'repo', 'note']) if (params[field] !== undefined) fields[field] = params[field];
+    if (params.assignee !== undefined) fields.assignee = params.assignee === '' ? null : params.assignee;
+    if (!params.id) {
+      if (params.action) return this.#text('`action` needs the `id` of the task to act on.', true);
+      if (params.parent !== undefined) fields.parent = params.parent;
+      const made = await this.#org('POST', '/api/tasks', fields, NO_TASKS);
+      return 'failed' in made ? made.failed : said(made);
+    }
+    const at = `/api/tasks/${encodeURIComponent(String(params.id))}`;
+    if (params.action) {
+      const done = await this.#org('POST', `${at}/act`, { action: params.action, ...(params.note !== undefined ? { note: params.note } : {}) }, NO_TASKS);
+      return 'failed' in done ? done.failed : said(done);
+    }
+    const saved = await this.#org('PUT', at, fields, NO_TASKS);
+    return 'failed' in saved ? saved.failed : said(saved);
+  }
+
+  /**
+   * Hand a whole piece of work to another member and wait for what comes
+   * back (docs/tasks.md, "Delegating").
+   *
+   * FOUR STEPS, EACH THE FLEET'S OWN: a task is made, a session is started on
+   * it as its assignee, this server waits the way #await does, and the answer
+   * is the result the box read when the session stopped. Nothing of the
+   * caller's conversation is sent: the brief is the whole handover.
+   *
+   * WHAT IT LEAVES BEHIND IS SAID. A start the fleet refuses leaves a task
+   * that is open and unstarted, and the reply names it. A wait that runs out
+   * leaves work in flight, and `task` picks the wait back up. The session it
+   * started is this conversation's to stop, as any it starts is.
+   *
+   * @param {Record<string, unknown>} params
+   */
+  async #delegate(params) {
+    let id = String(params.task ?? '').trim().toLowerCase();
+    let lead = '';
+    if (!id) {
+      if (!params.to || !params.title || !params.brief) {
+        return this.#text('fleet_delegate needs `to`, `title` and `brief` for new work, or `task` to keep waiting for work already handed over.', true);
+      }
+      /** @type {Record<string, unknown>} */
+      const fields = { title: params.title, brief: params.brief, assignee: params.to };
+      for (const field of ['workType', 'repo', 'parent']) if (params[field] !== undefined) fields[field] = params[field];
+      const made = await this.#org('POST', '/api/tasks', fields, NO_TASKS);
+      if ('failed' in made) return made.failed;
+      if (made.body?.ok !== true || !made.body.task) return this.#text(String(made.body?.text || 'The fleet refused the task and did not say why.'), true);
+      id = String(made.body.task.id);
+      const unstarted = `${id} was made and is open, with nothing working on it. Start it with fleet_start and \`taskId\` once that is put right, or cancel it with fleet_task.`;
+      if (!made.body.start) return this.#text(`${made.body.text}\n\n${unstarted}`, true);
+      /** @type {any} */
+      let reply;
+      try {
+        reply = await this.#intent('start', made.body.start, null, null);
+      } catch (e) {
+        return this.#text(`${describeFailure(e)}\n\n${unstarted}`, true);
+      }
+      if (reply?.ok === false) return this.#text(`${String(reply.text ?? 'The fleet refused the start.')}\n\n${unstarted}`, true);
+      const session = sessionFrom(reply);
+      const named = String(session?.name || '');
+      if (named) {
+        this.started.add(named);
+        this.#watchStarted();
+      }
+      const landed = reply?.hostId || session?.hostId;
+      lead = `Handed ${id} to ${params.to}${named ? `: ${named}${landed ? ` on ${landed}` : ''}` : ''}.\n\n`;
+    }
+
+    const ceiling = this.maxWaitMs ? this.maxWaitMs / 1000 : 900;
+    const seconds = Math.min(ceiling, Math.max(5, Number(params.seconds) || 300));
+    const deadline = this.now() + seconds * 1000;
+    for (;;) {
+      const got = await this.#org('GET', `/api/tasks/${encodeURIComponent(id)}`, undefined, NO_TASKS);
+      if ('failed' in got) return got.failed;
+      if (got.body?.ok !== true || !got.body.task) return this.#text(`${lead}${String(got.body?.text || 'The fleet did not find that task.')}`, true);
+      const task = got.body.task;
+      if (task.result && (task.state === 'returned' || task.state === 'done')) {
+        return this.#text(
+          `${lead}${packetWords(task)}\n\n` +
+            (task.state === 'done'
+              ? `${id} has been accepted.`
+              : `That is the session’s own account: it stopped and said this, and nothing checked the work. Accept it or reopen it with fleet_task.`) +
+            (task.lock?.session ? ` ${task.lock.session} is still at its prompt: stop it with fleet_stop when you have what you need.` : ''),
+          task.result.outcome === 'failed',
+        );
+      }
+      if (task.state === 'cancelled') return this.#text(`${lead}${id} was cancelled, so no result is coming.`, true);
+      if (!task.lock) {
+        // Open with no lock: the session ended and wrote nothing, or the
+        // lock was released by hand. The last handoff says which.
+        const last = Array.isArray(task.handoffs) ? task.handoffs[task.handoffs.length - 1] : null;
+        return this.#text(
+          `${lead}${id} is ${task.state} and no session holds it${last?.note ? ` (${last.note})` : ''}, so no result is coming from the session that was started. ` +
+            `Start it again with fleet_start and \`taskId\`, or cancel it with fleet_task.`,
+          true,
+        );
+      }
+      if (task.lock.readyAt) {
+        return this.#text(
+          `${lead}${task.lock.session} is back at its prompt on ${task.lock.hostId} and wrote no ${RESULT_FILE}, so ${id} has no result. ` +
+            'fleet_read_log shows what it did. Release the task with fleet_task to start it again, or stop the session.',
+          true,
+        );
+      }
+      if (this.now() >= deadline) {
+        return this.#text(
+          `${lead}${id} is still being worked on after ${seconds}s${task.lock.session ? `, by ${task.lock.session} on ${task.lock.hostId}` : ''}` +
+            `${task.lock.connected === false ? `, and ${task.lock.hostId} is not connected right now, so the fleet cannot tell how it is going` : ''}. ` +
+            `That is not a failure. Call fleet_delegate again with \`task: "${id}"\` to keep waiting.`,
+        );
+      }
+      await this.sleep(Math.min(5000, Math.max(1000, deadline - this.now())));
+    }
   }
 
   /** The organization, as a tree an agent can choose a member from. */

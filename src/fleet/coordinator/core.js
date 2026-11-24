@@ -39,6 +39,8 @@ import { RunnerRepos } from './runner-repos.js';
 import { LinkedRepos } from './linked-repos.js';
 import { OrgMembers } from './org-members.js';
 import { MEMBER_ID_RE, composeFirstMessage } from '../protocol/members.js';
+import { OrgTasks } from './org-tasks.js';
+import { TASK_ID_RE, TASK_STATES, MAX_RESULT, lockTask, startFor, composeTaskMessage, firstBytes } from '../protocol/tasks.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
 import { VmStandby, MAX_READY, PENDING_MS } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
@@ -136,6 +138,23 @@ const TUNNEL_PROTOCOL = 17;
 const BROWSE_PROTOCOL = 18;
 /** The protocol a box speaks to run a session as a member, on that member's sign-ins (`start.member`, v19). */
 const MEMBER_PROTOCOL = 19;
+/**
+ * The protocol a box must speak to run a session on a task (intents.js, v20).
+ * An older one would run it, never say which task it was for and never
+ * report a result.
+ */
+const TASK_PROTOCOL = 20;
+/**
+ * How long a task's lock is kept for a start whose box never answered. Past
+ * it the start is taken not to have happened; a session that did start is
+ * taken up again the moment its box speaks of it (org-tasks.js, onSession).
+ */
+const TASK_START_MS = 5 * 60_000;
+/**
+ * How long after a start a box's list of sessions may still be the one from
+ * before it, so a lock is not ended by a list that could not hold its session.
+ */
+const TASK_LIST_GRACE_MS = 2 * 60_000;
 /**
  * How long a machine's ticket lives: as long as the fleet waits for a machine
  * kept ready to enrol before it takes it to have failed (vm-standby.js), and
@@ -624,6 +643,8 @@ export class CoordinatorCore {
     // (org-members.js, docs/members.md). The records are this coordinator's.
     // Custody of a member's vault is not: the minter holds it.
     this.org = new OrgMembers({ now });
+    // The fleet's tasks: the record above sessions (docs/tasks.md).
+    this.tasks = new OrgTasks({ now });
     /**
      * Who may start a session as each member, as the minter last signed it
      * for a box (#onHostKeys): member id → fleet addresses. READ, NEVER
@@ -1038,6 +1059,9 @@ export class CoordinatorCore {
         void this.#askForget(entry);
       }
       const moved = this.registry.recordHealth(hostId, msg.health);
+      // A TASK WHOSE SESSION THIS BOX NO LONGER LISTS is not being worked on
+      // (docs/tasks.md, "The lock follows the box's word").
+      this.#sweepTasks();
       // The outcome, not just the input: recordHealth silently ignores a host
       // the registry does not know, and during the outage that silence was
       // indistinguishable from the frame never arriving.
@@ -1200,8 +1224,13 @@ export class CoordinatorCore {
       // The same fact for a session handed its words directly (v7 `task`):
       // whether it had a job, never what the job said.
       ...(msg.tasked === true ? { tasked: true } : {}),
+      // WHICH TASK the session is work on (v20, docs/tasks.md): its id, and
+      // never the result, which is read below and kept on the task. The feed
+      // is read by more people than may see a task.
+      ...(typeof msg.taskId === 'string' && TASK_ID_RE.test(msg.taskId) ? { taskId: msg.taskId } : {}),
       at: this.now(),
     };
+    if (event.taskId) this.#onTaskSession(hostId, event, msg.result);
     // A TEMPORARY MACHINE THAT HAS FINISHED IS COSTING MONEY, and that is the
     // one sentence its owner needs more than "done". The host cannot know it
     // is temporary — the registry does, from the provision that made it — so
@@ -4227,6 +4256,16 @@ export class CoordinatorCore {
         // WHERE THE MEMBER RUNS, when the person did not say where.
         if (!spec.preferHost && !spec.preferLabels && as.member.hosts?.tag) spec = { ...spec, preferLabels: as.member.hosts.tag };
       }
+      // ON A TASK (docs/tasks.md, "Starting on a task"). Refused here, in the
+      // person's words, before a machine is chosen; the lock itself is taken
+      // once one is (below), because a lock names the box it waits on.
+      if (params.taskId === undefined) {
+        delete params.taskBranch;
+        delete params.taskRepo;
+      } else {
+        const on = this.#startOn(spec.requester, params);
+        if (!on.ok) return on;
+      }
       spec = { ...spec, params };
     }
     if (spec.verb === 'resume') {
@@ -4540,11 +4579,31 @@ export class CoordinatorCore {
     const outdated = placement.host ? this.#cannotCarry(placement.host, spec) : null;
     if (outdated) return outdated;
 
+    // THE TASK'S LOCK, taken now that the box is known and before anything is
+    // sent, so of two starts on one task the second is refused here and never
+    // reaches a box (docs/tasks.md, "One assignee, one lock").
+    const onTask = spec.verb === 'start' && typeof spec.params?.taskId === 'string' ? String(spec.params.taskId) : '';
+    const lockedOn = String(placement.host?.hostId || '');
+    if (onTask) {
+      const locked = this.tasks.lock(this.#who(spec.requester), onTask, { member: String(spec.params?.member ?? ''), branch: String(spec.params?.taskBranch ?? ''), hostId: lockedOn });
+      if (!locked.ok) return locked;
+      this.onStateChanged?.();
+    }
+
     try {
       const answer = explainUnsupportedVersion(
         explainUnknownVerb(await this.send(placement.host, spec), placement.host),
         placement.host,
       );
+      if (onTask) {
+        // THE BOX'S ANSWER DECIDES THE LOCK. A refusal started nothing, so
+        // the lock goes and nothing is written down. A start names its
+        // session, and the lock is that session's from here.
+        const started = answer?.ok !== false && Array.isArray(answer?.sessions) && typeof answer.sessions[0]?.name === 'string' ? answer.sessions[0].name : '';
+        if (started) this.tasks.confirm(onTask, { session: started, hostId: lockedOn });
+        else if (answer?.ok === false) this.tasks.unlock(onTask, lockedOn);
+        this.onStateChanged?.();
+      }
       // THE SESSION IS REAL THE MOMENT THE HOST SAYS SO, not when the next
       // health frame happens to arrive.
       //
@@ -5719,6 +5778,182 @@ export class CoordinatorCore {
     return read;
   }
 
+  // ── Tasks (docs/tasks.md) ─────────────────────────────────────────────────
+
+  /**
+   * Who is asking, for the task store: their address, whether they administer
+   * the fleet, and the members they act for. A null requester is the
+   * break-glass token, an admin with no address.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
+   * @returns {import('./org-tasks.js').Who}
+   */
+  #who(requester) {
+    return { email: String(requester?.email || '').toLowerCase(), admin: !requester || Boolean(requester.admin), acts: this.#actsFor(requester) };
+  }
+
+  /**
+   * A task as a screen needs it: the record, and whether the box that holds
+   * its lock is connected now. Not connected is cannot-tell about the
+   * session, and the page says so instead of calling the task free.
+   *
+   * @param {import('../protocol/tasks.js').Task} task
+   */
+  #shown(task) {
+    if (!task.lock) return task;
+    return { ...task, lock: { ...task.lock, connected: Boolean(this.registry.get(task.lock.hostId)?.connected) } };
+  }
+
+  /**
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   * @param {{ state?: string|null }} [filter]
+   */
+  tasksFor(requester, filter = {}) {
+    // A STATE NOBODY HAS IS A QUESTION WITH NO ANSWER, not a request for
+    // everything: a screen asking for `retuned` was handed every task and
+    // drew them all under one heading.
+    if (filter.state && !TASK_STATES.includes(/** @type {any} */ (filter.state))) {
+      return { ok: false, error: { code: 'bad_state' }, text: `A task is ${TASK_STATES.join(', ')}. “${oneLine(filter.state, 40)}” is none of those.` };
+    }
+    return { ok: true, tasks: this.tasks.visibleTo(this.#who(requester), filter).map((t) => this.#shown(t)) };
+  }
+
+  /**
+   * One task, and what to sign to start a session on it: `start`'s own
+   * parameters, or null when nobody can start it now.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester @param {unknown} id
+   */
+  taskFor(requester, id) {
+    const found = this.tasks.find(this.#who(requester), id);
+    if (!found.ok) return found;
+    return { ok: true, task: this.#shown(found.task), start: startFor(found.task) };
+  }
+
+  /**
+   * @param {{ email?: string|null, admin?: boolean }|null} requester @param {unknown} input
+   */
+  createTask(requester, input) {
+    const made = this.tasks.create(this.#who(requester), input, (id) => this.org.get(id));
+    if (!made.ok) return made;
+    this.onStateChanged?.();
+    return { ok: true, task: made.task, start: startFor(made.task), text: made.text };
+  }
+
+  /**
+   * @param {{ email?: string|null, admin?: boolean }|null} requester @param {unknown} id @param {unknown} input
+   */
+  changeTask(requester, id, input) {
+    const saved = this.tasks.change(this.#who(requester), id, input, (m) => this.org.get(m));
+    if (!saved.ok) return saved;
+    this.onStateChanged?.();
+    return { ok: true, task: this.#shown(saved.task), start: startFor(saved.task), text: saved.text };
+  }
+
+  /**
+   * Release, accept, reopen or cancel.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester @param {unknown} id @param {unknown} action @param {unknown} note
+   */
+  actOnTask(requester, id, action, note) {
+    const done = this.tasks.act(this.#who(requester), id, action, note);
+    if (!done.ok) return done;
+    this.onStateChanged?.();
+    return { ok: true, task: this.#shown(done.task), start: startFor(done.task), text: done.text };
+  }
+
+  /**
+   * May this start be a session on this task? The same refusals the lock
+   * makes (org-tasks.js), made before a machine is chosen so they are not
+   * hidden behind "no machine is free".
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
+   * @param {Record<string, any>} params  the start's, with `taskId` set
+   * @returns {{ ok: true } | { ok: false, error: { code: string }, text: string }}
+   */
+  #startOn(requester, params) {
+    const found = this.tasks.find(this.#who(requester), params.taskId);
+    if (!found.ok) return found;
+    const task = found.task;
+    if (params.member === undefined) {
+      return { ok: false, error: { code: 'task_needs_member' }, text: `A task is started as its assignee. ${task.assignee ? `Name ${task.assignee} as the member` : `${task.id} is assigned to nobody yet: assign it first`}.` };
+    }
+    const would = lockTask(task, { member: String(params.member), branch: String(params.taskBranch ?? ''), hostId: '', by: '', at: this.now() });
+    if (!would.ok) return { ok: false, error: { code: would.code }, text: would.text };
+    if (String(params.taskRepo ?? '') !== String(task.repo ?? '')) {
+      return { ok: false, error: { code: 'task_repo' }, text: `${task.id} is ${task.repo ? `in ${task.repo}` : 'in no repository'}, and this start names ${params.taskRepo || 'none'}.` };
+    }
+    if (typeof params.task !== 'string' || !params.task.trim()) {
+      return { ok: false, error: { code: 'bad_params' }, text: `A session on ${task.id} needs the task’s words as its first message. GET /api/tasks/${task.id} gives them, ready to send.` };
+    }
+    // The same sum the box will do, with the instructions this coordinator
+    // would send, so "too long" is said before a machine is woken for it.
+    const fits = composeTaskMessage({ instructions: typeof params.memberBrief === 'string' ? params.memberBrief : '', taskId: task.id, branch: task.branch, repo: task.repo, words: params.task });
+    if (!fits.ok) return { ok: false, error: { code: fits.code }, text: fits.text };
+    return { ok: true };
+  }
+
+  /**
+   * A box said something about a session it holds for a task: the result it
+   * read when the session came back, or that the session is gone.
+   *
+   * THE RESULT STAYS OUT OF THE EVENT. What the feed and the push get is the
+   * task's id and the outcome, completed here onto the line the box sent.
+   *
+   * @param {string} hostId
+   * @param {{ event: string, name: string, text: string|null, taskId?: string }} event
+   * @param {unknown} result  as the box sent it: `{ text, truncated }`, or nothing
+   */
+  #onTaskSession(hostId, event, result) {
+    const said = result && typeof result === 'object' && typeof (/** @type {any} */ (result).text) === 'string'
+      // Cut again here: a box's word for how much it sent is not a bound.
+      ? (() => {
+          const kept = firstBytes(String(/** @type {any} */ (result).text), MAX_RESULT);
+          return { text: kept.text, truncated: kept.cut || /** @type {any} */ (result).truncated === true };
+        })()
+      : null;
+    const changed = this.tasks.onSession(hostId, event.name, { event: event.event, task: String(event.taskId), result: said });
+    if (!changed) return;
+    this.onStateChanged?.();
+    const task = changed.task;
+    if (changed.returned && task.result) {
+      const outcome = { done: 'DONE', blocked: 'BLOCKED', failed: 'FAILED', unstated: 'no DONE, BLOCKED or FAILED on its first line' }[task.result.outcome];
+      event.text = `is back with a result for ${task.id}: ${outcome}`;
+      this.record({ event: 'task.returned', actor: task.createdBy, name: event.name, hostId, text: `${task.id} “${oneLine(task.title, 80)}” came back from ${task.result.member}: ${outcome}` });
+    } else if (changed.released) {
+      this.record({ event: 'task.released', actor: task.createdBy, name: event.name, hostId, text: `${task.id} “${oneLine(task.title, 80)}” is open again: its session ended with no result` });
+    } else if (event.event === 'session.ready') {
+      event.text = `is back at its prompt and wrote no result for ${task.id}`;
+    }
+  }
+
+  /**
+   * End the locks no box stands behind any more: a session its box no longer
+   * lists, and a start whose box never answered.
+   */
+  #sweepTasks() {
+    const now = this.now();
+    let changed = false;
+    for (const task of this.tasks.all()) {
+      const lock = task.lock;
+      if (lock && !lock.session && now - lock.at > TASK_START_MS) {
+        this.tasks.unlock(task.id, lock.hostId);
+        changed = true;
+      }
+    }
+    const released = this.tasks.sweep((hostId) => {
+      const host = this.registry.get(hostId);
+      // Only a connected box's own list, as of its last frame. A box that is
+      // away, or too busy to list its sessions, is cannot-tell.
+      if (!host?.connected || !Array.isArray(host.health?.sessions)) return null;
+      return { names: new Set(host.health.sessions.map((/** @type {any} */ s) => String(s?.name ?? ''))), at: Number(host.healthAt) || 0 };
+    }, TASK_LIST_GRACE_MS);
+    for (const task of released) {
+      this.record({ event: 'task.released', actor: task.createdBy, text: `${task.id} “${oneLine(task.title, 80)}” is open again: its box no longer lists the session that held it` });
+    }
+    if (changed || released.length) this.onStateChanged?.();
+  }
+
   /**
    * The members whose sessions this person may see and act on: the ones the
    * tree puts under them, and the ones they may start as.
@@ -6083,6 +6318,22 @@ export class CoordinatorCore {
             `${host?.hostId} is too old to run a session as a member — it speaks protocol ` +
             `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${MEMBER_PROTOCOL}. It would run on your own sign-ins and not ` +
             `${spec.params.memberName || spec.params.member}’s. Update it, or pick another machine.`,
+        };
+      }
+    }
+    // ON A TASK. A box older than 20 would lose `taskId` and run the session
+    // as work for no task: no result would come back and the lock would end
+    // with nothing.
+    if (spec.verb === 'start' && spec.params?.taskId) {
+      const speaks = Number(host?.health?.protocol);
+      if (!(Number.isInteger(speaks) && speaks >= TASK_PROTOCOL)) {
+        return {
+          ok: false,
+          error: { code: 'host_outdated' },
+          text:
+            `${host?.hostId} is too old to run a session on a task — it speaks protocol ` +
+            `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${TASK_PROTOCOL}. It would never say which task the ` +
+            `session was for, or send its result back. Update it, or pick another machine.`,
         };
       }
     }

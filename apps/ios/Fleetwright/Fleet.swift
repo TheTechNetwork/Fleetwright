@@ -96,6 +96,12 @@ struct Fleet {
         /// themselves and from a host older than protocol 19, and then
         /// nothing is drawn.
         let memberName: String?
+        /// THE TASK IT IS WORK ON, by id, and the branch its box told it
+        /// (docs/tasks.md). Nil for a session nobody started on a task and
+        /// from a host older than protocol 20, and then nothing is drawn: a
+        /// session with no task is not "no task yet".
+        let taskId: String?
+        let taskBranch: String?
 
         /// "as Debbie", for a session started as a member, or nil for one a
         /// person started as themselves. Drawn where the account would be:
@@ -1029,6 +1035,155 @@ struct Fleet {
     /// One member file, made or changed under the rules of any other write.
     func importMember(text: String) async throws -> MemberReply {
         try JSONDecoder().decode(MemberReply.self, from: try await post("/api/members/import", body: ["text": text]))
+    }
+
+    /// One task: a record above sessions, with a brief, one assignee, a
+    /// branch, the session that holds its lock, what came back, and every
+    /// change of hands (docs/tasks.md). No credential is ever in one.
+    ///
+    /// NAMED OrgTask, NOT Task: a `Task` nested here would hide Swift's own
+    /// inside this type, where `Task { }` is how every signed request starts
+    /// its key listing.
+    ///
+    /// Everything past the id and the state is optional, so a field the
+    /// coordinator stops sending is absent here and not a list that fails to
+    /// load.
+    struct OrgTask: Codable, Hashable, Identifiable {
+        let id: String
+        let title: String?
+        let brief: String?
+        let workType: String?
+        /// `owner/repo` the work is in, when the task names one.
+        let repo: String?
+        /// One member's id, or nil for nobody.
+        let assignee: String?
+        /// "open", "working", "returned", "done" or "cancelled".
+        let state: String
+        /// What its sessions are told to work on. An instruction and a
+        /// record: nothing checks that the branch exists.
+        let branch: String?
+        /// The task this one was delegated from.
+        let parent: String?
+        /// Why it was reopened, which its next session is told.
+        let note: String?
+        let lock: Lock?
+        let result: Returned?
+        /// Every change of hands, oldest first.
+        let handoffs: [Handoff]?
+        let createdBy: String?
+        let createdAt: Double?
+        let updatedAt: Double?
+
+        /// The session working on it. `session` is nil between a start
+        /// being sent and its box answering.
+        struct Lock: Codable, Hashable {
+            let session: String?
+            let hostId: String?
+            let member: String?
+            let by: String?
+            let at: Double?
+            /// When the session came back to its prompt with no result.
+            let readyAt: Double?
+            /// Whether its box is connected now. False is CANNOT TELL about
+            /// the session, never "released"; nil is a coordinator that did
+            /// not say, and then nothing is claimed either way.
+            let connected: Bool?
+        }
+
+        /// What came back: the session's own account of the work. Named
+        /// Returned because `Result` is Swift's.
+        struct Returned: Codable, Hashable {
+            /// "done", "blocked", "failed" or "unstated".
+            let outcome: String?
+            let summary: String?
+            /// The summary was longer than the fleet keeps and is cut.
+            let truncated: Bool?
+            let session: String?
+            let hostId: String?
+            let member: String?
+            let at: Double?
+        }
+
+        struct Handoff: Codable, Hashable {
+            let at: Double?
+            let by: String?
+            /// "created", "assigned", "started", "returned", "released",
+            /// "accepted", "reopened", "cancelled" or "delegated".
+            let kind: String?
+            let from: String?
+            let to: String?
+            let note: String?
+            let session: String?
+            let hostId: String?
+            let task: String?
+        }
+    }
+
+    /// The tasks this person may see, newest first. `tasks` is nil when the
+    /// answer carried no list: a refusal, or a fleet older than tasks, which
+    /// is not the same as a fleet with none.
+    struct Tasks: Codable {
+        let ok: Bool?
+        let tasks: [OrgTask]?
+        /// The fleet's sentence when it refused to list them.
+        let text: String?
+    }
+
+    /// One task, and what the fleet says about starting it. The answer to
+    /// reading, making, changing and acting on one. A refusal carries `text`,
+    /// a sentence written for a person, and no task.
+    struct TaskReply: Codable {
+        let ok: Bool?
+        let task: OrgTask?
+        /// `start`'s own parameters, ready to sign and send exactly as
+        /// given, or nil when nobody can start the task now. The phone never
+        /// builds these: the words in `task` are the ones it shows and signs.
+        let start: [String: String]?
+        let text: String?
+    }
+
+    /// The tasks in one state. Asked a state at a time on purpose: a fleet
+    /// keeps 500 tasks with their briefs and results, and the Tasks screen
+    /// opens on the unfinished ones only.
+    func tasks(state: String) async throws -> Tasks {
+        try JSONDecoder().decode(Tasks.self, from: try await get("/api/tasks?state=\(state)"))
+    }
+
+    func task(id: String) async throws -> TaskReply {
+        try JSONDecoder().decode(TaskReply.self, from: try await get("/api/tasks/\(id)"))
+    }
+
+    func createTask(fields: [String: Any]) async throws -> TaskReply {
+        try JSONDecoder().decode(TaskReply.self, from: try await post("/api/tasks", body: fields))
+    }
+
+    /// Change what a task says, or whose it is. Only the fields sent are
+    /// changed.
+    func changeTask(id: String, fields: [String: Any]) async throws -> TaskReply {
+        try JSONDecoder().decode(TaskReply.self, from: try await send("PUT", "/api/tasks/\(id)", body: fields))
+    }
+
+    /// Release, accept, reopen or cancel.
+    func actOnTask(id: String, action: String, note: String? = nil) async throws -> TaskReply {
+        var body: [String: Any] = ["action": action]
+        if let note, !note.isBlank { body["note"] = note }
+        return try JSONDecoder().decode(TaskReply.self, from: try await post("/api/tasks/\(id)/act", body: body))
+    }
+
+    /// Start a session on a task (docs/tasks.md, "Starting on a task").
+    ///
+    /// THE PARAMETERS ARE THE FLEET'S, SENT AS GIVEN. `GET /api/tasks/{id}`
+    /// answers with `start`: the member, the task's id, its branch, its
+    /// repository and the words. This signs and sends exactly that, through
+    /// the path every member start takes, so the words a person read on the
+    /// task's page are the words their phone signed. Nothing here rebuilds
+    /// a brief: a phone that composed its own would sign something the page
+    /// never showed.
+    ///
+    /// `host` is placement and rides beside the intent, as it does for any
+    /// start. With none, the fleet places it where the member runs.
+    func startOnTask(_ params: [String: String], host: String? = nil) async throws -> Reply {
+        try await intent("start", params: params, host: host)
     }
 
     /// Where to start a runner from this phone, and the ticket to start it with.

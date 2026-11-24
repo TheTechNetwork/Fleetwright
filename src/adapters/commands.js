@@ -58,6 +58,8 @@
  * @property {string} [memberName]  that member's name, for the record
  * @property {string} [memberRole]  and its role
  * @property {string} [startedBy]   who asked for a member's session, as `fleet:<address>`
+ * @property {string} [taskId]      the fleet's task a start is work on, when it is (docs/tasks.md)
+ * @property {string} [taskBranch]  and the branch that task's sessions are told
  * @property {string} [ticket]     a coordinator-minted dispatch ticket, for
  *   `/provision`. A credential, so it travels as a field rather than on the
  *   command line — see src/core/redact.js for why that distinction exists
@@ -992,6 +994,12 @@ export const COMMANDS = {
           memberRole: ctx.memberRole ?? null,
           startedBy: ctx.startedBy ?? null,
         });
+      }
+      // ON A TASK (docs/tasks.md): the id and the branch, which is what lets
+      // the watcher say which task a session coming back to its prompt was
+      // work on, and read the result it wrote.
+      if (r.ok && r.session?.name && typeof ctx.taskId === 'string') {
+        ctx.sessions.registry.upsert(r.session.name, { taskId: ctx.taskId, taskBranch: ctx.taskBranch ?? null });
       }
       let text = r.message;
       if (r.ok && archive) text += `\nIt is pushed to ${archive}, on a branch of its own, before it stops and every ten minutes while it runs.`;

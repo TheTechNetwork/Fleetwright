@@ -48,6 +48,7 @@ import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { membersRoute } from '../../src/fleet/coordinator/org-members.js';
+import { tasksRoute } from '../../src/fleet/coordinator/org-tasks.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { resource } from '../../src/core/resources.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
@@ -208,6 +209,7 @@ export class Coordinator {
     this.core.runnerRepos.restore(state.runnerRepos);
     this.core.linkedRepos.restore(state.linkedRepos);
     this.core.org.restore(state.orgMembers);
+    this.core.tasks.restore(state.orgTasks?.tasks, state.orgTasks?.seq);
     this.core.restoreRunnerStarts(state.runnerStarts);
     this.core.restoreStandby(state.vmStandby);
     this.core.restoreHolderJoins(state.holderJoins);
@@ -314,6 +316,8 @@ export class Coordinator {
         linkedRepos: this.core.linkedRepos.serialise(),
         // One value here; one row a member in the Worker (org-members.js).
         orgMembers: this.core.org.serialise(),
+        // And the tasks, with the counter that numbers them (org-tasks.js).
+        orgTasks: this.core.tasks.serialise(),
         runnerStarts: this.core.serialiseRunnerStarts(),
         vmStandby: this.core.serialiseStandby(),
         holderJoins: this.core.serialiseHolderJoins(),
@@ -1286,6 +1290,12 @@ export class Coordinator {
     // The organization's members — see the Worker's copy.
     if (p === '/api/members' || p.startsWith('/api/members/')) {
       const answer = await membersRoute(this.core, req.method, p, requesterFor(client), () => readJson(req));
+      if (answer) return json(res, answer.status, answer.body);
+    }
+
+    // The fleet's tasks — see the Worker's copy.
+    if (p === '/api/tasks' || p.startsWith('/api/tasks/')) {
+      const answer = await tasksRoute(this.core, req.method, p, url.searchParams, requesterFor(client), () => readJson(req));
       if (answer) return json(res, answer.status, answer.body);
     }
 

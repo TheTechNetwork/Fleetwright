@@ -26,6 +26,7 @@ import { sendInvite } from '../../src/fleet/coordinator/invite-email.js';
 import { credentialFrom, isClientCredential, viewsAsMember } from '../../src/fleet/coordinator/credential.js';
 import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { MEMBERS_PREFIX, membersRoute } from '../../src/fleet/coordinator/org-members.js';
+import { TASKS_PREFIX, tasksRoute } from '../../src/fleet/coordinator/org-tasks.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { NOT_FRAMED } from './pages.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
@@ -215,6 +216,10 @@ export class Fleet {
         // hold about a dozen. Bounded by MAX_MEMBERS rows of one checked
         // record each (test/members-coordinator.test.js measures the widest).
         this.#writeMembers(),
+        // The fleet's tasks, one row each under `tasks:<id>` for the same
+        // reason (org-tasks.js): a task with its brief, result and handoffs
+        // is up to about 20 KiB, and MAX_TASKS of them are kept.
+        this.#writeTasks(),
         this.state.storage.put('runnerStarts', this.core.serialiseRunnerStarts()),
         // Machines kept ready, and which were made for it.
         this.state.storage.put('vmStandby', this.core.serialiseStandby()),
@@ -320,6 +325,11 @@ export class Fleet {
       this.core.linkedRepos.restore(await this.state.storage.get('linkedRepos'));
       // One row a member (above). A storage with no `list` holds none.
       this.core.org.restore(this.state.storage.list ? await this.state.storage.list({ prefix: MEMBERS_PREFIX }) : []);
+      // One row a task, and the counter that numbers them.
+      this.core.tasks.restore(
+        this.state.storage.list ? await this.state.storage.list({ prefix: TASKS_PREFIX }) : [],
+        await this.state.storage.get('taskSeq'),
+      );
       this.core.restoreRunnerStarts(await this.state.storage.get('runnerStarts'));
       this.core.restoreStandby(await this.state.storage.get('vmStandby'));
       this.core.restoreSetups(await this.state.storage.get('xosetups'));
@@ -1052,6 +1062,15 @@ export class Fleet {
     // org-members.js's, and the same on the Node coordinator.
     if (url.pathname === '/api/members' || url.pathname.startsWith('/api/members/')) {
       const answer = await membersRoute(this.core, request.method, url.pathname, requesterFor(client), () => readJson(request));
+      if (answer) return json(answer.body, answer.status);
+    }
+
+    // THE FLEET'S TASKS (docs/tasks.md): the record above sessions. Whoever
+    // made one, an admin, and anybody who acts for its assignee see and
+    // change it. The rules are org-tasks.js's, and the same on the Node
+    // coordinator.
+    if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/')) {
+      const answer = await tasksRoute(this.core, request.method, url.pathname, url.searchParams, requesterFor(client), () => readJson(request));
       if (answer) return json(answer.body, answer.status);
     }
 
@@ -1799,6 +1818,19 @@ export class Fleet {
     await Promise.all([
       ...Object.entries(put).map(([key, member]) => this.state.storage.put(key, member)),
       ...del.map((key) => this.state.storage.delete?.(key)),
+    ]);
+  }
+
+  /**
+   * The task rows that changed, one key each, and the counter when a task
+   * was made. As #writeMembers.
+   */
+  async #writeTasks() {
+    const { put, del, seq } = this.core.tasks.takeChanges();
+    await Promise.all([
+      ...Object.entries(put).map(([key, task]) => this.state.storage.put(key, task)),
+      ...del.map((key) => this.state.storage.delete?.(key)),
+      ...(seq === null ? [] : [this.state.storage.put('taskSeq', seq)]),
     ]);
   }
 
