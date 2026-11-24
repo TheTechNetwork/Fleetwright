@@ -370,6 +370,11 @@ export function loadConfig(env = process.env) {
     // Bind-mount the per-session hook socket, so a container can report its
     // conversation uuid without being able to name another session.
     sandboxHookSocket: bool('FLEETWRIGHT_SANDBOX_HOOK_SOCKET', true),
+    // The engines beside Claude Code that this box's session image carries
+    // (docs/engines.md, "What a machine reports"): `codex`, `opencode`. The
+    // operator's word, because nothing here can see into the image cheaply.
+    // Empty, which is the default, runs Claude Code and nothing else.
+    engines: list('FLEETWRIGHT_ENGINES'),
     // A download cache per person, shared by their sessions on this box and
     // mounted at /root/.cache: npm, pip, uv, go and pnpm keep what they fetched,
     // so the next session does not fetch it again. See cacheVolumeFor.

@@ -137,7 +137,45 @@ export { HYPERVISOR_PREFIX, HYPERVISOR_ADDRESS_RE, splitHypervisorItem };
  * Each is refused as not kept yet, which is a different answer from a name a
  * vault has never heard of, and the one a person holding such a key needs.
  */
-export const FUTURE_ITEM_KINDS = Object.freeze(['codex', 'copilot', 'apikey:']);
+export const FUTURE_ITEM_KINDS = Object.freeze(['apikey:']);
+
+/**
+ * The items an engine runs on (docs/engines.md, "Credentials"): a Codex
+ * sign-in, as the text of the `auth.json` that `codex login` leaves, and a
+ * GitHub Copilot token. Pasted by a custodian, sealed and kept like a named
+ * secret, listed by name and never read back.
+ */
+export const ENGINE_ITEM_KINDS = Object.freeze(['codex', 'copilot']);
+/** A Copilot token: one GitHub hands out, by its alphabet and length. Never tried against GitHub from here. */
+const COPILOT_TOKEN_RE = /^[A-Za-z0-9_-]{20,400}$/;
+
+/**
+ * Is this the sign-in `codex login` writes: a ChatGPT sign-in, with a
+ * refresh token? A file that holds only an API key is not kept: keys are a
+ * later step's (FUTURE_ITEM_KINDS).
+ *
+ * @param {string} value
+ * @returns {{ ok: true } | { ok: false, text: string }}
+ */
+export function checkCodexSignIn(value) {
+  /** @type {any} */
+  let read;
+  try {
+    read = JSON.parse(value);
+  } catch {
+    return { ok: false, text: 'That is not the auth.json that codex login writes: it does not read as JSON. Paste the whole file.' };
+  }
+  if (!read || typeof read !== 'object' || Array.isArray(read)) return { ok: false, text: 'That is not the auth.json that codex login writes. Paste the whole file.' };
+  if (typeof read.tokens?.refresh_token !== 'string' || !read.tokens.refresh_token) {
+    return {
+      ok: false,
+      text: read.OPENAI_API_KEY
+        ? 'That auth.json holds an API key and no ChatGPT sign-in. A vault keeps the sign-in from codex login; API keys are not kept yet.'
+        : 'That auth.json holds no ChatGPT sign-in. Run codex login, sign in with ChatGPT, and paste the file it writes.',
+    };
+  }
+  return { ok: true };
+}
 
 /** @param {string} name */
 const isFutureKind = (name) => FUTURE_ITEM_KINDS.some((k) => (k.endsWith(':') ? name.startsWith(k) : name === k));
@@ -211,6 +249,7 @@ export const CLAUDE_CHECK_MIN_MS = 10 * 60_000;
  *   given is signed with, made beside the deposit key (worker/src/minter.js)
  * @property {Record<string, { clientId: string, secret: string }>} [clients]  each OAuth provider's client, from the environment
  * @property {typeof globalThis.fetch} [fetchImpl]
+ * @property {boolean} [takesEngines]  set per box request: whether that box said it takes the sign-ins an engine runs on (answerVaultBox)
  * @property {() => number} [now]
  */
 
@@ -221,10 +260,11 @@ const refuse = (code, text) => ({ ok: false, error: { code }, text });
  * What a vault item is, from its name. Null for a name a vault does not keep.
  *
  * @param {string} name
- * @returns {'claude'|'oauth'|'secret'|'hypervisor'|null}
+ * @returns {'claude'|'oauth'|'secret'|'hypervisor'|'engine'|null}
  */
 export function itemKind(name) {
   if (name === 'claude') return 'claude';
+  if (ENGINE_ITEM_KINDS.includes(name)) return 'engine';
   if (Object.hasOwn(OAUTH_PROVIDERS, name)) return 'oauth';
   if (name.startsWith(SECRET_PREFIX) && SECRET_NAME_RE.test(name.slice(SECRET_PREFIX.length))) return 'secret';
   if (splitHypervisorItem(name)) return 'hypervisor';
@@ -675,7 +715,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
     if (isFutureKind(name)) {
       return refuse('not_kept_yet', `${name.slice(0, 80)} is not kept yet. A vault will hold it once Fleetwright runs the engine that needs it (docs/members.md).`);
     }
-    if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor') {
+    if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor' && kind !== 'engine') {
       return refuse('bad_name', 'A value put in a vault is a named secret (secret:NAME), a hypervisor’s token or a Claude token. GitHub and Cloudflare are kept by signing in.');
     }
     if (!kind) return refuse('bad_name', `${name.slice(0, 80) || 'That'} is not something a vault keeps.`);
@@ -689,12 +729,31 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       return { ok: true, text: `Forgot ${label(name)}. Boxes stop being given it when they next ask.` };
     }
     const value = String(inside.value ?? '');
-    if (!value || value.length > MAX_SECRET) return refuse('bad_value', `A named secret is between 1 and ${MAX_SECRET} characters.`);
+    if (!value || value.length > MAX_SECRET) {
+      return refuse('bad_value', kind === 'engine' ? `That is ${value.length} characters, and a vault keeps at most ${MAX_SECRET}. Paste the file or the token alone.` : `A named secret is between 1 and ${MAX_SECRET} characters.`);
+    }
+    if (name === 'codex') {
+      const reads = checkCodexSignIn(value);
+      if (!reads.ok) return refuse('bad_value', reads.text);
+    }
+    if (name === 'copilot' && !COPILOT_TOKEN_RE.test(value.trim())) {
+      return refuse('bad_value', 'That is not a GitHub Copilot token: one is a single run of letters, digits, hyphens and underscores.');
+    }
     if (kind === 'hypervisor' && !isHypervisorRecord(name, value)) {
       return refuse('bad_value', 'That is not the token record a hypervisor’s setup hands back, for that address.');
     }
-    row.items[name] = { at, sealed: await seal({ to: key.publicKey, aad: vaultAtRestAad(who.userId, name), payload: { value } }) };
+    // A NEW DEPOSIT, so whichever machine held the last Codex sign-in holds
+    // nothing of this one: `box` is not carried over (itemsFor).
+    row.items[name] = { at, sealed: await seal({ to: key.publicKey, aad: vaultAtRestAad(who.userId, name), payload: { value: name === 'copilot' ? value.trim() : value } }) };
     await save();
+    if (kind === 'engine') {
+      return {
+        ok: true,
+        text: name === 'codex'
+          ? 'Kept the Codex sign-in. It is handed to one approved machine, the first that asks for it, because Codex renews it there and a renewal ends every other copy, the one on the computer it was pasted from included.'
+          : 'Kept the GitHub Copilot token. The machines approved for this vault are given it for sessions whose engine runs on it.',
+      };
+    }
     return {
       ok: true,
       text: kind === 'hypervisor'
@@ -881,6 +940,12 @@ async function testItem(name, row, config, key, who, save) {
     }
     return told('unknown', `Whether your Claude login works could not be told just now: ${r.why ?? `the API answered ${r.status}`}.`);
   }
+  if (itemKind(name) === 'engine') {
+    // SAID AS WHAT IT IS: not checked here, and where it is checked. Asking
+    // the provider from this Worker would mean renewing a Codex sign-in away
+    // from the machine that holds it, which ends that machine's copy.
+    return said('unknown', `${label(name)} is not tried from here. The machine that runs the engine asks whether it is signed in before each turn, and a sign-in that has ended is said on that session then.`);
+  }
   if (itemKind(name) !== 'oauth') {
     return refuse('not_testable', `${label(name)} is handed over as it is, and there is no service this Worker could ask about it.`);
   }
@@ -923,6 +988,8 @@ async function testItem(name, row, config, key, who, save) {
 /** @param {string} name */
 function label(name) {
   if (name === 'claude') return 'your Claude login';
+  if (name === 'codex') return 'the Codex sign-in';
+  if (name === 'copilot') return 'the GitHub Copilot token';
   if (Object.hasOwn(OAUTH_PROVIDERS, name)) return OAUTH_PROVIDERS[/** @type {keyof typeof OAUTH_PROVIDERS} */ (name)].label;
   const hypervisor = splitHypervisorItem(name);
   if (hypervisor) return hypervisor.box ? `the hypervisor at ${hypervisor.address}, as ${hypervisor.box}` : `the hypervisor at ${hypervisor.address}`;
@@ -982,7 +1049,9 @@ async function describe(row, store, userId) {
   /** @type {Array<{ name: string, at: number, kind?: string }>} */
   const items = Object.entries(row.items)
     .filter(([, v]) => v && !v.forgotten && v.sealed)
-    .map(([n, v]) => ({ name: n, at: Number(v.at) }));
+    // WHICH MACHINE HOLDS A CODEX SIGN-IN, by the label its approval has,
+    // once one does (itemsFor): it is handed to one machine and no other.
+    .map(([n, v]) => ({ name: n, at: Number(v.at), ...(n === 'codex' && v.box ? { heldBy: String(row.grants[v.box]?.label || v.box.slice(0, 16)) } : {}) }));
   // WHICH KIND, because only a sign-in opens Remote Control, and a phone that
   // said "Kept" over a setup-token let a person think it did.
   if (claude?.sealed && !claude.forgotten) items.push({ name: 'claude', at: Number(claude.at), kind: claude.kind === 'login' ? 'login' : 'token' });
@@ -1065,7 +1134,7 @@ export async function answerVaultBox(ask, config) {
       if (!tree?.has(member)) continue;
       custodians = await mayActFor(store, tree, member);
     }
-    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now }, members, custodians));
+    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now, takesEngines: accepts?.includes('engines') === true }, members, custodians));
     if (one) accounts.push(one);
   }
   const sealed = await seal({ to: String(req.reply), aad: VAULT_BOX_AAD, payload: { at: now(), accounts } });
@@ -1136,6 +1205,27 @@ async function itemsFor(userId, hash, jwk, store, key, config, members, custodia
       inside = await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: vaultAtRestAad(userId, name), sealed: item.sealed });
     } catch {
       problems.push(`${label(name)} does not open with this minter’s key; it was kept under a key that has since changed.`);
+      continue;
+    }
+    if (kind === 'engine') {
+      // ONLY TO A BOX THAT TAKES THEM (`accepts`, signed in its request): a
+      // box from before engines would file it where nothing reads it.
+      if (!config.takesEngines) continue;
+      if (name === 'codex') {
+        // ONE MACHINE (docs/engines.md, "Credentials"). Codex renews its own
+        // tokens where it runs, and a renewal ends every other copy, so the
+        // first approved box to ask holds it and no other is given it until
+        // it is deposited again.
+        if (item.box && item.box !== hash) {
+          problems.push(`The Codex sign-in is held by ${String(row.grants[item.box]?.label || 'another machine')}, and a sign-in is held by one machine. Deposit it again to move it here.`);
+          continue;
+        }
+        if (!item.box) {
+          row.items[name] = { ...item, box: hash };
+          changed = true;
+        }
+      }
+      items.push({ name, value: String(inside.value), expiresAt: null });
       continue;
     }
     if (kind === 'secret' || kind === 'hypervisor') {

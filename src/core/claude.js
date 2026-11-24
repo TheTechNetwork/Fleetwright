@@ -61,23 +61,40 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * internal network it joins and where its proxy is on it. Required when the
  * box is on an allowlist, ignored when egress is open (./egress.js).
  *
+ * engine is the member's engine this pane runs (docs/engines.md), when the
+ * session names one. Claude Code is launched as it always was, with the
+ * member's model when it names one. Any other engine is launched as
+ * `fleetwright-engine`, the runner the session image carries
+ * (sandbox/engine.mjs), in the same container on the same socket: no Remote
+ * Control and no resume, which are Claude Code's own, and the prompt after
+ * `--` so it stays one argument whatever it begins with.
+ *
  * @param {import('../config.js').Config} cfg
- * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null, configDir?: string|null, runnerAuth?: RunnerAuth|null, owner?: string|null, egress?: import('./egress.js').EgressRoute|null }} opts
+ * @param {{ name: string, resumeUuid?: string|null, skipPermissions?: boolean|null, remoteControl?: boolean|null, hookSocket?: boolean|null, prompt?: string|null, configDir?: string|null, runnerAuth?: RunnerAuth|null, owner?: string|null, egress?: import('./egress.js').EgressRoute|null, engine?: { engine: string, model?: string }|null }} opts
  *   `owner` is whose session this is (an actor or an email), for the download cache it shares
  */
-export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null, configDir = null, runnerAuth = null, owner = null, egress = null }) {
+export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = null, remoteControl = null, hookSocket = null, prompt = null, configDir = null, runnerAuth = null, owner = null, egress = null, engine = null }) {
   const rc = remoteControl === null ? cfg.remoteControl : remoteControl;
   const skip = skipPermissions === null ? cfg.skipPermissions : skipPermissions;
+  const runner = Boolean(engine && engine.engine !== 'claude-code');
 
   const argv = cfg.sandbox ? sandboxArgv(cfg, name, hookSocket === null ? cfg.sandboxHookSocket : hookSocket, owner, egress) : [cfg.claudeBin];
-  if (cfg.sandbox) argv.push('claude');
-  if (rc) argv.push('--remote-control', name);
-  if (skip) argv.push('--dangerously-skip-permissions');
-  if (resumeUuid) argv.push('--resume', resumeUuid);
-  // LAST, and after every flag. A profile is prose: it can start with "-",
-  // contain newlines, and contain quotes. As the final positional it is one
-  // argv entry that nothing after it can reinterpret.
-  if (typeof prompt === 'string' && prompt.trim()) argv.push(prompt);
+  if (runner && engine) {
+    argv.push('fleetwright-engine', '--engine', engine.engine);
+    if (engine.model) argv.push('--model', engine.model);
+    argv.push('--mode', skip ? 'dangerous' : 'safe');
+    if (typeof prompt === 'string' && prompt.trim()) argv.push('--', prompt);
+  } else {
+    if (cfg.sandbox) argv.push('claude');
+    if (engine?.model) argv.push('--model', engine.model);
+    if (rc) argv.push('--remote-control', name);
+    if (skip) argv.push('--dangerously-skip-permissions');
+    if (resumeUuid) argv.push('--resume', resumeUuid);
+    // LAST, and after every flag. A profile is prose: it can start with "-",
+    // contain newlines, and contain quotes. As the final positional it is one
+    // argv entry that nothing after it can reinterpret.
+    if (typeof prompt === 'string' && prompt.trim()) argv.push(prompt);
+  }
   // Single-quote each argument: cfg.claudeBin can be an absolute path with
   // spaces, and resumeUuid/name are already charset-validated upstream. The
   // prompt is the one argument here that is NOT charset-validated — it is

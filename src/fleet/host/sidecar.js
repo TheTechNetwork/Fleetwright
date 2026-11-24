@@ -2094,7 +2094,10 @@ export class Sidecar {
     // `accepts`, signed with the rest: this box files a member's vault under
     // an account of its own (vault-store.js, applyVault), so the minter may
     // hand it one. A box from before members sends none and is handed none.
-    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at: Date.now(), reply: publicKey, accepts: ['members'] };
+    // And `engines`: the sign-ins an engine runs on, which this box hands a
+    // session's runner over its socket (docs/engines.md). IN ALPHABETICAL
+    // ORDER, because the minter checks the signature over the list sorted.
+    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at: Date.now(), reply: publicKey, accepts: ['engines', 'members'] };
     let signature;
     try {
       signature = await key.sign(signingInput('vault-box', request));
@@ -2461,6 +2464,10 @@ export class Sidecar {
         ...base,
         hub: { reachable: true, host: state.host ?? null },
         maxSessions: state.maxSessions ?? null,
+        // THE ENGINES THIS BOX RUNS (docs/engines.md), as its hub says. A hub
+        // from before engines says nothing, and the coordinator reads that
+        // as Claude Code alone.
+        ...(Array.isArray(state.engines) ? { engines: state.engines.filter((/** @type {unknown} */ e) => typeof e === 'string').slice(0, 8) } : {}),
         running,
         // The hub's own answer when it gives one (it measures memory and load,
         // core/capacity.js); a hub from before that has only a fixed count.
@@ -2500,6 +2507,10 @@ export class Sidecar {
             // AND ON WHICH TASK (docs/tasks.md), so a screen can go from a
             // session to the task it is work on.
             ...(s.taskId ? { taskId: s.taskId, taskBranch: s.taskBranch ?? null } : {}),
+            // WHICH ENGINE IT IS ON, of the ones its member names, and how
+            // its last turn ended (docs/engines.md).
+            ...(Array.isArray(s.engines) ? { engines: s.engines, engineAt: s.engineAt ?? 0, engineLog: s.engineLog ?? [] } : {}),
+            ...(s.turn ? { turn: s.turn } : {}),
             // WHERE the work is happening. The app showed a session with no
             // way to answer "which checkout is this?" — the commonest question
             // about a session somebody started yesterday, and the answer was
@@ -3309,6 +3320,9 @@ export function commandMeta(verb, params = {}, actor = '') {
     // was told. The words are `task`, above, and are not kept.
     ...(verb === 'start' && typeof params?.taskId === 'string' ? { taskId: params.taskId } : {}),
     ...(verb === 'start' && typeof params?.taskId === 'string' && typeof params?.taskBranch === 'string' ? { taskBranch: params.taskBranch } : {}),
+    // THE MEMBER'S ENGINES, v21, in order: what the pane runs first, and
+    // what takes over at a limit (docs/engines.md).
+    ...(verb === 'start' && typeof params?.memberEngines === 'string' ? { memberEngines: params.memberEngines } : {}),
     // File content, for the same reason and by the same route: prose and
     // payloads travel beside a command rather than inside it.
     ...(verb === 'writefile' && typeof params?.content === 'string' ? { content: params.content } : {}),

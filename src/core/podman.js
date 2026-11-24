@@ -583,14 +583,18 @@ export async function canStartSession(cfg, { timeout = 30_000 } = {}) {
  * @param {import('../config.js').Config} cfg
  * @param {string} name
  * @param {string|null} [actor]
- * @param {{ account?: string|null, createdBy?: string|null }} [opts]  what the
+ * @param {{ account?: string|null, createdBy?: string|null, claude?: boolean|'seed' }} [opts]  what the
  *   registry already knows about this session, when it is a resume: the Claude
  *   account its volume holds, and the actor who started it. See
  *   refreshSeededCredentials for why both are needed and why neither is the
- *   actor pressing resume.
+ *   actor pressing resume. `claude` is false for a session whose engine is
+ *   not Claude Code (docs/engines.md): it needs no Claude sign-in, and a
+ *   member who keeps none must not be refused for it. `'seed'` is the other
+ *   way round: an engine handed on to Claude Code, in a volume that was
+ *   never given a sign-in, is given one now or refused.
  * @returns {Promise<{ ok: boolean, message?: string, account?: string|null }>}
  */
-export async function ensureSandboxVolumes(cfg, name, actor = null, { account: recorded = null, createdBy = null } = {}) {
+export async function ensureSandboxVolumes(cfg, name, actor = null, { account: recorded = null, createdBy = null, claude: wantsClaude = true } = {}) {
   if (!podmanAvailable(cfg)) {
     return { ok: false, message: `${cfg.podmanBin} is not installed, but FLEETWRIGHT_SANDBOX is on` };
   }
@@ -626,9 +630,11 @@ export async function ensureSandboxVolumes(cfg, name, actor = null, { account: r
     log.info(`sandbox: created volume ${volume}`);
 
     if (volume !== claude) continue;
-    const seeded = seedCredentials(cfg, claude, pickCredentialSource(cfg, actor), actor);
-    if (!seeded.ok) return seeded;
-    account = seeded.account ?? 'shared';
+    if (wantsClaude !== false) {
+      const seeded = seedCredentials(cfg, claude, pickCredentialSource(cfg, actor), actor);
+      if (!seeded.ok) return seeded;
+      account = seeded.account ?? 'shared';
+    }
     // AFTER the credential and never instead of it: this one cannot refuse a
     // start, so it must not run before the thing that can.
     seedHouseRules(cfg, claude);
@@ -651,7 +657,11 @@ export async function ensureSandboxVolumes(cfg, name, actor = null, { account: r
   // credential it had is exactly the old behaviour, and refusing to resume
   // because a refresh could not happen would be a worse bug than the one this
   // fixes.
-  if (!fresh) {
+  if (!fresh && wantsClaude === 'seed') {
+    const seeded = seedCredentials(cfg, claude, pickCredentialSource(cfg, createdBy ?? actor), createdBy ?? actor);
+    if (!seeded.ok) return seeded;
+    account = seeded.account ?? 'shared';
+  } else if (!fresh && wantsClaude) {
     const again = refreshSeededCredentials(cfg, name, { account: recorded, actor: createdBy ?? actor });
     if (again.account) account = again.account;
   }

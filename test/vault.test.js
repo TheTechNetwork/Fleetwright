@@ -2075,11 +2075,9 @@ test('a custodian keeps things in the member’s vault and not their own, and a 
   assert.deepEqual(Object.keys(m.rows.get('v:member:debbie').items), ['secret:DEPLOY_KEY']);
   assert.deepEqual((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.map((/** @type {any} */ i) => i.name), ['claude', 'secret:DEPLOY_KEY']);
   assert.deepEqual((await as(ELI, { op: 'list' })).answer.items.map((/** @type {any} */ i) => i.name), ['secret:MINE']);
-  // What the engines after Claude Code will keep is named, and not kept yet.
-  for (const name of ['codex', 'copilot', 'apikey:openrouter']) {
-    const r = await as(ELI, { op: 'put', name, value: 'x', for: 'debbie' });
-    assert.equal(r.error?.code, 'not_kept_yet', name);
-  }
+  // What a paid API engine will keep is named, and not kept yet.
+  const key = await as(ELI, { op: 'put', name: 'apikey:openrouter', value: 'x', for: 'debbie' });
+  assert.equal(key.error?.code, 'not_kept_yet');
   // A custodian holds the vault's items and machines, and none of what is a person's alone.
   assert.equal((await as(ELI, { op: 'custody', allow: true, for: 'debbie' })).error?.code, 'bad_params');
 
@@ -2108,6 +2106,57 @@ test('a custodian keeps things in the member’s vault and not their own, and a 
   // Removed from the box, by a custodian.
   assert.equal((await as(DANA, { op: 'revoke', key: await boxKeyHash(boxKeys.publicJwk), for: 'debbie' })).ok, true);
   assert.deepEqual((await m.box(boxKeys, { members: [ELI, DANA], accepts: ['members'] })).answer.accounts, []);
+});
+
+test('a member’s Codex sign-in and Copilot token are kept, handed only to a box that takes them, and the Codex one to one machine', async (t) => {
+  // docs/engines.md, "Credentials".
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  const signIn = JSON.stringify({ OPENAI_API_KEY: null, tokens: { id_token: 'i', access_token: 'a', refresh_token: 'r-1', account_id: 'acct' }, last_refresh: '2026-11-24T00:00:00Z' });
+  const put = (/** @type {string} */ name, /** @type {string} */ value) => as(ELI, { op: 'put', name, value, for: 'debbie' });
+
+  // WHAT IS NOT ONE IS REFUSED IN WORDS THAT SAY WHAT IS.
+  assert.match((await put('codex', 'not json')).text, /does not read as JSON\. Paste the whole file/);
+  assert.match((await put('codex', JSON.stringify({ OPENAI_API_KEY: 'sk-x' }))).text, /holds an API key and no ChatGPT sign-in.*API keys are not kept yet/);
+  assert.match((await put('codex', JSON.stringify({ tokens: {} }))).text, /holds no ChatGPT sign-in\. Run codex login/);
+  assert.match((await put('copilot', 'two words')).text, /not a GitHub Copilot token/);
+  const kept = await put('codex', signIn);
+  assert.equal(kept.ok, true, kept.text);
+  assert.match(kept.text, /handed to one approved machine, the first that asks/);
+  assert.equal((await put('copilot', `  ${'gho_'}${'c'.repeat(36)}\n`)).ok, true);
+  // Listed by name, never read back; and not tried from the vault, said as that.
+  const listed = (await as(ELI, { op: 'list', for: 'debbie' })).answer;
+  assert.deepEqual(listed.items.map((/** @type {any} */ i) => i.name), ['codex', 'copilot']);
+  assert.ok(!JSON.stringify(listed).includes('r-1'));
+  const tested = await as(ELI, { op: 'test', name: 'codex', for: 'debbie' });
+  assert.equal(tested.answer?.state, 'unknown');
+  assert.match(tested.text, /is not tried from here\. The machine that runs the engine asks whether it is signed in before each turn/);
+
+  const one = await generateKeyPair();
+  const two = await generateKeyPair();
+  for (const [keys, label] of /** @type {const} */ ([[one, 'box-one'], [two, 'box-two']])) {
+    assert.equal((await as(ELI, { op: 'grant', hostKey: keys.publicJwk, label, for: 'debbie' })).ok, true);
+  }
+  const names = (/** @type {any} */ r) => (r.answer.accounts[0]?.items ?? []).map((/** @type {any} */ i) => i.name).sort();
+  // A box that takes members and not engines is handed neither.
+  assert.deepEqual(names(await m.box(one, { members: [ELI], accepts: ['members'] })), []);
+  // THE FIRST THAT ASKS HOLDS THE CODEX SIGN-IN; the second gets the token that does not rotate, and is told why not the other.
+  const first = await m.box(two, { members: [ELI], accepts: ['engines', 'members'] });
+  assert.deepEqual(names(first), ['codex', 'copilot']);
+  assert.equal(first.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'codex').value, signIn);
+  const second = await m.box(one, { members: [ELI], accepts: ['engines', 'members'] });
+  assert.deepEqual(names(second), ['copilot']);
+  assert.match(second.answer.accounts[0].problems.join(' '), /The Codex sign-in is held by box-two, and a sign-in is held by one machine\. Deposit it again to move it here\./);
+  assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.find((/** @type {any} */ i) => i.name === 'codex').heldBy, 'box-two');
+  // And still the same one on the next ask.
+  assert.deepEqual(names(await m.box(two, { members: [ELI], accepts: ['engines', 'members'] })), ['codex', 'copilot']);
+
+  // DEPOSITED AGAIN, it is nobody's until a machine asks, and then that machine's.
+  const again = signIn.replace('r-1', 'r-2');
+  assert.equal((await put('codex', again)).ok, true);
+  assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.find((/** @type {any} */ i) => i.name === 'codex').heldBy, undefined);
+  assert.deepEqual(names(await m.box(one, { members: [ELI], accepts: ['engines', 'members'] })), ['codex', 'copilot']);
+  assert.deepEqual(names(await m.box(two, { members: [ELI], accepts: ['engines', 'members'] })), ['copilot']);
 });
 
 test('two boxes asking at once renew a member’s refresh token once, under the member’s own lock', async (t) => {
