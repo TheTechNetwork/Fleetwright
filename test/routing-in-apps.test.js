@@ -438,7 +438,7 @@ test('what the fleet says of a route is the line on the task’s page, a refusal
 test('New task sends `routing` as the choice says: off for Nobody, the mode named for the fleet, none for “As your fleet is set” or a member; Edit sends it either way', () => {
   for (const [name, src, chooses, whose, write, assignee, asFleet] of /** @type {const} */ ([
     ['iOS', IOS, /Text\("Let the fleet choose"\)\.tag\((\w+)\)/, /Picker\("Assignee", selection: \$(\w+)\) \{\s*Text\("Nobody"\)\.tag\(""\)/, /\["routing"\] = /, /\["assignee"\] = /, /Text\((\w+)\)\.tag\(""\)/],
-    ['Android', ANDROID, /"Let the fleet choose"[^\n]*== (\w+)\) \{ \w+ = \1 \}/, /"Nobody", role = null, selected = (\w+)\.isEmpty\(\)\) \{ \1 = "" \}\s*(?:\/\/[^\n]*\s*)*if \(\1\.isEmpty\(\)\) Hint\(/, /\.put\("routing", /, /\.put\("assignee", /, /\w+\((\w+), role = null, selected = \w+\.isEmpty\(\)\) \{ \w+ = "" \}/],
+    ['Android', ANDROID, /"Let the fleet choose"[^\n]*== (\w+)\) \{ \w+ = \1 \}/, /"Nobody", role = null, selected = (\w+)\.isEmpty\(\)\) \{ \1 = "" \}\s*(?:\/\/[^\n]*\n\s*)*if \(\1\.isEmpty\(\)\) Hint\(/, /\.put\("routing", /, /\.put\("assignee", /, /\w+\((\w+), role = null, selected = \w+\.isEmpty\(\)\) \{ \w+ = "" \}/],
   ])) {
     // The choice beside the members and Nobody, and what it sets. Nobody is
     // the empty choice of the same field.
