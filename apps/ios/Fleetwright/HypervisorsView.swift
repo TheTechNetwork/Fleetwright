@@ -22,6 +22,12 @@ import SwiftUI
 /// address, and "Sandbox provider" where one says its kind. Adding one is a
 /// row of its own under Add a hypervisor: it is a key and a list of
 /// templates, and nothing is found at an address.
+///
+/// SO IS ONE OF YOUR OWN MACHINES THAT MAKES MACHINES (docs/api-engines.md,
+/// "A machine on a box of your own"), by its own name and as "One of your
+/// machines". Nothing here adds one or takes one away: its operator turns
+/// it on, on that machine. While it has no image to offer, its row says why
+/// in the machine's own sentence, where another row has its one status.
 struct HypervisorsView: View {
     let settings: Settings
 
@@ -59,13 +65,25 @@ struct HypervisorsView: View {
         /// A sandbox provider, which only the fleet reports: a phone holds
         /// no pool of one.
         var sandbox: Bool { fleet?.onSandbox == true }
+        /// One of your own machines that makes machines, which the fleet
+        /// lists as a place of the same kind and which is no provider.
+        var ownBox: Bool { fleet?.onOwnBox == true }
         /// Xen Orchestra pools first, then clusters, then providers.
         var order: Int { sandbox ? 2 : proxmox ? 1 : 0 }
         /// What the row is called: a hypervisor by its address, a provider
         /// by its name, since "e2b" is nobody's address.
         var title: String { sandbox ? (fleet?.provider ?? address) : address }
         /// Which kind it is, in the words a person knows it by.
-        var kindName: String { sandbox ? SandboxWords.kind : proxmox ? "Proxmox VE" : "Xen Orchestra" }
+        var kindName: String { ownBox ? SandboxWords.ownKind : sandbox ? SandboxWords.kind : proxmox ? "Proxmox VE" : "Xen Orchestra" }
+        /// WHY ONE OF YOUR OWN MACHINES HAS NO IMAGE TO OFFER, in that
+        /// machine's words: it is building one, the build failed, or its hub
+        /// did not answer. It says so while it is reached as well, so this
+        /// does not ask whether it was. Nil for every other row, whose
+        /// machines' reasons are on its page under Details.
+        var ownProblem: String? {
+            guard ownBox else { return nil }
+            return fleet?.boxes.compactMap { $0.problem }.first { !$0.isEmpty }
+        }
     }
 
     var body: some View {
@@ -157,9 +175,19 @@ struct HypervisorsView: View {
             // `answered` keeps §7: a pool the fleet did not list is waiting for
             // a machine only when the fleet actually answered, and Unknown
             // when it did not.
-            Text(HypervisorWords.status(row.fleet, onPhone: row.onPhone, answered: fleet != nil))
-                .fleetType(.label)
-                .foregroundStyle(HypervisorWords.wantsSomething(row.fleet, onPhone: row.onPhone) ? Design.Palette.attention : Design.Palette.inkDim)
+            //
+            // ONE OF YOUR OWN MACHINES WITH NO IMAGE YET says why, and that
+            // sentence is its status: "Ready" over a machine that is still
+            // building its image would be a claim nothing is behind (C-5).
+            if let problem = row.ownProblem {
+                Text(problem)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+            } else {
+                Text(HypervisorWords.status(row.fleet, onPhone: row.onPhone, answered: fleet != nil))
+                    .fleetType(.label)
+                    .foregroundStyle(HypervisorWords.wantsSomething(row.fleet, onPhone: row.onPhone) ? Design.Palette.attention : Design.Palette.inkDim)
+            }
             // HOW CURRENT ITS PAGE WILL BE, for a pool this phone reads
             // itself: nothing watches a pool while the app is closed, so the
             // row says when this phone last read it rather than letting the
@@ -216,6 +244,11 @@ struct HypervisorsView: View {
 /// given its key with whether it reached the provider. It has no pools, no
 /// version, no edge router and no machine of its own, and nothing here sets
 /// one up: its key is replaced where it was added.
+///
+/// ONE OF YOUR OWN MACHINES HAS THAT SHORT PAGE TOO, with images where a
+/// provider has templates and one line saying whose switch it is. It offers
+/// nothing: there is no key to replace or forget, and this app cannot turn
+/// it on or off.
 struct HypervisorPageView: View {
     let settings: Settings
     let row: HypervisorsView.Row
@@ -263,13 +296,30 @@ struct HypervisorPageView: View {
     /// master answers.
     private var statusCard: some View {
         VStack(alignment: .leading, spacing: Design.Space.insideTight) {
-            Text(HypervisorWords.answer(row.fleet))
-                .fleetType(.body)
-                .foregroundStyle(HypervisorWords.wantsSomething(row.fleet, onPhone: row.onPhone) ? Design.Palette.attention : Design.Palette.ink)
-                .contentTransition(.opacity)
-                .animation(Design.Motion.change, value: HypervisorWords.answer(row.fleet))
+            // ONE OF YOUR OWN MACHINES WITH NO IMAGE YET: its own sentence
+            // on why, reached or not, where the verdict would be. "Ready.
+            // It makes machines" is not so until it has an image (C-5).
+            if let problem = row.ownProblem {
+                Text(problem)
+                    .fleetType(.body)
+                    .foregroundStyle(Design.Palette.attention)
+                    .textSelection(.enabled)
+            } else {
+                Text(HypervisorWords.answer(row.fleet))
+                    .fleetType(.body)
+                    .foregroundStyle(HypervisorWords.wantsSomething(row.fleet, onPhone: row.onPhone) ? Design.Palette.attention : Design.Palette.ink)
+                    .contentTransition(.opacity)
+                    .animation(Design.Motion.change, value: HypervisorWords.answer(row.fleet))
+            }
             ForEach(row.fleet.map(HypervisorWords.facts) ?? [], id: \.self) { line in
                 Text(line)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+            // WHOSE SWITCH IT IS, for one of your own machines: no screen
+            // here turns it on or off, so the page says who does and where.
+            if row.ownBox {
+                Text(SandboxWords.ownSwitch(row.fleet?.provider))
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
             }
@@ -357,12 +407,16 @@ struct HypervisorPageView: View {
                 // verdict is the word beside the name, and the sentence is the
                 // mechanism (docs/design-system.md, Words), selectable because
                 // it names a path and a status, which is what gets searched for.
-                if let why = box.problem, !why.isEmpty {
-                    DisclosureGroup("Details") {
-                        Text(why).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
+                // One of your own machines says it at the head of this page
+                // instead, in the open, so it is not said twice.
+                if !row.ownBox {
+                    if let why = box.problem, !why.isEmpty {
+                        DisclosureGroup("Details") {
+                            Text(why).fleetType(.label).foregroundStyle(Design.Palette.inkDim).textSelection(.enabled)
+                        }
+                        .fleetType(.label)
+                        .frame(minHeight: 44)
                     }
-                    .fleetType(.label)
-                    .frame(minHeight: 44)
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -772,8 +826,10 @@ enum HypervisorWords {
             case nil: break
             }
         }
-        // A provider has templates where a hypervisor has images.
-        if let n = h.images { lines.append(h.onSandbox ? SandboxWords.templates(n) : n == 1 ? "1 image" : "\(n) images") }
+        // A provider has templates where a hypervisor has images, and so
+        // has one of your own machines: what it makes a machine from is an
+        // image it built, and nobody's template.
+        if let n = h.images { lines.append(h.onSandbox && !h.onOwnBox ? SandboxWords.templates(n) : n == 1 ? "1 image" : "\(n) images") }
         if let n = h.machines { lines.append(n == 1 ? "1 machine made on it" : "\(n) machines made on it") }
         return lines
     }

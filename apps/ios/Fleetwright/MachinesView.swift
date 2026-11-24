@@ -174,19 +174,26 @@ struct MachinesView: View {
     }
 
     /// The machines made for you, under where each is: on your hypervisor,
-    /// or rented from a sandbox provider (docs/api-engines.md). Two
-    /// headings, because "On your hypervisor" over a machine on somebody
-    /// else's cloud would be untrue, and each drawn only over machines.
+    /// rented from a sandbox provider, or a container on one of your own
+    /// machines (docs/api-engines.md). Three headings, because "On your
+    /// hypervisor" over a machine on somebody else's cloud would be untrue,
+    /// and so would "At a sandbox provider" over one on a machine you
+    /// enrolled. Each is drawn only over machines of its kind.
     @ViewBuilder private var poolMachineRows: some View {
-        let rented = poolMachines.filter(\.onSandbox)
-        let own = poolMachines.filter { !$0.onSandbox }
-        if !own.isEmpty {
+        let rented = poolMachines.filter { $0.onSandbox && !$0.onOwnBox }
+        let onBoxes = poolMachines.filter(\.onOwnBox)
+        let onHypervisor = poolMachines.filter { !$0.onSandbox }
+        if !onHypervisor.isEmpty {
             poolMachineHeading("On your hypervisor")
-            poolMachineLinks(own)
+            poolMachineLinks(onHypervisor)
         }
         if !rented.isEmpty {
             poolMachineHeading(SandboxWords.rentedHeader)
             poolMachineLinks(rented)
+        }
+        if !onBoxes.isEmpty {
+            poolMachineHeading(SandboxWords.ownHeader)
+            poolMachineLinks(onBoxes)
         }
     }
 
@@ -223,9 +230,10 @@ struct MachinesView: View {
                     .fleetType(.label)
                     .foregroundStyle(m.state == "Running" ? Design.Palette.ok : Design.Palette.attention)
             }
-            // A rented machine says whose cloud it is on, where one of
-            // yours says its address. Named first, so the line under it
-            // stays one the compiler reads at a glance.
+            // A rented machine says whose cloud it is on, and a container
+            // which of your machines it is on, where one on your hypervisor
+            // says its address. Named first, so the line under it stays one
+            // the compiler reads at a glance.
             let place: String? = m.onSandbox ? "on \(m.providerName)" : m.ip
             Text([m.standby == true ? "kept ready" : m.image, place, m.until.map { "ends \(relativeTime($0))" }].compactMap { $0 }.joined(separator: " · "))
                 .fleetType(.micro)

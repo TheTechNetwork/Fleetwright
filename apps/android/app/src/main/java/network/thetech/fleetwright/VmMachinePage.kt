@@ -157,7 +157,8 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                         "resize" -> "Restart $name with the new size? A session running on it ends."
                         // A rented machine has no disk of yours to speak of:
                         // the provider removes it, and what was on it goes
-                        // with it.
+                        // with it. So does the machine a container is on,
+                        // which is named the same way.
                         else -> if (machine?.onSandbox == true) "End $name now? ${machine?.providerName} removes it, and anything on it is lost."
                         else "End $name now? It is stopped and removed with its disk, and anything on it is lost."
                     },
@@ -198,20 +199,28 @@ fun VmMachinePage(settings: Settings, name: String, onDismiss: () -> Unit) {
                     Fact("Made from", m.image ?: "Not reported")
                     Fact("Ends", m.until?.let { "${java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it))}, ${relative(it)}" } ?: "Unknown")
                 }
-                Hint(SandboxWords.machineFooter(m.providerName))
+                // ONE OF YOUR OWN MACHINES IS NOBODY'S CLOUD: what it is,
+                // and then, quietly, what it is not, where a machine on your
+                // hypervisor would have the controls.
+                Hint(if (m.onOwnBox) SandboxWords.ownMachineFooter(m.providerName) else SandboxWords.machineFooter(m.providerName))
+                if (m.onOwnBox) Hint(SandboxWords.OWN_NEEDS_HYPERVISOR)
 
                 SectionHead("Work it")
                 // MORE TIME AND END, and nothing else. The provider counts a
                 // new time from now, so each choice says when it would end
                 // and not how much is added, and the hint says who is
-                // counting.
+                // counting. One of your own machines adds the minutes to the
+                // end a container already had, so there each choice says how
+                // much more.
                 Text("More time", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
-                listOf(30 to "30 minutes from now", 60 to "1 hour from now", 120 to "2 hours from now").forEach { (minutes, label) ->
+                val choices = if (m.onOwnBox) listOf(30 to "30 more minutes", 60 to "1 more hour", 120 to "2 more hours")
+                else listOf(30 to "30 minutes from now", 60 to "1 hour from now", 120 to "2 hours from now")
+                choices.forEach { (minutes, label) ->
                     OutlinedButton(onClick = { act("extend", minutes) }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) {
                         Text(label)
                     }
                 }
-                Hint(SandboxWords.timeFooter(m.providerName))
+                Hint(if (m.onOwnBox) SandboxWords.OWN_TIME_FOOTER else SandboxWords.timeFooter(m.providerName))
                 OutlinedButton(onClick = { asking = "stop" }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text("End it now", color = Design.Palette.bad.now)
                 }

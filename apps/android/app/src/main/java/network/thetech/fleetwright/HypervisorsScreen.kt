@@ -24,6 +24,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,6 +56,12 @@ import kotlinx.coroutines.withContext
  * and "Sandbox provider" where one says its kind. Adding one is a row of its
  * own under Add a hypervisor: it is a key and a list of templates, and
  * nothing is found at an address.
+ *
+ * SO IS ONE OF YOUR OWN MACHINES THAT MAKES MACHINES (docs/api-engines.md,
+ * "A machine on a box of your own"), by its own name and as "One of your
+ * machines". Nothing here adds one or takes one away: its operator turns it
+ * on, on that machine. While it has no image to offer, its row says why in
+ * the machine's own sentence, where another row has its one status.
  */
 @Composable
 internal fun HypervisorsScreen(
@@ -219,11 +226,21 @@ internal fun HypervisorsScreen(
                 // colour. `answered` keeps §7: a pool the fleet did not list
                 // is waiting for a machine only when the fleet actually
                 // answered, and Unknown when it did not.
-                Text(
-                    HypervisorWords.status(row.fleet, row.onPhone, answered = fleet != null),
-                    style = Design.Style.label,
-                    color = if (trouble) Design.Palette.attention.now else Design.Palette.inkDim.now,
-                )
+                //
+                // ONE OF YOUR OWN MACHINES WITH NO IMAGE YET says why, and
+                // that sentence is its status: "Ready" over a machine that
+                // is still building its image would be a claim nothing is
+                // behind (C-5). Same as iOS.
+                val problem = row.ownProblem
+                if (problem != null) {
+                    Text(problem, style = Design.Style.label, color = Design.Palette.attention.now)
+                } else {
+                    Text(
+                        HypervisorWords.status(row.fleet, row.onPhone, answered = fleet != null),
+                        style = Design.Style.label,
+                        color = if (trouble) Design.Palette.attention.now else Design.Palette.inkDim.now,
+                    )
+                }
                 // HOW CURRENT ITS PAGE WILL BE, for a pool this phone reads
                 // itself: nothing watches a pool while the app is closed, so the
                 // row says when this phone last read it.
@@ -254,6 +271,9 @@ internal data class HypervisorRow(val address: String, val proxmox: Boolean, val
     /** A sandbox provider, which only the fleet reports: a phone holds no pool of one. */
     val sandbox: Boolean get() = fleet?.onSandbox == true
 
+    /** One of your own machines that makes machines, which the fleet lists as a place of the same kind and which is no provider. */
+    val ownBox: Boolean get() = fleet?.onOwnBox == true
+
     /** Xen Orchestra pools first, then clusters, then providers. */
     val order: Int get() = if (sandbox) 2 else if (proxmox) 1 else 0
 
@@ -261,7 +281,17 @@ internal data class HypervisorRow(val address: String, val proxmox: Boolean, val
     val title: String get() = if (sandbox) fleet?.provider ?: address else address
 
     /** Which kind it is, in the words a person knows it by. */
-    val kindName: String get() = if (sandbox) SandboxWords.KIND else if (proxmox) "Proxmox VE" else "Xen Orchestra"
+    val kindName: String get() = if (ownBox) SandboxWords.OWN_KIND else if (sandbox) SandboxWords.KIND else if (proxmox) "Proxmox VE" else "Xen Orchestra"
+
+    /**
+     * WHY ONE OF YOUR OWN MACHINES HAS NO IMAGE TO OFFER, in that machine's
+     * words: it is building one, the build failed, or its hub did not
+     * answer. It says so while it is reached as well, so this does not ask
+     * whether it was. Null for every other row, whose machines' reasons are
+     * on its page under Details.
+     */
+    val ownProblem: String?
+        get() = if (ownBox) fleet?.boxes?.firstNotNullOfOrNull { box -> box.problem?.takeIf { it.isNotBlank() } } else null
 }
 
 /** The fleet's hypervisors, and this phone's pools the fleet does not list (no machine holds their token yet). */
@@ -306,6 +336,11 @@ private fun ChoiceRow(title: String, line: String, onClick: () -> Unit) {
  * its key with whether it reached the provider. It has no pools, no version,
  * no edge router and no machine of its own, and nothing here sets one up: its
  * key is replaced where it was added.
+ *
+ * ONE OF YOUR OWN MACHINES HAS THAT SHORT PAGE TOO, with images where a
+ * provider has templates and one line saying whose switch it is. It offers
+ * nothing: there is no key to replace or forget, and this app cannot turn it
+ * on or off.
  */
 @Composable
 private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain: () -> Unit, onTurnOnFirewall: () -> Unit, onMakeOwn: (Boolean) -> Unit, onMakeEdge: (Boolean, Boolean, Boolean) -> Unit, onDismiss: () -> Unit) {
@@ -343,15 +378,26 @@ private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain:
             Modifier.fillMaxWidth().fleetCard(radius = Design.Radius.cardSmall).heightIn(min = 48.dp).padding(Design.Space.groupTight),
             verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
         ) {
-            val answer = HypervisorWords.answer(row.fleet)
-            AnimatedContent(
-                targetState = answer,
-                transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
-                label = "hypervisor status",
-            ) { words ->
-                Text(words, style = Design.Style.body, color = if (HypervisorWords.wantsSomething(row.fleet, row.onPhone)) Design.Palette.attention.now else Design.Palette.ink.now)
+            // ONE OF YOUR OWN MACHINES WITH NO IMAGE YET: its own sentence
+            // on why, reached or not, where the verdict would be. "Ready. It
+            // makes machines" is not so until it has an image (C-5).
+            val problem = row.ownProblem
+            if (problem != null) {
+                SelectionContainer { Text(problem, style = Design.Style.body, color = Design.Palette.attention.now) }
+            } else {
+                val answer = HypervisorWords.answer(row.fleet)
+                AnimatedContent(
+                    targetState = answer,
+                    transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
+                    label = "hypervisor status",
+                ) { words ->
+                    Text(words, style = Design.Style.body, color = if (HypervisorWords.wantsSomething(row.fleet, row.onPhone)) Design.Palette.attention.now else Design.Palette.ink.now)
+                }
             }
             row.fleet?.let { f -> HypervisorWords.facts(f).forEach { Text(it, style = Design.Style.label, color = Design.Palette.inkDim.now) } }
+            // WHOSE SWITCH IT IS, for one of your own machines: no screen
+            // here turns it on or off, so the page says who does and where.
+            if (row.ownBox) Text(SandboxWords.ownSwitch(row.fleet?.provider), style = Design.Style.label, color = Design.Palette.inkDim.now)
             if (!row.proxmox && !row.sandbox && !row.onPhone) Text(HypervisorWords.XO_ELSEWHERE, style = Design.Style.label, color = Design.Palette.inkDim.now)
         }
         // THE EDGE ROUTERS, on a pool's card. A cluster says whether it has
@@ -397,7 +443,9 @@ private fun HypervisorPage(settings: Settings, row: HypervisorRow, onSetUpAgain:
                 // THE MACHINE'S OWN WORDS on why, under Details: the row's
                 // verdict is the word beside the name, and the sentence is
                 // the mechanism (docs/design-system.md, Words). Same as iOS.
-                box.problem?.takeIf { it.isNotBlank() }?.let { Details(it) }
+                // One of your own machines says it at the head of this page
+                // instead, in the open, so it is not said twice.
+                if (!row.ownBox) box.problem?.takeIf { it.isNotBlank() }?.let { Details(it) }
             }
         }
         // ITS OWN MACHINE (docs/proxmox.md), a card under its heading.
@@ -573,8 +621,10 @@ object HypervisorWords {
                 null -> {}
             }
         }
-        // A provider has templates where a hypervisor has images.
-        h.images?.let { lines.add(if (h.onSandbox) SandboxWords.templates(it) else if (it == 1) "1 image" else "$it images") }
+        // A provider has templates where a hypervisor has images, and so
+        // has one of your own machines: what it makes a machine from is an
+        // image it built, and nobody's template.
+        h.images?.let { lines.add(if (h.onSandbox && !h.onOwnBox) SandboxWords.templates(it) else if (it == 1) "1 image" else "$it images") }
         h.machines?.let { lines.add(if (it == 1) "1 machine made on it" else "$it machines made on it") }
         return lines
     }

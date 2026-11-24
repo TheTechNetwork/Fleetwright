@@ -1,5 +1,6 @@
-// API keys and rented machines on the two phones and the signing page
-// (docs/api-engines.md): what a person sees, and what each client sends.
+// API keys, rented machines and machines on a box of your own, on the two
+// phones and the signing page (docs/api-engines.md): what a person sees, and
+// what each client sends.
 //
 //   node --test test/api-engines-in-apps.test.js
 //
@@ -23,6 +24,12 @@
 //      a switch only for a fleet that sent it, no restart on a machine that
 //      has none, no network for a machine that is on nobody's network.
 //   4. THE THREE SAY IT IN THE SAME WORDS.
+//   5. A BOX OF YOUR OWN IS NOT A PROVIDER. A place, an image and a machine
+//      there come through the provider's seam marked `own`, and nothing a
+//      phone says of a provider's is true of them: not rented, nobody's
+//      cloud, read by nobody else, no key, no template. Each of those
+//      sentences is held to the side of a choice an `own` row does not take,
+//      and a row that says nothing is a provider's, as it always was.
 //
 // Identifiers are matched as `\w+` wherever the rule does not depend on one,
 // and a control is found by the words beside it and the block it sits in, so
@@ -138,6 +145,96 @@ function block(src, at) {
 const plain = (s) => s.replace(/\\\(\w+(?:\.\w+)?\)/g, '{}').replace(/\$\{\w+(?:\.\w+)?\}/g, '{}').replace(/\$\w+/g, '{}');
 /** Every sentence in a piece of source: a string literal with a space in it. @param {string} src */
 const sentences = (src) => [...src.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)].map((m) => m[1]).filter((s) => s.includes(' ')).map(plain);
+
+/** A sentence with `{}` where something is put into it, as a pattern for it written in Swift or in Kotlin. @param {string} s */
+const written = (s) => lit(s).replace(/\\\{\\\}/g, () => '(?:\\\\\\(\\w+\\)|\\$\\{\\w+\\}|\\$\\w+)');
+
+const SANDBOX_ANCHOR = 'Nothing kept is shown. Enter the key and every template again.';
+/**
+ * The one place each phone keeps its words about a sandbox place, found by
+ * a sentence that is in it.
+ * @param {string} name @param {string} src
+ */
+const sandboxWords = (name, src) => block(src, src.lastIndexOf(name === 'iOS' ? '\nenum ' : '\nobject ', only(src, `"${SANDBOX_ANCHOR}"`, name)) + 1);
+
+/**
+ * What a phone calls one of those sentences, found by the sentence, so a
+ * test can ask where it is drawn without knowing its name.
+ * @param {string} name @param {string} src @param {string} sentence
+ */
+const named = (name, src, sentence) => found(
+  sandboxWords(name, src),
+  name === 'iOS'
+    ? new RegExp(`static (?:let|func) (\\w+)(?: = |\\([^)\\n]*\\) -> String \\{\\s*)"${written(sentence)}"`)
+    : new RegExp(`(?:const val|fun) (\\w+)(?: = |\\([^)\\n]*\\): String =\\s*)"${written(sentence)}"`),
+  `${name} lost: ${sentence}`,
+);
+
+/**
+ * How many places a phone draws one of those words, by the name `named`
+ * found for it. Counted with the name of the place they are kept in, since
+ * another screen's words may have one of the same name.
+ * @param {string} name @param {string} src @param {string} word
+ */
+const uses = (name, src, word) => {
+  const kept = found(sandboxWords(name, src), name === 'iOS' ? /^enum (\w+) \{/ : /^object (\w+) \{/, `this did not find what ${name} keeps its words about a sandbox place in`);
+  return (src.match(new RegExp(`\\b${kept}\\.${word}\\b`, 'g')) ?? []).length;
+};
+
+/**
+ * How each phone knows a row is on a box of the person's own, found from
+ * where `own` is read off the wire and never by a name: on iOS the answer is
+ * decoded into a property by the field's name, on Android a reader fills one
+ * by hand. `sandbox` is what a row asks to know it is a sandbox place at
+ * all, `kept` is where `own` is kept, and `flags` is what each of the three
+ * rows (a place, an image, a machine) asks of itself: a sandbox place AND
+ * `own` true, which is the only thing that makes it so.
+ * @param {string} name @param {string} src
+ */
+function ownFlag(name, src) {
+  const ios = name === 'iOS';
+  const sandbox = found(src, ios ? /var (\w+): Bool \{ kind == "sandbox" \}/ : /val (\w+): Boolean get\(\) = kind == "sandbox"/, `${name} does not know a sandbox place by the fleet’s word for it`);
+  const kept = ios ? ['own'] : [...new Set([...src.matchAll(/\b(\w+) = (?:\w+\(\w+, "own"\)|if \(\w+\.has\("own"\) && !\w+\.isNull\("own"\)\) \w+\.optBoolean\("own"\) else null),/g)].map((m) => m[1]))];
+  assert.equal(kept.length, 1, `${name} does not read \`own\` off a place, an image and a machine into one property`);
+  const rule = ios ? `var (\\w+): Bool \\{ ${sandbox} && ${kept[0]} == true \\}` : `val (\\w+): Boolean get\\(\\) = ${sandbox} && ${kept[0]} == true`;
+  const flags = [...src.matchAll(new RegExp(rule, 'g'))].map((m) => m[1]);
+  assert.ok(flags.length > 0, `${name} never asks whether a sandbox place is a box of the person’s own\n  looked for ${rule}`);
+  return { sandbox, kept: kept[0], flags };
+}
+
+/**
+ * What a row on Hypervisors asks to know its place is a box of the person's
+ * own: what the fleet's row for the place says (`ownFlag`), and nothing the
+ * phone worked out.
+ * @param {string} name @param {string} src @param {string} own
+ */
+const ownRow = (name, src, own) => found(
+  src,
+  name === 'iOS' ? new RegExp(`var (\\w+): Bool \\{ fleet\\?\\.${own} == true \\}`) : new RegExp(`val (\\w+): Boolean get\\(\\) = fleet\\?\\.${own} == true`),
+  `${name}’s Hypervisors page does not know a box of your own`,
+);
+
+/**
+ * The page of a machine at a sandbox place, in its two parts: what it is,
+ * and what can be done to it. A rented machine and a container on a box of
+ * the person's own get the same two.
+ * @param {string} name @param {string} s
+ */
+function rentedPage(name, s) {
+  if (name === 'iOS') {
+    // By where the page chooses between it and a machine on a hypervisor.
+    const [facts, work] = caught(s, /if (?:\w+)\.\w+ \{\s*(\w+)\(\w+\)\s*(\w+)\(\w+\)\s*\} else \{\s*facts\(\w+\)\s*traffic\(\w+\)\s*reach\(\w+\)\s*work\(\w+\)\s*\}/, 'iOS draws a rented machine as one on your hypervisor');
+    return { facts: block(s, s.indexOf(`private func ${facts}(`)), work: block(s, s.indexOf(`private func ${work}(`)) };
+  }
+  // The branch of the page it gets, which opens by saying where it is, cut
+  // where what can be done to it begins.
+  const at = s.search(/\n\s*\w+\.\w+ -> \{\n\s*SectionHead\("This machine"\)\n[^\n]*\n\s*Fact\("On", \w+\.\w+\)/);
+  assert.ok(at > 0, 'Android draws a rented machine as one on your hypervisor');
+  const whole = block(s, at + 1);
+  const cut = whole.indexOf('SectionHead("Work it")');
+  assert.ok(cut > 0, 'Android’s rented machine has nothing that can be done to it');
+  return { facts: whole.slice(0, cut), work: whole.slice(cut) };
+}
 
 /** The signing page's own helpers, as it serves them, run and not read. */
 async function pageHelpers() {
@@ -569,12 +666,17 @@ test('both phones say where a sandbox template goes as the fleet does, and the o
   assert.equal(imageWhere('sandbox', 'E2B'), 'E2B');
   assert.equal(placeKind({ kind: 'sandbox' }), 'sandbox');
   for (const [name, src, flag, where] of /** @type {const} */ ([
-    ['iOS', IOS, /var (\w+): Bool \{ kind == "sandbox" \}/, (/** @type {string} */ f) => new RegExp(`var (\\w+): String \\{\\s*if ${f} \\{ return (\\w+) \\?\\? "([^"\\n]+)" \\}\\s*return \\w+ \\? "([^"\\n]+)" : "([^"\\n]+)"\\s*\\}`)],
-    ['Android', ANDROID, /val (\w+): Boolean get\(\) = kind == "sandbox"/, (/** @type {string} */ f) => new RegExp(`val (\\w+): String\\s*get\\(\\) = if \\(${f}\\) (\\w+) \\?: "([^"\\n]+)" else if \\(\\w+\\) "([^"\\n]+)" else "([^"\\n]+)"`)],
+    ['iOS', IOS, /var (\w+): Bool \{ kind == "sandbox" \}/, (/** @type {string} */ f) => new RegExp(`var (\\w+): String \\{\\s*if (\\w+) \\{ return (\\w+) \\?\\? \\w+\\.(\\w+) \\}\\s*if ${f} \\{ return \\3 \\?\\? "([^"\\n]+)" \\}\\s*return \\w+ \\? "([^"\\n]+)" : "([^"\\n]+)"\\s*\\}`)],
+    ['Android', ANDROID, /val (\w+): Boolean get\(\) = kind == "sandbox"/, (/** @type {string} */ f) => new RegExp(`val (\\w+): String\\s*get\\(\\) = if \\((\\w+)\\) (\\w+) \\?: \\w+\\.(\\w+) else if \\(${f}\\) \\3 \\?: "([^"\\n]+)" else if \\(\\w+\\) "([^"\\n]+)" else "([^"\\n]+)"`)],
   ])) {
     // A sandbox template is known by the fleet's own word for its kind.
     const f = found(src, flag, `${name} does not know a sandbox template by the fleet’s word for it`);
-    const [word, provider, unnamed, proxmox, xo] = caught(src, where(f), `${name} does not say where a machine from an image goes`);
+    const [word, own, provider, ownUnnamed, unnamed, proxmox, xo] = caught(src, where(f), `${name} does not say where a machine from an image goes`);
+    // A BOX OF YOUR OWN IS ASKED FIRST, and named the same way, by its own
+    // name, so the picker reads "New machine from Linux on deb132". With no
+    // name sent it is one of your machines, and never "a sandbox provider".
+    assert.ok(ownFlag(name, src).flags.includes(own), `${name} asks something other than \`own\` before it names where an image on a box of your own goes`);
+    has(src, new RegExp(`(?:static let|const val) ${ownUnnamed} = "one of your machines"\\n`), `${name} calls an unnamed box of your own something other than one of your machines`);
     // The provider as the fleet sent it, which is the wire's `provider`: on
     // iOS the property the answer is decoded into by its name, on Android
     // the one read off the image by hand. And the fleet's own words otherwise.
@@ -595,9 +697,11 @@ test('a sandbox template is offered as a rented machine that ends on a timer, wi
   const androidWords = caught(ANDROID, /fun (\w+)\(\w+: String\): String =\s*"(A rented machine on [^"\n]+)"/, 'Android has no line for a rented machine');
   assert.equal(plain(androidWords[1]), plain(iosWords[1]), 'the phones say a rented machine differently');
   assert.match(plain(iosWords[1]), /^A rented machine on \{\}’s cloud\. It ends when its time runs out/, 'the line no longer says a sandbox template is a rented machine that ends');
-  has(IOS, new RegExp(`\\} else if let (\\w+) = chosenImage, \\1\\.\\w+ \\{\\s*(?:\\/\\/[^\\n]*\\n\\s*)*Text\\(\\w+\\.${iosWords[0]}\\(\\1\\.\\w+\\)\\)`), 'iOS does not say a chosen sandbox template is a rented machine');
+  // (The other side of that choice is an image on a box of your own, which
+  // is not rented: the tests under "A machine on a box of your own".)
+  has(IOS, new RegExp(`\\} else if let (\\w+) = chosenImage, \\1\\.\\w+ \\{\\s*(?:\\/\\/[^\\n]*\\n\\s*)*Text\\(\\1\\.\\w+ \\? \\w+\\.\\w+\\(\\1\\.\\w+\\) : \\w+\\.${iosWords[0]}\\(\\1\\.\\w+\\)\\)`), 'iOS does not say a chosen sandbox template is a rented machine');
   const rented = found(ANDROID, /val (\w+) = images\.firstOrNull \{ it\.template == template \}\?\.takeIf \{ platform == "vm" && it\.\w+ \}/, 'Android does not know when the image chosen is a sandbox template');
-  has(ANDROID, new RegExp(`\\} else if \\(${rented} != null\\) \\{\\s*(?:\\/\\/[^\\n]*\\n\\s*)*Text\\(\\w+\\.${androidWords[0]}\\(${rented}\\.\\w+\\),`), 'Android does not say a chosen sandbox template is a rented machine');
+  has(ANDROID, new RegExp(`\\} else if \\(${rented} != null\\) \\{\\s*(?:\\/\\/[^\\n]*\\n\\s*)*Text\\(if \\(${rented}\\.\\w+\\) \\w+\\.\\w+\\(${rented}\\.\\w+\\) else \\w+\\.${androidWords[0]}\\(${rented}\\.\\w+\\),`), 'Android does not say a chosen sandbox template is a rented machine');
 
   // NO NETWORK, GROUP OR LAB, whatever was sent: New session draws each of
   // those pickers from the image's own lists, and a sandbox template is
@@ -618,21 +722,23 @@ test('the Hypervisors page draws a sandbox provider as what it is: its name, “
     ['iOS', IOS,
       /var (\w+): Bool \{ fleet\?\.\w+ == true \}/,
       (/** @type {string} */ f) => new RegExp(`var (\\w+): String \\{ ${f} \\? \\(fleet\\?\\.provider \\?\\? address\\) : address \\}`),
-      (/** @type {string} */ f) => new RegExp(`var (\\w+): String \\{ ${f} \\? \\w+\\.(\\w+) : proxmox \\? "Proxmox VE" : "Xen Orchestra" \\}`),
+      (/** @type {string} */ f) => new RegExp(`var (\\w+): String \\{ (?:\\w+ \\? \\w+\\.\\w+ : )?${f} \\? \\w+\\.(\\w+) : proxmox \\? "Proxmox VE" : "Xen Orchestra" \\}`),
       (/** @type {string} */ f) => new RegExp(`if !row\\.proxmox && !row\\.${f} && !row\\.onPhone \\{\\s*Text\\(HypervisorWords\\.xoElsewhere\\)`),
       (/** @type {string} */ f) => new RegExp(`if row\\.${f} \\{ return false \\}`),
-      /if let (\w+) = \w+\.images \{ \w+\.append\(\w+\.\w+ \? \w+\.(\w+)\(\1\) : \1 == 1 \? "1 image" : /],
+      /if let (\w+) = \w+\.images \{ \w+\.append\(\w+\.\w+ (?:&& !\w+\.\w+ )?\? \w+\.(\w+)\(\1\) : \1 == 1 \? "1 image" : /],
     ['Android', ANDROID,
       /val (\w+): Boolean get\(\) = fleet\?\.\w+ == true/,
       (/** @type {string} */ f) => new RegExp(`val (\\w+): String get\\(\\) = if \\(${f}\\) fleet\\?\\.provider \\?: address else address`),
-      (/** @type {string} */ f) => new RegExp(`val (\\w+): String get\\(\\) = if \\(${f}\\) \\w+\\.(\\w+) else if \\(proxmox\\) "Proxmox VE" else "Xen Orchestra"`),
+      (/** @type {string} */ f) => new RegExp(`val (\\w+): String get\\(\\) = (?:if \\(\\w+\\) \\w+\\.\\w+ else )?if \\(${f}\\) \\w+\\.(\\w+) else if \\(proxmox\\) "Proxmox VE" else "Xen Orchestra"`),
       (/** @type {string} */ f) => new RegExp(`if \\(!row\\.proxmox && !row\\.${f} && !row\\.onPhone\\) Text\\(HypervisorWords\\.XO_ELSEWHERE,`),
       (/** @type {string} */ f) => new RegExp(`val \\w+ = !row\\.${f} && !\\(row\\.proxmox && `),
-      /\w+\.images\?\.let \{ \w+\.add\(if \(\w+\.\w+\) \w+\.(\w+)\(it\) else if \(it == 1\) "1 image" else /],
+      /\w+\.images\?\.let \{ \w+\.add\(if \(\w+\.\w+(?: && !\w+\.\w+)?\) \w+\.(\w+)\(it\) else if \(it == 1\) "1 image" else /],
   ])) {
     const f = found(src, flag, `${name}’s Hypervisors page does not know a sandbox provider`);
     // Its row: the provider's name where a hypervisor has its address, and
-    // what it is where a hypervisor says its kind.
+    // what it is where a hypervisor says its kind. (A box of the person's
+    // own is asked after first, and what it is called and counted in is
+    // held under "A machine on a box of your own".)
     const t = found(src, title(f), `${name} calls a sandbox provider by its address, which is nobody’s address`);
     const [k, word] = caught(src, kindName(f), `${name} does not say a sandbox provider is one`);
     has(src, new RegExp(`(?:static let|const val) ${word} = "${kind}"\\n`), `${name} calls a sandbox provider something other than “${kind}”`);
@@ -656,25 +762,8 @@ test('the Hypervisors page draws a sandbox provider as what it is: its name, “
 });
 
 test('a rented machine’s page says whose cloud it is on, its state and when it ends, and offers More time and End and nothing a rented machine has not got', () => {
-  for (const [name, src, page] of /** @type {const} */ ([
-    ['iOS', IOS, (/** @type {string} */ s) => {
-      // The two parts of the page a rented machine gets, by where the page
-      // chooses between it and a machine of yours.
-      const [facts, work] = caught(s, /if (?:\w+)\.\w+ \{\s*(\w+)\(\w+\)\s*(\w+)\(\w+\)\s*\} else \{\s*facts\(\w+\)\s*traffic\(\w+\)\s*reach\(\w+\)\s*work\(\w+\)\s*\}/, 'iOS draws a rented machine as one on your hypervisor');
-      return { facts: block(s, s.indexOf(`private func ${facts}(`)), work: block(s, s.indexOf(`private func ${work}(`)) };
-    }],
-    ['Android', ANDROID, (/** @type {string} */ s) => {
-      // The branch of the page a rented machine gets, which opens by saying
-      // whose cloud it is on, cut where what can be done to it begins.
-      const at = s.search(/\n\s*\w+\.\w+ -> \{\n\s*SectionHead\("This machine"\)\n[^\n]*\n\s*Fact\("On", \w+\.\w+\)/);
-      assert.ok(at > 0, 'Android draws a rented machine as one on your hypervisor');
-      const whole = block(s, at + 1);
-      const cut = whole.indexOf('SectionHead("Work it")');
-      assert.ok(cut > 0, 'Android’s rented machine has nothing that can be done to it');
-      return { facts: whole.slice(0, cut), work: whole.slice(cut) };
-    }],
-  ])) {
-    const { facts, work } = page(src);
+  for (const [name, src] of BOTH) {
+    const { facts, work } = rentedPage(name, src);
     // WHAT IT IS: on whose cloud, its state, when it ends.
     for (const fact of ['"On"', '"State"', '"Ends"']) assert.ok(facts.includes(`(${fact},`), `${name}’s rented machine does not say ${fact}`);
     for (const [what, re] of /** @type {const} */ ([['an SSH address', /ssh/i], ['a console', /console/i], ['a network', /"Network"|\.network\b/], ['a size', /"Size"|cpus|memory/], ['an address of its own', /\.address\b|\.ip\b/]])) {
@@ -710,8 +799,8 @@ test('a rented machine’s page says whose cloud it is on, its state and when it
 
 test('a rented machine is listed under its own heading, and its own page does not promise a console, SSH or a size', () => {
   for (const [name, src, heading, link] of /** @type {const} */ ([
-    ['iOS', IOS, /static let (\w+) = "At a sandbox provider"\n/, /Text\((\w+)\.map\(\w+\.(\w+)\) \?\? "On your hypervisor: console, SSH, size and end"\)/],
-    ['Android', ANDROID, /const val (\w+) = "At a sandbox provider"\n/, /OpenRow\((\w+)\?\.let \{ \w+\.(\w+)\(it\) \} \?: "On your hypervisor: console, SSH, size and end"\)/],
+    ['iOS', IOS, /static let (\w+) = "At a sandbox provider"\n/, /Text\((\w+) \?\? "On your hypervisor: console, SSH, size and end"\)/],
+    ['Android', ANDROID, /const val (\w+) = "At a sandbox provider"\n/, /OpenRow\((\w+) \?: "On your hypervisor: console, SSH, size and end"\)/],
   ])) {
     // Under their own heading in the list, only when there are any.
     const h = found(src, heading, `${name} has no heading for rented machines`);
@@ -721,10 +810,13 @@ test('a rented machine is listed under its own heading, and its own page does no
     // "On your hypervisor" is over the others only.
     has(src, name === 'iOS' ? /let (\w+) = \w+\.filter \{ !\$0\.\w+ \}\s*if !\1\.isEmpty \{\s*\w+\("On your hypervisor"\)/ : /val (\w+) = \w+\.filter \{ !it\.\w+ \}[\s\S]{0,200}?if \(\1\.isNotEmpty\(\)\) \{\s*SectionHead\("On your hypervisor"\)/, `${name} lists a rented machine as on your hypervisor`);
     // On the machine's own page, the row to its page says what a rented
-    // machine has, once the fleet has said it is one.
-    const [from, words] = caught(src, link, `${name} promises a console, SSH and a size on a rented machine’s page`);
+    // machine has, once the fleet has said it is one: the words are chosen
+    // from the fleet's own row for the machine, and from nothing else.
+    const from = found(src, link, `${name} promises a console, SSH and a size on a rented machine’s page`);
+    const words = found(src, name === 'iOS'
+      ? new RegExp(`${from} = \\(try\\? await \\w+\\.vmMachines\\(\\)\\)\\?\\.first \\{ \\$0\\.name == hostId && \\$0\\.\\w+ \\}\\s*\\.map \\{ \\$0\\.\\w+ \\? \\w+\\.\\w+\\(\\$0\\.\\w+\\) : \\w+\\.(\\w+)\\(\\$0\\.\\w+\\) \\}`)
+      : new RegExp(`${from} = Fleet\\(settings\\)\\.vmMachines\\(\\)\\.getOrNull\\(\\)\\?\\.firstOrNull \\{ it\\.name == hostId && it\\.\\w+ \\}\\s*\\?\\.let \\{ if \\(it\\.\\w+\\) \\w+\\.\\w+\\(it\\.\\w+\\) else \\w+\\.(\\w+)\\(it\\.\\w+\\) \\}`), `${name} decides a machine is rented from something other than the fleet’s word`);
     has(src, name === 'iOS' ? new RegExp(`static func ${words}\\(_ \\w+: String\\) -> String \\{\\s*"At \\\\\\(\\w+\\): more time and end"\\s*\\}`) : new RegExp(`fun ${words}\\(\\w+: String\\): String = "At \\$\\w+: more time and end"`), `${name} does not say what a rented machine’s page offers`);
-    has(src, name === 'iOS' ? new RegExp(`${from} = \\(try\\? await \\w+\\.vmMachines\\(\\)\\)\\?\\.first \\{ \\$0\\.name == hostId && \\$0\\.\\w+ \\}\\?\\.\\w+`) : new RegExp(`${from} = Fleet\\(settings\\)\\.vmMachines\\(\\)\\.getOrNull\\(\\)\\?\\.firstOrNull \\{ it\\.name == hostId && it\\.\\w+ \\}\\?\\.\\w+`), `${name} decides a machine is rented from something other than the fleet’s word`);
   }
 });
 
@@ -733,14 +825,255 @@ test('the words about a sandbox provider are the same on both phones', () => {
   // sentence that is in it and compared as a set: what is put into a
   // sentence is written differently in Swift and in Kotlin, and marked the
   // same here.
-  const anchor = 'Nothing kept is shown. Enter the key and every template again.';
-  const ios = block(IOS, IOS.lastIndexOf('\nenum ', only(IOS, `"${anchor}"`, 'iOS')) + 1);
-  const android = block(ANDROID, ANDROID.lastIndexOf('\nobject ', only(ANDROID, `"${anchor}"`, 'Android')) + 1);
+  const ios = sandboxWords('iOS', IOS);
+  const android = sandboxWords('Android', ANDROID);
   const said = (/** @type {string} */ src) => [...new Set(sentences(src))].sort();
   assert.ok(said(ios).length >= 16, `this found ${said(ios).length} sentences about a sandbox provider on iOS; the search for them is broken`);
   assert.deepEqual(said(android), said(ios));
   // And the words on the form itself.
   for (const words of ['"Add a sandbox provider"', '"Replace it"', '"Templates"', '"No templates yet."', '"Add the template"', '"Before you keep it"', '"Keep in your vault"', '"Asking your vault…"', '"Could not load your saved credentials."', '"Provider"', '"Template id"']) {
     for (const [name, src] of BOTH) assert.ok(src.includes(words), `${name} lost: ${words}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// A machine on a box of your own (docs/api-engines.md, part three)
+// ---------------------------------------------------------------------------
+
+// The sentences, as asked for. `{}` is the box's name, which is the row's
+// `provider`; with none sent it is "one of your machines", and the one
+// sentence that would put an apostrophe on that starts another way.
+const OWN_SAID = [
+  'One of your machines',
+  'On one of your machines',
+  'one of your machines',
+  'A container on {}, one of your own machines. It ends when its time runs out, with everything on it.',
+  'A container on {}, one of your own machines.',
+  'A network, a lab, a restart, a resize and a console need a hypervisor.',
+  'The time is added to when it would have ended.',
+  'On {}: more time and end',
+  '{}’s operator turned this on, on that machine, and turns it off there.',
+  'Its operator turned this on, on that machine, and turns it off there.',
+];
+// More time there is added to the end it had, where a provider's is counted
+// from now, and each choice says which.
+const OWN_TIMES = /** @type {const} */ ([['30 more minutes', '30 minutes from now'], ['1 more hour', '1 hour from now'], ['2 more hours', '2 hours from now']]);
+
+test('what is said of a machine on a box of your own is the same on both phones, sentence for sentence, and none of it says rented, a cloud, a provider or a template', () => {
+  for (const [name, src] of BOTH) {
+    const said = new Set(sentences(sandboxWords(name, src)));
+    for (const words of OWN_SAID) assert.ok(said.has(words), `${name} does not say: ${words}`);
+    for (const [mine] of OWN_TIMES) assert.ok(src.includes(`"${mine}"`), `${name} lost: ${mine}`);
+  }
+  // That the two phones' words are one set is the last test's; this is that
+  // these are in it, and that none of them borrows a word that is true of a
+  // provider's and false of a box you enrolled.
+  for (const words of [...OWN_SAID, ...OWN_TIMES.map(([mine]) => mine)]) {
+    assert.ok(!/rented|cloud|sandbox|provider|template|can read/i.test(words), `“${words}” says of a box of your own what is true of a provider’s`);
+  }
+});
+
+test('a place, an image and a machine are on a box of your own only when the fleet said `own: true`: one that says nothing is a provider’s, as from an older coordinator', () => {
+  for (const [name, src] of BOTH) {
+    const { kept, flags } = ownFlag(name, src);
+    // All three rows ask it, each of itself: the place, the image, the machine.
+    assert.equal(flags.length, 3, `${name} asks whether a row is on a box of your own of ${flags.length} kinds of row; a place, an image and a machine each need it`);
+    if (name === 'iOS') {
+      // Decoded by the field's name, and nothing when the field is not there.
+      assert.equal(count(src, `var ${kept}: Bool? = nil\n`), 3, 'iOS reads an `own` nobody sent as something');
+    } else {
+      // Read by hand in three places, each answering null for a field that
+      // is not there and never a default of the phone's.
+      const helper = found(src, new RegExp(`\\b${kept} = (\\w+)\\(\\w+, "own"\\),`), 'Android does not read `own` off a place');
+      has(src, new RegExp(`val ${helper} = \\{ (\\w+): JSONObject, (\\w+): String -> if \\(\\1\\.has\\(\\2\\) && !\\1\\.isNull\\(\\2\\)\\) \\1\\.optBoolean\\(\\2\\) else null \\}`), 'Android reads an `own` nobody sent as off or on');
+      assert.equal((src.match(new RegExp(`\\b${kept} = (?:${helper}\\(\\w+, "own"\\)|if \\(\\w+\\.has\\("own"\\) && !\\w+\\.isNull\\("own"\\)\\) \\w+\\.optBoolean\\("own"\\) else null),`, 'g')) ?? []).length, 3, 'Android does not read `own` off a place, an image and a machine');
+      assert.ok(!/opt(?:Boolean)?\("own", /.test(src), 'Android reads an `own` nobody sent as a default of its own');
+    }
+    // And no line turns nothing into yes: only `true` is true (ownFlag).
+    assert.ok(!new RegExp(`\\b${kept} (?:\\?\\?|\\?:) true\\b|\\b${kept} != false\\b`).test(src), `${name} reads an \`own\` nobody sent as true`);
+  }
+});
+
+test('a place, an image and a machine on a box of your own are never called rented, a provider’s or readable by somebody else: each of the provider’s sentences is the side of a choice an `own` row does not take', () => {
+  for (const [name, src] of BOTH) {
+    const ios = name === 'iOS';
+    const { sandbox, flags: [own] } = ownFlag(name, src);
+
+    // THE FOUR SENTENCES WITH A TWIN: under New session › Where, under what
+    // a machine is, under More time, and on the row that opens its page.
+    // Wherever the provider's is drawn, the row was asked first whether it
+    // is on a box of your own, and that one gets its own sentence instead.
+    for (const [theirs, ours] of [
+      ['A rented machine on {}’s cloud. It ends when its time runs out, with everything on it.', 'A container on {}, one of your own machines. It ends when its time runs out, with everything on it.'],
+      ['Rented from {}, on its cloud. {} can read what runs on it.', 'A container on {}, one of your own machines.'],
+      ['The time is counted from now, as {} counts it.', 'The time is added to when it would have ended.'],
+      ['At {}: more time and end', 'On {}: more time and end'],
+    ]) {
+      const [t, o] = [named(name, src, theirs), named(name, src, ours)];
+      const drawn = uses(name, src, t);
+      assert.ok(drawn > 0, `${name} never says: ${theirs}`);
+      const chosen = src.match(new RegExp(ios
+        ? `(?:\\$0|\\w+)\\.${own} \\? \\w+\\.${o}(?:\\([^()\\n]*\\))? : \\w+\\.${t}\\(`
+        : `if \\(\\w+\\.${own}\\) \\w+\\.${o}(?:\\([^()\\n]*\\))? else \\w+\\.${t}\\(`, 'g')) ?? [];
+      assert.equal(chosen.length, drawn, `${name} can say “${theirs}” of a row on a box of your own, or never says “${ours}” of one`);
+    }
+
+    // MORE TIME: "from now" is how a provider counts. A box adds.
+    if (ios) {
+      for (const [mine, theirs] of OWN_TIMES) has(src, new RegExp(`Button\\(\\w+\\.${own} \\? "${mine}" : "${theirs}"\\)`), `iOS offers a machine on a box of your own “${theirs}”, which is not how its time is counted`);
+    } else {
+      has(src, new RegExp(`if \\(\\w+\\.${own}\\) listOf\\(${OWN_TIMES.map(([mine], i) => `${[30, 60, 120][i]} to "${mine}"`).join(', ')}\\)\\s*else listOf\\(${OWN_TIMES.map(([, theirs], i) => `${[30, 60, 120][i]} to "${theirs}"`).join(', ')}\\)`), 'Android offers a machine on a box of your own time “from now”, which is not how its time is counted');
+    }
+    for (const [, theirs] of OWN_TIMES) assert.equal(count(src, `"${theirs}"`), 1, `${name} says “${theirs}” somewhere this did not read`);
+
+    // WITH NO NAME SENT it is never "a sandbox provider": that is said in
+    // two places, where an image goes (the test of that, above) and where a
+    // machine is, and each asks first.
+    assert.equal(count(src, '"a sandbox provider"'), 2, `${name} calls an unnamed place a sandbox provider somewhere this did not read`);
+    has(src, ios ? new RegExp(`\\?\\? \\(${own} \\? \\w+\\.\\w+ : "a sandbox provider"\\)`) : new RegExp(`\\?: if \\(${own}\\) \\w+\\.\\w+ else "a sandbox provider"`), `${name} calls an unnamed box of your own a sandbox provider, on its machine`);
+
+    // ON HYPERVISORS: "One of your machines" where a provider's row says
+    // "Sandbox provider", and images where a provider has templates.
+    const rowOwn = ownRow(name, src, own);
+    const [mine, theirs] = [named(name, src, 'One of your machines'), named(name, src, 'Sandbox provider')];
+    has(src, ios
+      ? new RegExp(`var \\w+: String \\{ ${rowOwn} \\? \\w+\\.${mine} : \\w+ \\? \\w+\\.${theirs} : `)
+      : new RegExp(`val \\w+: String get\\(\\) = if \\(${rowOwn}\\) \\w+\\.${mine} else if \\(\\w+\\) \\w+\\.${theirs} else `), `${name} calls a box of your own a sandbox provider on its row`);
+    // Its one other use is the title of the provider's own form, which no
+    // row on a box of your own opens (the test of the place's page, below).
+    const titled = (src.match(new RegExp(ios ? `\\.navigationTitle\\(\\w+\\.${theirs}\\)` : `FullScreen\\(title = \\w+\\.${theirs},`, 'g')) ?? []).length;
+    assert.equal(uses(name, src, theirs) - titled, 1, `${name} says “Sandbox provider” somewhere this did not read`);
+    has(src, ios
+      ? new RegExp(`\\w+\\.${sandbox} && !\\w+\\.${own} \\? \\w+\\.\\w+\\((\\w+)\\) : \\1 == 1 \\? "1 image" : "\\\\\\(\\1\\) images"`)
+      : new RegExp(`if \\(\\w+\\.${sandbox} && !\\w+\\.${own}\\) \\w+\\.\\w+\\(it\\) else if \\(it == 1\\) "1 image" else "\\$it images"`), `${name} counts what a box of your own makes a machine from as a provider’s templates`);
+  }
+});
+
+test('machines are listed under three headings, each drawn only over machines of its kind: on your hypervisor, at a sandbox provider, on one of your machines', () => {
+  for (const [name, src] of BOTH) {
+    const ios = name === 'iOS';
+    const { sandbox, flags: [own] } = ownFlag(name, src);
+    for (const [heading, list, what] of /** @type {const} */ ([
+      // A provider's heading is over the machines that are a provider's:
+      // a sandbox place, and not a box of your own.
+      ['At a sandbox provider', ios ? `let (\\w+) = \\w+\\.filter \\{ \\$0\\.${sandbox} && !\\$0\\.${own} \\}` : `val (\\w+) = \\w+\\.filter \\{ it\\.${sandbox} && !it\\.${own} \\}`, 'lists a machine on a box of your own as at a sandbox provider'],
+      ['On one of your machines', ios ? `let (\\w+) = \\w+\\.filter\\(\\\\\\.${own}\\)` : `val (\\w+) = \\w+\\.filter \\{ it\\.${own} \\}`, 'has no list of the machines on a box of your own'],
+    ])) {
+      const l = found(src, new RegExp(list), `${name} ${what}`);
+      const h = named(name, src, heading);
+      // Drawn once, only when there are any, and over that list.
+      has(src, ios
+        ? new RegExp(`if !${l}\\.isEmpty \\{\\s*\\w+\\(\\w+\\.${h}\\)\\s*\\w+\\(${l}\\)\\s*\\}`)
+        : new RegExp(`if \\(${l}\\.isNotEmpty\\(\\)\\) \\{\\s*SectionHead\\(\\w+\\.${h}\\)\\s*${l}\\.forEach \\{`), `${name} draws “${heading}” over other machines, or over none`);
+      assert.equal(uses(name, src, h), 1, `${name} draws “${heading}” somewhere this did not read`);
+    }
+  }
+});
+
+test('New session does not skip the Claude sign-in for an image on a box of your own: a machine there is handed it like a VM, so with none kept the session can’t start and the page says so', () => {
+  const words = 'Set up Claude first, or this session can\'t start.';
+  for (const [name, src] of BOTH) {
+    const ios = name === 'iOS';
+    const { sandbox, flags: [own] } = ownFlag(name, src);
+    // THE ONE THING THAT SKIPS IT is a provider's image, which is handed no
+    // sign-in: a sandbox place that is NOT a box of your own.
+    const gate = ios
+      ? new RegExp(`^if chosenImage\\?\\.${sandbox} != true \\|\\| chosenImage\\?\\.${own} == true \\{$`)
+      : new RegExp(`^if \\(images\\.none \\{ it\\.template == template && platform == "vm" && it\\.${sandbox} && !it\\.${own} \\}\\) \\{$`);
+    const at = only(src, `"${words}"`, name);
+    const asked = headers(src, at).filter((h) => new RegExp(`\\b${sandbox}\\b`).test(h));
+    assert.equal(asked.length, 1, `${name} asks ${asked.length} times whether the image is a sandbox one before the Claude sign-in; this reads the one`);
+    assert.ok(gate.test(asked[0]), `${name} skips the Claude sign-in for an image on a box of your own\n  found ${asked[0]}\n  looked for ${gate}`);
+    // And an image says "can't", not "may not": a machine made from one has
+    // nothing to fall back on, on a hypervisor or on a box.
+    has(src, ios ? new RegExp(`Text\\(chosenImage != nil\\s*\\? "${lit(words)}"`) : new RegExp(`if \\(platform == "vm"\\) "${lit(words)}"`), `${name} tells somebody choosing an image that the session may start with no Claude sign-in`);
+  }
+});
+
+test('a machine on a box of your own has the short page: More time and End and nothing a hypervisor has, which one line says; and its place’s page says whose switch it is and edits no key', () => {
+  for (const [name, src] of BOTH) {
+    const ios = name === 'iOS';
+    const { sandbox, flags: [own] } = ownFlag(name, src);
+
+    // THE SAME BRANCH OF THE PAGE AS A RENTED MACHINE, chosen by the kind
+    // alone, which a box of your own shares. So everything the test of a
+    // rented machine's page holds it to (no restart, no size, no console,
+    // no terminal, no sign-in, no way to another page) holds here.
+    has(src, ios
+      ? new RegExp(`if (\\w+)\\.${sandbox} \\{\\s*\\w+\\(\\1\\)\\s*\\w+\\(\\1\\)\\s*\\} else \\{\\s*facts\\(\\1\\)`)
+      : new RegExp(`\\n\\s*\\w+\\.${sandbox} -> \\{\\n\\s*SectionHead\\("This machine"\\)`), `${name} draws a machine on a box of your own as one on your hypervisor, with a console, a restart and a size it has not got`);
+    const { facts, work } = rentedPage(name, src);
+    // WHAT CAN BE PRESSED: three lengths of more time, and End. Nothing in
+    // what it is, and nothing else in what can be done.
+    if (ios) {
+      assert.equal(count(work, 'Menu("More time")'), 1, 'iOS has no More time');
+      assert.equal(count(work, 'Button('), 4, 'iOS offers something other than three lengths of more time and End');
+      assert.ok(!/Button\(|Menu\(|Toggle\(|Stepper\(|Picker\(|onTapGesture/.test(facts), 'iOS offers something to press in what a machine is');
+    } else {
+      assert.equal(count(work, 'OutlinedButton('), 2, 'Android offers something other than more time, drawn once for its three lengths, and End');
+      assert.ok(!/TextButton\(|\bButton\(|clickable|toggleable|Switch\(|Slider\(/.test(work), 'Android offers something other than more time and End');
+      assert.ok(!/Button\(|clickable|toggleable|Switch\(/.test(facts), 'Android offers something to press in what a machine is');
+    }
+    // WHAT IT HAS NOT GOT IS SAID, once, as a line of text under what it
+    // is, and only of a machine on a box of your own.
+    const note = named(name, src, 'A network, a lab, a restart, a resize and a console need a hypervisor.');
+    has(facts, ios ? new RegExp(`if \\w+\\.${own} \\{\\s*Text\\(\\w+\\.${note}\\)\\s*\\}`) : new RegExp(`if \\(\\w+\\.${own}\\) Hint\\(\\w+\\.${note}\\)`), `${name} does not say what a machine on a box of your own would need a hypervisor for, or says it of a rented one`);
+    assert.equal(uses(name, src, note), 1, `${name} says what needs a hypervisor somewhere this did not read`);
+
+    // THE PLACE'S PAGE. Whose switch it is, for a box of your own alone:
+    // no screen here turns it on or off, so the page says who does.
+    const rowOwn = ownRow(name, src, own);
+    const whose = found(sandboxWords(name, src), ios
+      ? /static func (\w+)\(_ (\w+): String\?\) -> String \{\s*guard let \2 else \{ return "Its operator turned this on, on that machine, and turns it off there\." \}\s*return "\\\(\2\)’s operator turned this on, on that machine, and turns it off there\."\s*\}/
+      : /fun (\w+)\((\w+): String\?\): String =\s*if \(\2 == null\) "Its operator turned this on, on that machine, and turns it off there\."\s*else "\$\{\2\}’s operator turned this on, on that machine, and turns it off there\."/, `${name} does not say whose switch a box of your own is, with its name and without one`);
+    const at = only(src, `.${whose}(`, name);
+    has(src, ios
+      ? new RegExp(`if row\\.${rowOwn} \\{\\s*Text\\(\\w+\\.${whose}\\(row\\.fleet\\?\\.provider\\)\\)`)
+      : new RegExp(`if \\(row\\.${rowOwn}\\) Text\\(\\w+\\.${whose}\\(row\\.fleet\\?\\.provider\\),`), `${name} says whose switch it is of a provider or a hypervisor, or by something other than the box’s name as the fleet sent it`);
+
+    // AND NOTHING THAT EDITS A KEY (C-2): there is none. The page that says
+    // it never opens the provider's form, and names neither of its verbs.
+    const pageAt = Math.max(...(ios ? ['\nstruct '] : ['\nprivate fun ', '\ninternal fun ', '\nfun ']).map((open) => src.lastIndexOf(open, at))) + 1;
+    const page = block(src, pageAt);
+    const form = ios
+      ? found(src, /NavigationLink \{\s*(\w+)\(settings: settings\)\s*\} label: \{\s*Label\("Add a sandbox provider"/, 'iOS has no way to add a sandbox provider')
+      : found(src, /if \(\w+\) \{\s*(\w+)\(settings, onDismiss = \{ \w+ = false \}\)\s*return\s*\}/, 'Android has no way to add a sandbox provider');
+    assert.ok(page.includes(ios ? '.navigationTitle(row.title)' : 'FullScreen(title = row.title'), `this did not find ${name}’s page for one place`);
+    assert.ok(!page.includes(`${form}(`), `${name}’s page for a place opens the sandbox provider’s form, which a box of your own has no key for`);
+    assert.ok(!/"(?:Replace|Forget|Keep in your vault|Add a sandbox provider)/.test(page), `${name}’s page for a place offers to replace, forget or keep a key`);
+    // Everything that page can do is a Proxmox VE cluster's setup, as it
+    // was: each thing it offers sits in the block that asks for one.
+    const offered = [...src.slice(pageAt, src.indexOf('\n}\n', pageAt)).matchAll(ios ? /\n\s*action\(\w+\.\w+, /g : /\n\s*ActionRow\(/g)].map((m) => pageAt + /** @type {number} */ (m.index) + m[0].length - 1);
+    assert.ok(offered.length > 0, `this did not find what ${name}’s page for a place offers`);
+    assert.ok(offered.every((p) => headers(src, p).some((h) => /^if \(?row\.proxmox\)? \{$/.test(h))), `${name}’s page for a place offers something to a place that is not a Proxmox VE cluster`);
+    // On iOS each of those is a way to another screen, and the one that
+    // draws them is the only such way the page has.
+    if (ios) assert.equal(count(page, 'NavigationLink'), 1, 'iOS’s page for a place has a way to another screen that is not one of a Proxmox VE cluster’s');
+  }
+});
+
+test('a box of your own that has no image to offer says why on its row and on its page, in the attention colour, while it is reached as well, and where “Ready” would be', () => {
+  for (const [name, src] of BOTH) {
+    const ios = name === 'iOS';
+    const { flags: [own] } = ownFlag(name, src);
+    const rowOwn = ownRow(name, src, own);
+    // THE BOX'S OWN SENTENCE, the first one any of its machines said, for a
+    // box of your own alone, and WHETHER OR NOT IT WAS REACHED: nothing in
+    // the rule asks. Unchanged, since it is the box's to word.
+    const why = found(src, ios
+      ? new RegExp(`var (\\w+): String\\? \\{\\s*guard ${rowOwn} else \\{ return nil \\}\\s*return fleet\\?\\.boxes\\.compactMap \\{ \\$0\\.problem \\}\\.first \\{ !\\$0\\.isEmpty \\}\\s*\\}`)
+      : new RegExp(`val (\\w+): String\\?\\s*get\\(\\) = if \\(${rowOwn}\\) fleet\\?\\.boxes\\?\\.firstNotNullOfOrNull \\{ (\\w+) -> \\2\\.problem\\?\\.takeIf \\{ it\\.isNotBlank\\(\\) \\} \\} else null\\n`), `${name} does not take a box of your own’s reason from what its machine said, or asks whether it was reached first`);
+    // DRAWN TWICE, in the attention colour: on the row in place of its one
+    // status, and on the page in place of its verdict. "Ready" over a box
+    // that is still building its image would be a claim (C-5).
+    const drawn = [...src.matchAll(ios
+      ? new RegExp(`if let (\\w+) = row\\.${why} \\{\\s*Text\\(\\1\\)\\s*\\.fleetType\\(\\.\\w+\\)\\s*\\.foregroundStyle\\(Design\\.Palette\\.attention\\)(?:\\s*\\.textSelection\\(\\.enabled\\))?\\s*\\} else \\{\\s*Text\\(HypervisorWords\\.(status|answer)\\(`, 'g')
+      : new RegExp(`val (\\w+) = row\\.${why}\\s*if \\(\\1 != null\\) \\{\\s*(?:SelectionContainer \\{ )?Text\\(\\1, style = Design\\.Style\\.\\w+, color = Design\\.Palette\\.attention\\.now\\)(?: \\})?\\s*\\} else \\{[\\s\\S]{0,120}?HypervisorWords\\.(status|answer)\\(`, 'g'))].map((m) => m[2]);
+    assert.deepEqual(drawn.sort(), ['answer', 'status'], `${name} does not draw a box of your own’s reason on its row and on its page, each where its status would be`);
+    assert.equal(count(src, `row.${why}`), 2, `${name} draws a box of your own’s reason somewhere this did not read`);
+    // The colour the page already has for a machine that could not reach a place.
+    has(src, ios ? /box\.reachable == false \? Design\.Palette\.attention :/ : /false -> Design\.Palette\.attention\.now\n/, `${name}’s page no longer says “Can’t reach” in the attention colour, which this reason is drawn in`);
+    // Said once: the page does not repeat it under that machine's Details.
+    has(src, ios ? new RegExp(`if !row\\.${rowOwn} \\{\\s*if let \\w+ = box\\.problem, `) : new RegExp(`if \\(!row\\.${rowOwn}\\) box\\.problem\\?\\.takeIf`), `${name} says a box of your own’s reason twice on one page`);
   }
 });

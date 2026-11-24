@@ -572,7 +572,8 @@ fun StartSheet(
                         // A TEMPLATE AT A SANDBOX PROVIDER is among them, said
                         // by whose cloud it is on (`sandboxLabel`): none is
                         // ever kept ready, so only the others can say "ready
-                        // now".
+                        // now". An image on one of your own machines is said
+                        // the same way, by that machine's name.
                         (if (chosenMember.isEmpty()) images else emptyList()).forEach { image ->
                             AssistChip(
                                 onClick = {
@@ -733,7 +734,10 @@ fun StartSheet(
                             } else if (rented != null) {
                                 // A RENTED MACHINE, said as one before it is
                                 // made: whose cloud it is on, and that it ends.
-                                Text(SandboxWords.rented(rented.whereWord), style = MaterialTheme.typography.bodySmall)
+                                // A CONTAINER ON ONE OF YOUR OWN MACHINES is
+                                // not rented and is on nobody's cloud, and
+                                // says so.
+                                Text(if (rented.onOwnBox) SandboxWords.ownMachine(rented.whereWord) else SandboxWords.rented(rented.whereWord), style = MaterialTheme.typography.bodySmall)
                             } else if (platform == "vm") {
                                 Text("Ready in about 2 minutes. Deleted with its files when time runs out.", style = MaterialTheme.typography.bodySmall)
                             } else {
@@ -794,7 +798,11 @@ fun StartSheet(
                 // runs on what its template was given, so a Claude login kept
                 // here would not reach it, and "can't start" would be a claim
                 // this page cannot make.
-                if (images.none { it.template == template && platform == "vm" && it.onSandbox }) {
+                //
+                // ASKED FOR A MACHINE ON ONE OF YOUR OWN, which is handed your
+                // sign-in when it joins as a VM on your hypervisor is: with
+                // none kept its session can't start, and this says so.
+                if (images.none { it.template == template && platform == "vm" && it.onSandbox && !it.onOwnBox }) {
                     if (platform.isNotEmpty() && (claude == ClaudeKept.Missing || claude == ClaudeKept.NeedsGitHub)) {
                         SectionHead("Claude")
                         // "May not" for a runner, which can fall back on the runner

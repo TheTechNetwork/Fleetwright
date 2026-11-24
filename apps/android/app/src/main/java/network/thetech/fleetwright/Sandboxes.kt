@@ -49,6 +49,14 @@ import org.json.JSONObject
  * values, so there is no editing a kept provider: replacing it is the form
  * again, empty, and the form says so.
  *
+ * AND A FOURTH, WHICH IS NOT RENTED AT ALL (docs/api-engines.md, "A machine
+ * on a box of your own"): one of your own machines making a machine out of a
+ * container of its own. It comes through the same seam, as the same kind of
+ * place, image and machine, marked `own`, so the same screens draw it. No
+ * key is kept for it and nothing here adds one: its operator turns it on on
+ * that machine. Every sentence above that says rented, a cloud or who can
+ * read it is false of it, so it has its own, at the foot of [SandboxWords].
+ *
  * The same words as iOS (Sandboxes.swift) and the signing page, held equal
  * by test/api-engines-in-apps.test.js.
  */
@@ -149,6 +157,46 @@ object SandboxWords {
 
     /** How many templates a provider offers, for its page. */
     fun templates(count: Int): String = if (count == 1) "1 template" else "$count templates"
+
+    // A BOX OF YOUR OWN (docs/api-engines.md, part three). The place, its
+    // image and a machine made there are marked `own` by the fleet, and then
+    // `provider` is that machine's name and not a company's. Nothing here
+    // says rented, a cloud, a template or who can read it: none is true of a
+    // container on a machine you enrolled.
+
+    /** What a row on Hypervisors calls it, where a provider says its kind. */
+    const val OWN_KIND = "One of your machines"
+
+    /** The heading over machines made on one, in the list of machines. */
+    const val OWN_HEADER = "On one of your machines"
+
+    /** Where the machine's name would go, when the fleet sent none. */
+    const val OWN_UNNAMED = "one of your machines"
+
+    /** On a machine's page there: what a container has not got, said once where the controls for them would be on a hypervisor's machine. */
+    const val OWN_NEEDS_HYPERVISOR = "A network, a lab, a restart, a resize and a console need a hypervisor."
+
+    /** Under More time: the box adds the minutes to the end it already had, where a provider counts from now. */
+    const val OWN_TIME_FOOTER = "The time is added to when it would have ended."
+
+    /** Under New session › Where, for an image there: what kind of machine it is and how it ends. */
+    fun ownMachine(box: String): String =
+        "A container on $box, one of your own machines. It ends when its time runs out, with everything on it."
+
+    /** On a machine's own page there, under what it is. */
+    fun ownMachineFooter(box: String): String = "A container on $box, one of your own machines."
+
+    /** The row on a machine's own page that opens its page on the box. */
+    fun ownHostLink(box: String): String = "On $box: more time and end"
+
+    /**
+     * On the place's page: whose switch it is, because no screen here turns
+     * it on or off. With no name sent, the sentence has no owner to put an
+     * apostrophe on, so it starts another way.
+     */
+    fun ownSwitch(box: String?): String =
+        if (box == null) "Its operator turned this on, on that machine, and turns it off there."
+        else "${box}’s operator turned this on, on that machine, and turns it off there."
 }
 
 /**

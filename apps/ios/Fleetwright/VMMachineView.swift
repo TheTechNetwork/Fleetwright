@@ -30,6 +30,11 @@ import SwiftUI
 /// things that can be done to it, more time and ending it. It has no
 /// console, no address, no restart and no size: the machine that made it
 /// refuses each in words, so none is drawn (C-2).
+///
+/// A CONTAINER ON ONE OF YOUR OWN MACHINES (the same document, part three)
+/// has that shorter page with other words: it is not rented and nobody else
+/// can read it, more time is added to its end and not counted from now, and
+/// one line says what it would need a hypervisor for.
 struct VMMachineView: View {
     let settings: Settings
     let name: String
@@ -105,7 +110,8 @@ struct VMMachineView: View {
         case .resize?: return "Restart \(name) with the new size? A session running on it ends."
         case .end?:
             // A rented machine has no disk of yours to speak of: the
-            // provider removes it, and what was on it goes with it.
+            // provider removes it, and what was on it goes with it. So does
+            // the machine a container is on, which is named the same way.
             if let machine, machine.onSandbox { return "End \(name) now? \(machine.providerName) removes it, and anything on it is lost." }
             return "End \(name) now? It is stopped and removed with its disk, and anything on it is lost."
         case nil: return ""
@@ -153,20 +159,30 @@ struct VMMachineView: View {
         } header: {
             sectionHead("This machine")
         } footer: {
-            Text(SandboxWords.machineFooter(m.providerName))
+            // ONE OF YOUR OWN MACHINES IS NOBODY'S CLOUD: what it is, and
+            // then, quietly, what it is not, where a machine on your
+            // hypervisor would have the controls.
+            VStack(alignment: .leading, spacing: Design.Space.hair) {
+                Text(m.onOwnBox ? SandboxWords.ownMachineFooter(m.providerName) : SandboxWords.machineFooter(m.providerName))
+                if m.onOwnBox {
+                    Text(SandboxWords.ownNeedsHypervisor)
+                }
+            }
         }
     }
 
     /// More time and End, and nothing else. The provider counts a new time
     /// from now, so each choice says when it would end and not how much is
-    /// added, and the footer says who is counting.
+    /// added, and the footer says who is counting. One of your own machines
+    /// adds the minutes to the end a container already had, so there each
+    /// choice says how much more.
     @ViewBuilder
     private func rentedWork(_ m: Fleet.VMMachine) -> some View {
         Section {
             Menu("More time") {
-                Button("30 minutes from now") { Task { await act("extend", minutes: 30) } }
-                Button("1 hour from now") { Task { await act("extend", minutes: 60) } }
-                Button("2 hours from now") { Task { await act("extend", minutes: 120) } }
+                Button(m.onOwnBox ? "30 more minutes" : "30 minutes from now") { Task { await act("extend", minutes: 30) } }
+                Button(m.onOwnBox ? "1 more hour" : "1 hour from now") { Task { await act("extend", minutes: 60) } }
+                Button(m.onOwnBox ? "2 more hours" : "2 hours from now") { Task { await act("extend", minutes: 120) } }
             }
             .disabled(busy)
             .frame(minHeight: 44)
@@ -182,7 +198,7 @@ struct VMMachineView: View {
         } header: {
             sectionHead("Work it")
         } footer: {
-            Text(SandboxWords.timeFooter(m.providerName))
+            Text(m.onOwnBox ? SandboxWords.ownTimeFooter : SandboxWords.timeFooter(m.providerName))
         }
     }
 

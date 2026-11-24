@@ -564,6 +564,8 @@ struct StartSheet: View {
                                 // them, said by whose cloud it is on
                                 // (`sandboxLabel`): none is ever kept ready,
                                 // so only the others can say "ready now".
+                                // An image on one of your own machines is
+                                // said the same way, by that machine's name.
                                 ForEach(images) { image in
                                     Text(standby?.template == image.template && (standby?.ready ?? 0) > 0 ? "\(image.label), ready now" : image.sandboxLabel ?? image.label)
                                         .tag(vmImageTag + image.template)
@@ -663,7 +665,9 @@ struct StartSheet: View {
                         } else if let rented = chosenImage, rented.onSandbox {
                             // A RENTED MACHINE, said as one before it is
                             // made: whose cloud it is on, and that it ends.
-                            Text(SandboxWords.rented(rented.whereWord))
+                            // A CONTAINER ON ONE OF YOUR OWN MACHINES is not
+                            // rented and is on nobody's cloud, and says so.
+                            Text(rented.onOwnBox ? SandboxWords.ownMachine(rented.whereWord) : SandboxWords.rented(rented.whereWord))
                                 .fleetType(.label)
                                 .foregroundStyle(Design.Palette.inkDim)
                         } else if chosenPlatform == "vm" {
@@ -729,7 +733,11 @@ struct StartSheet: View {
                 // runs on what its template was given, so a Claude login
                 // kept here would not reach it, and "can't start" would be a
                 // claim this page cannot make.
-                if chosenImage?.onSandbox != true {
+                //
+                // ASKED FOR A MACHINE ON ONE OF YOUR OWN, which is handed
+                // your sign-in when it joins as a VM on your hypervisor is:
+                // with none kept its session can't start, and this says so.
+                if chosenImage?.onSandbox != true || chosenImage?.onOwnBox == true {
                     if chosenPlatform != nil, claude == .missing || claude == .needsGitHub {
                         Section {
                             // "May not" for a runner, which can fall back on the

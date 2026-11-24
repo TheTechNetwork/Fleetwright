@@ -340,22 +340,30 @@ fun MachinesScreen(
             // console, SSH, a restart, longer, a new size. Asked for: "Vm
             // console, settings, reboot, ssh". Drawn only when there is one.
             //
-            // UNDER WHERE EACH IS: on your hypervisor, or rented from a
-            // sandbox provider (docs/api-engines.md). Two headings, because
-            // "On your hypervisor" over a machine on somebody else's cloud
-            // would be untrue, and each drawn only over machines.
+            // UNDER WHERE EACH IS: on your hypervisor, rented from a
+            // sandbox provider, or a container on one of your own machines
+            // (docs/api-engines.md). Three headings, because "On your
+            // hypervisor" over a machine on somebody else's cloud would be
+            // untrue, and so would "At a sandbox provider" over one on a
+            // machine you enrolled. Each is drawn only over machines of its
+            // kind.
             if (poolMachines.isNotEmpty()) {
-                val rented = poolMachines.filter { it.onSandbox }
-                val own = poolMachines.filter { !it.onSandbox }
+                val rented = poolMachines.filter { it.onSandbox && !it.onOwnBox }
+                val onBoxes = poolMachines.filter { it.onOwnBox }
+                val onHypervisor = poolMachines.filter { !it.onSandbox }
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
-                        if (own.isNotEmpty()) {
+                        if (onHypervisor.isNotEmpty()) {
                             SectionHead("On your hypervisor")
-                            own.forEach { m -> PoolMachineCard(m, onClick = { showingPoolMachine = m.name }) }
+                            onHypervisor.forEach { m -> PoolMachineCard(m, onClick = { showingPoolMachine = m.name }) }
                         }
                         if (rented.isNotEmpty()) {
                             SectionHead(SandboxWords.RENTED_HEADER)
                             rented.forEach { m -> PoolMachineCard(m, onClick = { showingPoolMachine = m.name }) }
+                        }
+                        if (onBoxes.isNotEmpty()) {
+                            SectionHead(SandboxWords.OWN_HEADER)
+                            onBoxes.forEach { m -> PoolMachineCard(m, onClick = { showingPoolMachine = m.name }) }
                         }
                     }
                 }
@@ -418,8 +426,9 @@ private fun PoolMachineCard(m: Fleet.VmMachine, onClick: () -> Unit) {
             )
         }
         Text(
-            // A rented machine says whose cloud it is on, where one of
-            // yours says its address.
+            // A rented machine says whose cloud it is on, and a container
+            // which of your machines it is on, where one on your hypervisor
+            // says its address.
             listOfNotNull(if (m.standby) "kept ready" else m.image, if (m.onSandbox) "on ${m.providerName}" else m.ip, m.until?.let { "ends ${relative(it)}" }).joinToString(" · "),
             style = Design.Style.micro,
             color = Design.Palette.inkDim.now,
@@ -603,13 +612,15 @@ private fun MachinePage(
     }
     var pin by remember { mutableStateOf("") }
     var poolPage by remember { mutableStateOf(false) }
-    // Whose cloud this machine is rented on, when it is one from a sandbox
-    // provider (docs/api-engines.md): read for a `vm-` machine, and null
-    // until the fleet has said and for a machine on your own hypervisor.
-    var rentedFrom by remember(hostId) { mutableStateOf<String?>(null) }
+    // What the row to this machine's own page says, when it is one from a
+    // sandbox provider or a container on one of your own machines
+    // (docs/api-engines.md): read for a `vm-` machine, and null until the
+    // fleet has said and for a machine on your own hypervisor.
+    var rentedLink by remember(hostId) { mutableStateOf<String?>(null) }
     LaunchedEffect(hostId) {
         if (hostId.startsWith("vm-")) {
-            rentedFrom = Fleet(settings).vmMachines().getOrNull()?.firstOrNull { it.name == hostId && it.onSandbox }?.providerName
+            rentedLink = Fleet(settings).vmMachines().getOrNull()?.firstOrNull { it.name == hostId && it.onSandbox }
+                ?.let { if (it.onOwnBox) SandboxWords.ownHostLink(it.providerName) else SandboxWords.hostLink(it.providerName) }
         }
     }
     // What the Proxmox VE machines it made showed as they booted (BootLogs.kt).
@@ -1098,8 +1109,10 @@ private fun MachinePage(
         // fleet's view of it; that one is the pool's.
         if (hostId.startsWith("vm-")) {
             // A RENTED MACHINE HAS NO CONSOLE, ADDRESS OR SIZE, so the row
-            // does not promise them (C-2).
-            OpenRow(rentedFrom?.let { SandboxWords.hostLink(it) } ?: "On your hypervisor: console, SSH, size and end") { poolPage = true }
+            // does not promise them (C-2). Neither has a container on one of
+            // your own machines, which is "on" that machine and not "at"
+            // anybody.
+            OpenRow(rentedLink ?: "On your hypervisor: console, SSH, size and end") { poolPage = true }
         }
         // NOR FOR ONE THE COORDINATOR REFUSES: a reboot's first step names
         // every session on the machine, whoever's, and its second ends them.

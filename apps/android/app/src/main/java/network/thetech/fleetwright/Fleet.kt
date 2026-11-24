@@ -3046,6 +3046,14 @@ class Fleet(
          */
         val kind: String? = null,
         val provider: String? = null,
+        /**
+         * A `sandbox` image that is not a provider's at all: one of your own
+         * machines makes a machine from it out of a container, and then
+         * [provider] is that machine's name (docs/api-engines.md, "A machine
+         * on a box of your own"). Null from a coordinator older than those,
+         * and null is a provider's, as every sandbox image was.
+         */
+        val own: Boolean? = null,
     ) {
         /**
          * "New machine from Fleetwright Ubuntu 24.04 on Proxmox", or "… on
@@ -3066,16 +3074,25 @@ class Fleet(
         /** A template at a sandbox provider (docs/api-engines.md): a rented machine on the provider's cloud, with no network of yours to go on. */
         val onSandbox: Boolean get() = kind == "sandbox"
 
+        /** On one of your own machines, and so not rented, on nobody's cloud and read by nobody else. Only a `true` the fleet sent makes it so. */
+        val onOwnBox: Boolean get() = onSandbox && own == true
+
         /**
          * Where a machine from it goes, in a word, exactly as the fleet says
          * it (core.js, imageWhere): the provider by name for a sandbox
          * template, because whose cloud it is on is the thing to know about
-         * a rented machine, and the kind of hypervisor otherwise.
+         * a rented machine, and the kind of hypervisor otherwise. One of
+         * your own machines is named the same way, by its own name.
          */
         val whereWord: String
-            get() = if (onSandbox) provider ?: "a sandbox provider" else if (onProxmox) "Proxmox" else "XCP-ng"
+            get() = if (onOwnBox) provider ?: SandboxWords.OWN_UNNAMED else if (onSandbox) provider ?: "a sandbox provider" else if (onProxmox) "Proxmox" else "XCP-ng"
 
-        /** "New machine from base on E2B", for a sandbox template in a picker; null for an image on a hypervisor, which [label] says. */
+        /**
+         * "New machine from base on E2B", for a sandbox template in a
+         * picker, and "New machine from Linux on deb132" for an image on one
+         * of your own machines; null for an image on a hypervisor, which
+         * [label] says.
+         */
         val sandboxLabel: String? get() = if (onSandbox) "New machine from $name on $whereWord" else null
     }
 
@@ -3135,6 +3152,13 @@ class Fleet(
         /** ITS EDGE ROUTER (docs/proxmox.md): null is no box said, never none. */
         val edge: EdgeRouter? = null,
         val provider: String? = null,
+        /**
+         * A `sandbox` place that is one of your own machines, making
+         * machines out of its own containers, and then [provider] is that
+         * machine's name. Null from an older coordinator, and null is a
+         * provider's.
+         */
+        val own: Boolean? = null,
     ) {
         val onProxmox: Boolean get() = kind == "proxmox"
 
@@ -3144,6 +3168,13 @@ class Fleet(
          * edge router and no machine of its own.
          */
         val onSandbox: Boolean get() = kind == "sandbox"
+
+        /**
+         * One of your own machines, which is a place of this kind and no
+         * provider: no key was kept for it, it has an image where a provider
+         * has templates, and its operator turns it on there.
+         */
+        val onOwnBox: Boolean get() = onSandbox && own == true
     }
 
     /** A box looked and saw none ([name] null), or the machine and whether it is up. */
@@ -3153,7 +3184,12 @@ class Fleet(
     /** `pair`: two of them, sharing the gateway (docs/proxmox.md, "Two of them"). */
     data class EdgeRouter(val there: Boolean, val running: Boolean, val blocks: Boolean, val pair: Boolean = false)
 
-    /** What one box holding a hypervisor last saw: null is it has not looked yet, never no. */
+    /**
+     * What one box holding a hypervisor last saw: null is it has not looked
+     * yet, never no. [problem] is why not, in the box's words: it could not
+     * reach the place, or, for one of your own machines and while
+     * [reachable] is true, it has no image to offer yet.
+     */
     data class HypervisorBox(val hostId: String, val reachable: Boolean?, val problem: String?)
 
     /** Your hypervisors. Null from a coordinator too old to send the field: cannot tell, not none. */
@@ -3178,6 +3214,8 @@ class Fleet(
                         else -> "xo"
                     },
                     provider = text(o, "provider"),
+                    // Absent is null, and null is a provider's.
+                    own = flag(o, "own"),
                     boxes = if (boxes == null) emptyList() else (0 until boxes.length()).mapNotNull { j ->
                         val b = boxes.optJSONObject(j) ?: return@mapNotNull null
                         HypervisorBox(b.optString("hostId"), flag(b, "reachable"), text(b, "problem"))
@@ -3218,7 +3256,10 @@ class Fleet(
                 // A SANDBOX TEMPLATE IS OFFERED WITH NO NETWORK, GROUP OR
                 // LAB, whatever was sent: a rented machine is on its
                 // provider's network and none of yours, so there is no such
-                // choice to draw for it (C-2).
+                // choice to draw for it (C-2). Nor for an image on one of
+                // your own machines: a container there is on that machine's
+                // network, and a network, a group and a lab need a
+                // hypervisor.
                 val rented = kind == "sandbox"
                 VmImage(
                     template = template,
@@ -3232,6 +3273,8 @@ class Fleet(
                     labs = if (rented) null else labsOf(o.optJSONArray("labs")),
                     kind = kind,
                     provider = o.optString("provider").takeIf { it.isNotBlank() && it != "null" },
+                    // Absent is null, and null is a provider's.
+                    own = if (o.has("own") && !o.isNull("own")) o.optBoolean("own") else null,
                 )
             }
         }
@@ -3279,6 +3322,12 @@ class Fleet(
         val vmid: Int? = null,
         /** For a machine rented from a sandbox provider (`kind` is `sandbox`), whose cloud it is on. */
         val provider: String? = null,
+        /**
+         * A `sandbox` machine that is a container on one of your own
+         * machines, and then [provider] is that machine's name. Null from an
+         * older coordinator, and null is a rented one.
+         */
+        val own: Boolean? = null,
     ) {
         data class InLab(val name: String, val open: Boolean)
 
@@ -3290,8 +3339,11 @@ class Fleet(
          */
         val onSandbox: Boolean get() = kind == "sandbox"
 
-        /** Whose cloud a rented machine is on, as the fleet names it. */
-        val providerName: String get() = provider ?: "a sandbox provider"
+        /** A container on one of your own machines: the same short page, and none of what is said of a rented one. */
+        val onOwnBox: Boolean get() = onSandbox && own == true
+
+        /** Whose cloud a rented machine is on, as the fleet names it, or which of your own machines a container is on. */
+        val providerName: String get() = provider ?: if (onOwnBox) SandboxWords.OWN_UNNAMED else "a sandbox provider"
 
         /** The hypervisor's own name for itself, which is where its console opens and where you sign in. */
         val hypervisorName: String get() = if (onProxmox) "Proxmox VE" else "Xen Orchestra"
@@ -3472,6 +3524,8 @@ class Fleet(
                     node = o.str("node"),
                     vmid = o.num("vmid")?.toInt(),
                     provider = o.str("provider"),
+                    // Absent is null, and null is a rented one.
+                    own = if (o.has("own") && !o.isNull("own")) o.optBoolean("own") else null,
                 )
             }
         }
