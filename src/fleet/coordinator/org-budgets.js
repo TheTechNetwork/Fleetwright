@@ -14,7 +14,7 @@
 // NEVER THROWS. Every refusal is a code and a sentence.
 
 import {
-  checkBudgetSettings, NO_BUDGET_SETTINGS, newSpend, startCounting, resumeCounting, countSpend, readSpend, overBudget,
+  checkBudgetSettings, NO_BUDGET_SETTINGS, monthOf, newSpend, startCounting, resumeCounting, countSpend, readSpend, overBudget,
   newApproval, aged, covers, answerApproval, readApproval, APPROVAL_ID_RE, MAX_APPROVALS, BUDGET_WARN_AT,
 } from '../protocol/budgets.js';
 
@@ -63,9 +63,21 @@ export class OrgBudgets {
     return { ok: true, settings: this.settings, text: `${at}${more ? ` ${more}` : ''}` };
   }
 
-  /** A member's row, as the month `now` is in. @param {string} member @returns {Spend|null} */
+  /**
+   * A member's row, as the month `now` is in, or null when it has spent
+   * nothing this month that was counted.
+   *
+   * A ROW FROM AN EARLIER MONTH IS NOT THIS MONTH'S. Counting rolls a row
+   * over, but only a session reports a cost, and a member refused at its
+   * budget has no session: read as it was kept, last month's total refused
+   * it this month and every month after, in words that said "when the month
+   * turns".
+   *
+   * @param {string} member @returns {Spend|null}
+   */
   spendOf(member) {
-    return this.spend.get(member) ?? null;
+    const row = this.spend.get(member);
+    return row && row.month === monthOf(this.now()) ? row : null;
   }
 
   /** @param {string} member @param {Spend} next */
@@ -112,9 +124,19 @@ export class OrgBudgets {
     return crossed;
   }
 
-  /** A member was removed: its row goes with it. @param {string} member */
+  /**
+   * A member was removed: its row goes with it, and so does every approval
+   * still open for it. An approval is for a member, not for an id, and a
+   * member made later under the same id is not the one somebody approved a
+   * start as.
+   *
+   * @param {string} member
+   */
   forget(member) {
     if (this.spend.delete(member)) this.dirtySpend.add(member);
+    for (const a of this.approvals.values()) {
+      if (a.member === member && (a.state === 'waiting' || a.state === 'approved')) this.#keepApproval({ ...a, state: 'expired' });
+    }
   }
 
   /** @param {Approval} a */

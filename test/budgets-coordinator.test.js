@@ -191,8 +191,14 @@ test('a declined approval lets nothing through, and the next try asks afresh', a
   await f.start(sam, 'loose');
   await f.cost('cc-1', 6);
   assert.match((await f.start(sam, 'loose')).text, /which you may give yourself: a1/);
-  // Only Sam is named for Dana, because only Sam manages Loose.
-  assert.match((await f.start(dana, 'loose')).text, /^Loose has spent \$6\.00 of a budget of \$5\.00 this month\. sam@example\.com, or a fleet admin, must approve it first: a2\./);
+  // Only Sam is named for Dana, because only Sam manages Loose. And Dana,
+  // who may not see what Loose has spent, is not told it by being refused.
+  const danas = await f.start(dana, 'loose');
+  assert.equal(danas.text, 'Loose is past its budget for this month. sam@example.com, or a fleet admin, must approve it first: a2. Start it again once it is approved; nothing was sent.');
+  const mine = (/** @type {any} */ who) => /** @type {any} */ (f.core.approvalsFor(who)).approvals.find((/** @type {any} */ a) => a.id === 'a2');
+  for (const told of [danas.text, JSON.stringify(danas.approval), JSON.stringify(mine(dana)), JSON.stringify(f.core.snapshot(dana).events)]) assert.ok(!told.includes('$6.00'), told);
+  // Sam, who manages Loose and is the one asked, reads the figure on the same approval.
+  assert.match(mine(sam).words, /Loose has spent \$6\.00 of a budget of \$5\.00 this month\./);
   // An admin answers as an admin.
   assert.equal(/** @type {any} */ (await f.core.answerApproval(admin, 'a1', 'decline', 'Not this month.')).approval.state, 'declined');
   assert.deepEqual(f.pushes.at(-1).title, 'a1 was declined');
@@ -270,6 +276,47 @@ test('in refuse mode a start past the budget is refused in words, with no approv
   assert.equal((await f.start(admin, 'debbie')).ok, true);
 });
 
+test('a budget is a month’s: a member refused at it in one month starts in the next, with nothing counted since', async () => {
+  // Counting rolls a member's row to the new month, but only a session
+  // reports a cost, and a member refused at its budget has none. Read as it
+  // was kept, last month's total refused it for good.
+  const f = fleet();
+  f.set({ budgets: 'refuse' });
+  await f.reports();
+  await f.start(dana, 'debbie');
+  await f.cost('cc-1', 60);
+  f.as.clear();
+  await f.reports();
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
+  f.tick(8 * 86_400_000); // into December
+  await f.reports();
+  assert.equal(f.spendOf('debbie').over, false);
+  assert.equal((await f.start(dana, 'debbie')).ok, true, 'the month turned');
+  // And where the fleet asks first, it does not ask about a month that is over.
+  const g = fleet();
+  g.set({ budgets: 'ask' });
+  await g.reports();
+  await g.start(dana, 'debbie');
+  await g.cost('cc-1', 60);
+  g.tick(8 * 86_400_000);
+  await g.reports();
+  assert.equal((await g.start(sam, 'debbie')).ok, true);
+});
+
+test('an approval is for a member and not for its id: one removed takes its open approvals with it', async () => {
+  const f = fleet();
+  f.set({ dangerous: true });
+  await f.reports();
+  const asked = await f.start(sam, 'loose', { mode: 'dangerous' });
+  assert.equal(/** @type {any} */ (await f.core.answerApproval(admin, asked.approval.id, 'approve')).ok, true);
+  assert.equal(f.core.removeMember(admin, 'loose').ok, true);
+  assert.equal(f.core.org.set(admin, 'loose', { name: 'Loose', kind: 'agent', role: 'somebody else entirely' }).ok, true);
+  const again = await f.start(sam, 'loose', { mode: 'dangerous' });
+  assert.equal(again.error?.code, 'needs_approval', 'the approval given for the member that was removed lets nothing through');
+  assert.notEqual(again.approval.id, asked.approval.id);
+  assert.equal(/** @type {any} */ (f.core.approvalsFor(admin)).approvals.find((/** @type {any} */ a) => a.id === asked.approval.id).state, 'expired');
+});
+
 test('a member’s managers are told once when it nears its budget and once when it passes it, and its sessions go on', async () => {
   const f = fleet();
   f.set({ budgets: 'ask' });
@@ -312,6 +359,22 @@ test('a resumed session counts from the first figure heard, and a removed member
   await f.cost('cc-1', 9);
   await f.cost('cc-1', 11.5);
   assert.equal(f.spendOf('debbie').usd, 2.5);
+  // WHICH MEMBER A SESSION IS, ON A RESUME, IS ITS BOX'S WORD. Sam's session,
+  // which his box calls Debbie's, is his to resume and not hers to pay for:
+  // he could not have started as her.
+  f.core.registry.connect('sam-box', () => {}, { actsFor: sam.email });
+  const sams = (/** @type {number} */ usd) => f.core.onHostMessage('sam-box', {
+    kind: 'health',
+    health: {
+      hub: { reachable: true }, protocol: PROTOCOL_VERSION, maxSessions: 9, running: 1, free: 8, labels: [], sandboxed: true, resumable: ['mine'],
+      sessions: [{ name: 'mine', status: 'stopped', createdBy: `fleet:${sam.email}`, startedBy: sam.email, member: 'debbie', spent: { usd, complete: true } }],
+    },
+  });
+  await sams(500);
+  assert.equal(/** @type {any} */ (await f.core.dispatch({ verb: 'resume', params: { name: 'mine' }, actor: sam.email, requester: sam, preferHost: 'sam-box' })).ok, true);
+  await sams(500);
+  await sams(600);
+  assert.equal(f.spendOf('debbie').usd, 2.5, 'a box naming a member does not spend that member’s budget');
   assert.equal(f.core.removeMember(admin, 'debbie').ok, true);
   assert.equal(f.core.budgets.spendOf('debbie'), null);
 });

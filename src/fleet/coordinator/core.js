@@ -42,7 +42,7 @@ import { MEMBER_ID_RE, composeFirstMessage } from '../protocol/members.js';
 import { OrgTasks } from './org-tasks.js';
 import { OrgRouting } from './org-routing.js';
 import { OrgBudgets } from './org-budgets.js';
-import { approvalNeeded, approvalWords, spendWords, overBudget, dollars } from '../protocol/budgets.js';
+import { approvalNeeded, approvalWords, spendWords, overBudget, dollars, withoutFigures, refusedWithoutFigures } from '../protocol/budgets.js';
 import { manages } from '../protocol/members.js';
 import { modeFor, decide as decideRoute, candidatesFor, routeWords, routeQuestion, readRouteAnswer, MAX_MODEL_CHOICES } from '../protocol/routing.js';
 import { GATE_PATTERNS } from '../../core/mask-pane.js';
@@ -4692,7 +4692,12 @@ export class CoordinatorCore {
       } else if (spec.verb === 'resume' && answer?.ok !== false && typeof spec.params?.name === 'string') {
         const claim = this.registry.findSessions(spec.params.name).find((c) => c.host?.hostId === lockedOn);
         const as = typeof (/** @type {any} */ (claim)?.member) === 'string' ? /** @type {any} */ (claim).member : '';
-        if (as && this.org.get(as)) {
+        // WHICH MEMBER A SESSION IS, HERE, IS ITS BOX'S WORD. A person's own
+        // box could say any member's name on a session of theirs, and their
+        // resume of it would then spend that member's budget. So it counts
+        // only when the person resuming could have started as that member:
+        // then the box naming it gains them nothing they did not have.
+        if (as && this.org.get(as) && this.org.standing(spec.requester ?? null, this.memberCustody).startAs.includes(as)) {
           this.budgets.resumed(as, `${lockedOn}\n${spec.params.name}`);
           this.onStateChanged?.();
         }
@@ -6049,8 +6054,16 @@ export class CoordinatorCore {
       spend: this.budgets.spendOf(member.id),
       start: { dangerous: params.mode === 'dangerous', workType: task?.workType ?? null, task: task?.id ?? null },
     });
-    if ('refused' in need) return { ok: false, error: { code: 'over_budget' }, text: need.refused };
+    // WHAT A MEMBER HAS SPENT IS FOR WHOEVER MAY SEE IT (budgetsFor): an
+    // admin, its managers, and the person it is. Until the minter's custody
+    // list is in hand the coordinator refuses nobody a start as a member, so
+    // anybody in the fleet reaches this gate, and its sentences are not
+    // where they learn a figure. They are told what is asked and of whom.
+    const sees = this.#seesSpend(requester, member.id);
+    const name = member.name || member.id;
+    if ('refused' in need) return { ok: false, error: { code: 'over_budget' }, text: sees ? need.refused : refusedWithoutFigures(name) };
     if (!need.reasons.length) return { ok: true };
+    const said = sees ? need.reasons : withoutFigures(need.reasons, name);
     const by = String(requester?.email || '').toLowerCase() || 'an admin';
     const about = { member: member.id, task: task?.id ?? null, kinds: need.reasons.map((r) => r.kind), by };
     // GIVEN ALREADY: the start goes on, and takes the approval when it is
@@ -6062,7 +6075,9 @@ export class CoordinatorCore {
     const managers = this.#managersOf(member.id);
     const who = managers.length ? `${managers.slice(0, 3).join(' or ')}${managers.length > 3 ? ' or another of its managers' : ''}, or a fleet admin,` : 'A fleet admin';
     if (fresh) {
-      this.record({ event: 'approval.asked', actor: by, text: `${approval.id}: ${by} asks to start a session as ${member.name}${task ? ` on ${task.id}` : ''}. ${need.reasons.map((r) => r.text).join(' ')}` });
+      // The record is the asker's to read and an admin's (visibleEvents), so
+      // it says what the asker may be told. The managers read the approval.
+      this.record({ event: 'approval.asked', actor: by, text: `${approval.id}: ${by} asks to start a session as ${member.name}${task ? ` on ${task.id}` : ''}. ${said.map((r) => r.text).join(' ')}` });
       const phones = this.#phonesAbout(member.id);
       if (this.push && phones.length) {
         void this.push.send(phones, {
@@ -6076,14 +6091,24 @@ export class CoordinatorCore {
     return {
       ok: false,
       error: { code: 'needs_approval' },
-      text: `${need.reasons.map((r) => r.text).join(' ')} ${own ? `That needs approval, which you may give yourself: ${approval.id}.` : `${who} must approve it first: ${approval.id}.`} Start it again once it is approved; nothing was sent.`,
-      approval: { ...approval, mayAnswer: own },
+      text: `${said.map((r) => r.text).join(' ')} ${own ? `That needs approval, which you may give yourself: ${approval.id}.` : `${who} must approve it first: ${approval.id}.`} Start it again once it is approved; nothing was sent.`,
+      approval: { ...approval, reasons: said, mayAnswer: own },
     };
   }
 
   /** May this person answer approvals about this member? @param {{ email?: string|null, admin?: boolean }|null} requester @param {string} member */
   #mayAnswer(requester, member) {
     return !requester || Boolean(requester.admin) || this.org.mayManage(requester, member);
+  }
+
+  /**
+   * May this person be told what a member has spent? The rule budgetsFor
+   * lists by: an admin, whoever manages the member, and the person it is.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester @param {string} member
+   */
+  #seesSpend(requester, member) {
+    return this.#mayAnswer(requester ?? null, member) || this.org.standing(requester ?? null).member === member;
   }
 
   /**
@@ -6135,6 +6160,9 @@ export class CoordinatorCore {
     const approvals = this.budgets.all()
       .map((a) => ({ ...a, mayAnswer: this.#mayAnswer(requester, a.member) }))
       .filter((a) => a.mayAnswer || (email && a.askedBy === email))
+      // An ask of one's own, about a member whose spending one may not see,
+      // is listed without the figure (#gateStart).
+      .map((a) => (this.#seesSpend(requester, a.member) ? a : { ...a, reasons: withoutFigures(a.reasons, this.org.get(a.member)?.name ?? a.member) }))
       .map((a) => ({ ...a, memberName: this.org.get(a.member)?.name ?? a.member, words: approvalWords(a, (id) => this.org.get(id)?.name ?? id) }))
       .reverse();
     this.onStateChanged?.();

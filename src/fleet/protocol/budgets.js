@@ -218,6 +218,25 @@ export function approvalNeeded({ settings, member, spend, start }) {
   return { reasons };
 }
 
+/**
+ * The same reasons for somebody who may not see what the member has spent.
+ * Only one reason carries a figure, and it is said without it: that a start
+ * needs approval, and of which kind, is no secret, since the person asking
+ * is the one being told to wait. What the member has spent is its managers'
+ * to read (docs/budgets.md, "An approval").
+ *
+ * @param {readonly Reason[]} reasons @param {string} who the member's name
+ * @returns {Reason[]}
+ */
+export function withoutFigures(reasons, who) {
+  return reasons.map((r) => (r.kind === 'over-budget' ? { kind: r.kind, text: `${who} is past its budget for this month.` } : { kind: r.kind, text: r.text }));
+}
+
+/** A refusal at a budget, for somebody who may not see what the member has spent. @param {string} who */
+export function refusedWithoutFigures(who) {
+  return `${who} is past its budget for this month. The fleet refuses a start past a budget: it can start again when the month turns, or when the budget is raised.`;
+}
+
 /** One printable paragraph, bounded in bytes. */
 function note(/** @type {unknown} */ v) {
   const s = String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim();

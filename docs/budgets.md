@@ -36,11 +36,16 @@ month**:
   the total can be under, and is never over.
 - **Only sessions the fleet itself started or resumed as that member.** Which
   member a session belongs to, in a box's report, is the box's word. Counted
-  on that alone, a box could spend any member's budget by naming it.
+  on that alone, a box could spend any member's budget by naming it. For
+  the same reason a resume counts only when the person resuming could have
+  started as that member: a person's own box may call a session of theirs
+  any member's, and their resuming it then spends nobody else's budget.
 - A figure that goes down is a new conversation in the same session, and
   counts from nothing again.
 - The month is the calendar month in UTC. At its turn every member's total
   starts again, and sessions still running count only what they spend after.
+  A total from an earlier month is never read as this month's, by the gate
+  or by a screen, whether or not anything has been counted since.
 
 **What it cannot tell, it says.** A session that reports no dollar figure
 (Codex and OpenCode report tokens and no price; an older image reports
@@ -115,6 +120,14 @@ approval is given, the same start is sent again and goes through.
 - **A second ask for the same thing is the same approval**, so trying again
   does not fill a manager's phone.
 - A waiting approval nobody answers expires after a day.
+- **An approval is for a member, not for an id.** Removing a member ends
+  every approval still open for it, so a member made later under the same id
+  is not started on an approval given for the one that was removed.
+- **The figure is for whoever may see it.** What a member has spent is read
+  by an admin, its managers and the person it is. Somebody else whose start
+  is refused is told that the member is past its budget and who can approve,
+  without the amount, in the refusal, in their own list of asks and in the
+  record of it. The managers read the amount on the same approval.
 
 At most 200 are kept, the oldest finished ones going first.
 
