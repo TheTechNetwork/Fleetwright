@@ -54,6 +54,13 @@ when that version is cut.
 - **A session says why its turn ended.** A limit, a sign-in that ended, the
   wrong model or an error is named on the session, with when the limit lifts
   if the engine said.
+- **The fleet can choose who a task goes to.** Organization has Routing: off,
+  ask me, or choose for me, and rules that send a kind of work to a member.
+  A new task can be left for the fleet to place. It goes by the rule for its
+  kind of work, or to the only member who takes it; when several could, you
+  are asked on your phone, or the fleet's model picks if your operator has
+  turned that on. The task says how it was decided. Off until an admin
+  turns it on.
 
 ## 0.4.16 — 2026-11-04
 

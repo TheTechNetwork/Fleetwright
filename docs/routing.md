@@ -31,20 +31,21 @@ answers:
    this kind of work.
 4. **A pick among several.** In `auto`, the fleet's model chooses one of
    them. In `manual`, or when the model is off, refuses, or answers with
-   anybody who is not on the list, the person who made the task is asked on
-   their phone.
+   anybody who is not on the list, the person who asked for the routing is
+   asked on their phone.
 5. **Nobody.** No member allowed takes this kind of work. The task stays
    unassigned and says so.
 
 ## Who is allowed
 
-**Only a member the task's maker could have assigned it to by hand**: one
+**Only a member the person asking could have assigned it to by hand**: one
 they manage or may start as, or anybody for a fleet admin
-([members.md](./members.md), "The tree, and who manages whom"). Routing is a
-shortcut for a choice that person already has. It is never a way to put work
-on a member they could not have given it to, so a rule naming a member
-outside the maker's reach is passed over for that task, and the record says
-it was.
+([members.md](./members.md), "The tree, and who manages whom"). The person
+asking is whoever makes the task, or whoever asks later for it to be routed.
+Routing is a shortcut for a choice that person already has. It is never a
+way to put work on a member they could not have given it to, so a rule
+naming a member outside their reach is passed over for that task, and the
+record says it was.
 
 Among those, **a member takes a kind of work when its `workTypes` names
 it**. A task with no `workType` has no rule to match, and every allowed
@@ -109,9 +110,17 @@ later changed by hand.
 
 **Off unless the fleet's operator turns it on**, beside the decision model
 the fleet already has ([decide.md](./decide.md)): the same binding, the same
-one call site in the Worker, the same day's budget, and a switch of its own
-(`FLEETWRIGHT_ROUTE_MODEL=1`). With it off, `auto` is `manual` and the task
-says why a person was asked.
+one call site in the Worker, the same rate limit and day's budget, and a
+switch of its own, `FLEETWRIGHT_ROUTE_MODEL=1`, which does nothing unless
+the decision model is on too. No committed config sets either. With it off,
+`auto` is `manual` and the task says why a person was asked.
+
+**No real model has been asked this question.** The request has the shape
+the decision model's own questions have, and every path here is tested
+against a stand-in that answers in that shape. What a real answer looks
+like for a choice among members, and whether 0.7 is the right confidence to
+ask of one, is for the first fleet that turns the switch on to find out,
+which is why a pick says it was the model's.
 
 What is sent: the task's title, its kind of work and the first 600 bytes of
 its brief; and for each candidate its id, role, description and kinds of
@@ -138,8 +147,8 @@ either the person is asked.
 
 ## Asking a person
 
-`how: waiting`. The task's maker is told on their phone, with the candidates
-by name. The task's page lists them, each with its role and what it is for,
+`how: waiting`. The person who asked is told on their own phones, with the
+candidates by name, at most once a minute however many tasks are waiting. The task's page lists them, each with its role and what it is for,
 and choosing one is the answer. Anybody else who could assign the task by
 hand can answer too. Until somebody does, the task is open with no assignee,
 which is what it would have been with routing off.
@@ -158,11 +167,14 @@ PUT  /api/tasks/{id}           …, routing?
 POST /api/tasks/{id}/route     {} to route now, { member } to answer
 ```
 
-- **MCP**: `fleet_routing` reads the setting and, for an admin, changes it.
+- **MCP**: `fleet_routing` reads the setting and `fleet_set_routing` changes
+  it, for an admin, the split `fleet_members` and `fleet_member` have.
   `fleet_task` takes `routing`, and `action: "route"` with an optional
-  `member`. `fleet_delegate` no longer needs a member: with none it makes
-  the task, routes it, and starts the member routing chose; when a person is
-  being asked it says so and starts nothing.
+  `assignee` as the answer. `fleet_delegate` no longer needs `to`: with none
+  it makes the task, lets routing choose, and starts the member it chose.
+  When routing chose nobody it starts nothing and says which it was: a
+  person is being asked, no member takes that kind of work, or routing is
+  off.
 - **Both phones**: **Routing** under Organization, the mode in three plain
   choices and the rules, edited by an admin and read by everybody; on New
   task, "Let the fleet choose" beside the members; on a task's page, how it

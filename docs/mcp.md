@@ -101,6 +101,14 @@ wait that runs out says the work is still going and how to keep waiting; a
 session that stops and wrote nothing is an error that says so, and no result
 is made up from its log.
 
+`fleet_routing` says how the fleet chooses a member for a task that has none
+([routing.md](./routing.md)): its mode, its rules by kind of work, and the
+order it decides in. `fleet_set_routing` changes it, for a fleet admin.
+`fleet_task` with `action: "route"` asks for a task to be routed, and with
+`assignee` as well answers who it goes to. `fleet_delegate` with no `to`
+leaves the choice to routing and starts whoever it chose; when it chose
+nobody, nothing is started and the reply says why.
+
 ## What is not exposed, and why that is a policy rather than a lock
 
 ```

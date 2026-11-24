@@ -272,6 +272,44 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     mutating: true,
   },
   {
+    // WHICH MEMBER A TASK GOES TO (docs/routing.md): the fleet's mode and its
+    // rules by kind of work. Read by anybody; written by an admin with the
+    // tool below, the split fleet_members and fleet_member have.
+    name: 'fleet_routing',
+    verb: null,
+    description:
+      'How the fleet chooses a member for a task that has none: its mode (off, manual or auto), its rules by ' +
+      'kind of work, and whether a pick among several members can be a model’s. The order is fixed: a task ' +
+      'somebody was given is never moved; then the rule for its kind of work; then the only member who takes ' +
+      'it; then a pick among several, by the model in auto or by a person; and only among members the person ' +
+      'asking could have assigned it to by hand.',
+    schema: {},
+    requires: [],
+    local: true,
+    coordinator: '/api/routing',
+  },
+  {
+    name: 'fleet_set_routing',
+    verb: null,
+    description:
+      'Change how the fleet routes tasks. A fleet admin only. `mode` is off, manual or auto; `rules` replaces ' +
+      'the whole list, each a kind of work and the member it goes to, one member a kind. Either may be left ' +
+      'out to keep what it is. This moves no task that already has a member.',
+    schema: {
+      mode: { type: 'string', enum: ['off', 'manual', 'auto'], description: 'off routes nothing; manual routes by the rules and asks a person to pick among several members; auto lets the fleet’s model pick where it has one.' },
+      rules: {
+        type: 'array',
+        maxItems: 40,
+        items: { type: 'string' },
+        description: 'Every rule, each written "kind-of-work=member-id", like "backend=debbie". Replaces the list; an empty list removes every rule.',
+      },
+    },
+    requires: [],
+    local: true,
+    coordinator: '/api/routing',
+    mutating: true,
+  },
+  {
     // THE FLEET'S TASKS (docs/tasks.md), on the route the phones use: the
     // record above sessions, which is the fleet's own and no host's.
     name: 'fleet_tasks',
@@ -300,6 +338,8 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       '`title` and `brief`. With `id` and fields it changes them; a new `assignee` is a handoff and is ' +
       'refused while a session is working on the task. With `id` and `action` it releases the lock, accepts ' +
       'a result that came back, reopens the task with a `note` the next session is told, or cancels it. ' +
+      '`action: "route"` asks the fleet which member an unassigned task should go to (fleet_routing says ' +
+      'how it decides); with `assignee` as well it is your answer to that question. ' +
       'This starts and stops no session.',
     schema: {
       id: { type: 'string', description: 'The task to change or act on, like t12. Leave out to make a new one.' },
@@ -309,7 +349,8 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       workType: { type: 'string', description: 'The kind of work, as a short lowercase name a member’s workTypes use.' },
       repo: { type: 'string', description: 'The repository the work is in, written owner/repo.' },
       parent: { type: 'string', description: 'For a new task: the task it is delegated from.' },
-      action: { type: 'string', enum: ['release', 'accept', 'reopen', 'cancel'], description: 'What to do to the task named by `id`.' },
+      action: { type: 'string', enum: ['release', 'accept', 'reopen', 'cancel', 'route'], description: 'What to do to the task named by `id`.' },
+      routing: { type: 'string', enum: ['auto', 'manual', 'off', ''], description: 'This task’s own routing, whatever the fleet’s is: `manual` routes it by the rules and asks a person to pick among several members, `auto` lets the fleet’s model pick where it has one, `off` leaves it unassigned. An empty string follows the fleet’s setting again.' },
       note: { type: 'string', description: 'Why: with a new `assignee`, the handoff’s note; with `reopen`, what the next session is told (required). At most 300 bytes.' },
     },
     requires: [],
@@ -324,7 +365,9 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     name: 'fleet_delegate',
     verb: null,
     description:
-      'Hand a whole piece of work to another member and get the result back. It makes a task from `to`, ' +
+      'Hand a whole piece of work to another member and get the result back. With no `to`, the fleet’s routing ' +
+      'chooses the member, and when a person has to choose it says who is being asked and starts nothing. ' +
+      'It makes a task from `to`, ' +
       '`title` and `brief`, starts a session on it as that member, on the member’s own sign-ins and ' +
       'machine, waits for it to stop, and answers with the result packet: DONE, BLOCKED or FAILED, what the ' +
       'session wrote, the branch it was told and where it ran. THE BRIEF IS ALL THE OTHER MEMBER GETS: ' +
@@ -333,7 +376,8 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       'allowed to start a session as the member. The session is yours to stop with fleet_stop once you have ' +
       'the result, and the task is accepted or reopened with fleet_task.',
     schema: {
-      to: { type: 'string', description: 'The member to hand the work to, by id (fleet_members lists them and the work each takes).' },
+      to: { type: 'string', description: 'The member to hand the work to, by id (fleet_members lists them and the work each takes). Leave out to let the fleet’s routing choose among the members you may hand work to.' },
+      routing: { type: 'string', enum: ['auto', 'manual'], description: 'With no `to`: how this one task is routed, whatever the fleet’s setting is. Left out, the fleet’s setting decides, and a fleet whose routing is off chooses nobody.' },
       title: { type: 'string', description: 'One line that says what the work is.' },
       brief: { type: 'string', description: 'What to do, where, and what to hand back, written for somebody who has seen none of this conversation. At most 2400 bytes.' },
       workType: { type: 'string', description: 'The kind of work, as a short lowercase name.' },

@@ -112,6 +112,18 @@ budget the coordinator logs one warning a day.
 The masked state is dropped after the call. The coordinator keeps counters and
 nothing else.
 
+## The second question: which member a task goes to
+
+Routing ([routing.md](./routing.md)) may put one more question to the same
+model: a task's title, its kind of work and the top of its brief, and a
+choice among the members allowed. It is its own switch on the coordinator,
+`FLEETWRIGHT_ROUTE_MODEL` exactly `"1"`, and it is read only where everything
+above is already on. It goes through the same one call in the Worker
+(`#askModel`), the same platform rate limit and the same day's budget, with
+fifty asks a day of its own and one ask a task. The text is held to the gate
+above before it is sent, and one that fails is not sent. No host is
+involved, and nothing a host sends can cause one.
+
 ## What the answer may do, and the one thing it may do
 
 `ok && asked && p ≥ DECIDE_P_AWAITING` marks the pane as waiting, for as long
