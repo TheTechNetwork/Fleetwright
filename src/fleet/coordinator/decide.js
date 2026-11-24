@@ -204,6 +204,25 @@ export class DecideLimits {
   }
 
   /**
+   * A call that is about no session and no host: a task put to the model for
+   * routing (docs/routing.md). The day's budget is its wall here, and the
+   * caller holds its own count of asks; the two windows above are per
+   * session and per host, and a task is neither.
+   *
+   * @param {number} bytes
+   * @returns {'budget'|null} the refusal, or null when it was charged and may go ahead
+   */
+  charge(bytes) {
+    const spend = this.#today();
+    const estimate = estimateNeurons(bytes);
+    if (spend.neurons + estimate > this.budget) return 'budget';
+    spend.neurons += estimate;
+    spend.calls++;
+    this.#warnOnce();
+    return null;
+  }
+
+  /**
    * Replace a call's estimate with what it actually cost. A call whose usage
    * did not come back keeps its estimate, which over-charges rather than under.
    *

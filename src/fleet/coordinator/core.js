@@ -40,6 +40,9 @@ import { LinkedRepos } from './linked-repos.js';
 import { OrgMembers } from './org-members.js';
 import { MEMBER_ID_RE, composeFirstMessage } from '../protocol/members.js';
 import { OrgTasks } from './org-tasks.js';
+import { OrgRouting } from './org-routing.js';
+import { modeFor, decide as decideRoute, candidatesFor, routeWords, routeQuestion, readRouteAnswer, MAX_MODEL_CHOICES } from '../protocol/routing.js';
+import { GATE_PATTERNS } from '../../core/mask-pane.js';
 import { TASK_ID_RE, TASK_STATES, MAX_RESULT, lockTask, startFor, composeTaskMessage, firstBytes } from '../protocol/tasks.js';
 import { ENGINES, cleanTurn, encodeEngines, enginesOn, enginesWords, isPlainDefault, turnWords } from '../protocol/engines.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
@@ -460,6 +463,7 @@ export class CoordinatorCore {
    *   oauthRelay?: { url: string, fleet: string, privateJwk: import('node:crypto').webcrypto.JsonWebKey, publicKey: string }|null,
    *   signingOrigin?: string|null,
    *   decide?: { ask: (state: string) => Promise<any>, rateLimit: () => Promise<boolean>, budget?: unknown }|null,
+   *   route?: { pick: (question: { state: string, questions: Record<string, any> }) => Promise<any> }|null,
    * }} [opts]
    */
   constructor({
@@ -524,6 +528,11 @@ export class CoordinatorCore {
     // is what the fork-safe config gives: every decide frame is answered
     // `off`, and nothing can spend.
     decide = null,
+    // THE MODEL'S PICK AMONG MEMBERS (docs/routing.md): `pick` is the same
+    // one call to Workers AI, asked a different question. It is used only
+    // where `decide` is set too, because its rate limit and its day's budget
+    // are the decision model's. Absent, a pick among several is a person's.
+    route = null,
   } = {}) {
     this.now = now;
     this.newId = newId;
@@ -549,6 +558,7 @@ export class CoordinatorCore {
     this.decide = typeof decide?.ask === 'function' && typeof decide?.rateLimit === 'function' ? decide : null;
     /** The day's spend on the decision model and its two windows, stored as `decide` (decide.js). */
     this.decideLimits = new DecideLimits({ now: () => this.now(), budget: decide?.budget, log: this.log });
+    this.router = this.decide && typeof route?.pick === 'function' ? route : null;
     // Single-use, minutes-long, and minted only when this coordinator itself
     // dispatches a run — so a runner's owner is decided before the job exists
     // rather than by a reusable secret sitting in a repository. Separate store
@@ -651,6 +661,10 @@ export class CoordinatorCore {
     this.org = new OrgMembers({ now });
     // The fleet's tasks: the record above sessions (docs/tasks.md).
     this.tasks = new OrgTasks({ now });
+    /** The fleet's routing record and the day's count of asks put to a model (org-routing.js). */
+    this.routing = new OrgRouting({ now: () => this.now() });
+    /** @type {Map<string, number>} when each person was last told a task needs a member (#askPerson) */
+    this.routeAskedAt = new Map();
     /**
      * Who may start a session as each member, as the minter last signed it
      * for a box (#onHostKeys): member id → fleet addresses. READ, NEVER
@@ -5872,10 +5886,247 @@ export class CoordinatorCore {
    * @param {{ email?: string|null, admin?: boolean }|null} requester @param {unknown} input
    */
   createTask(requester, input) {
-    const made = this.tasks.create(this.#who(requester), input, (id) => this.org.get(id));
+    const who = this.#who(requester);
+    const made = this.tasks.create(who, input, (id) => this.org.get(id));
     if (!made.ok) return made;
+    // ROUTED AS IT IS MADE, when its mode says so (docs/routing.md). All of it
+    // but a model's pick happens here and now; `routePending` tells the
+    // route's caller there is a pick to wait for (routeTask).
+    const routed = this.#routeByRules(who, made.task);
     this.onStateChanged?.();
-    return { ok: true, task: made.task, start: startFor(made.task), text: made.text };
+    const task = routed?.task ?? made.task;
+    return {
+      ok: true,
+      task,
+      start: startFor(task),
+      text: routed?.text ? `${made.text.replace(', assigned to nobody yet', '')} ${routed.text}` : made.text,
+      ...(routed?.pending ? { routePending: true } : {}),
+    };
+  }
+
+  // ── Routing (docs/routing.md) ─────────────────────────────────────────────
+
+  /** Can a pick among several members be a model's on this fleet? */
+  #modelPicks() {
+    return Boolean(this.router && this.decide);
+  }
+
+  /** @param {{ email?: string|null, admin?: boolean }|null} requester */
+  routingFor(requester) {
+    return { ok: true, routing: this.routing.record, model: this.#modelPicks(), you: { admin: !requester || Boolean(requester.admin) } };
+  }
+
+  /** @param {{ email?: string|null, admin?: boolean }|null} requester @param {unknown} input */
+  setRouting(requester, input) {
+    const who = this.#who(requester);
+    const saved = this.routing.set(who, input, (id) => this.org.get(id));
+    if (!saved.ok) return saved;
+    this.record({ event: 'routing.changed', actor: who.email || 'an admin', text: `${who.email || 'An admin'} set the fleet’s routing: ${saved.text}` });
+    this.onStateChanged?.();
+    return { ok: true, routing: saved.routing, model: this.#modelPicks(), text: saved.text };
+  }
+
+  /** A member's name for a sentence, or its id when it has gone. @param {string} id */
+  #memberSays(id) {
+    return this.org.get(id)?.name || id;
+  }
+
+  /**
+   * Everything about routing a task that rules alone decide: pinned, the
+   * owner's rule, the only member allowed, nobody, and, in `manual` or with
+   * no model, the question to a person. Null when the task's mode is off.
+   *
+   * `pending` means several members could take it and a model may pick:
+   * nothing is written yet, and `#pick` finishes it.
+   *
+   * @param {import('./org-tasks.js').Who} who
+   * @param {import('../protocol/tasks.js').Task} task
+   * @returns {{ task: import('../protocol/tasks.js').Task, text: string, pending?: boolean, decision?: ReturnType<typeof decideRoute>, mode?: 'manual'|'auto' }|null}
+   */
+  #routeByRules(who, task) {
+    const mode = modeFor(task, this.routing.record);
+    if (mode === 'off') return null;
+    const decision = decideRoute(task, { routing: this.routing.record, members: this.org.all(), who });
+    const base = { mode, candidates: decision.candidates.map((c) => c.id), at: this.now(), by: who.email || 'an admin', ...(task.route?.modelAsked ? { modelAsked: true } : {}) };
+    if (decision.how === 'several') {
+      // A model's, when this task has not been put to one and there is one
+      // to ask. Everything else about `several` is a person's.
+      if (mode === 'auto' && this.#modelPicks() && !task.route?.modelAsked) return { task, text: '', pending: true, decision, mode };
+      const because = mode === 'auto'
+        ? (task.route?.modelAsked ? 'The fleet’s model was already asked about this task once.' : 'The fleet has no model to pick with.')
+        : '';
+      return this.#askPerson(who, task, { ...base, why: `${decision.why}${because ? ` ${because}` : ''}` });
+    }
+    const wrote = this.tasks.route(who, task.id, { ...base, how: decision.how, member: decision.member, why: decision.why });
+    if (!wrote.ok) return { task, text: wrote.text };
+    if (decision.how === 'rule' || decision.how === 'only') this.#routed(wrote.task);
+    return { task: wrote.task, text: routeWords(/** @type {any} */ (wrote.task.route), (id) => this.#memberSays(id)) };
+  }
+
+  /** Say in the feed that routing gave a task to somebody. @param {import('../protocol/tasks.js').Task} task */
+  #routed(task) {
+    if (!task.route) return;
+    this.record({ event: 'task.routed', actor: task.createdBy, text: `${task.id} “${oneLine(task.title, 80)}”: ${routeWords(task.route, (id) => this.#memberSays(id))}` });
+  }
+
+  /**
+   * Several members could take a task and a person chooses: written on the
+   * task as waiting, said in the feed, and told to that person's own phones.
+   *
+   * ONE PUSH A PERSON A MINUTE. An agent that makes forty tasks in a loop
+   * asks forty questions, and every one is on the tasks' pages; its person's
+   * phone is told about the first.
+   *
+   * @param {import('./org-tasks.js').Who} who
+   * @param {import('../protocol/tasks.js').Task} task
+   * @param {Record<string, unknown>} record  the route record, less `how` and `asked`
+   */
+  #askPerson(who, task, record) {
+    const wrote = this.tasks.route(who, task.id, { ...record, how: 'waiting', member: null, ...(who.email ? { asked: who.email } : {}) });
+    if (!wrote.ok) return { task, text: wrote.text };
+    const route = /** @type {import('../protocol/routing.js').Route} */ (wrote.task.route);
+    const text = routeWords(route, (id) => this.#memberSays(id));
+    this.record({ event: 'task.needs-member', actor: who.email || task.createdBy, text: `${task.id} “${oneLine(task.title, 80)}”: ${text}` });
+    const last = this.routeAskedAt.get(who.email) ?? -Infinity;
+    if (this.push && who.email && this.now() - last >= 60_000) {
+      const own = this.#devicesOf(who.email).filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === who.email);
+      if (own.length) {
+        this.routeAskedAt.set(who.email, this.now());
+        if (this.routeAskedAt.size > 500) this.routeAskedAt.delete(/** @type {string} */ (this.routeAskedAt.keys().next().value));
+        const among = route.candidates.map((id) => this.#memberSays(id)).join(', ');
+        void this.push.send(own, {
+          title: `${task.id} needs a member`,
+          body: `“${oneLine(task.title, 80)}”. Choose among ${among}${route.more ? ` and ${route.more} more` : ''}.`,
+          data: { event: 'task.needs-member', kind: 'task', name: '', hostId: '', url: '', taskId: task.id },
+        }).catch(() => {});
+      }
+    }
+    return { task: wrote.task, text };
+  }
+
+  /**
+   * Put a task to the fleet's model, behind every wall (docs/routing.md,
+   * "The model's pick"), and write what came of it. Anything short of one
+   * of the candidates, named with a label's confidence, is a person's.
+   *
+   * THE WALLS, IN ORDER, cheapest first, and each one that stops it says so
+   * on the task: too many candidates to list; a brief that reads as holding
+   * a credential (not cleaned, not sent); the day's routing asks; the
+   * decision model's own budget; the platform's rate limit. Then one call,
+   * no retry. The question is dropped when the answer is read.
+   *
+   * @param {import('./org-tasks.js').Who} who
+   * @param {import('../protocol/tasks.js').Task} task
+   * @param {'manual'|'auto'} mode
+   * @param {ReturnType<typeof decideRoute>} decision
+   */
+  async #pick(who, task, mode, decision) {
+    const base = { mode, candidates: decision.candidates.map((c) => c.id), at: this.now(), by: who.email || 'an admin' };
+    /** @param {string} because @param {boolean} asked */
+    const person = (because, asked) => {
+      // Somebody may have assigned it by hand while the model thought.
+      const now = this.tasks.get(task.id);
+      if (!now || now.assignee) return { task: now ?? task, text: now?.assignee ? `${task.id} was given to ${this.#memberSays(now.assignee)} in the meantime.` : '' };
+      return this.#askPerson(who, now, { ...base, at: this.now(), why: `${decision.why} ${because}`, ...(asked ? { modelAsked: true } : {}) });
+    };
+    if (!this.router || !this.decide) return person('The fleet has no model to pick with.', false);
+    if (decision.candidates.length > MAX_MODEL_CHOICES) return person(`A model is given at most ${MAX_MODEL_CHOICES} members to choose among.`, false);
+    const question = routeQuestion(task, decision.candidates);
+    for (const [, re] of GATE_PATTERNS) {
+      if (re.test(question.state)) return person('Its title or brief reads as holding a credential, so it was not sent to the model.', false);
+    }
+    const bytes = new TextEncoder().encode(question.state).length + new TextEncoder().encode(JSON.stringify(question.questions)).length;
+    if (!this.routing.admitAsk()) return person('The day’s routing asks to the model are spent.', false);
+    if (this.decideLimits.charge(bytes)) return person('The model’s budget for the day is spent.', false);
+    // Counted and charged before the call, so a rebuild during it forgets neither.
+    this.onStateChanged?.();
+    let allowed = false;
+    try {
+      allowed = (await this.decide.rateLimit()) === true;
+    } catch { /* a rate limit that cannot be asked is a no */ }
+    if (!allowed) return person('The model is being asked too often just now.', false);
+    /** @type {ReturnType<typeof readRouteAnswer>} */
+    let read = null;
+    let timer;
+    try {
+      const raw = await Promise.race([
+        this.router.pick(question),
+        new Promise((_, reject) => {
+          timer = this.setTimer(() => reject(new Error('timed out')), DECIDE_TIMEOUT_MS);
+        }),
+      ]);
+      read = readRouteAnswer(raw, base.candidates);
+    } catch (e) {
+      this.log.warn(`coordinator: routing ${task.id} by the model failed: ${/** @type {Error} */ (e)?.message || e}`);
+    } finally {
+      this.clearTimer(timer);
+    }
+    if (!read) return person('The fleet’s model was asked and did not name one of them with enough confidence.', true);
+    this.decideLimits.reconcile(bytes, read.inputTokens);
+    const now = this.tasks.get(task.id);
+    if (!now || now.assignee) return { task: now ?? task, text: now?.assignee ? `${task.id} was given to ${this.#memberSays(now.assignee)} in the meantime.` : '' };
+    const wrote = this.tasks.route(who, task.id, {
+      ...base,
+      at: this.now(),
+      how: 'model',
+      member: read.member,
+      modelAsked: true,
+      // THE FLEET'S WORDS AROUND THE MODEL'S CHOICE. The model returns an id
+      // and a number, and that is all of it that reaches a task.
+      why: `${decision.why} The fleet’s model chose ${this.#memberSays(read.member)}, with confidence ${read.confidence.toFixed(2)}.`,
+    });
+    if (!wrote.ok) return { task: now, text: wrote.text };
+    this.#routed(wrote.task);
+    return { task: wrote.task, text: routeWords(/** @type {any} */ (wrote.task.route), (id) => this.#memberSays(id)) };
+  }
+
+  /**
+   * Route a task now, or answer the question a routing asked.
+   *
+   *   {}            route it under its mode
+   *   { member }    a person's answer: an assignment by hand, written as one
+   *   { settle }    internal: the pick `createTask` left pending
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester @param {unknown} id @param {any} [body]
+   */
+  async routeTask(requester, id, body = {}) {
+    const who = this.#who(requester);
+    const found = this.tasks.find(who, id);
+    if (!found.ok) return found;
+    const task = found.task;
+    /** @param {{ task: import('../protocol/tasks.js').Task, text: string }} r */
+    const shown = (r) => ({ ok: true, task: this.#shown(r.task), start: startFor(r.task), text: r.text });
+    if (task.assignee) {
+      return { ok: false, error: { code: 'task_pinned' }, text: `${task.id} is ${this.#memberSays(task.assignee)}’s, and routing never moves a task somebody was given. Reassign it by hand to move it.` };
+    }
+    const answer = body?.member === undefined || body.member === null || body.member === '' ? null : String(body.member).trim().toLowerCase();
+    if (answer !== null) {
+      const mode = modeFor(task, this.routing.record);
+      const wrote = this.tasks.answer(who, task.id, answer, (m) => this.org.get(m), {
+        mode: mode === 'off' ? 'manual' : mode,
+        candidates: task.route?.candidates ?? candidatesFor(task, this.org.all(), who).map((c) => c.id),
+        ...(task.route?.more ? { more: task.route.more } : {}),
+        ...(task.route?.modelAsked ? { modelAsked: true } : {}),
+        why: `${who.email || 'An admin'} chose ${this.#memberSays(answer)}.`,
+        at: this.now(),
+        by: who.email || 'an admin',
+      });
+      if (!wrote.ok) return wrote;
+      this.#routed(wrote.task);
+      this.onStateChanged?.();
+      return shown({ task: wrote.task, text: routeWords(/** @type {any} */ (wrote.task.route), (m) => this.#memberSays(m)) });
+    }
+    if (modeFor(task, this.routing.record) === 'off') {
+      return { ok: false, error: { code: 'routing_off' }, text: `Routing is off for ${task.id}: the fleet’s routing is off and the task does not ask for it. Set the task’s routing to manual or auto, or assign it by hand.` };
+    }
+    if (task.state !== 'open' || task.lock) {
+      return { ok: false, error: { code: task.lock ? 'task_locked' : 'task_not_open' }, text: task.lock ? `${task.id} is being worked on, and has no assignee to route to until that ends.` : `${task.id} is ${task.state}. Only an open task is routed.` };
+    }
+    const first = this.#routeByRules(who, task);
+    if (!first) return shown({ task, text: '' });
+    const done = first.pending && first.decision && first.mode ? await this.#pick(who, task, first.mode, first.decision) : first;
+    this.onStateChanged?.();
+    return shown(done);
   }
 
   /**

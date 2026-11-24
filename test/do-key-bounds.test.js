@@ -101,6 +101,9 @@ const BOUNDED = {
   // one key each under `tasks:`, MAX_TASKS of them, each a checked record
   // (test/tasks-coordinator.test.js measures the widest).
   taskSeq: 'src/fleet/protocol/tasks.js',
+  // The fleet's routing: a mode, MAX_RULES rules of two short checked
+  // strings, and one day's count of asks.
+  routing: 'src/fleet/protocol/routing.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */

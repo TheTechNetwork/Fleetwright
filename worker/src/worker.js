@@ -3601,7 +3601,7 @@ const OPENAPI = JSON.stringify({
           "identity"
         ],
         "summary": "Make a task",
-        "description": "Open, with a branch named from its id and title that never changes. Nothing runs until a session is started on it.",
+        "description": "Open, with a branch named from its id and title that never changes. Nothing runs until a session is started on it. A task made with no assignee is routed as it is made when its routing mode is not `off`: the answer\u2019s `task.route` says how it was decided, and `task.assignee` who it went to, if anybody.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3639,6 +3639,20 @@ const OPENAPI = JSON.stringify({
                   "parent": {
                     "type": "string",
                     "description": "The task this one is delegated from, which you must be able to see."
+                  },
+                  "routing": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "auto",
+                      "manual",
+                      "off",
+                      "",
+                      null
+                    ],
+                    "description": "This task\u2019s own routing mode, whatever the fleet\u2019s is (docs/routing.md): `manual` routes it by the rules and asks a person to pick among several members, `auto` lets the fleet\u2019s model pick where it has one, `off` leaves it unassigned. Empty or null follows the fleet\u2019s setting."
                   }
                 }
               }
@@ -3749,6 +3763,20 @@ const OPENAPI = JSON.stringify({
                   "note": {
                     "type": "string",
                     "description": "Why it changed hands. At most 300 bytes."
+                  },
+                  "routing": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "auto",
+                      "manual",
+                      "off",
+                      "",
+                      null
+                    ],
+                    "description": "This task\u2019s own routing mode, whatever the fleet\u2019s is (docs/routing.md): `manual` routes it by the rules and asks a person to pick among several members, `auto` lets the fleet\u2019s model pick where it has one, `off` leaves it unassigned. Empty or null follows the fleet\u2019s setting."
                   }
                 }
               }
@@ -3838,6 +3866,145 @@ const OPENAPI = JSON.stringify({
           },
           "409": {
             "description": "the task is not in a state that action applies to"
+          }
+        }
+      }
+    },
+    "/api/tasks/{id}/route": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Route a task to a member, or answer who it goes to",
+        "description": "With an empty body, the fleet decides which member an open, unassigned task goes to, in a fixed order: the rule for its kind of work, then the only member who takes it, then a pick among several by the fleet\u2019s model (in `auto`, where the fleet has one) or by a person. Only among members the person asking could have assigned it to by hand. With `member`, it is that person\u2019s answer: an assignment by hand, checked as one, and written on the task as the answer. Every decision is `task.route` and a line in `task.handoffs`. Routing starts no session (docs/routing.md).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t[1-9][0-9]{0,8}$"
+            },
+            "description": "The task\u2019s id: `t` and a number"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "member": {
+                    "type": "string",
+                    "description": "A member\u2019s id: the answer to which member it goes to. Leave out to have the fleet decide."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "the task, as it is now, and what to sign to start it"
+          },
+          "400": {
+            "description": "not a member\u2019s id"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "the member named is not one you may hand work to"
+          },
+          "404": {
+            "description": "no task by that id that you can see, or no member by that id"
+          },
+          "409": {
+            "description": "the task already has a member, is not open, is being worked on, or routing is off for it"
+          }
+        }
+      }
+    },
+    "/api/routing": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "How the fleet routes a task with no assignee",
+        "description": "The fleet\u2019s routing mode and its rules by kind of work, read by anybody signed in. `model` says whether a pick among several members can be a model\u2019s on this fleet; where it is false, `auto` asks a person (docs/routing.md).",
+        "responses": {
+          "200": {
+            "description": "`{ routing: { mode, rules, updatedBy, updatedAt }, model, you: { admin } }`"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Set the fleet\u2019s routing",
+        "description": "A fleet admin only. Either field may be left out to keep what it is. This moves no task that already has a member.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "manual",
+                      "auto"
+                    ],
+                    "description": "`off` routes nothing. `manual` routes by the rules and asks a person to pick among several members. `auto` lets the fleet\u2019s model pick where it has one."
+                  },
+                  "rules": {
+                    "type": "array",
+                    "maxItems": 40,
+                    "description": "Every rule, replacing the list: one member a kind of work.",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "workType",
+                        "member"
+                      ],
+                      "properties": {
+                        "workType": {
+                          "type": "string",
+                          "description": "A kind of work, a slug as on a member."
+                        },
+                        "member": {
+                          "type": "string",
+                          "description": "The member\u2019s id."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "the routing, as it is now"
+          },
+          "400": {
+            "description": "not a mode, or a rule that does not read as one"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not a fleet admin"
+          },
+          "404": {
+            "description": "a rule names a member the fleet does not have"
           }
         }
       }
