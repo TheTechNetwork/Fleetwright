@@ -591,6 +591,8 @@ export class PvePools {
     this.ssh = new Map();
     /** @type {Map<string, any>} what the last look found, keyed as `held` */
     this.seen = new Map();
+    /** @type {Map<string, Map<string, number|null>>} how much memory each router had at the last `edgeAddresses`, keyed as `held` */
+    this.edgeMemorySeen = new Map();
     /** @type {Map<string, { vmid: number, node: string, owner: string, at: number }>} by name, as xo-pools.js keeps `made` */
     this.made = new Map();
     /** @type {Set<string>} */
@@ -714,9 +716,14 @@ export class PvePools {
         .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || Number(a.vmid) - Number(b.vmid));
       /** @type {Map<string, string>} */
       const out = new Map();
+      /** @type {Map<string, number|null>} */
+      const memory = new Map();
       for (const edge of edges) {
         const name = String(edge.name);
         if (out.has(name)) continue;
+        // ITS MEMORY, in bytes, as the cluster lists it (`maxmem`): what the
+        // setup made it with. Not a number is not said, which is null.
+        memory.set(name, Number.isSafeInteger(edge.maxmem) && edge.maxmem > 0 ? edge.maxmem : null);
         if (edge.status !== 'running') {
           out.set(name, '');
           continue;
@@ -725,10 +732,21 @@ export class PvePools {
         const cfg = await api.get(`${base}/config`);
         out.set(name, agentAddress(await api.get(`${base}/agent/network-get-interfaces`).catch(() => null), cfg?.net0) ?? '');
       }
+      this.edgeMemorySeen.set(key, memory);
       return out;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * How much memory each of a cluster's routers has, in bytes, as the last
+   * `edgeAddresses` saw it (xo-pools.js, edgeMemory, is the same for a pool).
+   *
+   * @param {string} key  `owner address` @returns {Map<string, number|null>|null}
+   */
+  edgeMemory(key) {
+    return this.edgeMemorySeen.get(key) ?? null;
   }
 
   /** Whether this box holds a cluster of this person's at all. @param {string} owner */

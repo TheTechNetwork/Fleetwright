@@ -55,7 +55,7 @@ import dgram from 'node:dgram';
 import http from 'node:http';
 
 import { EDGE_WATCH } from './edge-credentials.js';
-import { EDGE_UPDATES } from './edge-router.js';
+import { EDGE, EDGE_UPDATES } from './edge-router.js';
 import { connectPinnedTls } from './xo-ws.js';
 
 /**
@@ -161,13 +161,13 @@ export function statusOf({ vip, unbound, gateways, leases, stats }) {
 }
 
 /**
- * @typedef {{ name: string, address: string|null, reached: boolean|null, role: string|null, dns: boolean|null, gateway: boolean|null, leases: number|null, delay: number|null, loss: number|null, answered: number|null, blocked: number|null, since: number|null, topBlocked: Array<{ name: string, count: number }>|null, heardAt: number|null, problem: string|null }} RouterState
+ * @typedef {{ name: string, address: string|null, reached: boolean|null, role: string|null, dns: boolean|null, gateway: boolean|null, leases: number|null, delay: number|null, loss: number|null, answered: number|null, blocked: number|null, since: number|null, topBlocked: Array<{ name: string, count: number }>|null, heardAt: number|null, problem: string|null, memory: number|null, needs: number }} RouterState
  */
 
 export class EdgeWatch {
   /**
    * @param {{
-   *   pools: { held: Map<string, { owner: string, record: any }>, seen?: Map<string, { reachable: boolean|null }>, edgeAddresses?: (key: string) => Promise<Map<string, string>|null>, kindOf?: (key: string) => string },
+   *   pools: { held: Map<string, { owner: string, record: any }>, seen?: Map<string, { reachable: boolean|null }>, edgeAddresses?: (key: string) => Promise<Map<string, string>|null>, edgeMemory?: (key: string) => Map<string, number|null>|null, kindOf?: (key: string) => string },
    *   reaches?: ((key: string) => boolean|null)|null,
    *   connect?: typeof connectPinnedTls,
    *   createSocket?: () => dgram.Socket,
@@ -206,7 +206,7 @@ export class EdgeWatch {
     this.learned = new Map();
     /** @type {Map<string, number>} keyed `owner address name`, when its syslog was last heard */
     this.heard = new Map();
-    /** @type {Map<string, { at: number, routers: Map<string, string>|null }>} keyed `owner address`: where Xen Orchestra last said the routers are, null when it could not be asked */
+    /** @type {Map<string, { at: number, routers: Map<string, string>|null, memory?: Map<string, number|null>|null }>} keyed `owner address`: where Xen Orchestra last said the routers are and how much memory each has, null when it could not be asked */
     this.fromXo = new Map();
     /** @type {dgram.Socket|null} */
     this.socket = null;
@@ -421,14 +421,22 @@ export class EdgeWatch {
     }
     // COULD NOT ASK KEEPS WHAT WAS KNOWN: a Xen Orchestra that did not answer
     // this once says nothing about where the routers went.
-    this.fromXo.set(k, { at: this.now(), routers: routers ?? last?.routers ?? null });
+    // AND HOW MUCH MEMORY EACH HAS, from the same look (edgeMemory): what a
+    // router is short of is the hypervisor's to say, not the router's. Kept
+    // the same way when it could not be asked.
+    const memory = routers ? (this.pools?.edgeMemory?.(k) ?? null) : null;
+    this.fromXo.set(k, { at: this.now(), routers: routers ?? last?.routers ?? null, memory: memory ?? last?.memory ?? null });
   }
 
   /** @param {string} k @param {any} record @param {string} name @param {boolean|null} can @returns {Promise<RouterState>} */
   async #read(k, record, name, can = true) {
     const address = this.#addressOf(k, record, name);
     const heardAt = this.heard.get(`${k} ${name}`) ?? null;
-    const base = { name, address, heardAt };
+    // WHAT IT HAS AND WHAT IT NEEDS, in bytes: asked for as "prompt users to
+    // one click fix", since one with less than it needs crashes
+    // (edge-router.js, EDGE.memory) and the phone offers to rebuild it. Null
+    // is a hypervisor that did not say, which is cannot tell (C-5).
+    const base = { name, address, heardAt, memory: this.fromXo.get(k)?.memory?.get(name) ?? null, needs: EDGE.memory };
     if (can !== true) {
       // NOT FROM HERE. Nothing is opened to the router, and the phone is told
       // it was not tried, not that it did not answer (C-5).

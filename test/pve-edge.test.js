@@ -269,7 +269,7 @@ test('the record keeps the router’s key the line carried, and passes over one 
 test('a box finds the router where its guest agent says, on its WAN, through the cluster’s API', async () => {
   const asked = /** @type {string[]} */ ([]);
   let resources = [
-    { type: 'qemu', vmid: 120, node: 'pve1', status: 'running', pool: '', name: 'fleetwright-edge', tags: 'fleetwright-edge;fleetwright-edge-watch' },
+    { type: 'qemu', vmid: 120, node: 'pve1', status: 'running', pool: '', name: 'fleetwright-edge', tags: 'fleetwright-edge;fleetwright-edge-watch', maxmem: 2 * 1024 ** 3 },
     { type: 'qemu', vmid: 130, node: 'pve1', status: 'running', pool: 'fleetwright', name: 'fleetwright-edge', tags: 'fleetwright-edge' },
   ];
   const api = {
@@ -300,6 +300,10 @@ test('a box finds the router where its guest agent says, on its WAN, through the
   // address, so it is shown as not read rather than left out.
   resources = [resources[0], { type: 'qemu', vmid: 121, node: 'pve1', status: 'stopped', pool: '', name: 'fleetwright-edge-b', tags: 'fleetwright-edge;fleetwright-edge-watch;fleetwright-edge-node-1' }];
   assert.deepEqual([...(/** @type {Map<string, string>} */ (await pools.edgeAddresses(key)))].sort(), [['fleetwright-edge', '10.69.10.61'], ['fleetwright-edge-b', '']]);
+  // HOW MUCH MEMORY EACH HAS, as the cluster lists it and from the same
+  // look: bytes, and null for one it gave none for, which is not "none".
+  assert.deepEqual([...(pools.edgeMemory(key) ?? new Map())].sort(), [['fleetwright-edge', 2 * 1024 ** 3], ['fleetwright-edge-b', null]]);
+  assert.equal(pools.edgeMemory('me@example.com xo.lan'), null, 'a pool never looked at says nothing');
   // Unasked is null, said apart from none.
   resources = [{ ...resources[0], status: 'stopped' }];
   assert.deepEqual([...(/** @type {Map<string, string>} */ (await pools.edgeAddresses(key)))], [['fleetwright-edge', '']]);

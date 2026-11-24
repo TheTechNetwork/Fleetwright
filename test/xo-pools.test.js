@@ -1915,18 +1915,23 @@ test('a pool’s page asks for the method list and every object type at once, no
 });
 
 test('where the pool’s edge routers are is read from Xen Orchestra now, by their tag, a running one first', async () => {
-  const edge = (/** @type {string} */ id, /** @type {string} */ ip, /** @type {string[]} */ tags, state = 'Running') => ({ type: 'VM', id, name_label: 'x', power_state: state, tags, addresses: { '0/ipv4/0': ip } });
+  const GiB = 1024 ** 3;
+  const edge = (/** @type {string} */ id, /** @type {string} */ ip, /** @type {string[]} */ tags, state = 'Running', /** @type {any} */ memory = undefined) => ({ type: 'VM', id, name_label: 'x', power_state: state, tags, addresses: { '0/ipv4/0': ip }, ...(memory ? { memory } : {}) });
   const { stand, pools } = pageHolder({
     objects: [
       pool,
-      edge('old-a', '192.168.1.9', ['fleetwright-edge'], 'Halted'),
-      edge('a', '192.168.1.40', ['fleetwright-edge', 'fleetwright-edge-node:0']),
+      edge('old-a', '192.168.1.9', ['fleetwright-edge'], 'Halted', { static: [8 * GiB, 8 * GiB], size: 8 * GiB }),
+      edge('a', '192.168.1.40', ['fleetwright-edge', 'fleetwright-edge-node:0'], 'Running', { dynamic: [2 * GiB, 2 * GiB], static: [2 * GiB, 2 * GiB], size: 2 * GiB }),
       edge('b', '192.168.1.41', ['fleetwright-edge', 'fleetwright-edge-node:1']),
       edge('not-one', '192.168.1.99', []),
     ],
   });
   const got = await pools.edgeAddresses(`${ELI} xo.lan`);
   assert.deepEqual([...(got ?? new Map()).entries()], [['fleetwright-edge', '192.168.1.40'], ['fleetwright-edge-b', '192.168.1.41']]);
+  // HOW MUCH MEMORY EACH HAS, from the same look: the running one's, never a
+  // stopped leftover's, and one Xen Orchestra gave no memory for is null.
+  assert.equal(pools.edgeMemory('sam@example.com xo.lan'), null, 'a pool never looked at says nothing');
+  assert.deepEqual([...(pools.edgeMemory(`${ELI} xo.lan`) ?? new Map()).entries()], [['fleetwright-edge', 2 * GiB], ['fleetwright-edge-b', null]]);
   assert.deepEqual(stand.calls[0], { method: 'session.signIn', params: { token: 'xo-limited-token' } }, 'under the person’s own token');
   assert.equal(stand.rpc.closed, true);
   assert.equal(await pools.edgeAddresses('sam@example.com xo.lan'), null, 'nobody else’s pool');
