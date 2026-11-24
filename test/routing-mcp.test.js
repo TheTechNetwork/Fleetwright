@@ -19,7 +19,7 @@ const dana = { email: 'dana@example.com', admin: false };
 const rpc = (/** @type {number} */ id, /** @type {string} */ name, /** @type {any} */ args) => JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
 
 /** An agent's MCP server acting as `who`, on a fleet with one box, Debbie and Sam (backend) and Ines (design). */
-function fleet(/** @type {any} */ who = eli) {
+function fleet(/** @type {any} */ who = eli, { old = false } = {}) {
   let clock = 1_000_000;
   const core = new CoordinatorCore({ now: () => clock });
   const add = (/** @type {string} */ id, /** @type {any} */ m) => assert.equal(core.setMember(eli, id, m).ok, true, id);
@@ -58,7 +58,10 @@ function fleet(/** @type {any} */ who = eli) {
         const r = await core.dispatch({ verb: body.verb, params: body.params, actor: who.email, requester: who, ...(body.host ? { preferHost: body.host } : {}) });
         return { status: 200, json: async () => r };
       }
-      const answer = (await routingRoute(core, method, u.pathname, who, async () => body)) ?? (await tasksRoute(core, method, u.pathname, u.searchParams, who, async () => body));
+      // A COORDINATOR FROM BEFORE ROUTING, when `old`: it serves no routing
+      // route, does not read a task's `routing`, and writes no `route`.
+      if (old && body && typeof body === 'object') delete body.routing;
+      const answer = (old ? null : await routingRoute(core, method, u.pathname, who, async () => body)) ?? (await tasksRoute(core, method, u.pathname, u.searchParams, who, async () => body));
       return answer ? { status: answer.status, json: async () => answer.body } : { status: 404, json: async () => { throw new Error('not json'); } };
     }),
   });
@@ -116,6 +119,15 @@ test('fleet_delegate with nobody named starts the member routing chose, and says
   assert.equal(r.isError, false, r.text);
   assert.match(r.text, /^Handed t1 to ines, chosen by routing \(rule\): cc-1 on deb132\.\n\nt1 “A settings screen”, worked on by ines: DONE\./);
   assert.deepEqual(f.started.map((p) => [p.member, p.taskId]), [['ines', 't1']]);
+});
+
+test('fleet_delegate on a coordinator from before routing says the mode was not taken, and does not tell an agent to pass what it passed', async () => {
+  const f = fleet(eli, { old: true });
+  const r = await f.call('fleet_delegate', { title: 'Fix it', brief: 'Do the thing.', workType: 'backend', routing: 'manual' });
+  assert.equal(r.isError, true);
+  assert.match(r.text, /Nothing was started: this fleet did not take `routing: "manual"` for the task, so its coordinator is from before routing and chose nobody\. Name a member with `to`, or give t1 to one with fleet_task\.$/);
+  assert.doesNotMatch(r.text, /pass `routing/);
+  assert.deepEqual(f.started, []);
 });
 
 test('fleet_delegate starts nothing when routing chose nobody, and says which of the three reasons it was', async () => {

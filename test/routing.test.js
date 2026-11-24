@@ -118,7 +118,11 @@ test('only an open task nobody holds is routed; a pinned one only has it said wh
 test('assigning by hand a task that is waiting for a pick stops it asking', () => {
   const waiting = /** @type {any} */ (routeTask(made(), record({ how: 'waiting', asked: 'eli@example.com' }))).task;
   const by = /** @type {any} */ (changeTask(waiting, { assignee: 'debbie' }, { by: 'eli@example.com', at: 300 }));
-  assert.deepEqual([by.task.assignee, by.task.route], ['debbie', undefined]);
+  // It is written as the person's choice it was, and keeps that the model
+  // had its one ask: a task left with nobody again is not put to it twice.
+  assert.deepEqual([by.task.assignee, by.task.route.how, by.task.route.member, by.task.route.why], ['debbie', 'person', 'debbie', 'eli@example.com gave it to debbie by hand.']);
+  const askedOnce = /** @type {any} */ (routeTask(made(), record({ how: 'waiting', asked: 'eli@example.com', modelAsked: true }))).task;
+  assert.equal(/** @type {any} */ (changeTask(askedOnce, { assignee: 'debbie' }, { by: 'eli@example.com', at: 300 })).task.route.modelAsked, true);
   // Any other decision stays as the record of how it got there.
   const ruled = /** @type {any} */ (routeTask(made(), record({ how: 'rule', member: 'sam' }))).task;
   assert.equal(/** @type {any} */ (changeTask(ruled, { assignee: 'debbie' }, { by: 'eli@example.com', at: 300 })).task.route.how, 'rule');

@@ -293,8 +293,14 @@ export function changeTask(task, fields, { by, at, note = '' }) {
     next.handoffs = handed(task, { at, by, kind: 'assigned', from: task.assignee, to: fields.assignee, ...(note ? { note } : {}) });
     // A QUESTION SOMEBODY ANSWERED BY HAND IS NOT STILL BEING ASKED. A task
     // waiting on a person's pick that is then assigned the ordinary way has
-    // its answer, and its page must stop asking.
-    if (next.route?.how === 'waiting') delete next.route;
+    // its answer, and its page must stop asking. It is written as what it
+    // was, a person's choice, and not thrown away: the record keeps that the
+    // model was already asked about this task once, which is what stops it
+    // being asked again if the task is ever left with nobody.
+    if (next.route?.how === 'waiting') {
+      if (fields.assignee) next.route = { ...next.route, how: 'person', member: fields.assignee, why: `${by} gave it to ${fields.assignee} by hand.`, at, by };
+      else delete next.route;
+    }
   }
   return { ok: true, task: next };
 }

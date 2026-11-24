@@ -1517,11 +1517,19 @@ export class McpServer {
       // reply says which of the three and what to do next.
       if (!made.body.task.assignee) {
         const how = made.body.task.route?.how;
+        // A MODE THAT WAS ASKED FOR AND DID NOT COME BACK ON THE TASK was not
+        // taken: this coordinator is from before routing. Saying "routing is
+        // off, pass routing" to somebody who passed it would report a state
+        // nobody knows (C-5) and send them round again.
+        const asked = typeof params.routing === 'string' && params.routing && params.routing !== 'off' ? String(params.routing) : '';
+        const notTaken = asked && made.body.task.routing !== asked;
         const next = how === 'waiting'
           ? `Nothing was started. When somebody has chosen (fleet_task with \`action: "route"\` and \`assignee\` is your own answer, if you may give one), start it with fleet_start and \`taskId: "${id}"\`.`
           : how === 'nobody'
             ? `Nothing was started. Give it to a member with fleet_task and \`assignee\`, or cancel it.`
-            : `Nothing was started: the fleet’s routing is off, so no member was chosen. Name one with \`to\`, pass \`routing: "manual"\` for this task, or give ${id} to a member with fleet_task.`;
+            : notTaken
+              ? `Nothing was started: this fleet did not take \`routing: "${asked}"\` for the task, so its coordinator is from before routing and chose nobody. Name a member with \`to\`, or give ${id} to one with fleet_task.`
+              : `Nothing was started: the fleet’s routing is off, so no member was chosen. Name one with \`to\`, pass \`routing: "manual"\` for this task, or give ${id} to a member with fleet_task.`;
         return this.#text(`${made.body.text}\n\n${next}`, true);
       }
       if (!made.body.start) return this.#text(`${made.body.text}\n\n${unstarted}`, true);

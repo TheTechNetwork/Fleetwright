@@ -663,6 +663,8 @@ export class CoordinatorCore {
     this.tasks = new OrgTasks({ now });
     /** The fleet's routing record and the day's count of asks put to a model (org-routing.js). */
     this.routing = new OrgRouting({ now: () => this.now() });
+    /** Tasks the model is being asked about right now, so no task is asked about twice at once (#pick). @type {Set<string>} */
+    this.picking = new Set();
     /** @type {Map<string, number>} when each person was last told a task needs a member (#askPerson) */
     this.routeAskedAt = new Map();
     /**
@@ -6031,20 +6033,51 @@ export class CoordinatorCore {
     };
     if (!this.router || !this.decide) return person('The fleet has no model to pick with.', false);
     if (decision.candidates.length > MAX_MODEL_CHOICES) return person(`A model is given at most ${MAX_MODEL_CHOICES} members to choose among.`, false);
-    const question = routeQuestion(task, decision.candidates);
+    // THE WHOLE TITLE AND BRIEF ARE LOOKED AT, not the part that is sent. The
+    // question carries only the top of a brief, and a credential that starts
+    // just inside the cut would pass a gate that read the cut text: its
+    // first characters would leave, and they are the ones that say whose
+    // key it is.
+    const whole = `${task.title ?? ''}\n${task.brief ?? ''}`;
     for (const [, re] of GATE_PATTERNS) {
-      if (re.test(question.state)) return person('Its title or brief reads as holding a credential, so it was not sent to the model.', false);
+      if (re.test(whole)) return person('Its title or brief reads as holding a credential, so it was not sent to the model.', false);
     }
+    // ONE QUESTION A TASK AT A TIME. Two routes of one task that arrive
+    // together would both find the model not yet asked and both ask it. The
+    // second is told the first is under way and changes nothing.
+    if (this.picking.has(task.id)) return { task, text: `${task.id} is being routed just now.` };
+    this.picking.add(task.id);
+    try {
+      return await this.#askModel(who, task, base, decision, person);
+    } finally {
+      this.picking.delete(task.id);
+    }
+  }
+
+  /**
+   * The model's pick itself, once #pick has decided it may be asked for.
+   *
+   * @param {import('./org-tasks.js').Who} who @param {import('../protocol/tasks.js').Task} task
+   * @param {{ mode: 'manual'|'auto', candidates: string[], at: number, by: string }} base
+   * @param {ReturnType<typeof decideRoute>} decision
+   * @param {(because: string, asked: boolean) => any} person
+   */
+  async #askModel(who, task, base, decision, person) {
+    if (!this.router || !this.decide) return person('The fleet has no model to pick with.', false);
+    const question = routeQuestion(task, decision.candidates);
     const bytes = new TextEncoder().encode(question.state).length + new TextEncoder().encode(JSON.stringify(question.questions)).length;
-    if (!this.routing.admitAsk()) return person('The day’s routing asks to the model are spent.', false);
-    if (this.decideLimits.charge(bytes)) return person('The model’s budget for the day is spent.', false);
-    // Counted and charged before the call, so a rebuild during it forgets neither.
-    this.onStateChanged?.();
+    // THE RATE LIMIT FIRST, because it is the one that costs nothing to be
+    // refused by: counted before it, a burst that the limit turned away
+    // still spent the day's asks and allowance on calls nobody made.
     let allowed = false;
     try {
       allowed = (await this.decide.rateLimit()) === true;
     } catch { /* a rate limit that cannot be asked is a no */ }
     if (!allowed) return person('The model is being asked too often just now.', false);
+    if (!this.routing.admitAsk()) return person('The day’s routing asks to the model are spent.', false);
+    if (this.decideLimits.charge(bytes)) return person('The model’s budget for the day is spent.', false);
+    // Counted and charged before the call, so a rebuild during it forgets neither.
+    this.onStateChanged?.();
     /** @type {ReturnType<typeof readRouteAnswer>} */
     let read = null;
     let timer;
@@ -6117,7 +6150,7 @@ export class CoordinatorCore {
       return shown({ task: wrote.task, text: routeWords(/** @type {any} */ (wrote.task.route), (m) => this.#memberSays(m)) });
     }
     if (modeFor(task, this.routing.record) === 'off') {
-      return { ok: false, error: { code: 'routing_off' }, text: `Routing is off for ${task.id}: the fleet’s routing is off and the task does not ask for it. Set the task’s routing to manual or auto, or assign it by hand.` };
+      return { ok: false, error: { code: 'routing_off' }, text: `Routing is off for ${task.id}: the fleet’s routing is off and the task does not ask for it. Set the task’s routing to manual (a person is asked) or auto (the fleet’s model chooses), or assign it by hand.` };
     }
     if (task.state !== 'open' || task.lock) {
       return { ok: false, error: { code: task.lock ? 'task_locked' : 'task_not_open' }, text: task.lock ? `${task.id} is being worked on, and has no assignee to route to until that ends.` : `${task.id} is ${task.state}. Only an open task is routed.` };

@@ -130,7 +130,9 @@ address.
 **A brief that reads as holding a credential is not sent.** It is held to
 the same patterns a pane is before the decision model sees it
 (`GATE_PATTERNS`), and a match means the person is asked instead. The brief
-is not cleaned and sent.
+is not cleaned and sent. The whole title and brief are looked at, not only
+the 600 bytes that would be sent: a key that starts just inside the cut
+would otherwise leave by its first characters.
 
 **The answer is one of the candidates, or it is not an answer.** The model
 is asked a multiple-choice question whose choices are the candidates' ids.
@@ -141,16 +143,20 @@ was not on the list, and cannot leave a sentence of its own on the task:
 number.
 
 **One ask a task, and a cap a day.** A task is put to the model once. A
-second routing of the same task asks a person. At most 50 routing asks a
+second routing of the same task asks a person, and one that arrives while
+the first is still being answered is told so and changes nothing. A task
+somebody then gave away by hand keeps that it was asked about, so leaving
+it with nobody again does not earn a second ask. At most 50 routing asks a
 day reach the model, inside the decision model's own daily budget, and past
-either the person is asked.
+either the person is asked. An ask the rate limit turns away was never
+made and spends neither.
 
 ## Asking a person
 
 `how: waiting`. The person who asked is told on their own phones, with the
-candidates by name, at most once a minute however many tasks are waiting. The task's page lists them, each with its role and what it is for,
-and choosing one is the answer. Anybody else who could assign the task by
-hand can answer too. Until somebody does, the task is open with no assignee,
+candidates by name, at most once a minute however many tasks are waiting.
+The task's page lists them, each with its role, and choosing one is the
+answer. Anybody else who could assign the task by hand can answer too. Until somebody does, the task is open with no assignee,
 which is what it would have been with routing off.
 
 An agent that made the task through MCP is not a phone. The person it acts

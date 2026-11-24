@@ -76,7 +76,7 @@ test('routing is off until an admin sets it: a task with nobody stays with nobod
   // And asking for it is refused in words that say how to turn it on for one task.
   const asked = /** @type {any} */ (await core.routeTask(dana, 't1'));
   assert.equal(asked.error.code, 'routing_off');
-  assert.match(asked.text, /Set the task’s routing to manual or auto, or assign it by hand/);
+  assert.match(asked.text, /Set the task’s routing to manual \(a person is asked\) or auto \(the fleet’s model chooses\), or assign it by hand/);
 });
 
 test('only an admin sets the fleet’s routing, a rule names a member the fleet has, and the feed says who changed it', () => {
@@ -179,6 +179,28 @@ test('a model’s answer that is not one of the candidates, or is a guess, is no
   }
 });
 
+test('a task is put to the model once: not twice at once, and not again after somebody answered by hand', async () => {
+  /** @type {(v: any) => void} */
+  let answer = () => {};
+  const f = fleet({ model: () => new Promise((resolve) => { answer = resolve; }) });
+  // Made while routing was off, then routed twice together once it is auto.
+  const made = (await f.make(admin, { workType: 'backend' })).task;
+  f.set({ mode: 'auto' });
+  const first = f.core.routeTask(admin, made.id, {});
+  const second = /** @type {any} */ (await f.core.routeTask(admin, made.id, {}));
+  assert.equal(second.text, `${made.id} is being routed just now.`);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.asked.length, 1, 'one question reached the model');
+  answer({ answers: { member: { choice: 'nobody-here', confidence: 0.9 } } });
+  assert.equal(/** @type {any} */ (await first).task.route.how, 'waiting');
+  // Answered by hand, then left with nobody, then routed again: a person is asked, not the model.
+  assert.equal(/** @type {any} */ (f.core.changeTask(admin, made.id, { assignee: 'debbie' })).ok, true);
+  assert.equal(/** @type {any} */ (f.core.changeTask(admin, made.id, { assignee: null })).ok, true);
+  const again = /** @type {any} */ (await f.core.routeTask(admin, made.id, {}));
+  assert.equal(f.asked.length, 1, 'and it was not asked a second time');
+  assert.match(again.task.route.why, /already asked about this task once/);
+});
+
 test('a model that throws or never answers is a person’s pick, and is charged for', async () => {
   const f = fleet({ model: () => { throw new Error('upstream'); } });
   f.set({ mode: 'auto' });
@@ -195,6 +217,12 @@ test('the walls in front of the model each stop the ask, say why on the task, an
   assert.deepEqual([held.task.route.how, held.task.route.modelAsked], ['waiting', undefined]);
   assert.match(held.task.route.why, /reads as holding a credential, so it was not sent to the model/);
   assert.equal(secret.asked.length, 0);
+  // Nor is one that starts just inside the part of the brief that is sent:
+  // the gate reads the whole brief, not the cut, or the key's first
+  // characters would leave with the question.
+  const edge = await secret.make(admin, { workType: 'backend', brief: `${'x'.repeat(585)} ghp_0123456789abcdefghijklmnopqrstuvwxyzAB` });
+  assert.match(edge.task.route.why, /reads as holding a credential/);
+  assert.equal(secret.asked.length, 0);
 
   // The day's budget on the decision model is the routing model's too.
   const broke = fleet({ model: () => { throw new Error('must not be sent'); }, budget: 0 });
@@ -205,6 +233,8 @@ test('the walls in front of the model each stop the ask, say why on the task, an
   const limited = fleet({ model: () => { throw new Error('must not be sent'); }, rateLimit: async () => false });
   limited.set({ mode: 'auto' });
   assert.match((await limited.make(admin, { workType: 'backend' })).task.route.why, /The model is being asked too often just now\./);
+  // And an ask the limit turned away was never made, so it spends none of the day's.
+  assert.equal(/** @type {any} */ (limited.core.routing.serialise()).asks.n, 0);
 
   // More members than a model is given to choose among.
   const crowd = fleet({ model: () => { throw new Error('must not be sent'); } });
