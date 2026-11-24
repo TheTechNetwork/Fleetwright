@@ -49,6 +49,16 @@ test('the words about the organization are the same on both phones', () => {
     'Lets their managers manage their credentials.',
     'Has not let their managers manage their credentials.',
     'Has not signed in on a phone yet, so there is no vault to manage.',
+    // Whoever added a person manages what they keep, said on their page...
+    ' added them, and manages their credentials.',
+    'Lets their other managers manage their credentials.',
+    'Has not let their other managers manage their credentials.',
+    'Stop managing their credentials',
+    'This is not given back. After it, managing their credentials is theirs to allow, as it is for their other managers.',
+    // ...and to the person, under You, Credentials, before the switch.
+    ' added you, and manages your credentials.',
+    'They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. They or an org admin can end this, and you can still remove anything your vault keeps.',
+    'Let my other managers manage my credentials',
     // A person's own switch, under You, Credentials.
     'Your managers',
     'Let my managers manage my credentials',
@@ -119,6 +129,25 @@ test('New session sends the member it was asked to start as, signed like any oth
   // And a session started as one says so on its row.
   assert.ok(IOS.includes('return "as \\(memberName)"'), 'iOS does not say whom a session runs as');
   assert.ok(ANDROID.includes('"as $it"'), 'Android does not say whom a session runs as');
+});
+
+test('giving up custody of a person is offered to whoever holds it or an org admin of the vault, and asks first (C-2)', () => {
+  // The vault refuses anybody else (test/vault.test.js), so the button is
+  // drawn for nobody else.
+  assert.match(IOS, /if address == me \|\| org\.youAdmin \{\s*Button\("Stop managing their credentials", role: \.destructive\) \{ stopping = address \}/);
+  assert.match(ANDROID, /if \(address == me \|\| held\.youAdmin\) \{\s*TextButton\(\s*enabled = !busy,\s*onClick = \{ stopping = address \},/);
+  // The first press only opens the question; its own button asks the vault.
+  assert.match(IOS, /\.confirmationDialog\("Stop managing their credentials\?"[\s\S]{0,260}Button\("Stop managing", role: \.destructive\) \{\s*if let address = stopping \{\s*act \{ try await vault\.setCustodian\(fleet, member: shown\.id, address: address, remove: true\) \}/);
+  assert.match(ANDROID, /title = \{ Text\("Stop managing their credentials\?"\) \},[\s\S]{0,260}act \{ vault\.setCustodian\(Fleet\(settings\), filed\.id, address, remove = true\) \}\s*\}\) \{ Text\("Stop managing"\) \}/);
+});
+
+test('a person is told who added them and manages what they keep, with nothing drawn to end it, before the switch for the rest (C-2)', () => {
+  // Drawn when either is true, so somebody whose only manager added them
+  // still reads it, and the switch only when there is somebody it lets in.
+  assert.match(IOS, /if let custody, custody\.member != nil, !\(custody\.custodians\.isEmpty && custody\.managers\.isEmpty\) \{/);
+  assert.match(ANDROID, /if \(held != null && held\.member != null && !\(held\.custodians\.isEmpty\(\) && held\.managers\.isEmpty\(\)\)\) \{/);
+  assert.match(IOS, /if !custody\.managers\.isEmpty \{\s*Toggle\(/);
+  assert.match(ANDROID, /if \(held\.managers\.isNotEmpty\(\)\) \{\s*Row\(/);
 });
 
 test('Remove asks first, and says what it costs', () => {

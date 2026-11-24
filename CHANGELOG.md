@@ -28,9 +28,13 @@ when that version is cut.
   opens with its instructions, and goes where that member runs. Machines
   need updating first: one from before this is refused, not run on your own
   sign-ins.
-- **Your managers manage your credentials only if you let them.** You,
-  Credentials has a switch for it, off until you turn it on, with a list of
-  what they changed.
+- **Whoever adds you manages your credentials; your other managers only if
+  you let them.** An admin or manager who adds a person to the organization
+  manages that person's credentials from their first sign-in, and You,
+  Credentials says who that is before you keep anything. That holds only for
+  somebody new: a record made for a person who already keeps their own
+  sign-ins gives nobody anything. For every other manager there is a switch,
+  off until you turn it on. Either way there is a list of what they changed.
 - **Tasks.** A task is a piece of work with a short brief and one member it
   belongs to. Start it and that member's session opens on the brief, on a
   branch named for the task; when the session stops, what it wrote in
