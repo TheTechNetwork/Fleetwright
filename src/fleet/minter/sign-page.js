@@ -34,7 +34,9 @@
 //    stays the minter's to decide. My team lists the members the vault says
 //    this person may act for, each with whether it is signed in to Claude;
 //    an agent's custodians are added and removed here; and a person sees who
-//    their managers are, lets them in or not, and reads what they changed.
+//    added them and so manages what they keep, who their other managers
+//    are, lets those in or not, and reads what any of them changed. Whoever
+//    added a person gives that up from the person's page here.
 //    The tree itself is filed from the phones and never from here;
 //  - keeps a Claude sign-in made on a machine (`setuptoken`, `kind: login`):
 //    it signs both halves for that one machine, holds the key the sign-in
@@ -557,7 +559,10 @@ const SIGN_MAIN = String.raw`
     $('vault-who').textContent = !view ? 'Opened as ' + (vault.login || gh.login) + ' on GitHub. This window holds that sign-in until you close it.'
       : 'Filed with the vault as ' + view.id + '. ' + (view.kind === 'agent'
         ? 'You are managing its credentials as one of its custodians. What you keep here goes in its vault, and none of it in yours.'
-        : 'You are managing their credentials as one of their managers, because they allowed it. What you keep here goes in their vault and none of it in yours, and they are told each thing you change.');
+        : (addedBy(view.id).indexOf(device && device.email) >= 0
+          ? 'You are managing their credentials because you added them.'
+          : 'You are managing their credentials as one of their managers, because they allowed it.')
+          + ' What you keep here goes in their vault and none of it in yours, and they are told each thing you change.');
     await draw();
     render();
     if (closed) tell(closed, true);
@@ -579,8 +584,9 @@ const SIGN_MAIN = String.raw`
     });
     box.appendChild(newSecretRow());
     var custody = !view && vault && vault.custody;
-    if (custody && custody.member && Array.isArray(custody.managers) && custody.managers.length) box.appendChild(managersRow(custody));
+    if (custody && custody.member && (arr(custody.custodians).length || arr(custody.managers).length)) box.appendChild(managersRow(custody));
     if (view && view.kind === 'agent') box.appendChild(custodiansRow(orgMember(view.id)));
+    if (view && view.kind !== 'agent' && addedBy(view.id).indexOf(device && device.email) >= 0) box.appendChild(addedRow());
     drawTeam();
     await drawMachines();
   }
@@ -1054,30 +1060,48 @@ const SIGN_MAIN = String.raw`
     return isNaN(d.getTime()) ? null : d;
   }
 
-  // A PERSON'S OWN SWITCH, and nobody else's: off until they turn it on here
-  // or on their phone, and theirs to turn off. Beside it, who it lets in and
-  // what they changed, which the vault writes down itself because the
-  // message to the person's phone is the coordinator's to drop.
+  function arr(x) { return Array.isArray(x) ? x : []; }
+  /** Whoever added a person member, as the vault's tree lists them, or nobody. */
+  function addedBy(id) {
+    var node = orgMember(id);
+    return node && node.kind !== 'agent' ? arr(node.custodians) : [];
+  }
+
+  // WHO MANAGES WHAT A PERSON KEEPS, said to that person. Whoever added them
+  // does, with no switch, and that is said first and is not theirs to end, so
+  // nothing is drawn to end it with. Every other manager waits on THE
+  // PERSON'S OWN SWITCH, and nobody else's: off until they turn it on here or
+  // on their phone, and theirs to turn off. Under both, what any of them
+  // changed, which the vault writes down itself because the message to the
+  // person's phone is the coordinator's to drop.
   function managersRow(c) {
-    var r = row('Your managers', c.managers.join(', ') + (c.allow ? ' can manage your credentials.' : ' cannot manage your credentials.'), Boolean(c.allow));
-    var label = el('label', 'check');
-    var box = el('input');
-    box.type = 'checkbox';
-    box.checked = Boolean(c.allow);
-    label.appendChild(box);
-    label.appendChild(el('span', null, 'Let my managers manage my credentials'));
-    r.actions.appendChild(label);
-    box.addEventListener('change', async function () {
-      var allow = box.checked;
-      box.disabled = true;
-      await change(r, allow ? 'Letting your managers in.' : 'Closing your vault to your managers.', function () { return vaultAsk('custody', { allow: allow }).then(function (t) { return t.text; }); });
-      // Still on the page only when the vault refused: the box goes back to
-      // what the vault holds.
-      box.checked = Boolean(c.allow);
-      box.disabled = false;
-    });
+    var added = arr(c.custodians);
+    var others = arr(c.managers);
+    var said = [];
+    if (added.length) said.push(added.join(', ') + ' added you, and manages your credentials.');
+    if (others.length) said.push(others.join(', ') + (c.allow ? ' can manage your credentials.' : ' cannot manage your credentials.'));
+    var r = row('Your managers', said.join(' '), Boolean(added.length || c.allow));
     r.step.hidden = false;
-    r.step.appendChild(el('p', 'lede', 'They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. You can turn this off.'));
+    if (added.length) r.step.appendChild(el('p', 'lede', 'They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. They or an org admin can end this, and you can still remove anything your vault keeps.'));
+    if (others.length) {
+      var label = el('label', 'check');
+      var box = el('input');
+      box.type = 'checkbox';
+      box.checked = Boolean(c.allow);
+      label.appendChild(box);
+      label.appendChild(el('span', null, added.length ? 'Let my other managers manage my credentials' : 'Let my managers manage my credentials'));
+      r.actions.appendChild(label);
+      box.addEventListener('change', async function () {
+        var allow = box.checked;
+        box.disabled = true;
+        await change(r, allow ? 'Letting your managers in.' : 'Closing your vault to your managers.', function () { return vaultAsk('custody', { allow: allow }).then(function (t) { return t.text; }); });
+        // Still on the page only when the vault refused: the box goes back to
+        // what the vault holds.
+        box.checked = Boolean(c.allow);
+        box.disabled = false;
+      });
+      r.step.appendChild(el('p', 'lede', 'They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. You can turn this off.'));
+    }
     r.step.appendChild(el('h4', null, 'What they changed'));
     var log = (Array.isArray(c.log) ? c.log.slice() : []).sort(function (a, b) { return Number(b.at) - Number(a.at); });
     if (!log.length) {
@@ -1096,6 +1120,32 @@ const SIGN_MAIN = String.raw`
       });
       r.step.appendChild(list);
     }
+    return r.el;
+  }
+
+  // WHOEVER ADDED A PERSON GIVES UP MANAGING WHAT THEY KEEP, here as on the
+  // phones. Drawn only for the one who holds it (C-2); an org admin ends
+  // somebody else's from the Org screen on a phone. Once it is given up the
+  // vault stops opening this view, and load() closes it with the vault's
+  // own sentence.
+  function addedRow() {
+    var id = view.id;
+    var me = device.email;
+    var r = row('You added them', 'You manage ' + view.name + '’s credentials because you added them. Giving that up leaves them to their own switch, like their other managers.', true);
+    // ASKED ONCE MORE, on the row, because it is not given back: nobody is
+    // made a person's custodian after whoever added them.
+    button(r.actions, 'Stop managing their credentials', null, function () {
+      r.step.hidden = false;
+      r.step.textContent = '';
+      r.step.appendChild(el('p', null, 'Stop managing their credentials? This is not given back. After it, managing their credentials is theirs to allow, as it is for their other managers.'));
+      var a = el('div', 'actions');
+      button(a, 'Stop managing', 'primary', function () {
+        r.step.hidden = true;
+        change(r, 'Giving that up.', function () { return vaultAsk('custodian', { member: id, address: me, remove: true }).then(function (t) { return t.text; }); });
+      });
+      button(a, 'Keep managing', null, function () { r.step.hidden = true; });
+      r.step.appendChild(a);
+    });
     return r.el;
   }
 

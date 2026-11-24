@@ -45,26 +45,46 @@ struct CredentialsHome: View {
                 sectionHead("Your vault")
             }
 
-            // ONLY FOR SOMEBODY WITH MANAGERS: a member of their own in the
-            // vault's tree, and at least one manager above it. Anybody else
-            // has nothing this switch would do (C-2).
-            if let custody, custody.member != nil, !custody.managers.isEmpty {
+            // ONLY FOR SOMEBODY SOMEBODY ELSE MAY MANAGE: a member of their
+            // own in the vault's tree, and whoever added them or a manager
+            // above it. Anybody else has nothing here to read or switch (C-2).
+            if let custody, custody.member != nil, !(custody.custodians.isEmpty && custody.managers.isEmpty) {
                 Section {
-                    Toggle("Let my managers manage my credentials", isOn: Binding(
-                        get: { custody.allow },
-                        set: { allow in Task { await setCustody(allow) } }
-                    ))
-                    .disabled(custodyBusy)
-                    .frame(minHeight: 44)
-                    Text(custodySentence)
-                        .fleetType(.label)
-                        .foregroundStyle(Design.Palette.inkDim)
-                        .fixedSize(horizontal: false, vertical: true)
-                    ForEach(custody.managers, id: \.self) { address in
-                        Text(address)
+                    // WHOEVER ADDED THEM MANAGES WHAT THEY KEEP, with no
+                    // switch: said first, where they keep things, so it is
+                    // read before anything is kept. Not theirs to end, so no
+                    // control is drawn for it (C-2); the sentence says whose it is.
+                    ForEach(custody.custodians, id: \.self) { address in
+                        Text("\(address) added you, and manages your credentials.")
                             .fleetType(.body)
                             .foregroundStyle(Design.Palette.ink)
+                            .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
+                    }
+                    if !custody.custodians.isEmpty {
+                        Text(addedSentence)
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    // EVERY OTHER MANAGER waits on this switch, which is theirs alone.
+                    if !custody.managers.isEmpty {
+                        Toggle(custody.custodians.isEmpty ? "Let my managers manage my credentials" : "Let my other managers manage my credentials", isOn: Binding(
+                            get: { custody.allow },
+                            set: { allow in Task { await setCustody(allow) } }
+                        ))
+                        .disabled(custodyBusy)
+                        .frame(minHeight: 44)
+                        Text(custodySentence)
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ForEach(custody.managers, id: \.self) { address in
+                            Text(address)
+                                .fleetType(.body)
+                                .foregroundStyle(Design.Palette.ink)
+                                .textSelection(.enabled)
+                        }
                     }
                     // WHAT THEY CHANGED, newest first, by name and never by
                     // value. The vault keeps this beside what it holds, so it
@@ -135,3 +155,7 @@ struct CredentialsHome: View {
 /// What turning the switch on gives a manager, said under it. The same
 /// sentence on both phones (test/members-in-apps.test.js).
 let custodySentence = "They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. You can turn this off."
+
+/// What whoever added a person may do, and whose it is to end, said under
+/// their address. The same sentence on both phones.
+let addedSentence = "They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. They or an org admin can end this, and you can still remove anything your vault keeps."
