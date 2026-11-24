@@ -67,6 +67,7 @@ One record, written by an admin and read by everybody:
 | `budgets` | what happens to a start as a member whose month is spent: `off`, `ask` or `refuse` | `off` |
 | `dangerous` | whether a member start that skips permission prompts (`mode: dangerous`) needs approval | `false` |
 | `workTypes` | kinds of work whose tasks need approval before a session starts on one | none, at most 20 |
+| `paidApi` | whether a start as a member with an engine that bills an API key needs approval ([api-engines.md](./api-engines.md), "What it costs, and who is asked") | `true`, the one guard that starts on: it guards spending no budget counts, and changes nothing for a fleet with no such engine |
 
 - `off`: budgets are counted and shown, and stop nothing.
 - `ask`: an over-budget start needs approval.
@@ -86,6 +87,7 @@ approval names each one that is:
 | `over-budget` | `budgets` is `ask`, the member has a budget, and its counted spend this month is at or past it |
 | `dangerous` | `dangerous` is on and the start asks for a session that does not ask before it runs commands |
 | `risky-work` | the start is on a task whose `workType` is in `workTypes` |
+| `paid-api` | `paidApi` is on and any engine in the member's list bills an API key, whichever machine the start goes to |
 
 A start as yourself, with no member, is not looked at: it runs on your own
 sign-ins and no member's budget is its. A **resume** is not looked at
@@ -102,7 +104,7 @@ approval is given, the same start is sent again and goes through.
 |---|---|
 | `id` | `a` and a number |
 | `member`, `task` | who the start is as, and the task when there is one |
-| `reasons` | `over-budget`, `dangerous`, `risky-work`, each with its sentence |
+| `reasons` | `over-budget`, `dangerous`, `risky-work`, `paid-api`, each with its sentence |
 | `askedBy`, `askedAt` | who tried to start it |
 | `state` | `waiting`, `approved`, `declined`, `used` or `expired` |
 | `decidedBy`, `decidedAt`, `note` | who answered, when, and what they said, at most 300 bytes |
@@ -143,7 +145,7 @@ budget bites.
 
 ```
 GET  /api/budgets                 { settings, members: [{ member, budgetUsdMonth, month, usd, unknownSessions, over }], you }
-PUT  /api/budgets/settings        { budgets?, dangerous?, workTypes? }        an admin
+PUT  /api/budgets/settings        { budgets?, dangerous?, paidApi?, workTypes? }   an admin
 GET  /api/approvals               { approvals }      the ones you asked for, and the ones you may answer
 POST /api/approvals/{id}          { answer: approve | decline, note? }
 ```

@@ -172,9 +172,12 @@ custodians.
 
 **Later kinds.** A vault item's name still decides its kind (`itemKind`).
 `codex` and `copilot`, the sign-ins the engines beside Claude Code run on,
-are kept since step 4 ([engines.md](./engines.md), "Credentials"). `apikey:`
-is still reserved by name in `FUTURE_ITEM_KINDS`: it is refused with a
-sentence that says it is not kept yet and not that it is unknown.
+are kept since step 4 ([engines.md](./engines.md), "Credentials"), and
+`apikey:<provider>`, the key an engine on a metered API runs on, since
+step 7 ([api-engines.md](./api-engines.md), "The key"). Nothing is reserved
+ahead of its engine any more, so the list of names held for later and its
+"not kept yet" refusal are gone: a name no vault keeps is refused as
+unknown.
 
 ## Starting as a member
 

@@ -61,6 +61,18 @@ when that version is cut.
   are asked on your phone, or the fleet's model picks if your operator has
   turned that on. The task says how it was decided. Off until an admin
   turns it on.
+- **A member can run on a paid API key.** A member's OpenCode engine can
+  name a model on OpenRouter or Vercel AI Gateway, and its Credentials keeps
+  the key. A key bills by the token and no budget here counts it, so a
+  session started as that member waits for a manager's approval first; an
+  admin can turn that off under Approvals. Off until a machine's operator
+  turns the provider on.
+- **Machines from a sandbox provider.** Under Machines you can keep an E2B
+  key with the templates you want offered, and those templates then appear
+  among the images you can make a machine from. The machine is rented, ends on a
+  timer, and runs on your own sign-in only. Off until a machine's operator
+  turns the provider on. A template has to be built to join the fleet, and
+  building one is not automated yet.
 - **A member's page shows what it has spent this month** against its budget,
   in dollars at API prices as each session counted its own cost. Sessions
   that reported no cost are said, not counted as free.

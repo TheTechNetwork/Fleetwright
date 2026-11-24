@@ -4018,7 +4018,7 @@ const OPENAPI = JSON.stringify({
         "description": "For each member the caller may see (an admin: everybody; a manager: their team; a person: their own member), what the coordinator saw its sessions spend this UTC month, in dollars at API prices as each session counted its own cost, against its `budgetUsdMonth`. `unknownSessions` is how many of its sessions reported no cost: the figure is then a floor, never read as nothing. `settings` is what the fleet does at a budget and what else needs approval (docs/budgets.md).",
         "responses": {
           "200": {
-            "description": "`{ settings: { budgets, dangerous, workTypes }, members: [{ member, name, budgetUsdMonth, month, usd, unknownSessions, over, words }], you: { admin } }`"
+            "description": "`{ settings: { budgets, dangerous, paidApi, workTypes }, members: [{ member, name, budgetUsdMonth, month, usd, unknownSessions, over, words }], you: { admin } }`"
           },
           "401": {
             "description": "no credential"
@@ -4051,6 +4051,10 @@ const OPENAPI = JSON.stringify({
                   "dangerous": {
                     "type": "boolean",
                     "description": "Whether a member start that skips permission prompts needs approval."
+                  },
+                  "paidApi": {
+                    "type": "boolean",
+                    "description": "Whether a start as a member with an engine that bills an API key needs approval. On until an admin turns it off: no budget counts what a key spends."
                   },
                   "workTypes": {
                     "type": "array",

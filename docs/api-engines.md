@@ -64,6 +64,12 @@ on that provider ([engines.md](./engines.md), "Credentials"). The runner
 writes it where OpenCode reads its keys, inside the container, and for
 OpenRouter also sets the variable OpenCode's documentation names.
 
+**A key is never said back.** How a turn ended is the engine's own words,
+and a provider that quotes a key in its refusal would otherwise put it in a
+notification. The runner takes any value it was handed out of everything it
+reports or prints, and the sandbox driver does the same with a provider's
+answer.
+
 ### Off until an operator says so, per provider
 
 A box runs API engines only when `FLEETWRIGHT_API_PROVIDERS` names the
@@ -92,8 +98,10 @@ beside `over-budget`, `dangerous` and `risky-work`. The setting is
 `paidApi`, and unlike the others it starts **on**, because it guards
 spending that did not exist before and so changes nothing for a fleet with
 no API engine. An admin turns it off. It asks whenever any engine in the
-member's list, as cut for the machine, is on an API key, since a limit on
-the first engine hands the session to the next with nobody there to ask.
+member's list is on an API key, whichever machine the start goes to and
+whether or not that machine runs the provider: a limit on the first engine
+hands the session to the next with nobody there to ask, and the question is
+about the member, which is what a manager approves.
 
 ## Part two: a machine from a sandbox provider
 
@@ -143,13 +151,20 @@ timeout, which the phone shows as a machine that never joined.
 
 - **Report**: for each `sandbox:<provider>` item a box holds, whether the
   provider answered, the templates as images, and the sandboxes this fleet
-  made there (found by their own metadata), with when each ends.
+  made there for that person (found by their own metadata), each as a
+  hypervisor's machine is reported: its state, when it was made and when it
+  ends. The coordinator passes the entry on as a third kind of place,
+  `sandbox`, with the provider's name beside it.
 - **Make**: one request, with the template, the ticket and the
   coordinator's address in its environment, a timeout of the minutes asked,
   and metadata naming the fleet's machine and its owner. Sent with an
   idempotency key made from the ticket, so a retry does not make two.
 - **Extend** and **end**: the provider's timeout and delete. Restart and
   resize are refused in words: a sandbox has neither.
+- **Gone when the provider says so.** A machine that enrolled and is no
+  longer among the provider's sandboxes is retired at the box's next look,
+  as a VM its pool no longer has is. A provider that did not answer says
+  nothing about any machine.
 - **Hand the Claude sign-in**: refused in words. A sandbox is given no
   sign-in after it is made (below).
 
@@ -157,9 +172,10 @@ timeout, which the phone shows as a machine that never joined.
 
 A machine on somebody else's cloud that runs a session holds whatever that
 session runs on. The fleet's rule for a temporary machine already covers
-it: **it holds its owner's sign-in only**, a member is never started there
-([members.md](./members.md), "Where"), and an API-key engine is never sent
-there. What it does hold, the provider can read. That is the nature of
+it: **it holds its owner's sign-in only**, and a member is never started
+there ([members.md](./members.md), "Where"). An engine is a member's, so no
+engine other than its owner's Claude Code runs there and no API key is ever
+sent there. What it does hold, the provider can read. That is the nature of
 renting a machine, and the page that offers one says so before it is made.
 
 ### Off until a person adds a key, and a box is told
@@ -196,12 +212,16 @@ and reports none, and no screen offers one.
 ## Tests
 
 `test/api-engines.test.js` (the providers, the model rule, which credential
-an engine runs on, what a machine is sent), `test/api-engines-run.test.js`
-(the runner staging a key for a stand-in OpenCode),
+an engine runs on, what a machine is sent), the API-key tests in
+`test/engines-run.test.js` (the runner staging a key for a stand-in
+OpenCode, and no engine started for a member with no key on the machine),
 `test/api-engines-coordinator.test.js` (a start cut to a machine's
 providers, the box from before this, the `paid-api` approval and its
-default), the key items in `test/vault.test.js` (kept, only to a box that
-asks for keys), `test/sandbox-pools.test.js` (the driver against a stand-in
-for E2B's API: report, make with its idempotency key, extend, end, a
-provider that is down, what is refused in words), and
-`test/api-engines-in-apps.test.js`.
+default), the key and sandbox items in `test/vault.test.js` (kept, never
+read back, only to a box that asks for them), `test/sandbox-pools.test.js`
+(the driver against a stand-in for E2B's API: report, make with its
+idempotency key, extend, end, a provider that is down, what is refused in
+words), `test/sandbox-coordinator.test.js` (a template offered as the
+provider's, making one, a member never started there, and the machine gone
+at the box's next look), the three new lines in `test/mcp.test.js` and
+`test/budgets-mcp.test.js`, and `test/api-engines-in-apps.test.js`.

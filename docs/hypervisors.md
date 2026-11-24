@@ -1866,6 +1866,13 @@ named by a UUID the box derives (`pveIdOf`), and a record that carries
 `kind: "proxmox"` is passed over here. What Proxmox does differently, and why,
 is `proxmox.md`, "What XCP-ng taught".
 
+A third driver sits behind the same face: `SandboxPools`
+(`src/fleet/host/sandbox-pools.js`), for a machine on a sandbox provider's
+cloud and not on a hypervisor of yours. Its record is the vault item
+`sandbox:<provider>`, its entries say `kind: "sandbox"`, and it has no
+networks, groups or labs. See [`api-engines.md`](./api-engines.md), "Part
+two".
+
 ## Order of work
 
 Following `CONTRIBUTING.md`, coordinator first. **Done:** protocol 8

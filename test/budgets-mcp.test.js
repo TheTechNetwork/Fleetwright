@@ -67,6 +67,8 @@ test('fleet_budgets says what a budget does here and what each member has spent 
     'Budgets are counted and stop nothing on this fleet.',
     'A member start that skips permission prompts is not asked about.',
     'No kind of work needs approval.',
+    // docs/api-engines.md: the one guard that starts on.
+    'A start on a member with an engine that bills an API key waits for approval: no budget here counts what a key spends.',
     '',
     'eli: $0.00 this month, at API prices as each session counted it. It has no budget.',
     'debbie: $0.00 of $50.00 this month, at API prices as each session counted it.',

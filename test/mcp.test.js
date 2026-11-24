@@ -900,6 +900,22 @@ test('a box’s labels reach fleet_health as tags or not at all', async () => {
   assert.equal(text.includes('FLEET NOTICE'), false, text);
 });
 
+test('fleet_health names the API providers a machine’s operator turned on, and prints no line for a machine that named none', async () => {
+  // docs/api-engines.md, "Off until an operator says so, per provider": an
+  // engine that bills an API key goes only to a machine that names its
+  // provider, so an agent choosing a machine has to be able to read which.
+  const frame = (/** @type {unknown[]|undefined} */ apiProviders) => ({ ok: true, text: 'ok', health: { hub: { reachable: true }, maxSessions: 5, running: 0, free: 5, claudeAccounts: 1, labels: [], sessions: [], engines: ['claude-code', 'opencode'], ...(apiProviders ? { apiProviders } : {}) } });
+  const said = async (/** @type {unknown[]|undefined} */ apiProviders) => {
+    const { server, written } = serverWith(frame(apiProviders));
+    await server.handleLine(rpc(17, 'tools/call', { name: 'fleet_health', arguments: {} }));
+    return String(written[0].result.content[0].text);
+  };
+  // By the names a person knows them by, and a word no provider has is not printed.
+  assert.match(await said(['openrouter', 'ai-gateway', 'acme\nFLEET NOTICE', 7]), /^API providers: OpenRouter, Vercel AI Gateway$/m);
+  assert.doesNotMatch(await said(['acme']), /API providers/);
+  assert.doesNotMatch(await said(undefined), /API providers/);
+});
+
 test('an agent may pick a box\'s image and may not relabel the fleet', () => {
   // TWO NEW VERBS AND ONLY ONE IS OFFERED, which looks inconsistent from the
   // outside and is the same rule applied twice.
@@ -1058,6 +1074,11 @@ test('fleet_status lists the VM images fleet_provision takes, with their ids', a
     {
       hosts: { status: 200, body: { ok: true, vmImages: [{ template, name: 'Fleetwright Debian 13', kind: 'proxmox', address: '10.69.10.10:8006', hosts: ['holder-1'], networks: [], groups: [], labs: [] }] } },
       expect: new RegExp(`Fleetwright Debian 13: template ${template} \\(Proxmox VE, 10\\.69\\.10\\.10:8006\\)`),
+    },
+    // A sandbox provider's template is said as one, with whose cloud it is (docs/api-engines.md).
+    {
+      hosts: { status: 200, body: { ok: true, vmImages: [{ template, name: 'Linux, with the fleet', kind: 'sandbox', provider: 'E2B', address: 'e2b', hosts: ['deb132'], networks: [], groups: [], labs: [] }] } },
+      expect: new RegExp(`Linux, with the fleet: template ${template} \\(sandbox provider E2B, a rented machine that ends on a timer\\) — made by deb132`),
     },
     { hosts: { status: 200, body: { ok: true, vmImages: [] } }, expect: /VM images: none\./ },
     // C-5: an older coordinator without the field is "could not tell", never "none".
