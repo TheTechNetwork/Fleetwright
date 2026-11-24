@@ -50,6 +50,7 @@ import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { membersRoute } from '../../src/fleet/coordinator/org-members.js';
 import { tasksRoute } from '../../src/fleet/coordinator/org-tasks.js';
 import { routingRoute } from '../../src/fleet/coordinator/org-routing.js';
+import { budgetsRoute } from '../../src/fleet/coordinator/org-budgets.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { resource } from '../../src/core/resources.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
@@ -212,6 +213,7 @@ export class Coordinator {
     this.core.org.restore(state.orgMembers);
     this.core.tasks.restore(state.orgTasks?.tasks, state.orgTasks?.seq);
     this.core.routing.restore(state.routing);
+    this.core.budgets.restore(state.budgets ?? {});
     this.core.restoreRunnerStarts(state.runnerStarts);
     this.core.restoreStandby(state.vmStandby);
     this.core.restoreHolderJoins(state.holderJoins);
@@ -321,6 +323,7 @@ export class Coordinator {
         // And the tasks, with the counter that numbers them (org-tasks.js).
         orgTasks: this.core.tasks.serialise(),
         routing: this.core.routing.serialise(),
+        budgets: this.core.budgets.serialise(),
         runnerStarts: this.core.serialiseRunnerStarts(),
         vmStandby: this.core.serialiseStandby(),
         holderJoins: this.core.serialiseHolderJoins(),
@@ -1299,6 +1302,12 @@ export class Coordinator {
     // The fleet's tasks — see the Worker's copy.
     if (p === '/api/tasks' || p.startsWith('/api/tasks/')) {
       const answer = await tasksRoute(this.core, req.method, p, url.searchParams, requesterFor(client), () => readJson(req));
+      if (answer) return json(res, answer.status, answer.body);
+    }
+
+    // What members have spent and the approvals a start waits on — see the Worker's copy.
+    if (p === '/api/budgets' || p.startsWith('/api/budgets/') || p === '/api/approvals' || p.startsWith('/api/approvals/')) {
+      const answer = await budgetsRoute(this.core, req.method ?? 'GET', p, requesterFor(client), () => readJson(req));
       if (answer) return json(res, answer.status, answer.body);
     }
 

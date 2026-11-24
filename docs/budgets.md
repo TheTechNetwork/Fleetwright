@@ -30,10 +30,13 @@ month**:
 
 - A session started as a member begins at nothing. Each time its box reports
   a higher figure, the difference is added to that member's month.
-- **It never counts what it did not see.** A session it first hears of with a
-  figure already on it (a conversation resumed from before, a coordinator
-  that was rebuilt) starts from that figure, and only growth after it counts.
-  So the total can be under, and is never over.
+- **It never counts what it did not see.** A conversation resumed as a
+  member already has a total on it from before. The first figure its box
+  reports is where its counting starts, and only growth after it counts. So
+  the total can be under, and is never over.
+- **Only sessions the fleet itself started or resumed as that member.** Which
+  member a session belongs to, in a box's report, is the box's word. Counted
+  on that alone, a box could spend any member's budget by naming it.
 - A figure that goes down is a new conversation in the same session, and
   counts from nothing again.
 - The month is the calendar month in UTC. At its turn every member's total
@@ -80,7 +83,8 @@ approval names each one that is:
 | `risky-work` | the start is on a task whose `workType` is in `workTypes` |
 
 A start as yourself, with no member, is not looked at: it runs on your own
-sign-ins and no member's budget is its.
+sign-ins and no member's budget is its. A **resume** is not looked at
+either: it is counted, and it is not gated.
 
 ## An approval
 
@@ -162,7 +166,17 @@ person member themselves.
   The MCP server offers no tool for it, which is a policy and not a lock.
 - **Dollars at API prices are not a subscription's bill**, and engines that
   report no price are not counted at all.
-- **A session already running goes on past the budget**, as above.
+- **A session already running goes on past the budget**, as above, and so
+  does one that is resumed.
+- **Anybody in the fleet can cause an approval to be asked for.** Until the
+  minter has signed its list of who may start as whom, the coordinator does
+  not know that somebody may not start as a member, and leaves that refusal
+  to the box. Such a person's start is still looked at here, so the member's
+  managers can be asked about a start that the box would have refused
+  anyway. The same ask twice is one approval, so it is one notice.
+- **`dangerous` reads what the start asks for.** A box whose own default is
+  to skip permission prompts starts such a session with nothing in the
+  request saying so, and that start is not asked about.
 
 ## Tests
 

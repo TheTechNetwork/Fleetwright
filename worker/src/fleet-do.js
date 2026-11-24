@@ -28,6 +28,7 @@ import { RunnerTickets } from '../../src/fleet/coordinator/runner-tickets.js';
 import { MEMBERS_PREFIX, membersRoute } from '../../src/fleet/coordinator/org-members.js';
 import { TASKS_PREFIX, tasksRoute } from '../../src/fleet/coordinator/org-tasks.js';
 import { routingRoute } from '../../src/fleet/coordinator/org-routing.js';
+import { SPEND_PREFIX, APPROVALS_PREFIX, budgetsRoute } from '../../src/fleet/coordinator/org-budgets.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { NOT_FRAMED } from './pages.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
@@ -230,6 +231,9 @@ export class Fleet {
         // reason (org-tasks.js): a task with its brief, result and handoffs
         // is up to about 20 KiB, and MAX_TASKS of them are kept.
         this.#writeTasks(),
+        // What members have spent, the approvals a start waits on, and what a
+        // budget does: only the rows that changed (org-budgets.js).
+        this.#writeBudgets(),
         // The fleet's routing record and the day's count of asks put to a
         // model, when either moved (org-routing.js).
         ...(this.core.routing.takeChange() ? [this.state.storage.put('routing', this.core.routing.serialise())] : []),
@@ -344,6 +348,13 @@ export class Fleet {
         await this.state.storage.get('taskSeq'),
       );
       this.core.routing.restore(await this.state.storage.get('routing'));
+      // One row a member's month and one an approval (org-budgets.js).
+      this.core.budgets.restore({
+        settings: await this.state.storage.get('budgetSettings'),
+        spend: this.state.storage.list ? await this.state.storage.list({ prefix: SPEND_PREFIX }) : [],
+        approvals: this.state.storage.list ? await this.state.storage.list({ prefix: APPROVALS_PREFIX }) : [],
+        seq: await this.state.storage.get('approvalSeq'),
+      });
       this.core.restoreRunnerStarts(await this.state.storage.get('runnerStarts'));
       this.core.restoreStandby(await this.state.storage.get('vmStandby'));
       this.core.restoreSetups(await this.state.storage.get('xosetups'));
@@ -1085,6 +1096,14 @@ export class Fleet {
     // coordinator.
     if (url.pathname === '/api/tasks' || url.pathname.startsWith('/api/tasks/')) {
       const answer = await tasksRoute(this.core, request.method, url.pathname, url.searchParams, requesterFor(client), () => readJson(request));
+      if (answer) return json(answer.body, answer.status);
+    }
+
+    // WHAT EACH MEMBER HAS SPENT, AND THE APPROVALS A START WAITS ON
+    // (docs/budgets.md). Who sees which member's spend, and who may answer
+    // an approval, are the core's to say.
+    if (url.pathname === '/api/budgets' || url.pathname.startsWith('/api/budgets/') || url.pathname === '/api/approvals' || url.pathname.startsWith('/api/approvals/')) {
+      const answer = await budgetsRoute(this.core, request.method, url.pathname, requesterFor(client), () => readJson(request));
       if (answer) return json(answer.body, answer.status);
     }
 
@@ -1852,6 +1871,17 @@ export class Fleet {
       ...Object.entries(put).map(([key, task]) => this.state.storage.put(key, task)),
       ...del.map((key) => this.state.storage.delete?.(key)),
       ...(seq === null ? [] : [this.state.storage.put('taskSeq', seq)]),
+    ]);
+  }
+
+  /** The budget rows that changed, each its own value, and the setting and the counter when they did. */
+  async #writeBudgets() {
+    const { put, del, settings, seq } = this.core.budgets.takeChanges();
+    await Promise.all([
+      ...Object.entries(put).map(([key, row]) => this.state.storage.put(key, row)),
+      ...del.map((key) => this.state.storage.delete?.(key)),
+      ...(settings === null ? [] : [this.state.storage.put('budgetSettings', settings)]),
+      ...(seq === null ? [] : [this.state.storage.put('approvalSeq', seq)]),
     ]);
   }
 

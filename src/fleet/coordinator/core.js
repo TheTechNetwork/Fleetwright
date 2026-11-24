@@ -41,6 +41,9 @@ import { OrgMembers } from './org-members.js';
 import { MEMBER_ID_RE, composeFirstMessage } from '../protocol/members.js';
 import { OrgTasks } from './org-tasks.js';
 import { OrgRouting } from './org-routing.js';
+import { OrgBudgets } from './org-budgets.js';
+import { approvalNeeded, approvalWords, spendWords, overBudget, dollars } from '../protocol/budgets.js';
+import { manages } from '../protocol/members.js';
 import { modeFor, decide as decideRoute, candidatesFor, routeWords, routeQuestion, readRouteAnswer, MAX_MODEL_CHOICES } from '../protocol/routing.js';
 import { GATE_PATTERNS } from '../../core/mask-pane.js';
 import { TASK_ID_RE, TASK_STATES, MAX_RESULT, lockTask, startFor, composeTaskMessage, firstBytes } from '../protocol/tasks.js';
@@ -661,6 +664,8 @@ export class CoordinatorCore {
     this.org = new OrgMembers({ now });
     // The fleet's tasks: the record above sessions (docs/tasks.md).
     this.tasks = new OrgTasks({ now });
+    /** What each member has spent this month, what a budget does, and the approvals a start waits on (org-budgets.js). */
+    this.budgets = new OrgBudgets({ now: () => this.now() });
     /** The fleet's routing record and the day's count of asks put to a model (org-routing.js). */
     this.routing = new OrgRouting({ now: () => this.now() });
     /** Tasks the model is being asked about right now, so no task is asked about twice at once (#pick). @type {Set<string>} */
@@ -1084,6 +1089,8 @@ export class CoordinatorCore {
       // A TASK WHOSE SESSION THIS BOX NO LONGER LISTS is not being worked on
       // (docs/tasks.md, "The lock follows the box's word").
       this.#sweepTasks();
+      // WHAT ITS MEMBERS' SESSIONS HAVE COST SINCE IT LAST SAID (docs/budgets.md).
+      this.#countSpend(hostId, msg.health);
       // The outcome, not just the input: recordHealth silently ignores a host
       // the registry does not know, and during the outage that silence was
       // indistinguishable from the frame never arriving.
@@ -4072,7 +4079,7 @@ export class CoordinatorCore {
 
   /**
    * Route one intent and return the reply.
-   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, memberEngines?: Array<{ engine: string, model?: string }>|null, memberSays?: string, internal?: boolean, setupRouted?: boolean, device?: string|null,
+   * @param {{ verb: string, params?: Record<string, any>, actor?: string, id?: string, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null, startAfter?: Record<string, any>|null, memberEngines?: Array<{ engine: string, model?: string }>|null, memberSays?: string, approvalId?: string, internal?: boolean, setupRouted?: boolean, device?: string|null,
    *   sig?: string, kid?: string, issuedAt?: number, signedOver?: { id?: string, actor: string, host: string, params: Record<string, unknown> }, delegation?: unknown, fromApp?: boolean }} spec
    *   `delegation`, what the asking person signed for a request that will reach
    *   a box unsigned (a placed one, or a start held for a runner): kept, and
@@ -4307,6 +4314,14 @@ export class CoordinatorCore {
       } else {
         const on = this.#startOn(spec.requester, params);
         if (!on.ok) return on;
+      }
+      // OVER ITS BUDGET, OR RISKY: a start as a member waits for somebody who
+      // manages that member (docs/budgets.md). Asked here, before a machine is
+      // chosen, so the answer is about the member and not about a box.
+      if (params.member !== undefined) {
+        const gate = this.#gateStart(spec.requester, params);
+        if (!gate.ok) return gate;
+        if (gate.approval) spec = { ...spec, approvalId: gate.approval };
       }
       spec = { ...spec, params };
     }
@@ -4640,6 +4655,16 @@ export class CoordinatorCore {
       if (!locked.ok) return locked;
       this.onStateChanged?.();
     }
+    // THE APPROVAL THIS START GOES AHEAD ON, taken now: it is for one start,
+    // and of two that found the same one the second is asked to wait again.
+    if (spec.approvalId) {
+      if (!this.budgets.take(spec.approvalId)) {
+        if (onTask) this.tasks.unlock(onTask, lockedOn);
+        return { ok: false, error: { code: 'needs_approval' }, text: `${spec.approvalId} was used by another start a moment ago, or ran out. Start it again to ask for a new one; nothing was sent.` };
+      }
+      this.record({ event: 'approval.used', actor: spec.actor ?? null, text: `${spec.approvalId} was used to start a session as ${spec.memberSays || spec.params?.member}${onTask ? ` on ${onTask}` : ''}` });
+      this.onStateChanged?.();
+    }
 
     try {
       const answer = explainUnsupportedVersion(
@@ -4654,6 +4679,23 @@ export class CoordinatorCore {
         if (started) this.tasks.confirm(onTask, { session: started, hostId: lockedOn });
         else if (answer?.ok === false) this.tasks.unlock(onTask, lockedOn);
         this.onStateChanged?.();
+      }
+      // WHOSE SPENDING THIS SESSION IS (docs/budgets.md). A session the fleet
+      // started as a member counts from nothing; one it resumed counts from
+      // the first figure its box reports. A start the box refused spent
+      // nothing, and the approval it was let through on is good again.
+      if (spec.verb === 'start' && typeof spec.params?.member === 'string') {
+        const named = answer?.ok !== false && Array.isArray(answer?.sessions) && typeof answer.sessions[0]?.name === 'string' ? answer.sessions[0].name : '';
+        if (named) this.budgets.started(spec.params.member, `${lockedOn}\n${named}`);
+        else if (answer?.ok === false && spec.approvalId) this.budgets.giveBack(spec.approvalId);
+        this.onStateChanged?.();
+      } else if (spec.verb === 'resume' && answer?.ok !== false && typeof spec.params?.name === 'string') {
+        const claim = this.registry.findSessions(spec.params.name).find((c) => c.host?.hostId === lockedOn);
+        const as = typeof (/** @type {any} */ (claim)?.member) === 'string' ? /** @type {any} */ (claim).member : '';
+        if (as && this.org.get(as)) {
+          this.budgets.resumed(as, `${lockedOn}\n${spec.params.name}`);
+          this.onStateChanged?.();
+        }
       }
       // THE SESSION IS REAL THE MOMENT THE HOST SAYS SO, not when the next
       // health frame happens to arrive.
@@ -4693,6 +4735,8 @@ export class CoordinatorCore {
       const said = enginesNote && answer?.ok !== false ? { ...answer, text: `${answer?.text ? `${answer.text}\n` : ''}${enginesNote}` } : answer;
       return withArchiveNote(said, spec, placement.host);
     } catch (e) {
+      // NOT GIVEN BACK: a box that did not answer may have started the
+      // session all the same, and an approval is for one start.
       return { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
     }
   }
@@ -5808,6 +5852,9 @@ export class CoordinatorCore {
   removeMember(requester, id) {
     const gone = this.org.remove(requester, id);
     if (!gone.ok) return gone;
+    // What it had spent goes with it: a member made later under the same id
+    // is not that member.
+    this.budgets.forget(gone.member.id);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
     this.record({ event: 'member.removed', actor: by, text: `${by} removed the member ${gone.member.id}` });
@@ -5904,6 +5951,230 @@ export class CoordinatorCore {
       text: routed?.text ? `${made.text.replace(', assigned to nobody yet', '')} ${routed.text}` : made.text,
       ...(routed?.pending ? { routePending: true } : {}),
     };
+  }
+
+  // ── Budgets and approvals (docs/budgets.md) ───────────────────────────────
+
+  /**
+   * The addresses that may answer an approval about this member: everybody
+   * the tree, or an admin's `managers`, puts above it. Fleet admins may too,
+   * and are found by their devices, not listed here.
+   *
+   * @param {string} id
+   * @returns {string[]}
+   */
+  #managersOf(id) {
+    const all = this.org.all();
+    const addresses = new Set();
+    for (const m of all) {
+      if (m.kind === 'person' && m.email) addresses.add(String(m.email).toLowerCase());
+      for (const a of m.managers ?? []) addresses.add(String(a).toLowerCase());
+    }
+    return [...addresses].filter((a) => manages(all, a, id)).sort();
+  }
+
+  /**
+   * The phones an approval, or a budget's notice, about this member goes to:
+   * its managers' own, and the admins'. Never a member's own phone for being
+   * the member: a person does not approve their own budget.
+   *
+   * @param {string} id
+   */
+  #phonesAbout(id) {
+    const managers = this.#managersOf(id);
+    return [...this.devices.values()].filter((d) => {
+      const client = d.clientId ? this.clients.clients.get(d.clientId) : null;
+      if (d.clientId && client?.revokedAt) return false;
+      if (!d.clientId || client?.admin) return true;
+      return managers.includes(String(d.actor || '').replace(/^fleet:/, '').toLowerCase());
+    });
+  }
+
+  /**
+   * What a box's health frame says its sessions have cost, counted into the
+   * month of each member the fleet started them as. The first report to
+   * take a member near its budget, or past it, is said once to the people
+   * who manage that member.
+   *
+   * @param {string} hostId @param {any} health
+   */
+  #countSpend(hostId, health) {
+    if (!Array.isArray(health?.sessions)) return;
+    let changed = false;
+    for (const s of health.sessions) {
+      if (typeof s?.member !== 'string' || typeof s?.name !== 'string') continue;
+      const member = this.org.get(s.member);
+      if (!member) continue;
+      const before = this.budgets.spendOf(member.id);
+      const crossed = this.budgets.count(member.id, `${hostId}\n${s.name}`, s.spent, member.budgetUsdMonth);
+      const after = this.budgets.spendOf(member.id);
+      if (after !== before) changed = true;
+      if (!crossed || !after) continue;
+      const said = crossed === 'over'
+        ? `${member.name} has passed its budget: ${spendWords(after, member.budgetUsdMonth)}`
+        : `${member.name} has spent four fifths of its budget: ${spendWords(after, member.budgetUsdMonth)}`;
+      this.record({ event: crossed === 'over' ? 'budget.over' : 'budget.warn', actor: member.createdBy ?? null, text: said });
+      const phones = this.#phonesAbout(member.id);
+      if (this.push && phones.length) {
+        const next = crossed === 'over'
+          ? { off: 'Its sessions go on; budgets stop nothing on this fleet.', ask: 'Its sessions go on. Its next start waits for approval.', refuse: 'Its sessions go on. Its next start is refused until the month turns or the budget is raised.' }[this.budgets.settings.budgets]
+          : '';
+        void this.push.send(phones, {
+          title: crossed === 'over' ? `${member.name} is over budget` : `${member.name} is near its budget`,
+          body: `${spendWords(after, member.budgetUsdMonth)}${next ? ` ${next}` : ''}`,
+          data: { event: crossed === 'over' ? 'budget.over' : 'budget.warn', kind: 'budget', name: '', hostId: '', url: '', member: member.id },
+        }).catch(() => {});
+      }
+    }
+    if (changed) this.onStateChanged?.();
+  }
+
+  /**
+   * May this start as a member go ahead now (docs/budgets.md, "What needs
+   * approval")? Yes with nothing to ask; yes on an approval already given,
+   * which is taken; or no, with the approval that was asked for and who can
+   * give it.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
+   * @param {Record<string, any>} params  the start's, with `member` set
+   * @returns {{ ok: true, approval?: string } | { ok: false, error: { code: string }, text: string, approval?: any }}
+   */
+  #gateStart(requester, params) {
+    const member = this.org.get(String(params.member));
+    if (!member) return { ok: true };
+    const task = typeof params.taskId === 'string' ? this.tasks.get(params.taskId) : null;
+    const need = approvalNeeded({
+      settings: this.budgets.settings,
+      member,
+      spend: this.budgets.spendOf(member.id),
+      start: { dangerous: params.mode === 'dangerous', workType: task?.workType ?? null, task: task?.id ?? null },
+    });
+    if ('refused' in need) return { ok: false, error: { code: 'over_budget' }, text: need.refused };
+    if (!need.reasons.length) return { ok: true };
+    const by = String(requester?.email || '').toLowerCase() || 'an admin';
+    const about = { member: member.id, task: task?.id ?? null, kinds: need.reasons.map((r) => r.kind), by };
+    // GIVEN ALREADY: the start goes on, and takes the approval when it is
+    // about to be sent and not before (dispatch).
+    const given = this.budgets.given(about);
+    if (given) return { ok: true, approval: given.id };
+    const { approval, fresh } = this.budgets.ask({ member: member.id, task: task?.id ?? null, reasons: need.reasons, by });
+    const own = !requester || Boolean(requester.admin) || this.org.mayManage(requester, member.id);
+    const managers = this.#managersOf(member.id);
+    const who = managers.length ? `${managers.slice(0, 3).join(' or ')}${managers.length > 3 ? ' or another of its managers' : ''}, or a fleet admin,` : 'A fleet admin';
+    if (fresh) {
+      this.record({ event: 'approval.asked', actor: by, text: `${approval.id}: ${by} asks to start a session as ${member.name}${task ? ` on ${task.id}` : ''}. ${need.reasons.map((r) => r.text).join(' ')}` });
+      const phones = this.#phonesAbout(member.id);
+      if (this.push && phones.length) {
+        void this.push.send(phones, {
+          title: `Approve a start as ${member.name}?`,
+          body: `${by} asks${task ? `, on ${task.id}` : ''}. ${need.reasons.map((r) => r.text).join(' ')}`,
+          data: { event: 'approval.asked', kind: 'approval', name: '', hostId: '', url: '', approval: approval.id, member: member.id },
+        }).catch(() => {});
+      }
+      this.onStateChanged?.();
+    }
+    return {
+      ok: false,
+      error: { code: 'needs_approval' },
+      text: `${need.reasons.map((r) => r.text).join(' ')} ${own ? `That needs approval, which you may give yourself: ${approval.id}.` : `${who} must approve it first: ${approval.id}.`} Start it again once it is approved; nothing was sent.`,
+      approval: { ...approval, mayAnswer: own },
+    };
+  }
+
+  /** May this person answer approvals about this member? @param {{ email?: string|null, admin?: boolean }|null} requester @param {string} member */
+  #mayAnswer(requester, member) {
+    return !requester || Boolean(requester.admin) || this.org.mayManage(requester, member);
+  }
+
+  /**
+   * What each member has spent this month against its budget, for the
+   * members this person may see that of: everybody for an admin, their team
+   * for a manager, and their own person member.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   */
+  budgetsFor(requester) {
+    const standing = this.org.standing(requester ?? { admin: true });
+    const admin = !requester || Boolean(requester.admin);
+    const mine = new Set([...(admin ? this.org.all().map((m) => m.id) : standing.manages), ...(standing.member ? [standing.member] : [])]);
+    const members = this.org.all().filter((m) => mine.has(m.id)).map((m) => {
+      const row = this.budgets.spendOf(m.id);
+      const current = row && row.month === new Date(this.now()).toISOString().slice(0, 7) ? row : null;
+      return {
+        member: m.id,
+        name: m.name,
+        budgetUsdMonth: m.budgetUsdMonth ?? null,
+        month: new Date(this.now()).toISOString().slice(0, 7),
+        usd: Math.round((current?.usd ?? 0) * 100) / 100,
+        unknownSessions: current?.unknown.length ?? 0,
+        over: overBudget(current, m.budgetUsdMonth),
+        words: spendWords(current, m.budgetUsdMonth),
+      };
+    });
+    return { ok: true, settings: this.budgets.settings, members, you: { admin } };
+  }
+
+  /** @param {{ email?: string|null, admin?: boolean }|null} requester @param {unknown} input */
+  setBudgetSettings(requester, input) {
+    const who = this.#who(requester);
+    const saved = this.budgets.setSettings(who, input);
+    if (!saved.ok) return saved;
+    this.record({ event: 'budgets.changed', actor: who.email || 'an admin', text: `${who.email || 'An admin'} set what a budget does: ${saved.text}` });
+    this.onStateChanged?.();
+    return { ok: true, settings: saved.settings, text: saved.text };
+  }
+
+  /**
+   * The approvals this person asked for, and the ones they may answer. Each
+   * says whether it is theirs to answer.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester
+   */
+  approvalsFor(requester) {
+    const email = String(requester?.email || '').toLowerCase();
+    const approvals = this.budgets.all()
+      .map((a) => ({ ...a, mayAnswer: this.#mayAnswer(requester, a.member) }))
+      .filter((a) => a.mayAnswer || (email && a.askedBy === email))
+      .map((a) => ({ ...a, memberName: this.org.get(a.member)?.name ?? a.member, words: approvalWords(a, (id) => this.org.get(id)?.name ?? id) }))
+      .reverse();
+    this.onStateChanged?.();
+    return { ok: true, approvals };
+  }
+
+  /**
+   * Approve or decline. Somebody who manages the member, or an admin; a
+   * person it is not theirs to answer is told it is not there.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null} requester @param {unknown} id @param {unknown} answer @param {unknown} [note]
+   */
+  async answerApproval(requester, id, answer, note) {
+    const email = String(requester?.email || '').toLowerCase();
+    const found = this.budgets.get(String(id ?? '').toLowerCase());
+    if (!found || !(this.#mayAnswer(requester, found.member) || (email && found.askedBy === email))) {
+      return { ok: false, error: { code: 'no_approval' }, text: 'There is no approval by that id that you can see.' };
+    }
+    if (!this.#mayAnswer(requester, found.member)) {
+      return { ok: false, error: { code: 'not_manager' }, text: `${found.id} is yours to ask for and not yours to answer: it waits on somebody who manages ${this.org.get(found.member)?.name ?? found.member}, or a fleet admin.` };
+    }
+    const by = email || 'an admin';
+    const done = this.budgets.answer(found.id, answer, { by, note });
+    if (!done.ok) return done;
+    const a = done.approval;
+    const words = approvalWords(a, (m) => this.org.get(m)?.name ?? m);
+    this.record({ event: 'approval.answered', actor: a.askedBy, text: words });
+    // TOLD TO WHOEVER ASKED, on their own phones, unless they answered it themselves.
+    if (this.push && a.askedBy !== by) {
+      const own = this.#devicesOf(a.askedBy).filter((d) => String(d.actor || '').replace(/^fleet:/, '').toLowerCase() === a.askedBy);
+      if (own.length) {
+        void this.push.send(own, {
+          title: a.state === 'approved' ? `${a.id} was approved` : `${a.id} was declined`,
+          body: a.state === 'approved' ? `${by} approved your start as ${this.org.get(a.member)?.name ?? a.member}${a.task ? ` on ${a.task}` : ''}. Start it again within the hour.` : `${by} declined your start as ${this.org.get(a.member)?.name ?? a.member}${a.task ? ` on ${a.task}` : ''}.${a.note ? ` ${a.note}` : ''}`,
+          data: { event: 'approval.answered', kind: 'approval', name: '', hostId: '', url: '', approval: a.id, member: a.member },
+        }).catch(() => {});
+      }
+    }
+    this.onStateChanged?.();
+    return { ok: true, approval: { ...a, mayAnswer: true, words }, text: words };
   }
 
   // ── Routing (docs/routing.md) ─────────────────────────────────────────────
