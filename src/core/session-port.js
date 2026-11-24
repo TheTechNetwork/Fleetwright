@@ -134,7 +134,10 @@ export function answerSessionPort(req, socket, head, deps) {
   const port = Number(portText);
   const rec = deps.record(name);
   const whose = rec ? (emailFromActor(rec.createdBy ?? null) ?? String(rec.createdBy || '').toLowerCase()) : null;
-  if (!rec || whose !== owner) return refuse(404, `This machine has no session of yours called ${name}.`);
+  // A session started as a member is the member's; the person who started it
+  // opens its ports as they would their own (docs/members.md).
+  const startedBy = rec ? emailFromActor(rec.startedBy ?? null) : null;
+  if (!rec || (whose !== owner && startedBy !== owner)) return refuse(404, `This machine has no session of yours called ${name}.`);
   if (rec.status !== 'running') return refuse(409, `${name} is not running, so nothing is listening in it.`);
   if (open >= MAX_SESSION_PORTS) return refuse(429, `This machine already has ${MAX_SESSION_PORTS} connections open into sessions.`);
 

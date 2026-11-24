@@ -70,6 +70,7 @@ import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
 import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
 import { actorEmail, needsSignature } from '../protocol/intent-signature.js';
+import { accountOfMember, memberOfAccount, composeFirstMessage } from '../protocol/members.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 import { CLAUDE_REFRESH_AHEAD_MS } from '../minter/claude-login.js';
 
@@ -912,7 +913,22 @@ export class Sidecar {
       this.log.warn(`sidecar: refused an intent (${checked.code}): ${checked.error}`);
       return { v: PROTOCOL_VERSION, kind: 'reply', id, ok: false, text: checked.error, error: { code: checked.code } };
     }
-    const intent = checked.intent;
+    let intent = checked.intent;
+
+    // NOBODY ASKS AS A MEMBER'S OWN ACCOUNT. `<id>@members.invalid` is where
+    // this box files an agent member's sign-ins (protocol/members.js), and a
+    // session runs on them only through `start` with `member`, checked below
+    // against the list the minter signed. A request naming that address as
+    // the one asking is the coordinator inventing a person nobody is, and on
+    // a box that takes unsigned work it would run on the member's sign-ins
+    // with nobody having signed for it.
+    if (memberOfAccount(intent.actor)) {
+      this.log.warn(`sidecar: refused ${intent.verb} ${intent.id}: it names a member's own account, ${intent.actor}, as who is asking`);
+      return {
+        v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'not_a_person' },
+        text: `${this.hostId} takes requests from people. ${intent.actor} is a member’s own account, which nobody asks as: a session is started as a member by one of its custodians. Nothing was done.`,
+      };
+    }
 
     // WHO SIGNED IT, counted and said on every box (docs/signed-intents.md,
     // phase 1). A signature that does not hold is logged with what it was
@@ -946,6 +962,18 @@ export class Sidecar {
         v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'signature_required' },
         text: `${this.hostId} takes only requests a person signed, and ${why}. Nothing was done.`,
       };
+    }
+
+    // AS A MEMBER (docs/members.md, "Starting as a member"): checked here,
+    // against the list the minter signed, whatever this box's mode. From
+    // here on the intent is the member's own start, with who asked beside it.
+    if (intent.verb === 'start' && intent.params?.member !== undefined) {
+      const as = this.#startAs(intent, verdict);
+      if (!as.ok) {
+        this.log.warn(`sidecar: refused start ${intent.id} as ${String(intent.params.member)} from ${intent.actor ?? 'nobody'}: ${as.text}`);
+        return { v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: as.code }, text: as.text };
+      }
+      intent = as.intent;
     }
 
     if (!isMutating(intent.verb)) return this.#run(intent, verdict);
@@ -1052,6 +1080,60 @@ export class Sidecar {
    * @param {string|null} [verdict]  what the signature check said, null when this box could not check
    * @returns {Promise<Record<string, any>>}
    */
+  /**
+   * May this start run as the member it names, and as what?
+   *
+   * THE CHECK THAT COUNTS. The coordinator refuses first and decides nothing
+   * (core.js, #startAs): it is the party this box does not believe. What
+   * this box believes is the minter's signed list of who may start as each
+   * member, and a signature or delegation, by a key the same list names for
+   * that person, over this start with this member in it.
+   *
+   *  - SIGNED OR DELEGATED, WHATEVER THE MODE. A box set to take unsigned
+   *    work takes the coordinator's word for who asked. Here that word would
+   *    name a custodian, and the session would run on sign-ins that are not
+   *    the asker's, so it is not taken.
+   *  - NO LIST IS A REFUSAL, as it is for signatures: a check that lapsed
+   *    while the list was late would be one a coordinator could lapse.
+   *
+   * What comes back is the member's own start: the account its vault is
+   * filed under here as who it runs as, its instructions and the task as one
+   * first message under the cap a first message has, and who asked kept
+   * beside it for the record. This box's own secrets never answer it: they
+   * are its operator's, for the operator's own sessions.
+   *
+   * @param {any} intent @param {string|null} verdict
+   * @returns {{ ok: true, intent: any } | { ok: false, code: string, text: string }}
+   */
+  #startAs(intent, verdict) {
+    const id = String(intent.params.member);
+    const name = typeof intent.params.memberName === 'string' && intent.params.memberName ? intent.params.memberName : id;
+    /** @param {string} code @param {string} text */
+    const refuse = (code, text) => /** @type {const} */ ({ ok: false, code, text: `${text} Nothing was started.` });
+    const members = this.intentKeys?.currentMembers ?? null;
+    if (!members) {
+      const why = this.intentKeys?.problem ? ` (${this.intentKeys.problem})` : '';
+      return refuse('member_unchecked', `${this.hostId} holds no list from the vault of who may start a session as a member${why}, so it starts nobody as one.`);
+    }
+    const member = members.get(id);
+    if (!member) return refuse('no_member', `The vault lists no member called ${id}. Whoever manages ${name} files it from the Org screen first.`);
+    const asker = String(intent.actor || '').trim().toLowerCase();
+    if (!asker || !member.may.includes(asker)) {
+      const who = member.may.length ? member.may.join(', ') : 'nobody in the fleet now';
+      return refuse('not_custodian', `${asker || 'Nobody named'} may not start a session as ${name}. The vault lists ${who}.`);
+    }
+    if (verdict !== 'signed' && verdict !== 'delegated') {
+      return refuse('signature_required', `A session as ${name} runs on ${name}’s sign-ins, so ${this.hostId} starts one only when ${asker} signed for it or delegated it, and this was neither.`);
+    }
+    const first = composeFirstMessage(typeof intent.params.memberBrief === 'string' ? intent.params.memberBrief : '', typeof intent.params.task === 'string' ? intent.params.task : '');
+    if (!first.ok) return refuse('bad_params', first.text);
+    const params = { ...intent.params, boxSecrets: 'no' };
+    delete params.memberBrief;
+    if (first.text) params.task = first.text;
+    else delete params.task;
+    return { ok: true, intent: { ...intent, actor: member.kind === 'agent' ? accountOfMember(id) : member.email, startedBy: asker, params } };
+  }
+
   async #run(intent, verdict = null) {
     /** @param {Record<string, unknown>} extra */
     const reply = (extra) => ({ v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ...extra });
@@ -1204,6 +1286,9 @@ export class Sidecar {
       // Deliberately not `actor` (which is 'fleet' when there is none): an
       // intent with no actor must still record NO actor, exactly as before.
       const meta = commandMeta(intent.verb, intent.params, intent.actor ? `fleet:${intent.actor}` : '');
+      // WHO ASKED, for a start as a member (#startAs): `actor` is by then the
+      // member it runs as, and the record keeps both.
+      if (intent.verb === 'start' && typeof intent.startedBy === 'string') /** @type {any} */ (meta).startedBy = `fleet:${intent.startedBy}`;
       // WHERE RUNNERS COME FROM AND WHICH FLEET THEY JOIN, added here because
       // neither is in the intent and they come from two different places.
       //
@@ -1980,7 +2065,10 @@ export class Sidecar {
   async #askVault() {
     const key = /** @type {NonNullable<typeof this.vaultKey>} */ (this.vaultKey);
     const { privateKey, publicKey } = await newSealKey();
-    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at: Date.now(), reply: publicKey };
+    // `accepts`, signed with the rest: this box files a member's vault under
+    // an account of its own (vault-store.js, applyVault), so the minter may
+    // hand it one. A box from before members sends none and is handed none.
+    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at: Date.now(), reply: publicKey, accepts: ['members'] };
     let signature;
     try {
       signature = await key.sign(signingInput('vault-box', request));
@@ -2378,6 +2466,11 @@ export class Sidecar {
             // guessed name still stops them — privacy against reading with no
             // authorisation against acting.
             createdBy: s.createdBy ?? null,
+            // AS WHICH MEMBER, and who asked for it, when it was started as
+            // one (docs/members.md): what lets the person who started it, and
+            // the member's managers, see and stop a session whose creator is
+            // the member.
+            ...(s.member ? { member: s.member, memberName: s.memberName ?? null, memberRole: s.memberRole ?? null, startedBy: s.startedBy ?? null } : {}),
             // WHERE the work is happening. The app showed a session with no
             // way to answer "which checkout is this?" — the commonest question
             // about a session somebody started yesterday, and the answer was
@@ -3178,6 +3271,11 @@ export function commandMeta(verb, params = {}, actor = '') {
     // prose, and anything in the line is split on whitespace and could read
     // as a flag.
     ...(verb === 'start' && typeof params?.task === 'string' && params.task ? { task: params.task } : {}),
+    // THE MEMBER IT RUNS AS, v19, for the record: its id, and the name and
+    // role the coordinator's record has. Who it runs as is `actor`.
+    ...(verb === 'start' && typeof params?.member === 'string' ? { member: params.member } : {}),
+    ...(verb === 'start' && typeof params?.memberName === 'string' ? { memberName: params.memberName } : {}),
+    ...(verb === 'start' && typeof params?.memberRole === 'string' ? { memberRole: params.memberRole } : {}),
     // File content, for the same reason and by the same route: prose and
     // payloads travel beside a command rather than inside it.
     ...(verb === 'writefile' && typeof params?.content === 'string' ? { content: params.content } : {}),

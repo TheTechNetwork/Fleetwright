@@ -20,7 +20,7 @@ import { Enrollment, emailOf, PINS_FULL } from './enrollment.js';
 import { NAME_RE as SESSION_NAME_RE } from '../../core/names.js';
 import { oneLine } from '../../core/text.js';
 import { RC_URL_RE } from '../../core/pane.js';
-import { place } from './scheduler.js';
+import { place, mayActOn } from './scheduler.js';
 import { actorEmail, intentSigningInput, needsSignature, MCP_UNDELEGATED_VERBS } from '../protocol/intent-signature.js';
 import { Delegations } from './delegations.js';
 import { VERBS, PROTOCOL_VERSION, PROTOCOL_MIN, SIG_RE, KID_RE, buildIntent, isMutating, checkParams, REPO_RE, JWT_RE, LINK_ROLES, XOSETUP_JOB_RE, IMAGE_REPORT_STEPS, IMAGE_REPORT_TOKEN_RE, IMAGE_REPORT_BYTES_MAX, XOSETUP_STEPS, XOPOLICY_STEPS, XODEPLOY_STEPS, XORECONNECT_STEPS, XOWATCHDOG_STEPS, PVESETUP_STEPS, XOBUILD_DOING, CERT_PIN_RE, SSH_HOST_KEY_RE, XO_UUID_RE, XO_ADDRESS_RE, xoActionArgs, runnerImageProblem, isLargerRunnerImage, PIN_SENTENCES } from '../protocol/intents.js';
@@ -4215,6 +4215,10 @@ export class CoordinatorCore {
       delete params.memberRole;
       delete params.memberBrief;
       if (params.member !== undefined) {
+        // NOT PUSHED TO THE STARTER'S ARCHIVE: that push is made with the
+        // starter's own GitHub sign-in on the box (archive.js), and a box
+        // holding the member's vault need not hold theirs.
+        delete params.archive;
         const as = this.#startAs(spec.requester, params.member, params.task);
         if (!as.ok) return as;
         params.memberName = as.member.name;
@@ -4258,7 +4262,11 @@ export class CoordinatorCore {
       // And who is asking, so pinned verbs can refuse a member acting on work
       // that is not theirs — with the same words as "unknown", so an access
       // control never becomes an existence oracle.
-      requester: spec.requester ?? null,
+      //
+      // WITH THE MEMBERS THEY MAY ACT FOR, so a session started as one, whose
+      // creator is the member's own account, is still theirs to stop and
+      // read: the ones they manage, and the ones the minter lists them for.
+      requester: spec.requester ? { ...spec.requester, members: this.#actsFor(spec.requester) } : null,
     });
     let placement = placeIt();
     // A MACHINE THAT HAS NOT SPOKEN YET IS NOT A MACHINE THAT CANNOT WORK. A
@@ -4379,8 +4387,8 @@ export class CoordinatorCore {
         // manages is theirs to see, whoever started it (docs/members.md). The
         // member on a session is the box's word, as its creator is, and what
         // a box could gain by naming one is a row in a manager's list.
-        const team = new Set(this.org.standing(spec.requester).manages);
-        sessions = sessions.filter((s) => String(s.createdBy || '').toLowerCase() === mine || (typeof s.member === 'string' && team.has(s.member)));
+        const asker = { email: spec.requester?.email, members: this.#actsFor(spec.requester) };
+        sessions = sessions.filter((s) => String(s.createdBy || '').toLowerCase() === mine || mayActOn(s, asker));
       }
 
       // AND THE PROSE WITH IT, which is where this filter was leaking everything
@@ -5709,6 +5717,18 @@ export class CoordinatorCore {
     const by = String(requester?.email || 'an admin').toLowerCase();
     this.record({ event: 'member.saved', actor: by, text: `${by} ${read.created ? 'added' : 'changed'} the member ${read.member.id} from a file` });
     return read;
+  }
+
+  /**
+   * The members whose sessions this person may see and act on: the ones the
+   * tree puts under them, and the ones they may start as.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
+   * @returns {string[]}
+   */
+  #actsFor(requester) {
+    const standing = this.org.standing(requester ?? null, this.memberCustody);
+    return [...new Set([...standing.manages, ...standing.startAs])];
   }
 
   /**

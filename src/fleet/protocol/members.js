@@ -54,6 +54,31 @@ export const MEMBER_ENGINES = Object.freeze(['claude-code']);
 /** The prefix an agent member's principal carries, in the minter and on a box. */
 export const MEMBER_PREFIX = 'member:';
 
+/**
+ * The domain an agent member's account on a box is filed under:
+ * `<id>@members.invalid`.
+ *
+ * A box files everything a session runs on by the address of whose it is (one
+ * 0600 file a person, docs/vault.md "On the box"), and every reader there,
+ * the credential broker included, finds a session's sign-ins by that address.
+ * An agent member has no address. Giving it one nobody can hold lets all of
+ * that work for it unchanged, and `.invalid` is the top-level name reserved
+ * for exactly this: no mail and no sign-in ever comes from it (RFC 2606). A
+ * person member at this domain is refused (checkMember), and a box refuses
+ * any request that names somebody at it as the one asking (sidecar.js).
+ */
+export const MEMBER_ACCOUNT_DOMAIN = 'members.invalid';
+
+/** @param {string} id @returns {string} the address a box files an agent member's vault under */
+export const accountOfMember = (id) => `${id}@${MEMBER_ACCOUNT_DOMAIN}`;
+
+/** @param {unknown} address @returns {string|null} the agent member a box account belongs to, or null for a person's */
+export function memberOfAccount(address) {
+  const a = String(address ?? '').trim().toLowerCase();
+  const id = a.endsWith(`@${MEMBER_ACCOUNT_DOMAIN}`) ? a.slice(0, -MEMBER_ACCOUNT_DOMAIN.length - 1) : '';
+  return MEMBER_ID_RE.test(id) ? id : null;
+}
+
 /** The line between a member's instructions and the task, in a session's first message. */
 export const FIRST_MESSAGE_SEPARATOR = '\n\n----------\n\n';
 
@@ -147,6 +172,7 @@ export function checkMember(input) {
   const email = lower(m.email);
   if (kind === 'person' && !ADDRESS_RE.test(email)) return refuse('A person member needs their fleet address, as email.');
   if (kind === 'agent' && email) return refuse('An agent member has no address of its own. Its custodians sign it in.');
+  if (email.endsWith(`@${MEMBER_ACCOUNT_DOMAIN}`)) return refuse(`Nobody’s address ends in @${MEMBER_ACCOUNT_DOMAIN}: that is where a machine files an agent member’s own sign-ins.`);
 
   const reportsTo = m.reportsTo === undefined || m.reportsTo === null || m.reportsTo === '' ? null : String(m.reportsTo);
   if (reportsTo !== null && !MEMBER_ID_RE.test(reportsTo)) return refuse('reportsTo is another member’s id, or nothing.');

@@ -1104,7 +1104,7 @@ async function signingFleet(t, { requireSigned = false } = {}) {
     };
     return { grant, sig: await sign(iphone.privateJwk, delegationSigningInput(grant)), kid };
   };
-  return { m, core, box, dir, served, start, poisonList, delegate, iphone };
+  return { m, core, box, dir, served, start, poisonList, delegate, iphone, stub, kid };
 }
 
 test('a box checks the signature on an intent with keys the minter signed, which the coordinator carries and cannot add to', async (t) => {
@@ -2238,4 +2238,118 @@ test('a member’s ended sign-in is told to every custodian, on their own phones
   assert.deepEqual(sends.map((s) => [s.to, s.message.title]), [[[`fleet:${DANA}`], 'A manager changed your vault']]);
   assert.match(sends[0].message.body, /eli@example\.com kept secret:FROM_ELI in your vault, as one of your managers\./);
   assert.ok(core.events.some((e) => e.event === 'vault.custody'));
+});
+
+test('a box starts a session as a member only for somebody the minter lists, who signed for it, and runs it on the member’s sign-ins', async (t) => {
+  // The whole path: the tree and the custodians in the minter, the member in
+  // the coordinator, a signed start from a phone, the box's own check, and
+  // what it hands the session manager. On a box that takes unsigned work, so
+  // every refusal below is the member check's own.
+  const { m, core, box, stub, iphone, kid } = await signingFleet(t);
+  // Eli's phone listed its key in signingFleet. Dana's lists one now.
+  const pixel = await generateKeyPair();
+  assert.equal((await m.phone({ op: 'devicekey', key: pixel.publicJwk, label: 'Dana’s Pixel' }, { person: DANA })).ok, true);
+  const danaKid = await boxKeyHash({ kty: 'EC', crv: 'P-256', x: pixel.publicJwk.x, y: pixel.publicJwk.y });
+  await core.issueClient({ email: DANA }, 'phone');
+  let clock = Date.now() - 30_000;
+  const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
+  await filed({ op: 'orgadmin', address: ELI });
+  await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
+  await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
+  await filed({ op: 'put', name: 'claude', value: `sk-ant-oat01-${'d'.repeat(40)}`, for: 'debbie' });
+  assert.equal(core.setMember(null, 'debbie', { name: 'Debbie', kind: 'agent', role: 'software engineer', instructions: 'Write small pull requests.' }).ok, true);
+
+  let n = 0;
+  /** A start from a phone. @param {{ who?: string, key?: any, keyId?: string, params: any, unsigned?: boolean }} o */
+  const start = async (o) => {
+    const who = o.who ?? ELI;
+    const id = `member-intent-${String(++n).padStart(4, '0')}`;
+    const issuedAt = Date.now();
+    const sig = await sign((o.key ?? iphone).privateJwk, intentSigningInput({ actor: who, id, issuedAt, params: o.params, verb: 'start' }, 'ops-box'));
+    return core.dispatch({ verb: 'start', params: o.params, id, actor: who, requester: { email: who, admin: false }, preferHost: 'ops-box', ...(o.unsigned ? {} : { sig, kid: o.keyId ?? kid, issuedAt }) });
+  };
+
+  // NO LIST YET, so the coordinator passes it on, and the box, which holds none, starts nobody as a member.
+  const early = await start({ params: { name: 'too-early', member: 'debbie', task: 'Fix the login bug.' } });
+  assert.equal(early.error?.code, 'member_unchecked');
+  assert.match(String(early.text), /holds no list from the vault of who may start a session as a member/);
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  assert.deepEqual(core.memberCustody?.get('debbie'), [ELI], 'the coordinator read the list on its way to the box');
+
+  // SIGNED BY A CUSTODIAN: started as the member's own account, with the instructions and the task as one first message.
+  stub.bodies.length = 0;
+  const ok = await start({ params: { name: 'as-debbie', member: 'debbie', task: 'Fix the login bug.' } });
+  assert.equal(ok.ok, true, ok.text);
+  const sent = stub.bodies.at(-1);
+  assert.equal(sent.actor, 'fleet:debbie@members.invalid', 'who it runs as is the member, never the asker');
+  assert.equal(sent.startedBy, `fleet:${ELI}`);
+  assert.deepEqual([sent.member, sent.memberName, sent.memberRole], ['debbie', 'Debbie', 'software engineer']);
+  assert.equal(sent.task, 'Write small pull requests.\n\n----------\n\nFix the login bug.');
+  assert.match(String(sent.command), /^\/new as-debbie\b/);
+  assert.doesNotMatch(String(sent.command), /--archive|members\.invalid/);
+
+  // NOT ON THE MINTER'S LIST: Dana signs with her own listed key, and is refused by the box, with who is.
+  core.memberCustody = null; // the coordinator's copy aside, so this is the box's answer
+  const stranger = await start({ who: DANA, key: pixel, keyId: danaKid, params: { name: 'danas-try', member: 'debbie', task: 'x' } });
+  assert.equal(stranger.error?.code, 'not_custodian');
+  assert.match(String(stranger.text), /dana@example\.com may not start a session as Debbie\. The vault lists eli@example\.com\. Nothing was started\./);
+  // UNSIGNED, naming a custodian: this box takes unsigned work, and not this.
+  const unsigned = await start({ params: { name: 'forged', member: 'debbie', task: 'x' }, unsigned: true });
+  assert.equal(unsigned.error?.code, 'signature_required');
+  assert.match(String(unsigned.text), /runs on Debbie’s sign-ins, so ops-box starts one only when eli@example\.com signed for it or delegated it/);
+  // Eli again, so the count below is of two starts that ran and none of the refused ones.
+  const again = await start({ params: { name: 'again', member: 'debbie', task: 'x' } });
+  assert.equal(again.ok, true);
+  // A MEMBER THE VAULT WAS NEVER TOLD ABOUT, though the coordinator has a record of it.
+  core.setMember(null, 'ghost', { name: 'Ghost', kind: 'agent', role: 'x' });
+  assert.equal((await start({ params: { name: 'ghostly', member: 'ghost', task: 'x' } })).error?.code, 'no_member');
+  // AND NOBODY ASKS AS THE MEMBER'S OWN ACCOUNT, signed or not, member start or not.
+  const impostor = await core.dispatch({ verb: 'start', params: { name: 'impostor' }, actor: 'debbie@members.invalid', preferHost: 'ops-box' });
+  assert.equal(impostor.error?.code, 'not_a_person');
+  assert.equal(stub.bodies.filter((b) => /^\/new /.test(String(b.command))).length, 2, 'only the two custodian-signed starts reached the session manager');
+
+  // ADDED AS A CUSTODIAN, Dana starts one once the box has the next list.
+  await filed({ op: 'custodian', member: 'debbie', address: DANA });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true);
+  const now = await start({ who: DANA, key: pixel, keyId: danaKid, params: { name: 'danas-own', member: 'debbie', task: 'Review the fix.' } });
+  assert.equal(now.ok, true, now.text);
+  assert.equal(stub.bodies.at(-1).startedBy, `fleet:${DANA}`);
+  assert.equal(stub.bodies.at(-1).actor, 'fleet:debbie@members.invalid');
+});
+
+test('a box asks for members’ vaults by saying it takes them, files one under the member’s own account, and nothing else answers for it', async (t) => {
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  assert.equal((await as(ELI, { op: 'put', name: 'claude', value: `sk-ant-oat01-${'d'.repeat(40)}`, for: 'debbie' })).ok, true);
+  assert.equal((await as(ELI, { op: 'put', name: 'secret:DEPLOY_KEY', value: 'debbie-deploy', for: 'debbie' })).ok, true);
+  assert.equal((await as(ELI, { op: 'put', name: 'claude', value: `sk-ant-oat01-${'e'.repeat(40)}` })).ok, true);
+  const boxKeys = await generateKeyPair();
+  for (const whose of [{ for: 'debbie' }, {}]) assert.equal((await as(ELI, { op: 'grant', hostKey: boxKeys.publicJwk, label: 'ops-box', ...whose })).ok, true);
+
+  const stateDir = mkdtempSync(join(tmpdir(), 'fw-member-vault-'));
+  t.after(() => rmSync(stateDir, { recursive: true, force: true }));
+  const cfg = /** @type {any} */ ({ stateDir, sandbox: true });
+  // What this version of a box signs: `accepts`, with the rest.
+  const given = await m.box(boxKeys, { members: [ELI, DANA], accepts: ['members'] });
+  const { applyVault } = await import('../src/core/vault-store.js');
+  assert.equal(applyVault(cfg, given.answer).ok, true);
+
+  // THE MEMBER'S ACCOUNT, and its own token: never the custodian's, who approved the same box for his own.
+  const asDebbie = pickCredentialSource(cfg, 'fleet:debbie@members.invalid');
+  assert.equal(asDebbie.account, 'debbie@members.invalid');
+  assert.equal(readFileSync(String(asDebbie.tokenFile), 'utf8').trim(), `sk-ant-oat01-${'d'.repeat(40)}`);
+  assert.equal(readFileSync(String(pickCredentialSource(cfg, `fleet:${ELI}`).tokenFile), 'utf8').trim(), `sk-ant-oat01-${'e'.repeat(40)}`);
+  assert.equal(vaultSecret(cfg, 'debbie@members.invalid', 'DEPLOY_KEY'), 'debbie-deploy');
+  assert.equal(vaultSecret(cfg, ELI, 'DEPLOY_KEY'), null);
+
+  // NO FALLBACK: a member with nothing on this box is refused by name, and is not run on anybody else's.
+  const none = pickCredentialSource(cfg, 'fleet:jason@members.invalid');
+  assert.equal(none.source, null);
+  assert.equal(none.tokenFile, undefined);
+  assert.match(String(none.why), /jason@members\.invalid keeps no Claude login in their vault that this box was given/);
+
+  // An answer that names the members' domain as a PERSON's address is not believed: only a principal files there.
+  applyVault(cfg, { accounts: [{ email: 'debbie@members.invalid', login: 'x', items: [{ name: 'claude', value: `sk-ant-oat01-${'x'.repeat(40)}`, expiresAt: null }], problems: [] }] });
+  assert.equal(pickCredentialSource(cfg, 'fleet:debbie@members.invalid').source, null);
+  assert.equal(pickCredentialSource(cfg, 'fleet:debbie@members.invalid').tokenFile, undefined);
 });

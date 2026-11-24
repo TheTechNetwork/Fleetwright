@@ -850,6 +850,10 @@ export class HostRegistry {
           // For ownership checks. Older sidecars report no createdBy; null
           // means "unattributed", which the scheduler treats as fleet-owned.
           createdBy: found.createdBy ?? null,
+          // And, for a session started as a member, which member and who
+          // asked: its creator is the member's account, and these are who
+          // else may act on it (scheduler.js, mayActOn).
+          ...(typeof found.member === 'string' ? { member: found.member, startedBy: typeof found.startedBy === 'string' ? found.startedBy : null } : {}),
           ageMs: asOf === null ? Infinity : this.now() - asOf,
           ...(live ? {} : { busy: true }),
         });

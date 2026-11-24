@@ -28,6 +28,7 @@
 // pinned admin signed, and that check runs whatever the switch says
 // (pinned-admins.js, Sidecar#boxWide).
 
+import { MEMBER_ID_RE } from '../protocol/members.js';
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -108,7 +109,22 @@ export async function keyListFrom({ payload, signature, pinned, host, now }) {
     if (keys.length) directory.set(email, keys);
     else cleared.add(email);
   }
-  return { ok: true, directory, at: payload.at, revoked, cleared };
+  // WHO MAY START A SESSION AS EACH MEMBER (docs/members.md), in the same
+  // signed answer. Absent from a minter older than members, and then this
+  // box holds no list of them and starts nobody as one.
+  /** @type {Map<string, { kind: 'person'|'agent', email: string|null, may: string[] }>|null} */
+  let members = null;
+  if (Array.isArray(payload.members)) {
+    members = new Map();
+    for (const m of payload.members.slice(0, 512)) {
+      const id = String(m?.id ?? '');
+      if (!MEMBER_ID_RE.test(id) || (m.kind !== 'person' && m.kind !== 'agent') || !Array.isArray(m.may)) continue;
+      const email = m.kind === 'person' ? String(m.email || '').trim().toLowerCase() : null;
+      if (m.kind === 'person' && !email) continue;
+      members.set(id, { kind: m.kind, email, may: m.may.slice(0, 64).map((/** @type {unknown} */ a) => String(a).trim().toLowerCase()).filter(Boolean) });
+    }
+  }
+  return { ok: true, directory, at: payload.at, revoked, cleared, members };
 }
 
 /**
@@ -135,6 +151,8 @@ export class IntentKeys {
     this.problem = null;
     /** @type {Map<string, Array<{ kid: string, key: any, label: string }>>|null} */
     this.directory = null;
+    /** Who may start as each member, from the same list (keyListFrom). @type {Map<string, { kind: 'person'|'agent', email: string|null, may: string[] }>|null} */
+    this.members = null;
     /** @type {number|null} */
     this.listAt = null;
     /** @type {Map<string, Set<string>>} the delegations each person revoked, from the same list */
@@ -252,6 +270,7 @@ export class IntentKeys {
         return false;
       }
       this.directory = list.directory;
+      this.members = list.members;
       this.listAt = list.at;
       this.revoked = list.revoked;
       this.#noteSigners(list.directory, list.cleared);
@@ -272,6 +291,16 @@ export class IntentKeys {
    */
   get current() {
     return this.directory && this.listAt !== null && this.now() - this.listAt <= 2 * KEY_LIST_MAX_AGE_MS ? this.directory : null;
+  }
+
+  /**
+   * Who may start as each member, while the list it came on may still be
+   * used, or null: no list, one too old, or a minter that sends none.
+   *
+   * @returns {Map<string, { kind: 'person'|'agent', email: string|null, may: string[] }>|null}
+   */
+  get currentMembers() {
+    return this.current ? (this.members ?? null) : null;
   }
 
   /**
