@@ -112,7 +112,7 @@ and "dead host" is the one it retries.
 | `status` | `name?` | | `/status [name]` |
 | `peek` | `name`, `lines?` (1–500) | | sidecar-local — `GET /api/peek` |
 | `health` | — | | sidecar-local — `GET /api/state` + `os` |
-| `start` | `name?`, `mode?` (`safe`\|`dangerous`), `title?`, `brief?` (stored, never delivered), `profile?`, `archive?` (`owner/repo`, v11, set by the coordinator), `boxSecrets?` (`yes`\|`no`, v14, set by the coordinator) | ✅ | `/new [name] [--safe\|--dangerous] [--profile=<name>] [--archive=<owner/repo>] [--box-secrets=yes\|no]` |
+| `start` | `name?`, `mode?` (`safe`\|`dangerous`), `title?`, `brief?` (stored, never delivered), `profile?`, `archive?` (`owner/repo`, v11, set by the coordinator), `boxSecrets?` (`yes`\|`no`, v14, set by the coordinator), `member?` (a member's id, v19: the session runs as that member, [members.md](./members.md)), `memberName?`, `memberRole?`, `memberBrief?` (v19, set by the coordinator from the member's record) | ✅ | `/new [name] [--safe\|--dangerous] [--profile=<name>] [--archive=<owner/repo>] [--box-secrets=yes\|no]` |
 | `profiles` | — | | `/profiles` |
 | `resume` | `name`, `choice?` (`summary`\|`full`), `boxSecrets?` (`yes`\|`no`, v14, set by the coordinator) | ✅ | `/resume <name> [summary\|full] [--box-secrets=yes\|no]` |
 | `stop` | `name` | ✅ | `/stop <name>` |

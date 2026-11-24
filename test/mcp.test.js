@@ -62,7 +62,10 @@ test('every exposed tool is a real verb, with the verb\'s own parameters', () =>
     if (tool.verb === null) {
       assert.ok(tool.coordinator, `${tool.name} has no verb and no coordinator route`);
       assert.equal(tool.local, true, `${tool.name} reads a coordinator route but is not local`);
-      assert.equal(tool.mutating, false, `${tool.name} is a coordinator READ and must not be mutating`);
+      // A READ, with ONE WRITE: `fleet_member` changes a member's record in
+      // the organization, which is the fleet's own and no host's
+      // (docs/members.md). Named here so a second write is a deliberate edit.
+      assert.equal(tool.mutating, tool.name === 'fleet_member', `${tool.name} is a coordinator read and must not be mutating`);
       // No `host`: naming one would ask the fleet to route a question the fleet
       // itself answers.
       assert.ok(!('host' in tool.inputSchema.properties), `${tool.name} takes a host it cannot use`);
@@ -969,4 +972,76 @@ test('the instructions no longer say nothing reports done, and say what "done" m
   assert.match(instructions, /BACK TO ITS PROMPT after working/);
   assert.match(instructions, /stopped working, not that it did what you asked/);
   assert.match(instructions, /fleet_await — returns when the session comes back to its prompt after working/);
+});
+
+test('fleet_members prints the organization as a tree, and says whom the caller may start as', async () => {
+  const members = [
+    { id: 'eli', name: 'Eli', kind: 'person', email: 'eli@example.com', role: 'owner', reportsTo: null, workTypes: [], hosts: {} },
+    { id: 'debbie', name: 'Debbie', kind: 'agent', role: 'software engineer', reportsTo: 'eli', workTypes: ['backend', 'review'], hosts: { tag: 'linux' }, description: 'Takes backend work.' },
+    { id: 'jason', name: 'Jason', kind: 'agent', role: 'designer', reportsTo: 'debbie', workTypes: [], hosts: {} },
+  ];
+  const { server, written } = serverWith(undefined, {
+    fetch: async () => ({ status: 200, json: async () => ({ ok: true, members, you: { admin: false, member: 'eli', manages: ['debbie', 'jason'], startAs: ['eli', 'debbie'] } }) }),
+  });
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_members', arguments: {} }));
+  const text = written[0].result.content[0].text;
+  assert.match(text, /^- eli: Eli, owner \(person\)$/m);
+  assert.match(text, /^ {2}- debbie: Debbie, software engineer \(agent\); takes backend, review; runs on linux; Takes backend work\.$/m);
+  assert.match(text, /^ {4}- jason: Jason, designer \(agent\)$/m);
+  assert.match(text, /You may start a session as: eli, debbie\. Pass the id as `member` to fleet_start\./);
+  assert.doesNotMatch(text, /eli@example\.com/, 'an address is not what an agent chooses a member by');
+
+  // None yet, and a coordinator from before members: said, not an error.
+  const empty = serverWith(undefined, { fetch: async () => ({ status: 200, json: async () => ({ ok: true, members: [], you: {} }) }) });
+  await empty.server.handleLine(rpc(2, 'tools/call', { name: 'fleet_members', arguments: {} }));
+  assert.match(empty.written[0].result.content[0].text, /no members yet/);
+  const old = serverWith(undefined, { fetch: async () => ({ status: 404, json: async () => { throw new Error('not json'); } }) });
+  await old.server.handleLine(rpc(3, 'tools/call', { name: 'fleet_members', arguments: {} }));
+  assert.match(old.written[0].result.content[0].text, /does not keep an organization yet/);
+  assert.notEqual(old.written[0].result.isError, true);
+});
+
+test('fleet_member changes the fields it is given and keeps the rest, and passes on a refusal in the fleet’s own words', async () => {
+  /** @type {Array<{ method: string, path: string, body: any }>} */
+  const asked = [];
+  const prior = { id: 'debbie', name: 'Debbie', kind: 'agent', role: 'software engineer', reportsTo: 'eli', instructions: 'Write small pull requests.', workTypes: ['backend'], hosts: { tag: 'linux' }, engines: [{ engine: 'claude-code' }] };
+  const fleet = (/** @type {(a: { method: string, path: string, body: any }) => { status: number, body: any }} */ answer) => serverWith(undefined, {
+    fetch: async (/** @type {string} */ url, /** @type {any} */ init = {}) => {
+      const a = { method: init.method ?? 'GET', path: new URL(url).pathname, body: init.body ? JSON.parse(init.body) : undefined };
+      asked.push(a);
+      const r = a.method === 'GET' ? { status: 200, body: { ok: true, members: [prior], you: {} } } : answer(a);
+      return { status: r.status, json: async () => r.body };
+    },
+  });
+
+  // ONE FIELD: read first, then the whole record with that field changed.
+  let { server, written } = fleet(() => ({ status: 200, body: { ok: true, text: 'Saved Debbie.' } }));
+  await server.handleLine(rpc(1, 'tools/call', { name: 'fleet_member', arguments: { id: 'debbie', role: 'staff engineer', reportsTo: '', model: 'opus' } }));
+  const put = asked.find((a) => a.method === 'PUT');
+  assert.equal(put?.path, '/api/members/debbie');
+  assert.deepEqual(put?.body, { ...prior, role: 'staff engineer', reportsTo: null, engines: [{ engine: 'claude-code', model: 'opus' }] });
+  assert.match(written[0].result.content[0].text, /Saved Debbie\. This changed the record only\. Who may sign debbie in or start a session as it is custody/);
+
+  // REFUSED: the fleet's sentence, as an error the agent can read.
+  asked.length = 0;
+  ({ server, written } = fleet(() => ({ status: 403, body: { ok: false, error: { code: 'not_manager' }, text: 'Debbie is not on your team, so you cannot change them.' } })));
+  await server.handleLine(rpc(2, 'tools/call', { name: 'fleet_member', arguments: { id: 'debbie', role: 'mine' } }));
+  assert.equal(written[0].result.isError, true);
+  assert.match(written[0].result.content[0].text, /not on your team/);
+
+  // REMOVE, and a file, each on its own route.
+  asked.length = 0;
+  ({ server, written } = fleet(() => ({ status: 200, body: { ok: true, text: 'Done.' } })));
+  await server.handleLine(rpc(3, 'tools/call', { name: 'fleet_member', arguments: { id: 'debbie', remove: true } }));
+  await server.handleLine(rpc(4, 'tools/call', { name: 'fleet_member', arguments: { id: 'debbie', markdown: '---\nid: debbie\n---\n' } }));
+  assert.deepEqual(asked.map((a) => `${a.method} ${a.path}`), ['DELETE /api/members/debbie', 'POST /api/members/import']);
+  assert.deepEqual(asked[1].body, { text: '---\nid: debbie\n---\n' });
+
+  // It is a write, and says so; and it needs an id.
+  const tool = toolsFor().find((t) => t.name === 'fleet_member');
+  assert.equal(tool?.mutating, true);
+  assert.deepEqual(tool?.inputSchema.required, ['id']);
+  assert.match(String(tool?.description), /holds no credential/);
+  // And `fleet_start` offers the member to start as.
+  assert.ok('member' in (toolsFor().find((t) => t.name === 'fleet_start')?.inputSchema.properties ?? {}));
 });

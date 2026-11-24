@@ -314,6 +314,28 @@ minter, renewed by nothing, until the person signs in again or forgets it,
 and an access token a box already handed a session lasts until it expires.
 Revoking at GitHub or Cloudflare ends it there.
 
+## A member's vault
+
+The fleet's organization ([members.md](./members.md)) has agent members, and
+each keeps its sign-ins in a vault of its own here, under the principal
+`member:<id>`: the same rows, seal, renewal lock, Test and fifteen-minute
+check as a person's. Nobody signs in as an agent, so who may act for its
+vault is **custody**, which this Worker holds on a copy of the tree filed by
+the people entitled to change it (`src/fleet/minter/org.js`):
+
+| who | may act for |
+|---|---|
+| an agent member's own custodians, and every manager above it | that agent's vault |
+| a person's managers, once that person turned it on from their own device | that person's vault |
+| the coordinator, or a fleet admin by being one | nothing |
+
+A custodian sends the request they would send for their own vault with
+`for: <member id>` inside the seal. A person reads who their managers are and
+what a manager changed in their own `list`. A box is handed a member's vault
+only when it signs that it takes one (`accepts`), and files it under an
+address nobody can hold. The signed key list a box takes says who may start a
+session as each member.
+
 ## On the box
 
 The sidecar asks (`Sidecar#syncVault`) and hands the answer to fleetwright,
@@ -566,6 +588,11 @@ Workers Routes on that zone, the deploy says so in a warning and carries on,
 and phones on that fleet ask for the key to be pasted.
 
 ## Adding a provider
+
+Three names are held for the engines after Claude Code and kept by nothing
+yet: `codex`, `copilot` and `apikey:<provider>` (`FUTURE_ITEM_KINDS`). A vault
+refuses each as not kept yet, which is a different answer from a name it has
+never heard of.
 
 One entry in `OAUTH_PROVIDERS` in `src/fleet/minter/vault.js` (its label and
 how it renews, in `src/core/oauth-refresh.js`), its client in the minter's

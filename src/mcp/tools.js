@@ -210,6 +210,59 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     coordinator: '/api/events',
   },
   {
+    // THE ORGANIZATION (docs/members.md), and for the reason `fleet_events`
+    // is here and not a verb: who the fleet's members are is the fleet's own
+    // record, and no host can answer it. Two tools, a read and a write, on
+    // the same route the phones use.
+    name: 'fleet_members',
+    verb: null,
+    description:
+      'The organization: every member of the fleet, each a person or an AI agent, with its role, who it ' +
+      'reports to, the kinds of work it takes and where it runs. Read this to choose who a piece of work ' +
+      'belongs to, then pass a member’s id as `member` to fleet_start. It also says which members you may ' +
+      'start a session as.',
+    schema: {},
+    requires: [],
+    local: true,
+    coordinator: '/api/members',
+  },
+  {
+    // A WRITE, and the only coordinator tool that is one. It changes the
+    // RECORD: a name, a role, a place in the tree, instructions. Who may sign
+    // a member in, or start a session as one, is custody, which the minter
+    // holds and a person files from their own phone or the signing page with
+    // their own sign-in inside. An MCP client holds no such thing, so nothing
+    // here can reach a vault, and the description says so.
+    name: 'fleet_member',
+    verb: null,
+    description:
+      'Add a member to the organization, change one, or remove one. Give `id` and the fields to set; a field ' +
+      'you leave out keeps its value. An admin may write any member, and a manager the members of their own ' +
+      'team. This changes the record only: it holds no credential, and who may sign the member in or start a ' +
+      'session as it (custody) is filed by a person from the app or the signing page.',
+    schema: {
+      id: { type: 'string', description: 'The member’s id: lowercase letters, digits and hyphens, at most 40. Naming one that does not exist adds it.' },
+      remove: { type: 'boolean', description: 'Remove this member. Refused while anybody reports to it.' },
+      markdown: { type: 'string', description: 'The member as its markdown file (front matter, then instructions), instead of fields. What fleet_members prints with `as: "files"` is this shape.' },
+      name: { type: 'string', description: 'What a screen shows. Required for a new member.' },
+      kind: { type: 'string', enum: ['person', 'agent'], description: 'Required for a new member, and never changed after.' },
+      email: { type: 'string', description: 'A person member’s fleet address. An agent has none.' },
+      role: { type: 'string', description: 'A label, like "software engineer". Required for a new member. It gives no rights.' },
+      title: { type: 'string', description: 'A longer label.' },
+      reportsTo: { type: 'string', description: 'Another member’s id, or an empty string for nobody. Who manages whom comes from this.' },
+      description: { type: 'string', description: 'What this member is for, at most 300 characters.' },
+      workTypes: { type: 'array', items: { type: 'string' }, description: 'The kinds of work it takes, as short lowercase names: "backend", "code-review".' },
+      instructions: { type: 'string', description: 'Markdown the member’s sessions open with, before the task. At most 4 KiB.' },
+      model: { type: 'string', description: 'The model its Claude Code engine runs, when not the default.' },
+      tag: { type: 'string', description: 'The host tag its sessions go to when the person starting one names no machine.' },
+      budgetUsdMonth: { type: 'number', description: 'A monthly budget in dollars. Stored; nothing enforces it yet.' },
+    },
+    requires: ['id'],
+    local: true,
+    coordinator: '/api/members',
+    mutating: true,
+  },
+  {
     name: 'fleet_read_log',
     verb: 'logs',
     description:
@@ -386,9 +439,9 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       tools.push({
         name: alias.name,
         description: alias.description,
-        inputSchema: { type: 'object', properties: { ...alias.schema }, additionalProperties: false },
+        inputSchema: { type: 'object', properties: { ...alias.schema }, ...(alias.requires?.length ? { required: alias.requires } : {}), additionalProperties: false },
         verb: null,
-        mutating: false,
+        mutating: Boolean(alias.mutating),
         local: true,
         coordinator: alias.coordinator,
       });

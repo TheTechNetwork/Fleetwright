@@ -41,11 +41,16 @@ nothing yet.
 **No credential is ever in a record or a file.** A member's sign-ins are in
 its vault, in the minter, and the record does not point at them.
 
-Members are kept by the coordinator (`src/fleet/coordinator/members.js`), one
-Durable Object value a member under `members:<id>`, because a value holds 128
-KiB and one member's instructions alone are 4 KiB. A fleet holds at most 200.
-The Node coordinator keeps the same rows in its state file. Everybody in the
-fleet reads the list; it is how a person learns who does what.
+Members are kept by the coordinator (`src/fleet/coordinator/org-members.js`),
+one Durable Object value a member under `members:<id>`, because a value holds
+128 KiB and one member's instructions alone are 4 KiB. A fleet holds at most
+200. Everybody in the fleet reads the list; it is how a person learns who does
+what.
+
+"Member" already meant somebody who may sign in (`clients.js`, `invites.js`,
+`member-page.js`). That list decides who is in the fleet. This one says what
+the fleet is made of. A person member names somebody on the other list by
+their address, and an agent member names nobody.
 
 ## The tree, and who manages whom
 
@@ -62,7 +67,8 @@ A manager can, for each member of their team:
 - read and edit the record, and move the member anywhere inside their own
   team. They cannot move a member out of it, change `managers`, or touch a
   member they do not manage;
-- start a session as that member, and see its sessions;
+- start a session as that member, and see and stop the sessions started as
+  it, whoever started them;
 - hold custody of its vault (below).
 
 `manages` in `src/fleet/protocol/members.js` is the one function that answers
@@ -109,15 +115,15 @@ one lock, tested and checked exactly as a person's is.
 party this fleet is built to distrust ([signed-intents.md](./signed-intents.md)),
 so who may act for a member's vault is held and checked in the minter:
 
-- **The minter keeps its own copy of the tree** (`org`, one row): each
-  member's id, kind, address, `reportsTo` and `managers`, and each agent
-  member's custodians. It reaches the minter only as a vault request, sealed
+- **The minter keeps its own copy of the tree** (`orgm:<id>`, one row a
+  member, in `src/fleet/minter/org.js`): each member's id, kind, address,
+  `reportsTo` and `managers`, and each agent member's custodians. It reaches the minter only as a vault request, sealed
   on a phone or the signing page with that person's own GitHub sign-in inside
   (`orgmember`), and the minter takes a change only from somebody who already
   holds the right to make it there: an org admin, or a manager above both the
   member's old place and its new one.
-- **Org admins are the minter's own list**, because the minter has no other
-  way to know one. The first person to file the tree becomes its first admin,
+- **Org admins are the minter's own list** (`org:admins`), because the minter
+  has no other way to know one. The first person to file the tree becomes its first admin,
   and only while the coordinator also says they administer the fleet. After
   that an admin is added or removed by an admin, the last one stays, and the
   coordinator's word can only take away. This is first use, as a fleet
@@ -139,7 +145,7 @@ so a manager holds custody of it only after that person turns it on from
 their own device (`custody`, under You › Credentials). Until then a manager's
 request is refused with a sentence saying who can allow it. The person's own
 `list` names their custodians, and every deposit, change or removal a
-custodian makes is written beside the vault (`custody-log`, the last twenty)
+custodian makes is written beside the vault (`clog:`, the last twenty)
 where the person reads it, and told to their phone. The log is the minter's;
 the push is the coordinator's and can be dropped by a dishonest one, which is
 why the log exists.
@@ -185,11 +191,21 @@ list**, whatever the box's signature mode: an unsigned actor here would be the
 coordinator naming a custodian. Otherwise it refuses, `not_custodian`, saying
 who the minter lists.
 
-**Credentials come from the member's principal and nowhere else.**
-`pickCredentialSource` takes the principal: `member:<id>` for an agent, the
-person's address for a person member. It does not fall back to the requester's
-account or to anything on the box. A member with no sign-in on that box is a
-refusal that names the member and the box.
+**Credentials come from the member's principal and nowhere else.** A box
+files everything a session runs on by the address of whose it is, and every
+reader there, the credential broker included, finds a session's sign-ins by
+that address. An agent member has no address, so a box files its vault under
+one nobody can hold: `<id>@members.invalid` (`accountOfMember`). The session's
+account is then the member's, and `pickCredentialSource` and everything after
+it read the member's sign-ins exactly as they read a person's, with the same
+rule: no fallback to the asker's account or to anything on the box. A member
+with no sign-in on that box is a refusal that names the member. A box refuses
+any request that names an address at that domain as the one asking, so the
+only way onto a member's sign-ins is a member start the box has checked.
+
+**A member's session is not pushed to the starter's archive.** That push is
+made with the starter's own GitHub sign-in on the box, and a box holding the
+member's vault need not hold theirs. A branch for the work is step 3's.
 
 **Where.** With no host and no tag given, the member's `hosts.tag` places it.
 A member start is not sent to a temporary runner: a runner holds its owner's
@@ -202,6 +218,9 @@ coordinator writes (`setBy: 'fleet'`), because the person signs the task and
 the member, and the instructions are the coordinator's record.
 
 **The session records** the member's id, name and role, and who started it.
+Its creator is the member's account, so `startedBy` is what lets the person
+who asked see it, stop it and open its ports, and the member's id is what
+lets its managers.
 
 **Protocol 19.** A host older than 19 is refused a member start. It would
 ignore `member` and run the session on the requester's account, which is the
@@ -252,8 +271,9 @@ tree as the minter's.
 
 `test/members.test.js` (records, cycles, managing, the file),
 `test/members-coordinator.test.js` (who may write, routes, the Durable Object
-round trip, start-as, the protocol 18 refusal),
-`test/members-vault.test.js` (the org row, custody, deposits, one renewal
-lock, box approval a vault, the check's alerts),
-`test/members-host.test.js` (the box's check, credentials by principal, the
-first message) and the phone and MCP rows in the existing suites.
+round trip, start-as, the protocol 18 refusal), the "Members' vaults" section
+of `test/vault.test.js`, which uses that file's real minter (the tree and its
+admins, custody following the tree, deposits, one renewal lock, box approval a
+vault, the check's alerts, and a signed member start from a phone through the
+coordinator to a box and what it hands the session manager),
+`test/members-in-apps.test.js`, and the two member tools in `test/mcp.test.js`.

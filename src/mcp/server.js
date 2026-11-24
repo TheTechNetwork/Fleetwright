@@ -898,6 +898,9 @@ export class McpServer {
     // A COORDINATOR TOOL — its subject is the fleet's own record, not a host,
     // so it goes to a route rather than through an intent. See tools.js for why
     // this is not a verb.
+    // THE ORGANIZATION, read and written on its own route (docs/members.md).
+    if (tool.name === 'fleet_members') return await this.#members();
+    if (tool.name === 'fleet_member') return await this.#member(params);
     if (tool.coordinator) return await this.#coordinatorRead(tool.coordinator);
 
     // A LOCAL TOOL — the waiting happens here, not in the fleet.
@@ -1181,6 +1184,117 @@ export class McpServer {
     if (!reply || reply.ok === false) return false;
     const creator = String(sessionFrom(reply, name)?.createdBy ?? '').toLowerCase();
     return creator === `fleet:${me.email}` || creator === me.email;
+  }
+
+  /**
+   * One request to the organization's route, as JSON, or the sentence for why
+   * there is none. A refusal comes back as the coordinator's own words, which
+   * say who may do what; only "no credential" is this server's to explain.
+   *
+   * @param {string} method @param {string} path @param {unknown} [body]
+   * @returns {Promise<{ body: any, status: number } | { failed: any }>}
+   */
+  async #org(method, path, body) {
+    let res;
+    try {
+      res = await this.fetch(`${this.coordinator}${path}`, {
+        method,
+        headers: { authorization: `Bearer ${this.credential}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    } catch (e) {
+      return { failed: this.#text(`Could not reach the fleet: ${/** @type {Error} */ (e).message}`, true) };
+    }
+    if (res.status === 401) return { failed: this.#text('this credential was refused — it may have been revoked from the app', true) };
+    /** @type {any} */
+    let read = null;
+    try {
+      read = await res.json();
+    } catch { /* not JSON: an older coordinator's 404 page, said below */ }
+    if (res.status === 404 && typeof read?.text !== 'string') {
+      return { failed: this.#text('This coordinator does not keep an organization yet, so there are no members to list or change.') };
+    }
+    return { body: read ?? {}, status: res.status };
+  }
+
+  /** The organization, as a tree an agent can choose a member from. */
+  async #members() {
+    const got = await this.#org('GET', '/api/members');
+    if ('failed' in got) return got.failed;
+    /** @type {any[]} */
+    const members = Array.isArray(got.body?.members) ? got.body.members : [];
+    if (!members.length) return this.#text('The organization has no members yet. An admin adds one with fleet_member, or from the app.');
+    const byId = new Map(members.map((m) => [m.id, m]));
+    const depth = (/** @type {any} */ m, seen = new Set()) => {
+      let d = 0;
+      for (let at = m.reportsTo; at && byId.has(at) && !seen.has(at); at = byId.get(at).reportsTo) {
+        seen.add(at);
+        d += 1;
+      }
+      return d;
+    };
+    /** Managers before their reports, each branch together. @type {any[]} */
+    const ordered = [];
+    const walk = (/** @type {string|null} */ parent) => {
+      for (const m of members) if ((m.reportsTo && byId.has(m.reportsTo) ? m.reportsTo : null) === parent) { ordered.push(m); walk(m.id); }
+    };
+    walk(null);
+    const lines = ordered.map((m) => {
+      const bits = [
+        `${oneLine(String(m.name), 80)}, ${oneLine(String(m.role), 60)} (${m.kind === 'agent' ? 'agent' : 'person'})`,
+        Array.isArray(m.workTypes) && m.workTypes.length ? `takes ${m.workTypes.map((/** @type {unknown} */ w) => oneLine(String(w), 40)).join(', ')}` : null,
+        m.hosts?.tag ? `runs on ${oneLine(String(m.hosts.tag), 40)}` : null,
+        m.description ? oneLine(String(m.description), 300) : null,
+      ].filter(Boolean);
+      return `${'  '.repeat(depth(m))}- ${m.id}: ${bits.join('; ')}`;
+    });
+    const you = got.body?.you ?? {};
+    const startAs = Array.isArray(you.startAs) ? you.startAs.filter((/** @type {unknown} */ id) => byId.has(String(id))) : [];
+    lines.push('');
+    lines.push(startAs.length
+      ? `You may start a session as: ${startAs.join(', ')}. Pass the id as \`member\` to fleet_start.`
+      : 'You may not start a session as any member yet: that needs you to be the member, or one of its custodians.');
+    return this.#text(`The organization, each member under who it reports to:\n${lines.join('\n')}`);
+  }
+
+  /**
+   * Add, change or remove a member's record. A field left out keeps its
+   * value: the route takes a whole record, so what is there is read first and
+   * the caller's fields laid over it.
+   *
+   * @param {Record<string, unknown>} params
+   */
+  async #member(params) {
+    const id = String(params.id ?? '');
+    const at = `/api/members/${encodeURIComponent(id)}`;
+    /** @param {{ body: any, status: number }} got */
+    const said = (got) => this.#text(String(got.body?.text || (got.body?.ok ? 'Done.' : 'The fleet refused it and did not say why.')), got.body?.ok !== true);
+    if (params.remove === true) {
+      const gone = await this.#org('DELETE', at);
+      return 'failed' in gone ? gone.failed : said(gone);
+    }
+    if (typeof params.markdown === 'string') {
+      const read = await this.#org('POST', '/api/members/import', { text: params.markdown });
+      return 'failed' in read ? read.failed : said(read);
+    }
+    const now = await this.#org('GET', '/api/members');
+    if ('failed' in now) return now.failed;
+    const prior = (Array.isArray(now.body?.members) ? now.body.members : []).find((/** @type {any} */ m) => m.id === id) ?? {};
+    /** @type {Record<string, unknown>} */
+    const next = { ...prior };
+    for (const field of ['name', 'kind', 'email', 'role', 'title', 'description', 'workTypes', 'instructions', 'budgetUsdMonth']) {
+      if (params[field] !== undefined) next[field] = params[field];
+    }
+    if (params.reportsTo !== undefined) next.reportsTo = params.reportsTo === '' ? null : params.reportsTo;
+    if (params.model !== undefined) next.engines = [{ engine: 'claude-code', ...(params.model ? { model: params.model } : {}) }];
+    if (params.tag !== undefined) next.hosts = params.tag ? { tag: params.tag } : {};
+    const saved = await this.#org('PUT', at, next);
+    if ('failed' in saved) return saved.failed;
+    if (saved.body?.ok !== true) return said(saved);
+    return this.#text(
+      `${saved.body.text} This changed the record only. Who may sign ${id} in or start a session as it is custody, which a person files ` +
+        'from the app’s Org screen or the signing page.',
+    );
   }
 
   /**
