@@ -17,6 +17,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+import { EDGE } from '../src/fleet/host/edge-router.js';
+
 const read = (/** @type {string} */ p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const SAVED = read('apps/ios/Fleetwright/XOSaved.swift');
 const SCREEN = read('apps/ios/Fleetwright/AddHypervisorView.swift');
@@ -114,7 +116,10 @@ test('iOS: internet access says what it is, and offers to build the router only 
   assert.match(SCREEN, /\.onChange\(of: choice\.egress\) \{ _, way in\s*if way == nil \{ choice\.edge = false; choice\.image = false; choice\.images = \[\]; choice\.holder = false \}/);
   // Built where there is none, kept where there is, and the cost said first.
   assert.ok(SCREEN.includes('there == nil ? "Build the edge router on it" : "Keep the edge router on it"'));
-  assert.ok(SCREEN.includes('2 vCPU · 2 GiB · 3 GiB disk · 470 MB download'));
+  assert.ok(SCREEN.includes('2 vCPU · 4 GiB · 3 GiB disk · 470 MB download'));
+  // THE SIZE SAID IS THE SIZE BUILT (C-5). The line said 2 GiB while the
+  // router needed 4 to stay up; it is held to what the box builds now.
+  assert.ok(SCREEN.includes(`${EDGE.cpus} vCPU · ${EDGE.memory / 1024 ** 3} GiB · `), 'the phones state another size than the box builds');
   assert.ok(SCREEN.includes('needs an update to build the router.'));
   // Any of the pool's networks as the way out, from a machine that takes it,
   // and only the fleet's from one that does not (checkPolicy).
@@ -210,7 +215,7 @@ test('both phones say the same things about what is remembered', () => {
     ' Your other machines were asked instead.',
     'checks it again before signing in.',
     'The uplink: the network VMs reach the internet through',
-    '2 vCPU · 2 GiB · 3 GiB disk · 470 MB download',
+    '2 vCPU · 4 GiB · 3 GiB disk · 470 MB download',
     '"Running"',
     'Stopped · Apply starts it',
     'needs an update to build the router.',

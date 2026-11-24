@@ -1306,7 +1306,7 @@ struct AddHypervisorView: View {
     /// there is: a row's line, not a paragraph. The same words as Android
     /// (PolicyForm.kt).
     private func edgeLine(_ there: XOPolicy.Inventory.Edge?) -> String {
-        guard let there else { return "2 vCPU · 2 GiB · 3 GiB disk · 470 MB download" }
+        guard let there else { return "2 vCPU · 4 GiB · 3 GiB disk · 470 MB download" }
         let state = there.running ? "Running" : "Stopped · Apply starts it"
         return there.sr.map { "\(state) · disk on \($0)" } ?? state
     }
