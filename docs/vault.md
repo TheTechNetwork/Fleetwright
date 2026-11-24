@@ -48,13 +48,24 @@ the page signs both halves of `setuptoken` for that one machine, holds the key
 the sign-in comes back sealed to, and keeps it here, so `/me` and the
 coordinator carry ciphertext and a code a machine types, never the sign-in.
 
+**A member's vault, from the same page** ([members.md](./members.md)). **My
+team** lists the members the vault says this person may act for, each with its
+Claude sign-in's state, or "Not checked" where the vault refused to say.
+Opening one points the same screen at that member's vault: every request then
+carries `for`, and a sign-in begun there is deposited there even if the person
+looks away before it finishes. An agent member's page lists its custodians,
+to add or remove one. A person's own page has **Your managers**: the switch
+that lets them hold custody, who they are, and what each has changed. The
+tree itself is not edited here.
+
 The page opens the vault with the GitHub sign-in it listed its key with, held
 in that window's memory only; a window opened again signs in to GitHub again.
 It offers Cloudflare only where the minter holds the client, its secret and
 its registered scopes (`FLEETWRIGHT_CLOUDFLARE_SCOPES`, which the deploy
 passes from the coordinator's config). `/me` used to link accounts on each
 machine, which every machine now refuses; it carries the page's requests and
-nothing else (`member-page.js`, `RELAYS`). A fleet with no signing page says
+nothing else (`member-page.js`, `RELAYS`): the four above, and a read of the
+members' list for their names. A fleet with no signing page says
 a browser cannot reach the vault, and its members keep credentials from the
 app.
 

@@ -658,9 +658,12 @@ signed for that machine, the second carrying a key the page made, so the
 sign-in comes back sealed to the page. Nothing `/me` sends is signed any more.
 It used to send the page each change to an account, to link on machines, and
 every machine now refuses a person's link (the vault holds it), so that went,
-and a `/me` from before is told so rather than left waiting. `/me` carries four
+and a `/me` from before is told so rather than left waiting. `/me` carries five
 requests for the page and no others: `/api/github/device`, `/api/vault`,
-`GET /api/hosts/enrolled`, and `/api/intent` for `setuptoken` alone.
+`GET /api/hosts/enrolled`, `/api/intent` for `setuptoken` alone, and
+`GET /api/members`, which everybody in the fleet reads, for the name beside
+each member whose vault the person manages ([members.md](./members.md)). The
+page reads that list and cannot write it.
 
 **What it does not stop.** The coordinator serves `/me`, which carries
 everything the page sends, so it can drop or delay it, and it answers the list
@@ -676,7 +679,11 @@ list, unusable, until it is removed from the app under You, Devices.
 `test/sign-page.test.js` runs all of it in Chromium against the real minter,
 the coordinator's callbacks and `/me`: listing, approving a machine, a named
 secret, a Claude sign-in made on a machine, GitHub and Cloudflare, and that
-nothing `/me` carried held a secret in the clear.
+nothing `/me` carried held a secret in the clear. It also runs two people on
+two signing pages: a person turning their managers' custody on and reading
+what a manager changed, and a manager opening an agent member's vault, where
+a secret, a machine's approval and a Claude sign-in each land in the member's
+vault and not their own.
 
 `docs/security.md` changes in step: SEC-COORD-2 moves from aspirational to
 observed after phase 1, and to enforced only after phase 3 is the default.
