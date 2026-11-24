@@ -625,6 +625,11 @@ export class HttpAdapter {
         // the sidecar set after checking the asker against the minter's list.
         ['member', /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/],
         ['startedBy', /^fleet:[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,63}$/],
+        // ON A TASK (docs/tasks.md): which task of the fleet's a session is
+        // work on and the branch it was told, for the record. The sidecar
+        // set both from a start its asker signed.
+        ['taskId', /^t[1-9][0-9]{0,8}$/],
+        ['taskBranch', /^task\/t[1-9][0-9]{0,8}(?:-[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?)?$/],
       ])) {
         if (body[field] === undefined || body[field] === null) continue;
         if (typeof body[field] !== 'string' || !re.test(body[field])) {

@@ -71,6 +71,7 @@ import { IntentKeys } from './intent-keys.js';
 import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
 import { actorEmail, needsSignature } from '../protocol/intent-signature.js';
 import { accountOfMember, memberOfAccount, composeFirstMessage } from '../protocol/members.js';
+import { composeTaskMessage, TASK_BRANCH_RE } from '../protocol/tasks.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 import { CLAUDE_REFRESH_AHEAD_MS } from '../minter/claude-login.js';
 
@@ -967,6 +968,16 @@ export class Sidecar {
     // AS A MEMBER (docs/members.md, "Starting as a member"): checked here,
     // against the list the minter signed, whatever this box's mode. From
     // here on the intent is the member's own start, with who asked beside it.
+    //
+    // ON A TASK (docs/tasks.md) is a member start and nothing else: a task
+    // is one member's work, and a session on one with no member named would
+    // be work on a task as whoever asked.
+    if (intent.verb === 'start' && intent.params?.taskId !== undefined && intent.params?.member === undefined) {
+      return {
+        v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'bad_params' },
+        text: `A session on ${String(intent.params.taskId)} is started as the task’s assignee, and this names no member. Nothing was started.`,
+      };
+    }
     if (intent.verb === 'start' && intent.params?.member !== undefined) {
       const as = this.#startAs(intent, verdict);
       if (!as.ok) {
@@ -1120,7 +1131,20 @@ export class Sidecar {
     if (verdict !== 'signed' && verdict !== 'delegated') {
       return refuse('signature_required', `A session as ${name} runs on ${name}’s sign-ins, so ${this.hostId} starts one only when ${asker} signed for it or delegated it, and this was neither.`);
     }
-    const first = composeFirstMessage(typeof intent.params.memberBrief === 'string' ? intent.params.memberBrief : '', typeof intent.params.task === 'string' ? intent.params.task : '');
+    const instructions = typeof intent.params.memberBrief === 'string' ? intent.params.memberBrief : '';
+    const words = typeof intent.params.task === 'string' ? intent.params.task : '';
+    // ON A TASK (docs/tasks.md, "Starting on a task"): which task and branch
+    // this is go before the words the person signed, and where to write the
+    // result goes after them. The id, branch and repository are signed with
+    // the words, so the line this box writes is the asker's and not the
+    // coordinator's.
+    const onTask = typeof intent.params.taskId === 'string';
+    if (onTask && !(typeof intent.params.taskBranch === 'string' && TASK_BRANCH_RE.test(intent.params.taskBranch))) {
+      return refuse('bad_params', `A session on ${intent.params.taskId} needs the task’s branch, and this start names none.`);
+    }
+    const first = onTask
+      ? composeTaskMessage({ instructions, taskId: intent.params.taskId, branch: intent.params.taskBranch, repo: typeof intent.params.taskRepo === 'string' ? intent.params.taskRepo : '', words })
+      : composeFirstMessage(instructions, words);
     if (!first.ok) return refuse('bad_params', first.text);
     const params = { ...intent.params, boxSecrets: 'no' };
     delete params.memberBrief;
@@ -2473,6 +2497,9 @@ export class Sidecar {
             // the member's managers, see and stop a session whose creator is
             // the member.
             ...(s.member ? { member: s.member, memberName: s.memberName ?? null, memberRole: s.memberRole ?? null, startedBy: s.startedBy ?? null } : {}),
+            // AND ON WHICH TASK (docs/tasks.md), so a screen can go from a
+            // session to the task it is work on.
+            ...(s.taskId ? { taskId: s.taskId, taskBranch: s.taskBranch ?? null } : {}),
             // WHERE the work is happening. The app showed a session with no
             // way to answer "which checkout is this?" — the commonest question
             // about a session somebody started yesterday, and the answer was
@@ -3278,6 +3305,10 @@ export function commandMeta(verb, params = {}, actor = '') {
     ...(verb === 'start' && typeof params?.member === 'string' ? { member: params.member } : {}),
     ...(verb === 'start' && typeof params?.memberName === 'string' ? { memberName: params.memberName } : {}),
     ...(verb === 'start' && typeof params?.memberRole === 'string' ? { memberRole: params.memberRole } : {}),
+    // THE TASK IT IS WORK ON, v20, for the record: the id and the branch it
+    // was told. The words are `task`, above, and are not kept.
+    ...(verb === 'start' && typeof params?.taskId === 'string' ? { taskId: params.taskId } : {}),
+    ...(verb === 'start' && typeof params?.taskId === 'string' && typeof params?.taskBranch === 'string' ? { taskBranch: params.taskBranch } : {}),
     // File content, for the same reason and by the same route: prose and
     // payloads travel beside a command rather than inside it.
     ...(verb === 'writefile' && typeof params?.content === 'string' ? { content: params.content } : {}),

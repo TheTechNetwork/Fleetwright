@@ -657,6 +657,51 @@ test('a session handed its task in words says it had one when it comes back, and
   assert.equal(ready[0].tasked, true);
 });
 
+test('a session on a task brings back what it wrote in RESULT.md, read once, and cut where a result is', async (t) => {
+  // docs/tasks.md, "The result packet". The file is read through the hub's
+  // own /readfile, which confines the path to the session's workspace.
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [sessionRecord('on-t12', { status: 'running', tasked: true, taskId: 't12', taskBranch: 'task/t12-fix-it' }), sessionRecord('chat', { status: 'running', tasked: true })],
+    panes: { 'on-t12': WORKING, chat: WORKING },
+    onCommand: (line) => (line === '/readfile on-t12 RESULT.md' ? { ok: true, text: `DONE\n${'字'.repeat(3000)}` } : { ok: false, text: 'no such file' }),
+  });
+  await watcher.tick({ quiet: true });
+  stub.panes['on-t12'] = AT_PROMPT;
+  stub.panes.chat = AT_PROMPT;
+  await watcher.tick();
+  await watcher.tick();
+
+  const ready = events.filter((e) => e.event === 'session.ready');
+  const task = ready.find((e) => e.name === 'on-t12');
+  assert.equal(task?.taskId, 't12');
+  assert.ok(task?.result.text.startsWith('DONE\n字'));
+  assert.ok(new TextEncoder().encode(task?.result.text).length <= 4000);
+  assert.equal(task?.result.truncated, true);
+  // A session on no task is asked for no file and says nothing of one.
+  const chat = ready.find((e) => e.name === 'chat');
+  assert.deepEqual([chat?.taskId, chat?.result], [undefined, undefined]);
+  assert.deepEqual(stub.commands.filter((c) => c.startsWith('/readfile')), ['/readfile on-t12 RESULT.md'], 'read on the tick it came back, and not again');
+});
+
+test('a task session that wrote no result says which task it was and sends none, and its ending names the task too', async (t) => {
+  const { stub, watcher, events } = await watcherFor(t, {
+    sessions: [sessionRecord('on-t12', { status: 'running', tasked: true, taskId: 't12' })],
+    panes: { 'on-t12': WORKING },
+    onCommand: () => ({ ok: false, text: 'RESULT.md: not a file' }),
+  });
+  await watcher.tick({ quiet: true });
+  stub.panes['on-t12'] = AT_PROMPT;
+  await watcher.tick();
+  const ready = events.find((e) => e.event === 'session.ready');
+  assert.equal(ready?.taskId, 't12');
+  assert.equal('result' in /** @type {any} */ (ready), false, 'no file is no result, and nothing is made up from the pane');
+
+  stub.sessions[0].status = 'stopped';
+  delete stub.panes['on-t12'];
+  await watcher.tick();
+  assert.equal(events.find((e) => e.event === 'session.ended')?.taskId, 't12');
+});
+
 test('a question is not a return to the prompt', async (t) => {
   // A dialog blocks the pane and a person must answer it; that is
   // awaiting-input, already announced, and announcing "back at its prompt"

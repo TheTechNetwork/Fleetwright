@@ -32,6 +32,7 @@ import { pickCredentialSource } from '../src/core/podman.js';
 import { buildCommand } from '../src/core/claude.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { delegationSigningInput, intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
+import { RESULT_FOOTER } from '../src/fleet/protocol/tasks.js';
 import { startStubHub } from './helpers/stub-hub.js';
 import { standInClaude, revokeClaude, forbidClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns, claudeUsageAsks } from './helpers/stand-in-claude.js';
 
@@ -2315,6 +2316,66 @@ test('a box starts a session as a member only for somebody the minter lists, who
   assert.equal(now.ok, true, now.text);
   assert.equal(stub.bodies.at(-1).startedBy, `fleet:${DANA}`);
   assert.equal(stub.bodies.at(-1).actor, 'fleet:debbie@members.invalid');
+});
+
+test('a session on a task is the assignee’s, opens on the task’s own branch and words, and says where the result goes', async (t) => {
+  // docs/tasks.md, "Starting on a task", through a real box: the task in the
+  // coordinator, the custodian's signature over the task's id, branch and
+  // words, the box's own composition, and what the session manager is handed.
+  const { m, core, box, stub, iphone, kid } = await signingFleet(t);
+  let clock = Date.now() - 30_000;
+  const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
+  await filed({ op: 'orgadmin', address: ELI });
+  await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
+  await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
+  await filed({ op: 'put', name: 'claude', value: `sk-ant-oat01-${'d'.repeat(40)}`, for: 'debbie' });
+  assert.equal(core.setMember(null, 'debbie', { name: 'Debbie', kind: 'agent', role: 'software engineer', instructions: 'Write small pull requests.' }).ok, true);
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  const eli = { email: ELI, admin: false };
+
+  const made = /** @type {any} */ (core.createTask(eli, { title: 'Fix the login redirect', brief: 'It loses ?next. Fix it in app/auth.', assignee: 'debbie', repo: 'acme/app' }));
+  assert.equal(made.ok, true, made.text);
+  let n = 0;
+  /** A start from Eli's phone, signed over exactly the parameters given. */
+  const start = async (/** @type {any} */ params) => {
+    const id = `task-intent-${String(++n).padStart(4, '0')}`;
+    const issuedAt = Date.now();
+    const sig = await sign(iphone.privateJwk, intentSigningInput({ actor: ELI, id, issuedAt, params, verb: 'start' }, 'ops-box'));
+    return core.dispatch({ verb: 'start', params, id, actor: ELI, requester: eli, preferHost: 'ops-box', sig, kid, issuedAt });
+  };
+
+  stub.bodies.length = 0;
+  const ok = await start({ name: 'on-t1', ...made.start });
+  assert.equal(ok.ok, true, ok.text);
+  const sent = stub.bodies.at(-1);
+  assert.equal(sent.task, [
+    'Write small pull requests.',
+    'Task t1. Branch task/t1-fix-the-login-redirect in acme/app.\n\nFix the login redirect\n\nIt loses ?next. Fix it in app/auth.',
+    RESULT_FOOTER,
+  ].join('\n\n----------\n\n'));
+  assert.deepEqual([sent.taskId, sent.taskBranch, sent.member, sent.actor], ['t1', 'task/t1-fix-the-login-redirect', 'debbie', 'fleet:debbie@members.invalid']);
+  assert.doesNotMatch(String(sent.command), /task\/t1|acme\/app/, 'none of it rides the command line');
+  // The words, the task and the branch are what Eli signed: one signed for
+  // this task does not start another, and the branch cannot be swapped.
+  const asked = { actor: ELI, id: 'i', issuedAt: 1, verb: 'start' };
+  for (const swap of [{ taskId: 't2' }, { taskBranch: 'task/t1-elsewhere' }, { taskRepo: 'evil/app' }]) {
+    assert.notEqual(intentSigningInput({ ...asked, params: { ...made.start, ...swap } }, 'ops-box'), intentSigningInput({ ...asked, params: made.start }, 'ops-box'), JSON.stringify(swap));
+  }
+  // The coordinator holds the lock on this box for Eli's start. This stand-in
+  // session manager names no session in its answer, so the lock waits for
+  // the box to speak of one, and takes it up when it does.
+  assert.deepEqual([core.tasks.get('t1')?.lock?.hostId, core.tasks.get('t1')?.lock?.by, core.tasks.get('t1')?.lock?.session], ['ops-box', ELI, null]);
+  await core.onHostMessage('ops-box', { v: PROTOCOL_VERSION, kind: 'event', event: 'session.ready', name: 'on-t1', tasked: true, taskId: 't1', result: { text: 'DONE\nFixed in 3f2a.' } });
+  assert.deepEqual([core.tasks.get('t1')?.state, core.tasks.get('t1')?.result?.session, core.tasks.get('t1')?.result?.outcome], ['returned', 'on-t1', 'done']);
+
+  // THE BOX'S OWN REFUSALS, asked of it directly: a coordinator that would
+  // send these is the one it does not believe.
+  const direct = (/** @type {any} */ params) => box.sidecar.handle({ v: PROTOCOL_VERSION, kind: 'intent', id: `direct-task-${String(++n).padStart(4, '0')}`, verb: 'start', params, issuedAt: Date.now(), actor: ELI });
+  const nobody = /** @type {any} */ (await direct({ name: 'no-member', taskId: 't1', taskBranch: 'task/t1-fix-the-login-redirect', task: 'x' }));
+  assert.equal(nobody.error?.code, 'bad_params');
+  assert.match(String(nobody.text), /A session on t1 is started as the task’s assignee, and this names no member\. Nothing was started\./);
+  const before = stub.bodies.filter((b) => /^\/new /.test(String(b.command))).length;
+  assert.equal(before, 1, 'only the signed start reached the session manager');
 });
 
 test('a box asks for members’ vaults by saying it takes them, files one under the member’s own account, and nothing else answers for it', async (t) => {

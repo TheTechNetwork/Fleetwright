@@ -22,6 +22,7 @@ import { maskPane } from '../../core/mask-pane.js';
 import { DECIDE_P_AWAITING } from '../../core/decide-questions.js';
 import { isRemoteControlOnline, extractRcUrl } from './pane.js';
 import { readPrompt, promptId, describePrompt, answerActions } from './prompt.js';
+import { RESULT_FILE, MAX_RESULT, TASK_ID_RE, firstBytes } from '../protocol/tasks.js';
 
 const DEFAULT_INTERVAL_MS = 20_000;
 
@@ -438,6 +439,9 @@ export class SessionWatcher {
               event: session.status === 'error' ? 'session.error' : 'session.ended',
               name,
               text: session.detail,
+              // WHICH TASK it was work on, so the coordinator ends that
+              // task's lock on this box's word (docs/tasks.md).
+              ...taskOf(session),
             });
           }
         }
@@ -467,6 +471,12 @@ export class SessionWatcher {
             text: 'is back at its prompt',
             ...(session.profile ? { profile: String(session.profile) } : {}),
             ...(session.tasked === true ? { tasked: true } : {}),
+            // A SESSION ON A TASK brings back what it wrote down
+            // (docs/tasks.md, "The result packet"). Read now, once, on the
+            // tick it came back. No file is no result: the event goes with
+            // the task's id alone, and nothing is made up from the pane.
+            ...taskOf(session),
+            ...(taskOf(session).taskId && !quiet ? await this.#result(name) : {}),
           });
           readyAt = Date.now();
         }
@@ -839,12 +849,44 @@ export class SessionWatcher {
     };
   }
 
+  /**
+   * What a task's session wrote in RESULT.md at the top of its workspace:
+   * the first MAX_RESULT bytes, and whether there were more. Read through
+   * the hub's own `/readfile`, which confines the path to the session's
+   * workspace and refuses a binary or an outsized file. Whatever stops it
+   * being read, a missing file included, is no result.
+   *
+   * @param {string} name
+   * @returns {Promise<{ result?: { text: string, truncated: boolean } }>}
+   */
+  async #result(name) {
+    try {
+      const r = await this.hub.command(`/readfile ${name} ${RESULT_FILE}`);
+      if (r?.ok !== true || typeof r.text !== 'string' || !r.text.trim()) return {};
+      const kept = firstBytes(r.text, MAX_RESULT);
+      return { result: { text: kept.text, truncated: kept.cut } };
+    } catch (e) {
+      this.log.warn(`watcher: could not read ${name}'s ${RESULT_FILE}: ${/** @type {Error} */ (e).message}`);
+      return {};
+    }
+  }
+
   /** @param {boolean} quiet @param {Record<string, any>} event */
   #fire(quiet, event) {
     if (quiet) return;
     this.log.info(`watcher: ${event.event} ${event.name ?? ''}`);
     this.emit(event);
   }
+}
+
+/**
+ * The fleet's task a session is work on, when its record names one.
+ *
+ * @param {any} session
+ * @returns {{ taskId?: string }}
+ */
+function taskOf(session) {
+  return typeof session?.taskId === 'string' && TASK_ID_RE.test(session.taskId) ? { taskId: session.taskId } : {};
 }
 
 /** @param {any} session */
