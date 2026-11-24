@@ -4893,7 +4893,7 @@ export class CoordinatorCore {
    * coordinator's word is needed for that and is not enough on its own. The
    * answer comes back sealed to a key the device made for it.
    *
-   * @param {{ email?: string|null }|null} requester @param {any} body
+   * @param {{ email?: string|null, admin?: boolean }|null} requester @param {any} body
    * @returns {Promise<Record<string, unknown>>}
    */
   async vaultDevice(requester, body) {

@@ -148,7 +148,10 @@ export function checkMember(input) {
   const kind = String(m.kind ?? '');
   if (!MEMBER_KINDS.includes(/** @type {any} */ (kind))) return refuse('A member is a person or an agent. Say which, as kind.');
 
-  /** @param {string} field @param {number} max @param {boolean} required */
+  /**
+   * @param {string} field @param {number} max @param {boolean} required
+   * @returns {{ bad: string } | { v: string }}
+   */
   const line = (field, max, required) => {
     const raw = m[field] === undefined || m[field] === null ? '' : String(m[field]);
     if (UNPRINTABLE.test(raw) || /[\r\n\t]/.test(raw)) return { bad: `A member’s ${field} is one line of plain text.` };

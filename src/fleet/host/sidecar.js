@@ -1076,11 +1076,6 @@ export class Sidecar {
   }
 
   /**
-   * @param {import('../protocol/intents.js').Intent} intent
-   * @param {string|null} [verdict]  what the signature check said, null when this box could not check
-   * @returns {Promise<Record<string, any>>}
-   */
-  /**
    * May this start run as the member it names, and as what?
    *
    * THE CHECK THAT COUNTS. The coordinator refuses first and decides nothing
@@ -1134,6 +1129,11 @@ export class Sidecar {
     return { ok: true, intent: { ...intent, actor: member.kind === 'agent' ? accountOfMember(id) : member.email, startedBy: asker, params } };
   }
 
+  /**
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @param {string|null} [verdict]  what the signature check said, null when this box could not check
+   * @returns {Promise<Record<string, any>>}
+   */
   async #run(intent, verdict = null) {
     /** @param {Record<string, unknown>} extra */
     const reply = (extra) => ({ v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ...extra });
@@ -1288,7 +1288,9 @@ export class Sidecar {
       const meta = commandMeta(intent.verb, intent.params, intent.actor ? `fleet:${intent.actor}` : '');
       // WHO ASKED, for a start as a member (#startAs): `actor` is by then the
       // member it runs as, and the record keeps both.
-      if (intent.verb === 'start' && typeof intent.startedBy === 'string') /** @type {any} */ (meta).startedBy = `fleet:${intent.startedBy}`;
+      // Not a field of an intent as it arrives: #startAs adds it to the one it hands on.
+      const startedBy = /** @type {any} */ (intent).startedBy;
+      if (intent.verb === 'start' && typeof startedBy === 'string') /** @type {any} */ (meta).startedBy = `fleet:${startedBy}`;
       // WHERE RUNNERS COME FROM AND WHICH FLEET THEY JOIN, added here because
       // neither is in the intent and they come from two different places.
       //

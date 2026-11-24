@@ -150,7 +150,7 @@ export function mayActOn(claim, requester) {
 /**
  * @param {import('./registry.js').HostRegistry} registry
  * @param {{ verb: string, params?: Record<string, any> }} intent
- * @param {{ maxPinAgeMs?: number, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean }|null }} [opts]
+ * @param {{ maxPinAgeMs?: number, preferHost?: string, preferLabels?: string[]|string|null, requester?: { email?: string|null, admin?: boolean, members?: string[] }|null }} [opts]
  * @returns {Placement}
  */
 export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = '', preferLabels = null, requester = null } = {}) {

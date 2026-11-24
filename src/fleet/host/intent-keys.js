@@ -77,9 +77,11 @@ function p256(k) {
  * @param {{ payload: any, signature: unknown, pinned: { kty: string, crv: string, x: string, y: string }, host: string, now: number }} args
  *   `host` is this box key's id (keyId)
  * @returns {Promise<{ ok: true, directory: Map<string, Array<{ kid: string, key: any, label: string }>>, at: number,
- *   revoked: Map<string, Set<string>>, cleared: Set<string> } | { ok: false, text: string }>}
+ *   revoked: Map<string, Set<string>>, cleared: Set<string>,
+ *   members: Map<string, { kind: 'person'|'agent', email: string|null, may: string[] }>|null } | { ok: false, text: string }>}
  *   `revoked` the delegations each person took back; `cleared` the people the
- *   minter says keep no key now, having had one
+ *   minter says keep no key now, having had one; `members` who may start a
+ *   session as each member, or null from a minter older than members
  */
 export async function keyListFrom({ payload, signature, pinned, host, now }) {
   if (!payload || typeof payload !== 'object' || typeof signature !== 'string') return { ok: false, text: 'the answer is not a key list' };

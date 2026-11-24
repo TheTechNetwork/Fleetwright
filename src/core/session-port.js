@@ -81,7 +81,7 @@ export function isSessionPortUpgrade(req) {
  * @typedef {object} SessionPortDeps
  * @property {'operator'|'sidecar'|null} principal  who the request's token says it is
  * @property {boolean} contained  whether this box contains its sessions (http.js uncontained is empty)
- * @property {(name: string) => { status?: string, createdBy?: string|null }|undefined} record  the hub's own record of a session
+ * @property {(name: string) => { status?: string, createdBy?: string|null, startedBy?: string|null }|undefined} record  the hub's own record of a session
  * @property {(session: string, port: number) => import('node:child_process').ChildProcessWithoutNullStreams} [exec]
  * @property {string} [podmanBin]
  * @property {{ info: Function, warn: Function }} [log]
