@@ -101,7 +101,7 @@ that is no longer a reason to assume either shape if one starts.
 
 **The Android AVD must be API 30 or newer.** `minSdk = 30`, so the app will not
 install on anything older and the failure is a terse `INSTALL_FAILED_OLDER_SDK`.
-`compileSdk`/`targetSdk` are 37.
+`compileSdk` is 37.1 and `targetSdk` is 37.
 
 **The Android emulator is supposed to reach the host at `10.0.2.2`, never
 `127.0.0.1`** — `localhost` there is the emulator itself. That is the documented
