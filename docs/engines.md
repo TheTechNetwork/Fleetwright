@@ -47,7 +47,8 @@ engines:
 ```
 
 `model` is optional for `claude-code` and `codex`, and required for
-`opencode`, whose model also says whose account pays (`github-copilot/…`). A
+`opencode`, whose model also says whose account pays (`github-copilot/…`, or
+since step 7 an API key's provider: [api-engines.md](./api-engines.md)). A
 model from any other OpenCode provider is refused by name: those run on API
 keys, which are step 7.
 

@@ -1346,6 +1346,11 @@ struct Fleet {
         /// Who changed it last, and when. Nil on a fleet that never set it.
         let updatedBy: String?
         let updatedAt: Double?
+        /// Whether a start as a member with an engine on an API key is
+        /// asked about (docs/api-engines.md). NIL IS A FLEET FROM BEFORE
+        /// THE GUARD, which is unknown and never off: the switch is not
+        /// drawn at all for it (C-5).
+        var paidApi: Bool? = nil
     }
 
     /// What one member has spent this month, as the fleet says it.
@@ -1386,6 +1391,17 @@ struct Fleet {
     /// three are sent, because the page that sends them shows all three.
     func setBudgetSettings(budgets: String, dangerous: Bool, workTypes: [String]) async throws -> BudgetsReply {
         let body: [String: Any] = ["budgets": budgets, "dangerous": dangerous, "workTypes": workTypes]
+        return try JSONDecoder().decode(BudgetsReply.self, from: try await send("PUT", "/api/budgets/settings", body: body))
+    }
+
+    /// Change whether a start on a paid API key is asked about, as an admin.
+    ///
+    /// ALONE IN ITS REQUEST, because a field left out keeps what it was
+    /// (docs/budgets.md), and only a fleet that sent the switch is ever sent
+    /// it back: the three above go to every fleet with budgets, and this
+    /// goes only to one that has the guard.
+    func setPaidApiApproval(_ paidApi: Bool) async throws -> BudgetsReply {
+        let body: [String: Any] = ["paidApi": paidApi]
         return try JSONDecoder().decode(BudgetsReply.self, from: try await send("PUT", "/api/budgets/settings", body: body))
     }
 
@@ -2434,11 +2450,61 @@ struct Fleet {
         var labs: [Lab]? = nil
         /// Which hypervisor it is on: `proxmox`, or `xo` for Xen Orchestra;
         /// nil from a coordinator older than Proxmox, which is Xen Orchestra.
+        /// `sandbox` is a template at a sandbox provider, and then
+        /// `provider` is whose cloud it is on, as the fleet names it ("E2B").
         var kind: String? = nil
+        var provider: String? = nil
+        /// A `sandbox` image that is not a provider's at all: one of your
+        /// own machines makes a machine from it out of a container, and then
+        /// `provider` is that machine's name (docs/api-engines.md, "A
+        /// machine on a box of your own"). Nil from a coordinator older than
+        /// those, and nil is a provider's, as every sandbox image was.
+        var own: Bool? = nil
         var id: String { template }
         /// On Proxmox VE, where a machine is behind the cluster's firewall and
         /// a lab is a network on the cluster, not on an edge router.
         var onProxmox: Bool { kind == "proxmox" }
+        /// A template at a sandbox provider (docs/api-engines.md): a rented
+        /// machine on the provider's cloud, with no network of yours to go on.
+        var onSandbox: Bool { kind == "sandbox" }
+        /// On one of your own machines, and so not rented, on nobody's
+        /// cloud and read by nobody else. Only a `true` the fleet sent
+        /// makes it so.
+        var onOwnBox: Bool { onSandbox && own == true }
+
+        /// Where a machine from it goes, in a word, exactly as the fleet
+        /// says it (core.js, imageWhere): the provider by name for a
+        /// sandbox template, because whose cloud it is on is the thing to
+        /// know about a rented machine, and the kind of hypervisor otherwise.
+        /// One of your own machines is named the same way, by its own name.
+        var whereWord: String {
+            if onOwnBox { return provider ?? SandboxWords.ownUnnamed }
+            if onSandbox { return provider ?? "a sandbox provider" }
+            return onProxmox ? "Proxmox" : "XCP-ng"
+        }
+
+        /// "New machine from base on E2B", for a sandbox template in a
+        /// picker, and "New machine from Linux on deb132" for an image on
+        /// one of your own machines; nil for an image on a hypervisor, which
+        /// `label` says.
+        var sandboxLabel: String? {
+            onSandbox ? "New machine from \(name) on \(whereWord)" : nil
+        }
+
+        /// The image as New session offers it. A SANDBOX TEMPLATE IS OFFERED
+        /// WITH NO NETWORK, GROUP OR LAB, whatever was sent: a rented machine
+        /// is on its provider's network and none of yours, so there is no
+        /// such choice to draw for it (C-2). Nor for an image on one of your
+        /// own machines: a container there is on that machine's network, and
+        /// a network, a group and a lab need a hypervisor.
+        var offered: VMImage {
+            guard onSandbox else { return self }
+            var out = self
+            out.networks = nil
+            out.groups = nil
+            out.labs = nil
+            return out
+        }
 
         struct Network: Codable, Hashable, Identifiable {
             let id: String
@@ -2473,8 +2539,16 @@ struct Fleet {
     /// how this phone knows one exists (docs/hypervisors.md, "One page").
     struct Hypervisor: Codable, Hashable, Identifiable {
         let address: String
-        /// `proxmox`, or `xo` for Xen Orchestra.
+        /// `proxmox`, or `xo` for Xen Orchestra. `sandbox` is a sandbox
+        /// provider a machine of yours is given the key of
+        /// (docs/api-engines.md), and then `provider` is its name.
         let kind: String
+        var provider: String? = nil
+        /// A `sandbox` place that is one of your own machines, making
+        /// machines out of its own containers, and then `provider` is that
+        /// machine's name. Nil from an older coordinator, and nil is a
+        /// provider's.
+        var own: Bool? = nil
         let boxes: [Box]
         let pools: [String]?
         let version: String?
@@ -2515,6 +2589,14 @@ struct Fleet {
             }
         }
         var onProxmox: Bool { kind == "proxmox" }
+        /// Not a hypervisor of yours at all: a provider machines are rented
+        /// from. It has templates and machines, and no pools, no version,
+        /// no edge router and no machine of its own.
+        var onSandbox: Bool { kind == "sandbox" }
+        /// One of your own machines, which is a place of this kind and no
+        /// provider: no key was kept for it, it has an image where a
+        /// provider has templates, and its operator turns it on there.
+        var onOwnBox: Bool { onSandbox && own == true }
 
         /// `false` from a box that looked and saw none, or the machine.
         enum OwnMachine: Codable, Hashable {
@@ -2543,6 +2625,9 @@ struct Fleet {
             let hostId: String
             /// What that box last saw. Nil is "has not looked yet", never "no".
             let reachable: Bool?
+            /// Why not, in the box's words: it could not reach the place, or,
+            /// for one of your own machines and while `reachable` is true,
+            /// it has no image to offer yet.
             let problem: String?
         }
     }
@@ -2562,7 +2647,7 @@ struct Fleet {
     func vmImages() async throws -> [VMImage] {
         let data = try await get("/api/hosts")
         struct Reply: Codable { let vmImages: [VMImage]? }
-        return try JSONDecoder().decode(Reply.self, from: data).vmImages ?? []
+        return (try JSONDecoder().decode(Reply.self, from: data).vmImages ?? []).map(\.offered)
     }
 
     /// A machine made on one of your pools, as the box holding the pool last
@@ -2660,13 +2745,29 @@ struct Fleet {
         var standby: Bool? = nil
         /// `proxmox`, or `xo` for Xen Orchestra; nil from a coordinator older
         /// than Proxmox VE, which is Xen Orchestra. On Proxmox VE, the node
-        /// and number its own console is opened by.
+        /// and number its own console is opened by. `sandbox` is a machine
+        /// rented from a sandbox provider, and then `provider` is whose
+        /// cloud it is on.
         var kind: String? = nil
+        var provider: String? = nil
+        /// A `sandbox` machine that is a container on one of your own
+        /// machines, and then `provider` is that machine's name. Nil from
+        /// an older coordinator, and nil is a rented one.
+        var own: Bool? = nil
         var node: String? = nil
         var vmid: Int? = nil
         var id: String { name }
 
         var onProxmox: Bool { kind == "proxmox" }
+        /// Rented from a sandbox provider (docs/api-engines.md): it has a
+        /// state and a timer, and no console, address, restart or size.
+        var onSandbox: Bool { kind == "sandbox" }
+        /// A container on one of your own machines: the same short page,
+        /// and none of what is said of a rented one.
+        var onOwnBox: Bool { onSandbox && own == true }
+        /// Whose cloud a rented machine is on, as the fleet names it, or
+        /// which of your own machines a container is on.
+        var providerName: String { provider ?? (onOwnBox ? SandboxWords.ownUnnamed : "a sandbox provider") }
 
         /// The hypervisor's own name for itself, which is where its console
         /// opens and where you sign in.
@@ -3388,6 +3489,12 @@ struct Fleet {
         /// (machineRunsLine). A `var` with a default for the reason
         /// `permissions` is one.
         var engines: [String]? = nil
+
+        /// The API providers this machine's operator turned on, by id
+        /// (docs/api-engines.md). Nil or empty is none: off is what a
+        /// machine is until its operator says otherwise, so there is no
+        /// third state to tell apart here.
+        var apiProviders: [String]? = nil
 
         /// Mirrors `waiting` in the host's `/updates` reply.
         struct Waiting: Codable, Hashable {

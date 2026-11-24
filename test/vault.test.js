@@ -2075,9 +2075,9 @@ test('a custodian keeps things in the member’s vault and not their own, and a 
   assert.deepEqual(Object.keys(m.rows.get('v:member:debbie').items), ['secret:DEPLOY_KEY']);
   assert.deepEqual((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.map((/** @type {any} */ i) => i.name), ['claude', 'secret:DEPLOY_KEY']);
   assert.deepEqual((await as(ELI, { op: 'list' })).answer.items.map((/** @type {any} */ i) => i.name), ['secret:MINE']);
-  // What a paid API engine will keep is named, and not kept yet.
-  const key = await as(ELI, { op: 'put', name: 'apikey:openrouter', value: 'x', for: 'debbie' });
-  assert.equal(key.error?.code, 'not_kept_yet');
+  // A provider nobody has heard of is not something a vault keeps.
+  const key = await as(ELI, { op: 'put', name: 'apikey:nobody', value: 'sk-nobody-0123456789abcdef', for: 'debbie' });
+  assert.equal(key.error?.code, 'bad_name');
   // A custodian holds the vault's items and machines, and none of what is a person's alone.
   assert.equal((await as(ELI, { op: 'custody', allow: true, for: 'debbie' })).error?.code, 'bad_params');
 
@@ -2108,6 +2108,89 @@ test('a custodian keeps things in the member’s vault and not their own, and a 
   assert.deepEqual((await m.box(boxKeys, { members: [ELI, DANA], accepts: ['members'] })).answer.accounts, []);
 });
 
+test('a member’s API key is kept, never read back, and handed only to a box that asks for keys', async (t) => {
+  // docs/api-engines.md, "The key".
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  const put = (/** @type {string} */ name, /** @type {string} */ value) => as(ELI, { op: 'put', name, value, for: 'debbie' });
+  // What is not a key is refused in words; a provider nobody has heard of is not something a vault keeps.
+  assert.match((await put('apikey:openrouter', 'two words')).text, /That is not an API key: one is a single run of letters, digits and punctuation with no spaces/);
+  assert.equal((await put('apikey:openrouter', 'short')).error?.code, 'bad_value');
+  assert.equal((await put('apikey:acme', 'sk-acme-0123456789abcdef')).error?.code, 'bad_name');
+  const kept = await put('apikey:openrouter', '  sk-or-v1-0123456789abcdef\n');
+  assert.equal(kept.ok, true, kept.text);
+  assert.equal(kept.text, 'Kept the OpenRouter API key. It is given only to approved machines whose operator turned that provider on, for sessions whose engine bills to it. What it may spend is set at the provider, not here.');
+  assert.equal((await put('apikey:ai-gateway', 'vck_0123456789abcdef')).ok, true);
+  const listed = (await as(ELI, { op: 'list', for: 'debbie' })).answer;
+  assert.deepEqual(listed.items.map((/** @type {any} */ i) => i.name), ['apikey:ai-gateway', 'apikey:openrouter']);
+  assert.ok(!JSON.stringify(listed).includes('sk-or-v1'), 'listed by name, never by value');
+  const tested = await as(ELI, { op: 'test', name: 'apikey:openrouter', for: 'debbie' });
+  assert.equal(tested.answer?.state, 'unknown');
+  assert.match(tested.text, /^the OpenRouter API key is not tried from here\./);
+
+  const box = await generateKeyPair();
+  assert.equal((await as(ELI, { op: 'grant', hostKey: box.publicJwk, label: 'box-one', for: 'debbie' })).ok, true);
+  const names = (/** @type {any} */ r) => (r.answer.accounts[0]?.items ?? []).map((/** @type {any} */ i) => i.name).sort();
+  // A BOX FROM STEP 4 takes sign-ins and not keys: it is handed nothing that bills.
+  assert.deepEqual(names(await m.box(box, { members: [ELI], accepts: ['engines', 'members'] })), []);
+  // Keys alone are not enough either: they are an engine's, and a box that takes no engines has no use for one.
+  assert.deepEqual(names(await m.box(box, { members: [ELI], accepts: ['apikeys', 'members'] })), []);
+  const given = await m.box(box, { members: [ELI], accepts: ['apikeys', 'engines', 'members'] });
+  assert.deepEqual(names(given), ['apikey:ai-gateway', 'apikey:openrouter']);
+  assert.equal(given.answer.accounts[0].items.find((/** @type {any} */ i) => i.name === 'apikey:openrouter').value, 'sk-or-v1-0123456789abcdef', 'trimmed, and whole');
+  // Forgotten, it is gone from the next answer.
+  assert.equal((await as(ELI, { op: 'forget', name: 'apikey:openrouter', for: 'debbie' })).ok, true);
+  assert.deepEqual(names(await m.box(box, { members: [ELI], accepts: ['apikeys', 'engines', 'members'] })), ['apikey:ai-gateway']);
+});
+
+test('a sandbox provider’s key is kept with the templates to offer, never read back, and handed only to a box that asks for sandboxes', async (t) => {
+  // docs/api-engines.md, "The item".
+  const m = await minter();
+  t.after(m.restore);
+  const KEY = 'e2b_0123456789abcdef0123456789abcdef';
+  const record = (/** @type {any} */ templates) => JSON.stringify({ key: KEY, templates });
+  const linux = [{ id: 'fleetwright-linux', name: 'Linux, with the fleet' }];
+  // WHAT IS NOT ONE IS REFUSED IN WORDS: not a record, a provider nobody
+  // has heard of, and a key with nothing to make a machine from.
+  assert.match((await m.phone({ op: 'put', name: 'sandbox:e2b', value: KEY })).text, /it is the provider’s API key and the templates to offer, each an id and a name/);
+  assert.equal((await m.phone({ op: 'put', name: 'sandbox:acme', value: record(linux) })).error?.code, 'bad_name');
+  const none = await m.phone({ op: 'put', name: 'sandbox:e2b', value: record([]) });
+  assert.equal(none.error?.code, 'bad_value');
+  assert.match(none.text, /kept with at least one template to offer/);
+  // WHAT IS KEPT IS WHAT WAS SENT. A template the vault would have to leave
+  // out, a list it would have to cut, or a key that is not one, is refused
+  // saying which, and never answered with "Kept".
+  const said = async (/** @type {string} */ value) => (await m.phone({ op: 'put', name: 'sandbox:e2b', value })).text;
+  assert.match(await said(record([...linux, { id: 'has space', name: 'x' }])), /^“has space” is not a template’s id/);
+  assert.match(await said(record(Array.from({ length: 13 }, (_, i) => ({ id: `t${i}`, name: `T${i}` })))), /at most 12 templates, and that is 13/);
+  assert.match(await said(record([{ id: 'fleetwright-linux', name: 'n'.repeat(61) }])), /name for fleetwright-linux is too long/);
+  assert.match(await said(record([...linux, ...linux])), /listed twice/);
+  assert.match(await said(JSON.stringify({ key: 'short', templates: linux })), /^That is not a provider’s API key/);
+  assert.ok(!(await m.phone({ op: 'list' })).answer.items.some((/** @type {any} */ i) => i.name === 'sandbox:e2b'), 'none of those was kept');
+
+  const kept = await m.phone({ op: 'put', name: 'sandbox:e2b', value: record(linux) });
+  assert.equal(kept.ok, true, kept.text);
+  assert.equal(kept.text, 'Kept your E2B account’s key and templates. Approved machines whose operator turned that provider on can make machines there, and hold its key in memory only. The key is that whole account: what it may spend is set at the provider.');
+  assert.ok(![...m.rows.values()].some((v) => JSON.stringify(v).includes(KEY)), 'sealed at rest');
+  const listed = (await m.phone({ op: 'list' })).answer;
+  assert.ok(listed.items.some((/** @type {any} */ i) => i.name === 'sandbox:e2b'));
+  assert.ok(!JSON.stringify(listed).includes(KEY), 'listed by name, never by value');
+
+  const box = await generateKeyPair();
+  assert.equal((await m.phone({ op: 'grant', hostKey: box.publicJwk, label: 'box-one' })).ok, true);
+  const names = (/** @type {any} */ r) => (r.answer.accounts[0]?.items ?? []).map((/** @type {any} */ i) => i.name);
+  // A BOX FROM BEFORE THIS, and one whose operator turned no provider on,
+  // says nothing about sandboxes and is handed no provider's account.
+  assert.deepEqual(names(await m.box(box)), []);
+  assert.deepEqual(names(await m.box(box, { accepts: ['apikeys', 'engines', 'members'] })), []);
+  const given = await m.box(box, { accepts: ['sandboxes'] });
+  assert.deepEqual(names(given), ['sandbox:e2b']);
+  assert.deepEqual(JSON.parse(given.answer.accounts[0].items[0].value), { key: KEY, templates: linux });
+  // Forgotten, it is gone from the next answer.
+  assert.equal((await m.phone({ op: 'forget', name: 'sandbox:e2b' })).ok, true);
+  assert.deepEqual(names(await m.box(box, { accepts: ['sandboxes'] })), []);
+});
+
 test('a member’s Codex sign-in and Copilot token are kept, handed only to a box that takes them, and the Codex one to one machine', async (t) => {
   // docs/engines.md, "Credentials".
   const { m, as, tree } = await orgMinter(t);
@@ -2117,7 +2200,7 @@ test('a member’s Codex sign-in and Copilot token are kept, handed only to a bo
 
   // WHAT IS NOT ONE IS REFUSED IN WORDS THAT SAY WHAT IS.
   assert.match((await put('codex', 'not json')).text, /does not read as JSON\. Paste the whole file/);
-  assert.match((await put('codex', JSON.stringify({ OPENAI_API_KEY: 'sk-x' }))).text, /holds an API key and no ChatGPT sign-in.*API keys are not kept yet/);
+  assert.match((await put('codex', JSON.stringify({ OPENAI_API_KEY: 'sk-x' }))).text, /holds an API key and no ChatGPT sign-in\. For Codex a vault keeps the sign-in that codex login makes, and no OpenAI key\./);
   assert.match((await put('codex', JSON.stringify({ tokens: {} }))).text, /holds no ChatGPT sign-in\. Run codex login/);
   assert.match((await put('copilot', 'two words')).text, /not a GitHub Copilot token/);
   const kept = await put('codex', signIn);

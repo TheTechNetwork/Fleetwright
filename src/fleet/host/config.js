@@ -102,6 +102,12 @@ export function loadSidecarConfig(env = process.env) {
     // ON A POOL'S OWN MACHINE: the Xen Orchestra it was made to hold, which
     // the join script wrote (src/fleet/host/xo-holder.js). Empty elsewhere.
     holderFor: str(env, 'FLEETWRIGHT_HOLDER_FOR', ''),
+    // THE SANDBOX PROVIDERS THIS BOX MAKES MACHINES AT (docs/api-engines.md).
+    // Empty is none: it asks no vault for a provider's key, holds none and
+    // offers no template. A provider's key is its whole account. `own` among
+    // them is this box itself: machines out of its own containers, which
+    // hold no key at all (src/fleet/host/own-pools.js).
+    sandboxProviders: list(env, 'FLEETWRIGHT_SANDBOX_PROVIDERS'),
 
     // How far from now an intent's issuedAt may be. Bounds replay on top of the
     // idempotency key. Must stay below the replay cache TTL — see the check in

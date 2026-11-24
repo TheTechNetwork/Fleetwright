@@ -249,6 +249,8 @@ export async function main() {
     usage: usage ? () => usage.snapshot() : null });
   await http.start();
   adapters.push(http);
+  // The box's clock on machines it made before this start, if it made any.
+  http.machines.watch();
 
   // TELEGRAM IS ARCHIVED — see docs/telegram.md. The adapter is at
   // archive/telegram/telegram.js, unwired, and nothing is started for it here.

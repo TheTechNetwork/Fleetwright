@@ -47,7 +47,7 @@ import { manages } from '../protocol/members.js';
 import { modeFor, decide as decideRoute, candidatesFor, routeWords, routeQuestion, readRouteAnswer, MAX_MODEL_CHOICES } from '../protocol/routing.js';
 import { GATE_PATTERNS } from '../../core/mask-pane.js';
 import { TASK_ID_RE, TASK_STATES, MAX_RESULT, lockTask, startFor, composeTaskMessage, firstBytes } from '../protocol/tasks.js';
-import { ENGINES, cleanTurn, encodeEngines, enginesOn, enginesWords, isPlainDefault, turnWords } from '../protocol/engines.js';
+import { ENGINES, API_PROVIDERS, providerOf, anyPaid, cleanTurn, encodeEngines, enginesOn, enginesWords, isPlainDefault, turnWords } from '../protocol/engines.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
 import { VmStandby, MAX_READY, PENDING_MS } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
@@ -329,7 +329,7 @@ export const EDGE_REPORT = Object.freeze({
 
 /**
  * @typedef {{
- *   address: string, kind: 'xo'|'proxmox',
+ *   address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, own: boolean,
  *   boxes: Array<{ hostId: string, reachable: boolean|null, problem: string|null }>,
  *   pools: string[], version: string|null, supported: boolean|null, fenced: boolean|null,
  *   images: number, machines: number,
@@ -945,6 +945,10 @@ export class CoordinatorCore {
    * last seen is kept in memory as the boxes report (vmSeenOn), and the
    * box's word is taken only for a pool it may speak for.
    *
+   * A sandbox provider has no pools to show, and its list of this fleet's
+   * machines is the whole answer once it has answered at all, so its entry
+   * is believed without one (docs/api-engines.md).
+   *
    * Run on each box's report, for every machine, and on a machine's drop,
    * against every box's last report.
    *
@@ -961,7 +965,7 @@ export class CoordinatorCore {
       const owner = String(h.owner || '').toLowerCase();
       for (const box of boxes) {
         if (!box || box.ephemeral) continue;
-        const looks = xoFor(box, owner).filter((/** @type {any} */ e) => e?.address === address && e.reachable === true && Array.isArray(e.pools) && e.pools.length > 0 && Array.isArray(e.machines));
+        const looks = xoFor(box, owner).filter((/** @type {any} */ e) => e?.address === address && e.reachable === true && Array.isArray(e.pools) && (e.pools.length > 0 || placeKind(e) === 'sandbox') && Array.isArray(e.machines));
         if (!looks.length || looks.some((/** @type {any} */ e) => e.machines.some((/** @type {any} */ m) => m?.name === h.hostId))) continue;
         this.vmSeenOn.delete(h.hostId);
         this.ephemeralHostRetired(h.hostId, `its pool no longer has it, by ${box.hostId}’s look`);
@@ -6053,7 +6057,10 @@ export class CoordinatorCore {
       settings: this.budgets.settings,
       member,
       spend: this.budgets.spendOf(member.id),
-      start: { dangerous: params.mode === 'dangerous', workType: task?.workType ?? null, task: task?.id ?? null },
+      // PAID BY THE TOKEN, when any engine the member names bills to an API
+      // key: a limit on the first engine hands the session to the next with
+      // nobody there to ask (docs/api-engines.md).
+      start: { dangerous: params.mode === 'dangerous', workType: task?.workType ?? null, task: task?.id ?? null, paid: anyPaid(member.engines) },
     });
     // WHAT A MEMBER HAS SPENT IS FOR WHOEVER MAY SEE IT (budgetsFor): an
     // admin, its managers, and the person it is. Until the minter's custody
@@ -6584,18 +6591,25 @@ export class CoordinatorCore {
           `and that machine would run it on Claude Code with no model named, whatever the record says. Update it, or pick another machine.`,
       };
     }
-    const { kept, dropped, runs } = enginesOn(engines, host?.health?.engines);
+    // AN ENGINE ON AN API KEY ONLY FOR A MACHINE THAT REPORTS ITS PROVIDER
+    // (docs/api-engines.md), so a box from before keys is never sent one.
+    const { kept, dropped, runs, providers } = enginesOn(engines, host?.health?.engines, host?.health?.apiProviders);
+    /** How a dropped engine is said: by its provider when that is what the machine lacks. @param {{ engine: string, model?: string }} e */
+    const lacks = (e) => {
+      const provider = providerOf(e);
+      return provider && runs.includes(e.engine) ? `${e.engine} on ${API_PROVIDERS[/** @type {keyof typeof API_PROVIDERS} */ (provider)].says}` : e.engine;
+    };
     if (!kept.length) {
       return {
         ok: false,
         error: { code: 'no_engine' },
-        text: `${who} runs on ${enginesWords(engines)}, and ${host?.hostId} runs ${runs.join(', ')}. Start it on a machine that runs one of its engines, or add one this machine runs to its record.`,
+        text: `${who} runs on ${enginesWords(engines)}, and ${host?.hostId} runs ${runs.join(', ')}${providers.length ? `, billing to ${providers.join(', ')}` : ''}. Start it on a machine that runs one of its engines, or add one this machine runs to its record.`,
       };
     }
     return {
       ok: true,
       spec: { ...spec, params: { ...spec.params, memberEngines: encodeEngines(kept) } },
-      note: dropped.length ? `${host?.hostId} does not run ${dropped.map((e) => e.engine).join(' or ')}, so ${who} has ${kept.length === 1 ? 'no engine to fall back to' : 'fewer engines to fall back to'} there: ${enginesWords(kept)}.` : '',
+      note: dropped.length ? `${host?.hostId} does not run ${dropped.map(lacks).join(' or ')}, so ${who} has ${kept.length === 1 ? 'no engine to fall back to' : 'fewer engines to fall back to'} there: ${enginesWords(kept)}.` : '',
     };
   }
 
@@ -8509,7 +8523,13 @@ export class CoordinatorCore {
             // WHICH HYPERVISOR, and on Proxmox VE the node and number its own
             // console is opened by (`?console=kvm&vmid=&node=`): the phone
             // linked Xen Orchestra's page for a Proxmox machine without them.
-            kind: /** @type {any} */ (e).kind === 'proxmox' ? 'proxmox' : 'xo',
+            kind: placeKind(e),
+            // WHOSE CLOUD, for a machine from a sandbox provider: its page
+            // says so, and offers neither a console nor a restart.
+            provider: placeProvider(e),
+            // OR A BOX OF THE PERSON'S OWN (docs/api-engines.md, part
+            // three), named in `provider`: its page must not call it rented.
+            own: placeOwn(e),
             node: /** @type {any} */ (e).kind === 'proxmox' && typeof m.node === 'string' && /^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$/.test(m.node) ? m.node : null,
             vmid: /** @type {any} */ (e).kind === 'proxmox' && Number.isInteger(m.vmid) && m.vmid >= 100 && m.vmid <= 999_999_999 ? m.vmid : null,
             hosts: [host.hostId],
@@ -8770,12 +8790,12 @@ export class CoordinatorCore {
    * holding their pools' tokens reported (health `xo`, src/fleet/host/xo-pools.js).
    *
    * @param {{ email?: string|null, admin?: boolean }|null} requester
-   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, kind: 'xo'|'proxmox', hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>}
+   * @returns {Array<{ template: string, name: string, pool: string|null, poolName: string|null, address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, own: boolean, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>}
    */
   vmImagesFor(requester) {
     const email = String(requester?.email || '').toLowerCase();
     if (!email) return [];
-    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, kind: 'xo'|'proxmox', hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>} */
+    /** @type {Map<string, { template: string, name: string, pool: string|null, poolName: string|null, address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, own: boolean, hosts: string[], networks: Array<{ id: string, name: string }>, groups: Array<{ id: string, name: string }>, labs: LabOffer[] }>} */
     const found = new Map();
     for (const h of this.#vmHolders(email, null)) {
       for (const entry of h.entries) {
@@ -8800,6 +8820,8 @@ export class CoordinatorCore {
             poolName: image.poolName,
             address: entry.address,
             kind: entry.kind,
+            provider: entry.provider,
+            own: entry.own,
             hosts: [h.host.hostId],
             // THE NETWORKS IT CAN GO ON besides the uplink: the pool's, that
             // the fleet may use, for "reachable from my network".
@@ -8846,14 +8868,17 @@ export class CoordinatorCore {
       for (const e of /** @type {any[]} */ (xoFor(host, email))) {
         const address = String(e?.address || '');
         if (!address || address.length > 260) continue;
-        const kind = e?.kind === 'proxmox' ? 'proxmox' : 'xo';
+        const kind = placeKind(e);
         const key = `${kind} ${address}`;
         let row = found.get(key);
         if (!row) {
-          row = { address, kind, boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, holder: null, edge: null, imageIds: new Set(), machineNames: new Set() };
+          row = { address, kind, provider: placeProvider(e), own: placeOwn(e), boxes: [], pools: [], version: null, supported: null, fenced: null, images: 0, machines: 0, holder: null, edge: null, imageIds: new Set(), machineNames: new Set() };
           found.set(key, row);
         }
-        row.boxes.push({ hostId: host.hostId, reachable: typeof e.reachable === 'boolean' ? e.reachable : null, problem: e.reachable === false ? text(e.problem, 200) : null });
+        // WHY NOT, where a box said: one that could not reach the place, or a
+        // box of the person's own that has no image to offer yet (it is
+        // building one, or the build failed), which it can be while reached.
+        row.boxes.push({ hostId: host.hostId, reachable: typeof e.reachable === 'boolean' ? e.reachable : null, problem: e.reachable === false || placeOwn(e) ? text(e.problem, 200) : null });
         for (const p of Array.isArray(e.pools) ? e.pools.slice(0, 32) : []) {
           const name = text(p?.name ?? p?.name_label, 80);
           if (name && !row.pools.includes(name)) row.pools.push(name);
@@ -8997,7 +9022,7 @@ export class CoordinatorCore {
    * not reach it rather than that nobody holds it.
    *
    * @param {string} email @param {string|null} template @param {{ unreached?: boolean }} [opts]
-   * @returns {Array<{ host: any, entries: Array<{ address: string, kind: 'xo'|'proxmox', networks: Array<{ id: string, name: string, pool: string|null, group: boolean, lab: 'open'|'closed'|null, taken: boolean|null, perPerson: number|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
+   * @returns {Array<{ host: any, entries: Array<{ address: string, kind: 'xo'|'proxmox'|'sandbox', provider: string|null, own: boolean, networks: Array<{ id: string, name: string, pool: string|null, group: boolean, lab: 'open'|'closed'|null, taken: boolean|null, perPerson: number|null }>, images: Array<{ id: string, name: string, pool: string|null, poolName: string|null }> }> }>}
    */
   #vmHolders(email, template, { unreached = false } = {}) {
     /** @type {Array<{ host: any, entries: any[] }>} */
@@ -9011,7 +9036,9 @@ export class CoordinatorCore {
           // WHICH HYPERVISOR, as the box said: Proxmox's entries say so
           // (src/fleet/host/pve-pools.js), and an entry that says nothing is
           // Xen Orchestra's, which is every entry from before Proxmox.
-          kind: e.kind === 'proxmox' ? 'proxmox' : 'xo',
+          kind: placeKind(e),
+          provider: placeProvider(e),
+          own: placeOwn(e),
           networks: (Array.isArray(e.networks) ? e.networks : [])
             .filter((/** @type {any} */ n) => XO_UUID_RE.test(String(n?.id)))
             .map((/** @type {any} */ n) => ({
@@ -9189,7 +9216,7 @@ export class CoordinatorCore {
     this.record({
       event: 'vm.requested',
       actor: spec.actor ?? null,
-      text: `${owner} asked for a machine from ${image.name} on ${imageWhere(holders[0].entries[0].kind)}${lab ? ' in a lab' : ''}, as ${vmHost}`,
+      text: `${owner} asked for a machine from ${image.name} on ${imageWhere(holders[0].entries[0].kind, holders[0].entries[0].provider)}${lab ? ' in a lab' : ''}, as ${vmHost}`,
     });
     /** @type {Record<string, any>} */
     const vmParams = { platform: lab ? 'lab' : 'vm', template, ticket: ticket.token };
@@ -10353,10 +10380,55 @@ const DEPLOY_TITLES = Object.freeze({ running: 'Installing Xen Orchestra', done:
  * do it". A kind not given is Xen Orchestra, as everything was before
  * Proxmox VE.
  *
- * @param {string|null|undefined} kind
+ * @param {string|null|undefined} kind @param {string|null} [provider]
  */
-export function imageWhere(kind) {
+export function imageWhere(kind, provider = null) {
+  // A SANDBOX PROVIDER IS NAMED, because "on a sandbox provider" would not
+  // say whose cloud the machine is on, and that is the thing to know about
+  // a rented machine (docs/api-engines.md). A box of the person's own is
+  // named the same way, by its own name, which is where the machine is.
+  if (kind === 'sandbox') return provider || 'a sandbox provider';
   return kind === 'proxmox' ? 'Proxmox' : 'XCP-ng';
+}
+
+/**
+ * WHICH KIND OF PLACE an entry in a box's report is, in the box's own word
+ * and one of three: a Proxmox VE cluster, a sandbox provider
+ * (src/fleet/host/sandbox-pools.js), or Xen Orchestra, which is what an entry
+ * that says nothing is, as every entry was before the other two.
+ *
+ * @param {any} e
+ * @returns {'xo'|'proxmox'|'sandbox'}
+ */
+export function placeKind(e) {
+  return e?.kind === 'proxmox' ? 'proxmox' : e?.kind === 'sandbox' ? 'sandbox' : 'xo';
+}
+
+/**
+ * The sandbox provider an entry names, as its box says it ("E2B"), bounded.
+ * Null for a hypervisor's entry and for one that did not say.
+ *
+ * @param {any} e
+ * @returns {string|null}
+ */
+export function placeProvider(e) {
+  return placeKind(e) === 'sandbox' && typeof e?.provider === 'string' && e.provider.trim() ? e.provider.trim().slice(0, 24) : null;
+}
+
+/**
+ * Whether a sandbox entry is a box of the person's own and not a provider's
+ * cloud (src/fleet/host/own-pools.js; docs/api-engines.md, "A machine on a
+ * box of your own"). The same seam and the same kind, so that everything a
+ * sandbox place already does holds for it; this one word is what stops a
+ * phone calling a container on the person's own box rented, or saying
+ * somebody else can read it. Only `true` is true: an entry that says
+ * nothing is a provider's, as every sandbox entry was before this.
+ *
+ * @param {any} e
+ * @returns {boolean}
+ */
+export function placeOwn(e) {
+  return placeKind(e) === 'sandbox' && e?.own === true;
 }
 
 const PVE_TITLES = Object.freeze({ running: 'Setting up Proxmox VE', done: 'Proxmox VE set up', failed: 'Proxmox VE was not set up', cancelled: 'Setting up Proxmox VE cancelled' });

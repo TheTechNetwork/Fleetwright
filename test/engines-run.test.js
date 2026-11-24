@@ -17,7 +17,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync } from 'node
 import os from 'node:os';
 import path from 'node:path';
 
-import { Peer, codexAdapter, acpAdapter, run, parseArgs, stage, acpModel, reasonFromCodexError, codexResetsAt } from '../sandbox/engine.mjs';
+import { Peer, codexAdapter, acpAdapter, run, parseArgs, stage, providerOf, acpModel, reasonFromCodexError, codexResetsAt } from '../sandbox/engine.mjs';
 
 /**
  * A server on a pipe. `answer(message, send)` is called for each line the
@@ -392,4 +392,99 @@ test('an engine this runner does not speak to is said, and nothing is asked of t
   assert.equal(await run({ engine: 'gemini', model: null, mode: 'safe', prompt: 'go' }, { socket, home, env: {}, out: (s) => out.push(s), stdin: typed() }), 2);
   assert.match(out.join(''), /gemini is not an engine this runner speaks to/);
   assert.deepEqual(posts, []);
+});
+
+// ── An engine on an API key (docs/api-engines.md) ───────────────────────────
+
+test('an OpenCode model on an API provider asks the socket for that provider’s key, files it under OpenCode’s name for the provider, and gives the engine its variable', async (t) => {
+  const model = 'openrouter/anthropic/claude-sonnet-5.5';
+  const { socket, home, posts } = await sessionSocket(t, (kind) => (kind === 'apikey:openrouter' ? { ok: true, kind, value: ' sk-or-v1-0123456789abcdef\n' } : { ok: false, error: 'not_granted', message: 'This session’s member names no engine that runs on that sign-in.' }));
+  const server = acpServer({ session: { configOptions: modelOption('opencode/big-pickle') }, set: (m) => ({ result: { configOptions: modelOption(m.params.value) } }) });
+  /** @type {any[]} */
+  const spawned = [];
+  const code = await run({ engine: 'opencode', model, mode: 'safe', prompt: 'Fix the redirect.' }, {
+    socket, home, cwd: '/work', env: { PATH: '/usr/bin', OPENROUTER_API_KEY: 'somebody-elses' }, out: () => {}, stdin: typed(),
+    spawnEngine: (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts) => {
+      spawned.push({ argv: [cmd, ...args], env: opts.env });
+      // By the time the engine starts, the key is where it reads keys, private, and nothing else is in the file.
+      const file = path.join(home, '.local', 'share', 'opencode', 'auth.json');
+      assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { openrouter: { type: 'api', key: 'sk-or-v1-0123456789abcdef' } });
+      assert.equal(statSync(file).mode & 0o777, 0o600);
+      return server.child;
+    },
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(spawned[0].argv, ['opencode', 'acp']);
+  assert.deepEqual(spawned[0].env, { PATH: '/usr/bin', OPENROUTER_API_KEY: 'sk-or-v1-0123456789abcdef' }, 'the member’s key, whatever the session’s environment held');
+  // It asked for the key and for nothing else, and never handed one back.
+  assert.deepEqual(posts.filter((p) => p.path === '/internal/engine-credential').map((p) => [p.body.kind, typeof p.body.value]), [['apikey:openrouter', 'undefined']]);
+  assert.deepEqual(posts.at(-1).body.turn, { engine: 'opencode', reason: 'done', detail: null, model, usage: null, resetsAt: null });
+});
+
+test('a provider that quotes the key back in its refusal does not put the key in the turn’s detail', async (t) => {
+  // The detail goes to the coordinator, a notification and a screen.
+  const KEY = 'sk-or-v1-fedcba9876543210';
+  const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: KEY }));
+  const server = acpServer({ session: { error: { code: -32000, message: `401 from the provider: key ${KEY} is not valid` } } });
+  /** @type {string[]} */
+  const printed = [];
+  await run({ engine: 'opencode', model: 'openrouter/anthropic/claude-sonnet-5.5', mode: 'safe', prompt: 'Go.' }, {
+    socket, home, cwd: '/work', env: { PATH: '/usr/bin' }, out: (/** @type {string} */ s) => printed.push(s), stdin: typed(), spawnEngine: () => server.child,
+  });
+  const turn = posts.at(-1).body.turn;
+  assert.equal(turn.detail, '401 from the provider: key [withheld] is not valid');
+  assert.ok(!JSON.stringify(posts).includes(KEY), 'nothing this runner sent names the key');
+  assert.ok(!printed.join('').includes(KEY), 'and nothing it printed in the pane');
+});
+
+test('an engine that prints the key, in its answer or on its error output, does not put it in the pane a handoff note is cut from', async (t) => {
+  const KEY = 'sk-or-v1-0011223344556677';
+  const model = 'openrouter/anthropic/claude-sonnet-5.5';
+  const { socket, home } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: KEY }));
+  const server = acpServer({
+    session: { configOptions: modelOption(model) },
+    set: (m) => ({ result: { configOptions: modelOption(m.params.value) } }),
+    prompt: (send, m) => {
+      send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 's-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `Using key ${KEY} to call the provider.` } } } });
+      send({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } });
+    },
+  });
+  const { PassThrough } = await import('node:stream');
+  const stderr = new PassThrough();
+  /** @type {any} */ (server.child).stderr = stderr;
+  /** @type {string[]} */
+  const pane = [];
+  /** @type {string[]} */
+  const errors = [];
+  const done = run({ engine: 'opencode', model, mode: 'safe', prompt: 'Go.' }, {
+    socket, home, cwd: '/work', env: { PATH: '/usr/bin' }, out: (/** @type {string} */ s) => pane.push(s), err: (/** @type {string} */ s) => errors.push(s), stdin: typed(), spawnEngine: () => server.child,
+  });
+  stderr.write(`WARN provider rejected Authorization: Bearer ${KEY}\nsecond `);
+  stderr.end('half');
+  await done;
+  assert.match(pane.join(''), /Using key \[withheld\] to call the provider\./);
+  assert.ok(!pane.join('').includes(KEY));
+  assert.equal(errors.join(''), 'WARN provider rejected Authorization: Bearer [withheld]\nsecond half');
+});
+
+test('a provider OpenCode’s documentation names no variable for is filed in its key file alone, and a Copilot model is still Copilot’s', (t) => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'engine-stage-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, '.local', 'share', 'opencode', 'auth.json');
+  assert.deepEqual(stage('opencode', 'vck_0123456789abcdef', home, providerOf('opencode', 'vercel/anthropic/claude-sonnet-5.5')), { ok: true, file: null });
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { vercel: { type: 'api', key: 'vck_0123456789abcdef' } });
+  assert.equal(providerOf('opencode', 'github-copilot/gpt-5'), null);
+  assert.equal(providerOf('codex', 'openrouter/x'), null, 'only OpenCode speaks to these');
+});
+
+test('with no key on the machine for its member, no engine is started and the turn ends as the sign-in', async (t) => {
+  const { socket, home, posts } = await sessionSocket(t, () => ({ ok: false, error: 'not_granted', message: 'The operator of this machine has not turned that API provider on.' }));
+  let started = false;
+  const code = await run({ engine: 'opencode', model: 'openrouter/anthropic/claude-sonnet-5.5', mode: 'safe', prompt: 'Go.' }, {
+    socket, home, cwd: '/work', env: {}, out: () => {}, stdin: typed(),
+    spawnEngine: () => { started = true; throw new Error('must not start'); },
+  });
+  assert.equal(started, false);
+  assert.equal(code, 0, 'the pane stays for whoever looks at it; the turn is what failed');
+  assert.deepEqual([posts.at(-1).body.turn.reason, posts.at(-1).body.turn.detail], ['auth', 'The operator of this machine has not turned that API provider on.']);
 });

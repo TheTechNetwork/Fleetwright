@@ -47,6 +47,7 @@
 // what its people keep does not go back to keeping its own when one answer
 // comes back empty.
 
+import { API_KEY_ITEMS } from '../fleet/protocol/engines.js';
 import { mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, unlinkSync, existsSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 
@@ -159,7 +160,7 @@ function accountText(account) {
  * Kept in the member's held record like any item, and read from there by
  * the session's socket when an engine's runner asks.
  */
-export const ENGINE_ITEMS = Object.freeze(['codex', 'copilot']);
+export const ENGINE_ITEMS = /** @type {readonly string[]} */ (Object.freeze(['codex', 'copilot', ...API_KEY_ITEMS]));
 
 /** @param {string} name */
 function knownItem(name) {

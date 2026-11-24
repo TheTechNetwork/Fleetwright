@@ -264,6 +264,7 @@ const sidecar = new Sidecar({
       : null,
     vmLogin: fromVm,
     holderFor: cfg.holderFor,
+    sandboxProviders: cfg.sandboxProviders,
     onVmLoginHanded: cfg.vmJoin ? () => forgetJoin(cfg.vmJoin) : null,
     // Where a hypervisor's limited token is kept after onboarding: this
     // process's own state directory, beside its key (src/fleet/host/xo-setup.js).

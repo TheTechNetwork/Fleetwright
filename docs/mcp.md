@@ -85,6 +85,14 @@ where a member can be started. The sign-ins those engines run on are vault
 items, and like every vault item they are deposited from a phone or the
 signing page and never through an MCP client.
 
+An `opencode` model written `openrouter/<model>` or `vercel/<model>` bills
+an API key in the member's vault ([api-engines.md](./api-engines.md)).
+`fleet_health` prints the API providers a machine's operator turned on,
+which is where such an engine can go, and `fleet_budgets` says whether a
+start on one waits for approval. `fleet_status` lists a sandbox provider's
+templates among the VM images, each marked as a rented machine that ends on
+a timer, and `fleet_provision` makes one as it makes a VM.
+
 ## Tasks, and handing work on
 
 Three more are the fleet's own record ([tasks.md](./tasks.md)). `fleet_tasks`

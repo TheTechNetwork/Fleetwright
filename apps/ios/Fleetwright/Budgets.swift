@@ -52,6 +52,11 @@ func budgetModeLine(_ mode: String) -> String {
 /// The switch for a session that runs commands without asking first.
 let budgetDangerousLabel = "Ask before a session that skips permission prompts"
 
+/// The switch for a start as a member with an engine on an API key
+/// (docs/api-engines.md), and the one line under it: why it starts on.
+let budgetPaidApiLabel = "Ask before a session on a paid API key"
+let budgetPaidApiLine = "A key is billed by the token and no budget here counts it, so this is on until an admin turns it off."
+
 /// What counting is, and what it never does, said on the rules whoever is
 /// reading them.
 let budgetCountingLine = "Counting is at API prices, as each session counts its own cost. Sessions already running are not stopped."
@@ -680,6 +685,11 @@ struct ApprovalDeclineView: View {
 ///
 /// FOUR STATES: loading, could not load, loaded, and a fleet that answered
 /// with no setting and no sentence, which is one from before budgets.
+///
+/// THE PAID-KEY SWITCH IS DRAWN ONLY FOR A FLEET THAT SENT IT
+/// (docs/api-engines.md). One from before the guard sends no `paidApi`, and
+/// that is unknown, never off: no switch, no word, and nothing about it in
+/// what Save sends (C-5).
 struct BudgetSettingsView: View {
     let settings: Settings
 
@@ -691,6 +701,8 @@ struct BudgetSettingsView: View {
     /// The draft: what Save would send.
     @State private var mode = "off"
     @State private var dangerous = false
+    /// Nil when the fleet sent no such switch, and then none is drawn.
+    @State private var paidApi: Bool?
     @State private var workTypes: [String] = []
     @State private var newKind = ""
     @State private var busy = false
@@ -700,6 +712,7 @@ struct BudgetSettingsView: View {
     /// Whether the draft differs from what the fleet has.
     private var changed: Bool {
         mode != (saved?.budgets ?? "off") || dangerous != (saved?.dangerous ?? false) || workTypes != (saved?.workTypes ?? [])
+            || paidApi != saved?.paidApi
     }
 
     var body: some View {
@@ -832,6 +845,33 @@ struct BudgetSettingsView: View {
                 .frame(minHeight: 44)
                 .accessibilityElement(children: .combine)
             }
+            // A PAID API KEY, in the same two shapes, and only when the
+            // fleet sent the switch: `on` is its answer or the draft made
+            // from it, never a default of this phone's.
+            if let on = paidApi {
+                if isAdmin {
+                    Toggle(budgetPaidApiLabel, isOn: Binding(get: { on }, set: { paidApi = $0 }))
+                        .disabled(busy)
+                        .frame(minHeight: 44)
+                } else {
+                    HStack(spacing: Design.Space.insideTight) {
+                        Text(budgetPaidApiLabel)
+                            .fleetType(.body)
+                            .foregroundStyle(Design.Palette.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        Text(on ? "On" : "Off")
+                            .fleetType(.label)
+                            .foregroundStyle(Design.Palette.inkDim)
+                    }
+                    .frame(minHeight: 44)
+                    .accessibilityElement(children: .combine)
+                }
+                Text(budgetPaidApiLine)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         } header: {
             approvalsSectionHead("Before a start")
         }
@@ -938,6 +978,7 @@ struct BudgetSettingsView: View {
         saved = now
         mode = now.budgets ?? "off"
         dangerous = now.dangerous ?? false
+        paidApi = now.paidApi
         workTypes = now.workTypes ?? []
     }
 
@@ -965,16 +1006,25 @@ struct BudgetSettingsView: View {
         }
     }
 
-    /// Send the choice, the switch and every kind of work, and show what the
-    /// fleet said. Its sentence is the line either way, and a refusal's is
-    /// all there is.
+    /// Send the choice, the switch and every kind of work, then the paid-key
+    /// switch where there is one, and show what the fleet said. Its sentence
+    /// is the line either way, and a refusal's is all there is.
     @MainActor
     private func save() async {
         busy = true
         defer { busy = false }
         result = ""
         do {
-            let reply = try await Fleet(settings: settings).setBudgetSettings(budgets: mode, dangerous: dangerous, workTypes: workTypes)
+            var reply = try await Fleet(settings: settings).setBudgetSettings(budgets: mode, dangerous: dangerous, workTypes: workTypes)
+            // THE PAID-KEY SWITCH GOES IN A REQUEST OF ITS OWN, after the
+            // three, and only when the fleet sent the switch and the draft
+            // moved it. The three are the fleet's by then, so they stop
+            // being a draft whatever it says of the switch, and its answer
+            // carries the whole setting and is the one shown.
+            if reply.ok == true, let kept = reply.settings, let wanted = paidApi, wanted != kept.paidApi {
+                saved = kept
+                reply = try await Fleet(settings: settings).setPaidApiApproval(wanted)
+            }
             failed = reply.ok != true
             result = reply.text ?? (reply.ok == true ? "Saved." : "Your fleet refused that.")
             guard reply.ok == true, let now = reply.settings else { return }

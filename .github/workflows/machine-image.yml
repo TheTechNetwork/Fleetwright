@@ -1,0 +1,69 @@
+name: Machine image
+
+# The fleet's own machine image (sandbox/machine/), built and started with a
+# real Podman, through the code a box's hub runs.
+#
+# Its own workflow, and not a job of sandbox.yml, though the two images live
+# side by side: that one publishes the session image on every push that
+# touches what it watches, and this one is touched by the hub's own code
+# (src/core/machines.js), which has nothing to do with what a session runs
+# in. Nothing is published from here. A box builds this image itself, from
+# the release it runs (docs/api-engines.md, "A machine on a box of your
+# own"), so there is no image of ours to pull and none to push.
+#
+# WHAT IT PROVES is in scripts/machine-smoke.mjs, which is the whole job:
+# the image builds from the context the hub lays out, refuses a start with
+# nothing to join, starts the fleet's host with a ticket, and is listed,
+# extended and ended by the hub's own code. No fleet is dialled.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sandbox/machine/**'
+      - 'src/core/machines.js'
+      - 'scripts/machine-smoke.mjs'
+      - '.github/workflows/machine-image.yml'
+  pull_request:
+    paths:
+      - 'sandbox/machine/**'
+      - 'src/core/machines.js'
+      - 'scripts/machine-smoke.mjs'
+      - '.github/workflows/machine-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: the machine image builds, joins and ends
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '26.13.1'
+          cache: npm
+      # What a box running from a checkout has: the runtime dependencies and
+      # nothing else, so the image carries no test tooling.
+      - run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+      # ROOTLESS PODMAN, which is what a box runs these under. The runner
+      # image carries it; this says which, and installs it where one does not.
+      - name: Podman
+        run: |
+          set -eu
+          command -v podman >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y podman; }
+          podman --version
+      # WITHOUT THE THREE LIMITS a box gives a machine. A limit needs the
+      # runner's user to have been delegated its cgroup controllers, which a
+      # login session gets and a job's shell does not, so Podman would refuse
+      # the start here for a reason no box has. That the flags are passed is
+      # test/machines.test.js; that Podman honours them is not checked
+      # anywhere, and is Podman's.
+      - name: Build it, start one, end it
+        run: node scripts/machine-smoke.mjs --no-limits

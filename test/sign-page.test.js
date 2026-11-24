@@ -994,3 +994,239 @@ test('in a browser: a custodian opens a member’s vault from My team and keeps 
     await b.close();
   }
 });
+
+test('in a browser: a sandbox provider is kept in a person’s own vault and an API key in a member’s, each typed once, said in the vault’s words when refused, and gone from the page afterwards', { timeout: 180_000 }, async (t) => {
+  const b = await browser();
+  if (!b) return t.skip('no browser to run the pages in');
+  const m = await signingMinter();
+  const core = new CoordinatorCore({ githubApp: { clientId: 'Iv23liTEST', clientSecret: 'gh-secret' }, signingOrigin: `https://${SIGN}` });
+  const S = await pageHelpers(m.env);
+  // What is typed here, and must be nowhere afterwards but sealed in a vault.
+  const E2B_KEY = 'e2b_0123456789abcdef0123456789abcdef';
+  const OPENROUTER_KEY = 'sk-or-v1-0123456789abcdef0123456789abcdef';
+  /** Every request /me carried, in order. @type {Array<{ path: string, body: any }>} */
+  const carried = [];
+  /** @type {Error|null} */
+  let failed = null;
+  try {
+    const context = await b.newContext();
+    await context.addInitScript(({ email }) => {
+      if (location.origin === 'https://fleet.test') {
+        localStorage.setItem('fleetwright.credential', 'fw_test_credential');
+        localStorage.setItem('fleetwright.device', 'a browser');
+        if (!localStorage.getItem('fleetwright.email')) localStorage.setItem('fleetwright.email', email);
+      }
+    }, { email: ELI });
+    await context.route(`https://${SIGN}/**`, async (route) => {
+      const req = route.request();
+      const res = await minterWorker.fetch(new Request(req.url(), { method: req.method() }), m.env);
+      await route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: Buffer.from(await res.arrayBuffer()) });
+    });
+    await context.route('https://github.com/login/oauth/authorize**', async (route) => {
+      const u = new URL(route.request().url());
+      m.github.challenge = String(u.searchParams.get('code_challenge'));
+      await route.fulfill({ status: 302, headers: { location: `${FLEET}/oauth/github/callback?code=browsercode1&state=${u.searchParams.get('state')}` } });
+    });
+    await context.route(`${FLEET}/**`, (route) => coordinator(route).catch((e) => { failed = e; return route.abort(); }));
+    /** @param {import('playwright').Route} route */
+    async function coordinator(route) {
+      const req = route.request();
+      const u = new URL(req.url());
+      if (u.pathname === '/oauth/github/callback') {
+        const r = core.githubCallback({ code: u.searchParams.get('code'), state: u.searchParams.get('state') });
+        return route.fulfill({ status: r.ok ? 200 : 400, contentType: 'text/html', body: callbackPage(r) });
+      }
+      if (u.pathname === '/me') {
+        const page = /** @type {any} */ (memberRoutes({ method: 'GET', path: '/me' }, { fleet: 'Test fleet', signIn: { google: null, apple: null }, signer: `https://${SIGN}` }));
+        return route.fulfill({ status: 200, contentType: page.contentType, body: page.body });
+      }
+      if (u.pathname.startsWith('/me/')) return route.fulfill({ status: 404, body: '' });
+      const body = JSON.parse(req.postData() || '{}');
+      carried.push({ path: `${req.method()} ${u.pathname}`, body });
+      const reply = (/** @type {any} */ v) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(v) });
+      if (u.pathname === '/api/github/device') return reply(await m.post('/github/token', { sealed: body.sealed, boxCodes: [] }));
+      if (u.pathname === '/api/vault') return reply(await m.post('/vault/device', { sealed: body.sealed, email: ELI }));
+      if (u.pathname === '/api/hosts/enrolled') return reply({ ok: true, hosts: [] });
+      // THE FLEET'S LIST: Eli runs on Claude Code alone, and the agent Debbie
+      // has an OpenCode whose model is on OpenRouter, which is what says
+      // which key her vault's view offers a row for.
+      if (u.pathname === '/api/members') {
+        return reply({ ok: true, members: [
+          { id: 'eli', name: 'Eli', kind: 'person', engines: [{ engine: 'claude-code' }] },
+          { id: 'debbie', name: 'Debbie', kind: 'agent', engines: [{ engine: 'claude-code' }, { engine: 'opencode', model: 'openrouter/anthropic/claude-sonnet-5.5' }] },
+        ], you: { admin: true } });
+      }
+      return route.fulfill({ status: 404, contentType: 'application/json', body: '{"ok":false}' });
+    }
+
+    const me = await context.newPage();
+    await me.goto(`${FLEET}/me`);
+    const [signer] = await Promise.all([me.waitForEvent('popup'), me.click('#signing-open')]);
+    await signer.setViewportSize({ width: 390, height: 844 });
+    /** @param {string} title */
+    const rowOf = (title) => `#items .item:has(h3:text-is("${title}"))`;
+    /** Wait until a row says this. @param {string} title @param {RegExp} said */
+    const says = (title, said) => signer.waitForFunction(([name, src]) => {
+      const row = [...document.querySelectorAll('#items .item, #team .item')].find((r) => r.querySelector('h3')?.textContent === name);
+      return Boolean(row && new RegExp(src).test(row.textContent || ''));
+    }, [title, said.source], { timeout: 30_000 });
+    /** Whether anything on the page, shown or typed, still holds this. @param {string} secret */
+    const onPage = (secret) => signer.evaluate((s) => document.documentElement.outerHTML.includes(s)
+      || [...document.querySelectorAll('input, textarea')].some((f) => /** @type {HTMLInputElement} */ (f).value.includes(s)), secret);
+    /** The label of whatever the keyboard is on. */
+    const focused = () => signer.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.textContent ?? '');
+
+    await signer.waitForSelector('#list:not([disabled])');
+    await signer.click('#list');
+    await says('Claude', /Not kept\. A session you start is refused until it is\./);
+    // The organization, filed as a phone files it: Eli, and an agent of his.
+    assert.equal((await m.phone(ELI, { op: 'orgadmin', address: ELI }, { admin: true })).ok, true);
+    for (const member of [{ id: 'eli', kind: 'person', address: ELI }, { id: 'debbie', kind: 'agent', reportsTo: 'eli' }]) {
+      const filed = await m.phone(ELI, { op: 'orgmember', ...member });
+      assert.equal(filed.ok, true, filed.text);
+    }
+
+    // A SANDBOX PROVIDER, in the person's own vault: one row, not kept, with
+    // the one way to add it. Opened from the keyboard, which lands in the key.
+    const provider = rowOf('E2B, sandbox provider');
+    await says('E2B, sandbox provider', /Not kept\. With a key of yours, machines can be rented from E2B\./);
+    await signer.focus(`${provider} button:text-is("Add a sandbox provider")`);
+    await signer.keyboard.press('Enter');
+    await signer.waitForSelector(`${provider} form`);
+    assert.equal(await focused(), 'The E2B API key');
+    assert.equal(await signer.getAttribute(`${provider} input[aria-label="The E2B API key"]`, 'type'), 'password');
+    // The provider is said, and not asked: there is one.
+    assert.match(String(await signer.textContent(`${provider} form`)), /^Provider: E2B\./);
+    assert.equal(await signer.locator(`${provider} select`).count(), 0);
+
+    // WHAT IT COSTS IS BEFORE THE BUTTON: the five lines, in order, every
+    // one above Keep it.
+    const order = await signer.locator(`${provider} form`).evaluate((form) => {
+      const kids = [...form.children];
+      return { lines: kids.filter((k) => k.tagName === 'P').map((k) => k.textContent), keep: kids.findIndex((k) => k.textContent === 'Keep it'), at: kids.map((k) => k.textContent) };
+    });
+    const before = [...S.sandboxBefore('E2B')];
+    assert.deepEqual(order.lines.slice(-before.length), before);
+    assert.ok(before.every((line) => order.at.indexOf(line) < order.keep), 'what a sandbox provider costs is said after Keep');
+
+    // NOTHING IS SENT WITH NO TEMPLATE, and the key is not read to say so.
+    const vaultAsks = () => carried.filter((c) => c.path === 'POST /api/vault').length;
+    await signer.fill(`${provider} input[aria-label="The E2B API key"]`, E2B_KEY);
+    const asked = vaultAsks();
+    await signer.click(`${provider} button:text-is("Keep it")`);
+    await says('E2B, sandbox provider', /Add at least one template\. A machine is made from one\./);
+    assert.equal(vaultAsks(), asked, 'a sandbox provider with no template was sent');
+    assert.equal(await signer.inputValue(`${provider} input[aria-label="The E2B API key"]`), E2B_KEY, 'the key was thrown away for want of a template');
+
+    // A TEMPLATE, FROM THE KEYBOARD. An id the vault would drop is refused
+    // in a sentence; Enter in a template's field adds the template and does
+    // not keep the provider; and the keyboard is left on the next id.
+    const id = `${provider} input[aria-label="Template id, as E2B names it"]`;
+    const called = `${provider} input[aria-label="Name, optional"]`;
+    await signer.fill(id, 'two words');
+    await signer.press(id, 'Enter');
+    await says('E2B, sandbox provider', /A template id is letters, digits, dots, dashes and underscores/);
+    assert.equal(await signer.locator(`${provider} form li`).count(), 0);
+    await signer.fill(id, 'base');
+    await signer.fill(called, 'Base image');
+    await signer.press(called, 'Enter');
+    await signer.waitForSelector(`${provider} form li`);
+    assert.equal(await signer.textContent(`${provider} form li span`), 'Base image (base)');
+    assert.equal(await focused(), 'Template id, as E2B names it');
+    assert.equal(vaultAsks(), asked, 'Enter in a template’s field kept the provider');
+    await signer.fill(id, 'node.22-ci_x');
+    await signer.click(`${provider} button:text-is("Add the template")`);
+    assert.equal(await signer.locator(`${provider} form li`).count(), 2);
+    // And one is taken off the list again, by a button that says which.
+    await signer.click(`${provider} button[aria-label="Remove the template node.22-ci_x"]`);
+    assert.equal(await signer.locator(`${provider} form li`).count(), 1);
+
+    // AT A PHONE'S WIDTH, with the form open: nothing scrolls sideways, and
+    // everything pressed or typed into is 44px tall.
+    const fits = () => signer.evaluate(() => ({
+      sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      short: [...document.querySelectorAll('button, a.btn, label.check, input')].filter((e) => e instanceof HTMLElement && e.offsetParent !== null && !(e instanceof HTMLInputElement && e.type === 'checkbox'))
+        .filter((e) => e.getBoundingClientRect().height < 44).map((e) => e.textContent || e.getAttribute('aria-label')),
+    }));
+    assert.deepEqual(await fits(), { sideways: 0, short: [] });
+
+    // A KEY THE VAULT REFUSES: its own sentence, on the row, the field
+    // emptied and the templates still there to try again with.
+    await signer.fill(`${provider} input[aria-label="The E2B API key"]`, 'too short');
+    await signer.click(`${provider} button:text-is("Keep it")`);
+    await says('E2B, sandbox provider', /That is not a provider’s API key: one is a single run of 16 or more letters, digits and punctuation, with no spaces/);
+    assert.equal(await signer.inputValue(`${provider} input[aria-label="The E2B API key"]`), '');
+    assert.equal(await signer.locator(`${provider} form li`).count(), 1);
+    // And with none typed, nothing is sent.
+    const refused = vaultAsks();
+    await signer.click(`${provider} button:text-is("Keep it")`);
+    await says('E2B, sandbox provider', /Enter the API key\./);
+    assert.equal(vaultAsks(), refused);
+
+    // KEPT: in the person's own vault, sealed, and nowhere on the page.
+    await signer.fill(`${provider} input[aria-label="The E2B API key"]`, E2B_KEY);
+    await signer.click(`${provider} button:text-is("Keep it")`);
+    await says('E2B, sandbox provider', /Kept since [\s\S]*Kept your E2B account’s key and templates\./);
+    assert.ok(m.rows.get('v:42')?.items?.['sandbox:e2b']?.sealed, 'the vault keeps no sandbox provider');
+    assert.equal(JSON.stringify([...m.rows]).includes(E2B_KEY), false, 'the vault keeps the key in the clear');
+    assert.equal(await onPage(E2B_KEY), false, 'the key is still on the page after it was kept');
+
+    // REPLACE is the form again, empty, and says nothing kept is shown.
+    await signer.click(`${provider} button:text-is("Replace")`);
+    await signer.waitForSelector(`${provider} form`);
+    assert.match(String(await signer.textContent(`${provider} form`)), /Nothing kept is shown\. Enter the key and every template again\./);
+    assert.equal(await signer.locator(`${provider} form li`).count(), 0);
+    assert.equal(await signer.inputValue(`${provider} input[aria-label="The E2B API key"]`), '');
+    await signer.click(`${provider} button:text-is("Replace")`);
+
+    // A MEMBER'S VAULT, opened from My team: no sandbox provider there, and
+    // the one key her engines name. Her OpenCode runs on OpenRouter, so no
+    // Copilot row is offered for it, and no row for a provider she is not on.
+    await signer.waitForSelector('#team-card:not([hidden])');
+    await signer.click('#team .item:has(h3:text-is("Debbie")) button:text-is("Open its credentials")');
+    await signer.waitForFunction(() => document.getElementById('vault-title')?.textContent === 'Debbie’s vault');
+    const key = rowOf('OpenRouter API key');
+    await says('OpenRouter API key', /Not kept\./);
+    const titles = await signer.$$eval('#items .item h3', (hs) => hs.map((h) => h.textContent));
+    for (const absent of ['E2B, sandbox provider', 'Vercel AI Gateway API key', 'GitHub Copilot token', 'Codex sign-in']) assert.ok(!titles.includes(absent), `${absent} is offered in Debbie’s vault`);
+    // No Test: the vault does not try a key.
+    assert.equal(await signer.locator(`${key} button:text-is("Test")`).count(), 0);
+
+    // PASTED INTO A FIELD THAT HIDES IT, with who bills it said under it.
+    await signer.click(`${key} button:text-is("Keep")`);
+    assert.equal(await signer.getAttribute(`${key} input`, 'type'), 'password');
+    assert.ok(String(await signer.textContent(`${key} form`)).includes(S.apiKeyBillingLine('OpenRouter')), 'the form does not say who bills the key');
+    // One the vault refuses says why, in the vault's sentence.
+    await signer.fill(`${key} input`, 'not a key');
+    await signer.click(`${key} button:text-is("Keep it")`);
+    await says('OpenRouter API key', /That is not an API key: one is a single run of letters, digits and punctuation with no spaces/);
+    assert.equal(await signer.inputValue(`${key} input`), '');
+    // And one it takes is kept in her vault and not in his.
+    await signer.fill(`${key} input`, OPENROUTER_KEY);
+    await signer.click(`${key} button:text-is("Keep it")`);
+    await says('OpenRouter API key', /Kept since [\s\S]*Kept the OpenRouter API key\./);
+    assert.ok(m.rows.get('v:member:debbie')?.items?.['apikey:openrouter']?.sealed, 'the key is not in Debbie’s vault');
+    assert.equal(m.rows.get('v:42')?.items?.['apikey:openrouter'], undefined, 'the key is in Eli’s own vault');
+    assert.equal(await onPage(OPENROUTER_KEY), false, 'the key is still on the page after it was kept');
+    assert.equal(await signer.locator(`${key} button:text-is("Test")`).count(), 0);
+    assert.deepEqual(await fits(), { sideways: 0, short: [] });
+
+    // FORGET, back in his own vault, asks once more, and then it is not kept.
+    await signer.click('#vault-back');
+    await signer.waitForFunction(() => document.getElementById('vault-title')?.textContent === 'Your vault');
+    await signer.click(`${provider} button:text-is("Forget")`);
+    assert.match(String(await signer.textContent(`${provider} .step`)), /^Forget E2B, sandbox provider\?/);
+    await signer.click(`${provider} button:text-is("Forget it")`);
+    await says('E2B, sandbox provider', /Not kept\./);
+
+    // WHAT /me CARRIED: neither key, and not whose vault either went to.
+    const wire = JSON.stringify(carried);
+    for (const secret of [E2B_KEY, OPENROUTER_KEY, 'ghu_browser']) assert.equal(wire.includes(secret), false, `${secret} crossed /me in the clear`);
+    assert.equal(JSON.stringify(carried.filter((c) => c.path === 'POST /api/vault')).includes('debbie'), false, 'whose vault a request is for is inside the seal');
+    await context.close();
+    if (failed) throw failed;
+  } finally {
+    m.restore();
+    await b.close();
+  }
+});

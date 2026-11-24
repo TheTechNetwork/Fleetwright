@@ -15,7 +15,8 @@
 //      where it shows the same two sign-ins.
 //   3. WHAT IS SENT IS WHAT THE FLEET TAKES: a member's engines as a list in
 //      its order, never empty and never an OpenCode with no model; a Codex
-//      sign-in and a Copilot token as a `put` under those two names.
+//      sign-in, a Copilot token and a provider's API key as a `put` under
+//      the names the vault keeps them by, and under no other.
 //   4. NOTHING IS SAID THAT NOBODY SENT (C-5): a session whose machine named
 //      no engines gets no engine line, and a machine that reported nothing
 //      is not called Claude Code.
@@ -31,7 +32,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { iosSources } from './helpers/ios-sources.js';
 import { androidSources } from './helpers/android-sources.js';
-import { ENGINES, ENGINE_IDS, MAX_ENGINES, DEFAULT_ENGINE, TURN_REASONS, HANDS_ON, turnWords, enginesWords, enginesOn } from '../src/fleet/protocol/engines.js';
+import { ENGINES, ENGINE_IDS, MAX_ENGINES, DEFAULT_ENGINE, TURN_REASONS, HANDS_ON, API_KEY_ITEMS, turnWords, enginesWords, enginesOn } from '../src/fleet/protocol/engines.js';
 import { ENGINE_ITEM_KINDS } from '../src/fleet/minter/vault.js';
 import { signerRoutes } from '../src/fleet/minter/sign-page.js';
 
@@ -156,7 +157,7 @@ test('a member’s engines are said in order on its page, as the fleet says a li
 test('the member form sends engines as a list in its order, and cannot send an empty one or an OpenCode with no model', () => {
   for (const words of [
     'A member has at least one engine.',
-    'OpenCode needs a model, written github-copilot/<model>.',
+    'OpenCode needs a model.',
     'github-copilot/<model>',
     'A session starts on the first of these its machine runs, and moves to the next when one stops at its limit.',
   ]) {
@@ -164,8 +165,8 @@ test('the member form sends engines as a list in its order, and cannot send an e
   }
   // What is sent: each engine in the list's order, with its model only
   // when one is named, and nothing at all for a list that may not be sent.
-  has(IOS, /guard !(\w+)\.isEmpty else \{ return \(nil, "A member has at least one engine\."\) \}[\s\S]{0,200}?for (\w+) in \1 \{[\s\S]{0,200}?if \2\.engine == "opencode", (\w+)\.isEmpty \{\s*return \(nil, "OpenCode needs a model, written github-copilot\/<model>\."\)\s*\}\s*(\w+)\.append\(\3\.isEmpty \? \["engine": \2\.engine\] : \["engine": \2\.engine, "model": \3\]\)/, 'iOS can send no engines, an OpenCode with no model, or a list out of order');
-  has(ANDROID, /if \((\w+)\.isEmpty\(\)\) return \w+\(null, "A member has at least one engine\."\)[\s\S]{0,120}?for \((\w+) in \1\) \{[\s\S]{0,200}?if \(\2\.engine == "opencode" && (\w+)\.isEmpty\(\)\) \{\s*return \w+\(null, "OpenCode needs a model, written github-copilot\/<model>\."\)\s*\}\s*val (\w+) = JSONObject\(\)\.put\("engine", \2\.engine\)\s*if \(\3\.isNotEmpty\(\)\) \4\.put\("model", \3\)\s*\w+\.put\(\4\)/, 'Android can send no engines, an OpenCode with no model, or a list out of order');
+  has(IOS, /guard !(\w+)\.isEmpty else \{ return \(nil, "A member has at least one engine\."\) \}[\s\S]{0,200}?for (\w+) in \1 \{[\s\S]{0,200}?if \2\.engine == "opencode", (\w+)\.isEmpty \{\s*return \(nil, "OpenCode needs a model\."\)\s*\}\s*(\w+)\.append\(\3\.isEmpty \? \["engine": \2\.engine\] : \["engine": \2\.engine, "model": \3\]\)/, 'iOS can send no engines, an OpenCode with no model, or a list out of order');
+  has(ANDROID, /if \((\w+)\.isEmpty\(\)\) return \w+\(null, "A member has at least one engine\."\)[\s\S]{0,120}?for \((\w+) in \1\) \{[\s\S]{0,200}?if \(\2\.engine == "opencode" && (\w+)\.isEmpty\(\)\) \{\s*return \w+\(null, "OpenCode needs a model\."\)\s*\}\s*val (\w+) = JSONObject\(\)\.put\("engine", \2\.engine\)\s*if \(\3\.isNotEmpty\(\)\) \4\.put\("model", \3\)\s*\w+\.put\(\4\)/, 'Android can send no engines, an OpenCode with no model, or a list out of order');
   // Save sends that list or nothing, whatever pressed it, and says why.
   has(IOS, /guard let (\w+) = (\w+)\.list else \{\s*result = \2\.problem \?\? "A member has at least one engine\."\s*return\s*\}\s*fields\["engines"\] = \1\n/, 'iOS saves a member without checking its engines');
   has(ANDROID, /val (\w+) = (\w+)\.list\s*when \{[\s\S]{0,900}?\1 == null -> result = \2\.problem \?: "A member has at least one engine\."\s*else -> \{[\s\S]{0,1400}?fields\.put\("engines", \1\)/, 'Android saves a member without checking its engines');
@@ -197,12 +198,17 @@ test('the list is reordered with buttons that say what they move, and Add and Re
   has(ANDROID, /Text\("Add \$\{\w+\(\w+\)\}"\)/, 'Android has no way to add an engine');
 });
 
-test('a Codex sign-in and a Copilot token are kept by `put` under those two names, in the vault the screen is pointed at', () => {
+test('what an engine runs on is kept by `put` under the vault’s own names and no other, in the vault the screen is pointed at', () => {
+  // THE VAULT'S LIST IS THE SCREENS' LIST, name for name and in its order:
+  // the two sign-ins, then an API key for each provider (docs/api-engines.md).
+  // An item the vault keeps and no screen offers could be kept from nowhere,
+  // and one a screen offers that the vault does not keep is refused when it
+  // is pasted.
+  assert.deepEqual([...ENGINE_ITEM_KINDS], ['codex', 'copilot', ...API_KEY_ITEMS], 'the vault keeps engine items this test has never read about');
   const names = ENGINE_ITEM_KINDS.map((n) => `"${n}"`).join(', ');
-  assert.equal(names, '"codex", "copilot"', 'the vault keeps other engine items than the two the screens offer');
-  // The two names, and a put that carries one of them and nothing else.
-  const iosNames = found(IOS, new RegExp(`let (\\w+) = \\[${names}\\]`), 'iOS does not hold the two engine sign-ins by the vault’s names');
-  const androidNames = found(ANDROID, new RegExp(`val (\\w+) = listOf\\(${names}\\)`), 'Android does not hold the two engine sign-ins by the vault’s names');
+  // Those names, and a put that carries one of them and nothing else.
+  const iosNames = found(IOS, new RegExp(`let (\\w+) = \\[${names}\\]`), 'iOS does not hold what an engine runs on by the vault’s names');
+  const androidNames = found(ANDROID, new RegExp(`val (\\w+) = listOf\\(${names}\\)`), 'Android does not hold what an engine runs on by the vault’s names');
   has(IOS, new RegExp(`guard ${iosNames}\\.contains\\(name\\) else \\{ throw [^\\n]*\\n\\s*guard !value\\.isBlank else \\{ throw [^\\n]*\\n\\s*return try await ask\\(fleet, op: "put", extra: Self\\.aimed\\(\\["name": name, "value": value\\], at: member\\)\\)\\.text`), 'iOS does not keep an engine’s sign-in with put, under its own name, for the vault it was asked for');
   has(ANDROID, new RegExp(`require\\(name in ${androidNames}\\) [^\\n]*\\n\\s*require\\(value\\.isNotBlank\\(\\)\\) [^\\n]*\\n\\s*ask\\(fleet, "put", aimed\\(JSONObject\\(\\)\\.put\\("name", name\\)\\.put\\("value", value\\), member\\)\\)\\.first`), 'Android does not keep an engine’s sign-in with put, under its own name, for the vault it was asked for');
   // The row sends what was pasted for the vault on screen: a member's, when
@@ -217,8 +223,10 @@ test('a Codex sign-in and a Copilot token are kept by `put` under those two name
 });
 
 test('the two rows are offered only where an engine runs on them, or one is already kept and can be forgotten (C-2)', async () => {
-  has(IOS, /\w+\.filter \{ (\w+) in\s*kept\.contains\(\1\) \|\| engines\.contains \{ \w+\(\$0\.engine\) == \1 \}\s*\}/, 'iOS offers an engine’s sign-in to a member with no such engine, or hides a kept one');
-  has(ANDROID, /\w+\.filter \{ (\w+) -> \1 in kept \|\| engines\.any \{ \w+\(it\.engine\) == \1 \} \}/, 'Android offers an engine’s sign-in to a member with no such engine, or hides a kept one');
+  // Asked of the engine and its model together, since an OpenCode's model
+  // says which item it runs on (test/api-engines-in-apps.test.js).
+  has(IOS, /\w+\.filter \{ (\w+) in\s*kept\.contains\(\1\) \|\| engines\.contains \{ \w+\(for: \$0\) == \1 \}\s*\}/, 'iOS offers an engine’s sign-in to a member with no such engine, or hides a kept one');
+  has(ANDROID, /\w+\.filter \{ (\w+) -> \1 in kept \|\| engines\.any \{ \w+\(it\) == \1 \} \}/, 'Android offers an engine’s sign-in to a member with no such engine, or hides a kept one');
   // The rows are drawn from that answer and from nowhere else, and the two
   // items are not also drawn in the list of everything kept.
   has(IOS, /ForEach\(\w+\(engines: \w+, kept: kept\.items\.map\(\\\.name\)\), id: \\\.self\) \{ name in\s*(\w+)\(\s*name: name,/, 'iOS draws an engine’s row without asking whether it is offered');

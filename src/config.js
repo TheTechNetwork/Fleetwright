@@ -306,6 +306,14 @@ export function loadConfig(env = process.env) {
     sandboxMemory: str('FLEETWRIGHT_SANDBOX_MEMORY', '8g'),
     sandboxCpus: str('FLEETWRIGHT_SANDBOX_CPUS', '2'),
     sandboxPidsLimit: str('FLEETWRIGHT_SANDBOX_PIDS_LIMIT', '512'),
+    // MACHINES THIS BOX MAKES OUT OF ITS OWN CONTAINERS (src/core/machines.js;
+    // docs/api-engines.md, "A machine on a box of your own"). The image is
+    // built here from this release unless one is named; and at most this many
+    // run at once, since they share the box's memory with its sessions. Read
+    // only when the sidecar asks for one, which it does only where its
+    // operator turned that on (FLEETWRIGHT_SANDBOX_PROVIDERS names `own`).
+    machineImage: str('FLEETWRIGHT_MACHINE_IMAGE'),
+    machineMax: Math.max(0, int('FLEETWRIGHT_MACHINE_MAX', 2)),
     // Anything else to hand podman, space separated. An escape hatch for the
     // deployment-specific (extra mounts, --network, --userns) that does not
     // belong hard-coded here.
@@ -375,6 +383,9 @@ export function loadConfig(env = process.env) {
     // operator's word, because nothing here can see into the image cheaply.
     // Empty, which is the default, runs Claude Code and nothing else.
     engines: list('FLEETWRIGHT_ENGINES'),
+    // The metered API providers an engine here may bill to (docs/api-engines.md).
+    // Empty is none: a key is asked of no vault and handed to no session.
+    apiProviders: list('FLEETWRIGHT_API_PROVIDERS'),
     // A download cache per person, shared by their sessions on this box and
     // mounted at /root/.cache: npm, pip, uv, go and pnpm keep what they fetched,
     // so the next session does not fetch it again. See cacheVolumeFor.

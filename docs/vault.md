@@ -20,6 +20,7 @@ person removes the box.
 | named secrets | `secret:NAME`, any value up to 8 KiB | the value, by name |
 | SSH keys | `secret:SSH_AUTHORIZED_KEYS`, public keys one a line, from You › Credentials › SSH keys | the value, as any named secret is; a machine made on the person's pool takes them on its `fleetwright` account ([hypervisors.md](./hypervisors.md), "Working a machine") |
 | hypervisors | `hypervisor:ADDRESS`, the record a pool's setup handed the phone | the record, held in the sidecar's memory and never given to the hub or a session ([hypervisors.md](./hypervisors.md), "Machines from your pool") |
+| a sandbox provider | `sandbox:PROVIDER`, the provider's API key and the templates to offer | the record, only to a box that asks for sandboxes, held in the sidecar's memory and never given to the hub or a session ([api-engines.md](./api-engines.md), "The item") |
 | a box's own hypervisor user | `hypervisor:ADDRESS+BOX`, the same record with that box's user and token, filed by the phone from a policy apply's hand-off | that box alone: a full grant gets it only under that box's label, and a grant for the shared item gets its own box's with it; another box's is never handed over ([hypervisors.md](./hypervisors.md), "A user per box") |
 
 **Every credential a fleet person's session uses comes from here**, and from
@@ -616,9 +617,24 @@ box that asks holds it, `list` names that box (`heldBy`), every other box is
 told it is held elsewhere, and depositing it again is how it moves. Codex
 renews its own tokens where it runs, and a renewal ends every other copy.
 
-One name is still held and kept by nothing: `apikey:<provider>`
-(`FUTURE_ITEM_KINDS`). A vault refuses it as not kept yet, which is a
-different answer from a name it has never heard of.
+**An API key is an engine's item too** (`apikey:openrouter`,
+`apikey:ai-gateway`; [api-engines.md](./api-engines.md), "The key"). It is
+kept and listed the same way and never tried from here. It is handed only
+to a box that takes engines and says it takes keys as well (`accepts` names
+`apikeys`), which a box says only when its operator turned a provider on. A
+key bills by the token, and what it may spend is set at the provider.
+
+## A sandbox provider's account
+
+`sandbox:<provider>` holds a small record: the provider's API key and the
+templates the person wants offered, each an id and a name
+([api-engines.md](./api-engines.md), "The item"). It is a person's item, as
+a hypervisor's token is, and is kept only with at least one template. It is
+handed only to an approved box that asks for it (`accepts` names
+`sandboxes`), which holds it in the sidecar's memory and never gives it to
+the hub or a session. The key is that whole account. A machine is made
+for a person, so one kept in a member's vault is held by no box and offers
+nothing.
 
 One entry in `OAUTH_PROVIDERS` in `src/fleet/minter/vault.js` (its label and
 how it renews, in `src/core/oauth-refresh.js`), its client in the minter's

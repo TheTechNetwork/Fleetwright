@@ -173,14 +173,41 @@ struct MachinesView: View {
         }
     }
 
+    /// The machines made for you, under where each is: on your hypervisor,
+    /// rented from a sandbox provider, or a container on one of your own
+    /// machines (docs/api-engines.md). Three headings, because "On your
+    /// hypervisor" over a machine on somebody else's cloud would be untrue,
+    /// and so would "At a sandbox provider" over one on a machine you
+    /// enrolled. Each is drawn only over machines of its kind.
     @ViewBuilder private var poolMachineRows: some View {
-        Text("On your hypervisor")
+        let rented = poolMachines.filter { $0.onSandbox && !$0.onOwnBox }
+        let onBoxes = poolMachines.filter(\.onOwnBox)
+        let onHypervisor = poolMachines.filter { !$0.onSandbox }
+        if !onHypervisor.isEmpty {
+            poolMachineHeading("On your hypervisor")
+            poolMachineLinks(onHypervisor)
+        }
+        if !rented.isEmpty {
+            poolMachineHeading(SandboxWords.rentedHeader)
+            poolMachineLinks(rented)
+        }
+        if !onBoxes.isEmpty {
+            poolMachineHeading(SandboxWords.ownHeader)
+            poolMachineLinks(onBoxes)
+        }
+    }
+
+    private func poolMachineHeading(_ text: String) -> some View {
+        Text(text)
             .fleetType(.section)
             .foregroundStyle(Design.Palette.ink)
             .accessibilityAddTraits(.isHeader)
             .padding(.top, Design.Space.insideTight)
             .fleetRow()
-        ForEach(poolMachines) { machine in
+    }
+
+    private func poolMachineLinks(_ machines: [Fleet.VMMachine]) -> some View {
+        ForEach(machines) { machine in
             NavigationLink {
                 VMMachineView(settings: settings, name: machine.name)
                     .id(machine.name)
@@ -203,7 +230,12 @@ struct MachinesView: View {
                     .fleetType(.label)
                     .foregroundStyle(m.state == "Running" ? Design.Palette.ok : Design.Palette.attention)
             }
-            Text([m.standby == true ? "kept ready" : m.image, m.ip, m.until.map { "ends \(relativeTime($0))" }].compactMap { $0 }.joined(separator: " · "))
+            // A rented machine says whose cloud it is on, and a container
+            // which of your machines it is on, where one on your hypervisor
+            // says its address. Named first, so the line under it stays one
+            // the compiler reads at a glance.
+            let place: String? = m.onSandbox ? "on \(m.providerName)" : m.ip
+            Text([m.standby == true ? "kept ready" : m.image, place, m.until.map { "ends \(relativeTime($0))" }].compactMap { $0 }.joined(separator: " · "))
                 .fleetType(.micro)
                 .foregroundStyle(Design.Palette.inkDim)
         }

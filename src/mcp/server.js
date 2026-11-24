@@ -26,7 +26,7 @@ import { oneLine, LABEL_RE } from '../core/text.js';
 import { hostReported, rcLink } from '../fleet/coordinator/core.js';
 import { packetWords, RESULT_FILE } from '../fleet/protocol/tasks.js';
 import { routeWords } from '../fleet/protocol/routing.js';
-import { ENGINES, checkEngines, decodeEngines, enginesWords } from '../fleet/protocol/engines.js';
+import { ENGINES, API_PROVIDERS, checkEngines, decodeEngines, enginesWords } from '../fleet/protocol/engines.js';
 
 /**
  * MCP revisions this server understands, newest first.
@@ -247,8 +247,22 @@ function describeVmImages(images) {
   const lines = ['VM images (fleet_provision platform `vm`, `template` = the id):'];
   for (const i of images) {
     if (!i || typeof i.template !== 'string') continue;
-    const kind = i.kind === 'proxmox' ? 'Proxmox VE' : i.kind === 'xo' ? 'Xen Orchestra' : 'hypervisor';
-    const where = [kind, i.address ? oneLine(String(i.address), 120) : null, i.poolName ? `pool ${oneLine(String(i.poolName), 60)}` : null]
+    // A SANDBOX PROVIDER'S TEMPLATE IS SAID AS ONE, with whose cloud it is:
+    // a machine from it is rented, ends on the provider's timer, and is on
+    // no network of the person's (docs/api-engines.md).
+    // ONE ON A BOX OF THE PERSON'S OWN IS NOT RENTED and is said apart: a
+    // container on that box, with no network, restart or resize of its own.
+    const kind =
+      i.kind === 'sandbox' && i.own === true
+        ? `on ${oneLine(String(i.provider || 'one of your machines'), 24)}, one of your own machines: a container there that ends on a timer`
+        : i.kind === 'sandbox'
+          ? `sandbox provider ${oneLine(String(i.provider || 'not named'), 24)}, a rented machine that ends on a timer`
+          : i.kind === 'proxmox'
+          ? 'Proxmox VE'
+          : i.kind === 'xo'
+            ? 'Xen Orchestra'
+            : 'hypervisor';
+    const where = [kind, i.address && i.kind !== 'sandbox' ? oneLine(String(i.address), 120) : null, i.poolName ? `pool ${oneLine(String(i.poolName), 60)}` : null]
       .filter(Boolean)
       .join(', ');
     const by = Array.isArray(i.hosts) && i.hosts.length ? ` — made by ${i.hosts.map((/** @type {any} */ h) => oneLine(String(h), 64)).join(', ')}` : '';
@@ -352,6 +366,13 @@ function describeHealth(h) {
   if (Array.isArray(h.engines)) {
     const runs = h.engines.filter((/** @type {unknown} */ e) => typeof e === 'string' && Object.hasOwn(ENGINES, e));
     if (runs.length) lines.push(`engines: ${runs.join(', ')}`);
+  }
+  // THE API PROVIDERS ITS OPERATOR TURNED ON (docs/api-engines.md): an
+  // engine that bills a member's API key goes only to a machine that names
+  // its provider here. One that says nothing has none on, and prints nothing.
+  if (Array.isArray(h.apiProviders)) {
+    const on = h.apiProviders.filter((/** @type {unknown} */ p) => typeof p === 'string' && Object.hasOwn(API_PROVIDERS, p)).map((/** @type {string} */ p) => API_PROVIDERS[/** @type {keyof typeof API_PROVIDERS} */ (p)].says);
+    if (on.length) lines.push(`API providers: ${on.join(', ')}`);
   }
   // WHETHER A SESSION CAN ACTUALLY RUN — and `loggedIn` is not that fact.
   //
@@ -828,7 +849,11 @@ export class McpServer {
       'the same on GitHub\u2019s larger machine, billed by the minute; it is refused unless the person allowed',
       'larger machines for their runner repository, and the refusal says how.',
       'A machine from the person\u2019s own hypervisor is platform `vm`: fleet_status with no name lists the',
-      'VM images they can start one from, each with the id `template` takes.',
+      'VM images they can start one from, each with the id `template` takes. A template from a sandbox',
+      'provider is listed there too and made the same way: a rented machine on the provider\u2019s cloud,',
+      'which ends on a timer and is on no network of the person\u2019s. So is one on a box of the person\u2019s',
+      'own, where its operator turned that on: a container on that box, with no key and nobody else\u2019s cloud.',
+      'Neither has a network, a lab, a restart or a resize: those need a hypervisor.',
       '',
       'Watching one that is actually working:',
       '  1. fleet_start with a `task` (or a `profile`), naming a host or a tag for a kind of machine',
@@ -1615,6 +1640,9 @@ export class McpServer {
       at,
       s.dangerous === true ? 'A member start that skips permission prompts waits for approval.' : 'A member start that skips permission prompts is not asked about.',
       Array.isArray(s.workTypes) && s.workTypes.length ? `A start on a task of these kinds waits for approval: ${s.workTypes.join(', ')}.` : 'No kind of work needs approval.',
+      // SAID ONLY WHEN THE FLEET SAID (C-5): a coordinator from before API
+      // keys sends nothing, and that is not "not asked about".
+      ...(s.paidApi === true ? ['A start on a member with an engine that bills an API key waits for approval: no budget here counts what a key spends.'] : s.paidApi === false ? ['A start on a member with an engine that bills an API key is not asked about.'] : []),
       '',
       ...(got.body.members.length
         ? got.body.members.map((/** @type {any} */ m) => `${m.member}${m.over ? ' [over budget]' : ''}: ${m.words}${m.budgetUsdMonth === null || m.budgetUsdMonth === undefined ? ' It has no budget.' : ''}`)

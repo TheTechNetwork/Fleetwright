@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# What a machine container runs: the fleet's own host, joined with the
+# ticket it was started with. docs/api-engines.md, "A machine on a box of
+# your own".
+#
+# A VM does this from its boot data, with systemd (install/fleetwright-vm-join).
+# A container has neither, so this is that script's two jobs with nothing
+# else in it: write the join file the sidecar enrols from, and start the hub
+# and the sidecar. The same file, the same sidecar and the same enrolment, so
+# a machine made this way is a temporary host like any other.
+#
+# THE TICKET COMES IN THE ENVIRONMENT, as `FLEETWRIGHT_TICKET`, beside
+# `FLEETWRIGHT_COORDINATOR`. Those are the two names a sandbox provider's
+# driver sets (src/fleet/host/sandbox-pools.js), so an image built from this
+# directory joins the same way wherever it is started. It is written to the
+# join file, mode 0600, and taken out of the environment before anything
+# else is started: a session's pane does not inherit it. The sidecar spends
+# it at once and blanks it in the file whether or not that worked
+# (src/fleet/host/vm-join.js), so a restart finds no ticket and dials under
+# the name it was given. A ticket that came in the environment stays
+# readable in the environment this container's first process was started
+# with, to root in here; by then it is spent, as a VM's is in its boot data.
+#
+# OR THE JOIN FILE IS ALREADY THERE, which is how a box of the fleet's own
+# starts one (src/core/machines.js): it writes the file into this machine's
+# volume before the machine starts, so the ticket is in no environment at
+# all. Then only the coordinator's address is in the environment.
+#
+# NO TIMER IN HERE. A VM powers itself off when its minutes are up. A
+# container is ended by whatever made it, which also knows when its time was
+# extended: the box's hub for one of ours, the provider for a rented one.
+#
+# It ends when the sidecar does, with the sidecar's status, taking the hub
+# with it. tini is process 1 (the Containerfile), so what the panes leave
+# behind is reaped.
+set -euo pipefail
+
+say() { printf 'fleetwright-machine: %s\n' "$*"; }
+
+# Where the release and the state are. Both are fixed in the image; a test
+# points them at a directory of its own.
+ROOT="${FLEETWRIGHT_MACHINE_ROOT:-/opt/fleetwright/current}"
+STATE="${FLEETWRIGHT_MACHINE_STATE:-/var/lib/fleetwright-sidecar}"
+HUB_STATE="${FLEETWRIGHT_STATE_DIR:-/var/lib/fleetwright}"
+JOIN="$STATE/vm-join.json"
+
+COORDINATOR="${FLEETWRIGHT_COORDINATOR:-}"
+TICKET="${FLEETWRIGHT_TICKET:-}"
+OWNER="${FLEETWRIGHT_OWNER:-}"
+MINUTES="${FLEETWRIGHT_MINUTES:-}"
+case "$MINUTES" in '' | *[!0-9]*) MINUTES=60 ;; esac
+
+# Said before anything is written, so a machine started wrongly says why in
+# the one place its maker reads: its log.
+case "$COORDINATOR" in
+  https://*) ;;
+  *) say "started with no https coordinator in FLEETWRIGHT_COORDINATOR, so there is no fleet to join. Nothing was started."; exit 64 ;;
+esac
+
+install -d -m 0700 "$STATE"
+if [ ! -s "$JOIN" ]; then
+  # THE FIRST START. Without a ticket there is nothing to join with, and a
+  # host that cannot enrol would sit here until its time ran out.
+  if ! [[ "$TICKET" =~ ^fwt_[0-9a-f]{12}_[0-9a-f]{48}$ ]]; then
+    say "started with no ticket in FLEETWRIGHT_TICKET, so it cannot join $COORDINATOR. Nothing was started."
+    exit 64
+  fi
+  # Written by node, which quotes it: an owner's address is somebody's text.
+  ( umask 077
+    C="$COORDINATOR" T="$TICKET" O="$OWNER" M="$MINUTES" node -e '
+      const { C, T, O, M } = process.env;
+      process.stdout.write(JSON.stringify({ v: 1, coordinator: C, ticket: T, owner: O || null, minutes: Number(M) }) + "\n");
+    ' >"$JOIN.new" )
+  mv -f "$JOIN.new" "$JOIN"
+fi
+unset FLEETWRIGHT_TICKET TICKET
+
+# THE TOKEN THE SIDECAR SHOWS THE HUB, written before either starts. The hub
+# mints one as it comes up and the sidecar reads it once as it starts, so two
+# processes started together would race for it and the sidecar could lose,
+# holding no token for as long as it ran. A box's installer writes the file
+# first for the same reason (src/core/api-token.js), and so does this.
+install -d -m 0700 "$HUB_STATE"
+if [ ! -s "$HUB_STATE/sidecar-token" ]; then
+  ( umask 077
+    node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("hex") + "\n")' >"$HUB_STATE/sidecar-token" )
+fi
+
+# What the two processes read. No env file: everything a machine is told is
+# here, and a file left by something else in the image must not add to it.
+export FLEETWRIGHT_SIDECAR_ENV_FILE=/dev/null
+export FLEETWRIGHT_STATE_DIR="$HUB_STATE"
+export FLEETWRIGHT_COORDINATOR_URL="$COORDINATOR"
+export FLEETWRIGHT_VM_JOIN="$JOIN"
+export FLEETWRIGHT_HOST_KEY="$STATE/host-key.json"
+
+say "joining $COORDINATOR as its owner's temporary machine"
+node "$ROOT/bin/fleetwright" serve &
+HUB=$!
+# The hub goes when this does, however this ends.
+trap 'kill "$HUB" 2>/dev/null || true' EXIT
+
+status=0
+node "$ROOT/bin/fleetwright-sidecar" || status=$?
+say "the sidecar ended with status $status, so this machine is ending"
+exit "$status"

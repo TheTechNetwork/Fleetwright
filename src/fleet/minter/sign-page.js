@@ -251,27 +251,114 @@ var SIGNER = {};
     if (name === 'cloudflare') return 'Cloudflare';
     if (name === 'codex') return 'Codex sign-in';
     if (name === 'copilot') return 'GitHub Copilot token';
+    var billed = S.apiProviderOfItem(name);
+    if (billed) return billed.says + ' API key';
+    if (name.indexOf('sandbox:') === 0) return (S.sandboxSays(name.slice(8)) || name.slice(8)) + ', sandbox provider';
     if (name.indexOf('secret:') === 0) return name.slice(7);
     if (name.indexOf('hypervisor:') === 0) return 'Hypervisor at ' + name.slice(11);
     return name;
   };
   S.SECRET_NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 
-  // THE SIGN-INS THE ENGINES BESIDE CLAUDE CODE RUN ON (docs/engines.md,
+  // THE PROVIDERS AN OPENCODE MODEL MAY BILL BY THE TOKEN, with an API key
+  // kept in the member's vault (docs/api-engines.md), as the fleet's own
+  // table has them (API_PROVIDERS in src/fleet/protocol/engines.js): what
+  // each is called, the prefix a model on it starts with, and the vault
+  // item its key is kept under. The same table as both phones
+  // (test/api-engines-in-apps.test.js).
+  S.API_PROVIDERS = [
+    { id: 'openrouter', says: 'OpenRouter', prefix: 'openrouter', item: 'apikey:openrouter' },
+    { id: 'ai-gateway', says: 'Vercel AI Gateway', prefix: 'vercel', item: 'apikey:ai-gateway' }
+  ];
+  S.apiProviderOfItem = function (name) {
+    return S.API_PROVIDERS.filter(function (p) { return p.item === name; })[0] || null;
+  };
+  // THE LINE UNDER AN API KEY'S FIELD: who bills, where its limit is set,
+  // and that no budget sees it. Said where the key is pasted.
+  S.apiKeyBillingLine = function (says) {
+    return 'Billed by the token. What it may spend is set at ' + says + ', and no budget here counts it.';
+  };
+
+  // WHAT THE ENGINES BESIDE CLAUDE CODE RUN ON (docs/engines.md,
   // "Credentials"): the vault's item for each engine, by the names it keeps
-  // them under. Codex runs on a codex item, OpenCode on a copilot one.
-  S.ENGINE_ITEMS = ['codex', 'copilot'];
+  // them under. Codex runs on a codex item, OpenCode on a copilot one, or
+  // on the API key of the provider its model names.
+  S.ENGINE_ITEMS = ['codex', 'copilot'].concat(S.API_PROVIDERS.map(function (p) { return p.item; }));
   S.ENGINE_ITEM_OF = { codex: 'codex', opencode: 'copilot' };
-  // WHICH OF THE TWO A VAULT'S VIEW OFFERS: the ones an engine of whoever
-  // the vault belongs to runs on, and any it already keeps, so a kept one
-  // can always be forgotten. A Codex row for a member with no Codex engine
-  // would be a button for nothing.
+  // THE ITEM ONE ENGINE RUNS ON. An engine is given as the fleet lists it,
+  // its id and the model it names, or as its id alone. An OpenCode whose
+  // model starts with a provider's prefix runs on that provider's key and
+  // not on a Copilot token (credentialOf, the same rule). An engine this
+  // page never met runs on nothing it can offer.
+  S.engineItemOf = function (e) {
+    var id = typeof e === 'string' ? e : (e && typeof e.engine === 'string' ? e.engine : '');
+    var model = e && typeof e === 'object' && typeof e.model === 'string' ? e.model : '';
+    if (id === 'opencode' && model) {
+      var prefix = model.split('/')[0];
+      var billed = S.API_PROVIDERS.filter(function (p) { return p.prefix === prefix; })[0];
+      if (billed) return billed.item;
+    }
+    return Object.prototype.hasOwnProperty.call(S.ENGINE_ITEM_OF, id) ? S.ENGINE_ITEM_OF[id] : null;
+  };
+  // WHICH OF THEM A VAULT'S VIEW OFFERS: the ones an engine of whoever the
+  // vault belongs to runs on, and any it already keeps, so a kept one can
+  // always be forgotten. A Codex row for a member with no Codex engine, or
+  // an OpenRouter key's for one with no model on OpenRouter, would be a
+  // button for nothing.
   S.engineItems = function (engines, kept) {
     var runs = Array.isArray(engines) ? engines : [];
     var has = Array.isArray(kept) ? kept : [];
     return S.ENGINE_ITEMS.filter(function (item) {
-      return has.indexOf(item) >= 0 || runs.some(function (e) { return Object.prototype.hasOwnProperty.call(S.ENGINE_ITEM_OF, e) && S.ENGINE_ITEM_OF[e] === item; });
+      return has.indexOf(item) >= 0 || runs.some(function (e) { return S.engineItemOf(e) === item; });
     });
+  };
+
+  // A SANDBOX PROVIDER (docs/api-engines.md, "A machine from a sandbox
+  // provider"): machines rented on its cloud with a key of the person's
+  // own. The record a vault keeps is the key and the templates to offer,
+  // each an id and a name, as src/fleet/protocol/sandboxes.js reads it.
+  S.SANDBOX_PROVIDERS = [{ id: 'e2b', says: 'E2B' }];
+  S.SANDBOX_TEMPLATE_LIMIT = 12;
+  S.SANDBOX_TEMPLATE_NAME_LIMIT = 60;
+  // CHECKED HERE AS WELL AS IN THE VAULT, which drops a template whose id
+  // it cannot read and keeps the rest without a word: a person would read
+  // Kept over a list one short.
+  S.SANDBOX_TEMPLATE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+  S.sandboxSays = function (id) {
+    var p = S.SANDBOX_PROVIDERS.filter(function (x) { return x.id === id; })[0];
+    return p ? p.says : null;
+  };
+  // ONE TEMPLATE AS IT IS KEPT, or the sentence that says why not. A name
+  // left empty is the id, and one the vault would cut is cut here, where
+  // it can be seen.
+  S.sandboxTemplate = function (id, name, have) {
+    var i = String(id || '').trim();
+    if (!S.SANDBOX_TEMPLATE_ID_RE.test(i)) return { ok: false, text: 'A template id is letters, digits, dots, dashes and underscores, starting with a letter or a digit, up to 64.' };
+    if ((have || []).some(function (t) { return t.id === i; })) return { ok: false, text: 'That template is already in the list.' };
+    var n = String(name || '').trim().slice(0, S.SANDBOX_TEMPLATE_NAME_LIMIT);
+    return { ok: true, template: { id: i, name: n || i } };
+  };
+  // THE RECORD, as text, or null with no key or no template: a machine is
+  // made from a template, so a record with none could make nothing, and it
+  // is never sent.
+  S.sandboxValue = function (key, templates) {
+    var k = String(key || '').trim();
+    var list = Array.isArray(templates) ? templates : [];
+    if (!k || !list.length) return null;
+    return JSON.stringify({ key: k, templates: list.map(function (t) { return { id: t.id, name: t.name }; }) });
+  };
+  // WHAT TO KNOW BEFORE THE KEY IS KEPT, one line each, in the words both
+  // phones use: what the key is, where a machine made with it runs and who
+  // can read it, that it ends, what a template has to do, and whose switch
+  // it waits on.
+  S.sandboxBefore = function (says) {
+    return [
+      'The key is your whole ' + says + ' account.',
+      'A machine made there is on ' + says + '’s cloud, and ' + says + ' can read what runs on it.',
+      'It ends on a timer.',
+      'A template has to be built to join your fleet. One that is not stays up, unused, until its time runs out.',
+      'One of your machines makes these, and only after its operator turned ' + says + ' on there.'
+    ];
   };
   // WHICH MACHINE HOLDS A KEPT CODEX SIGN-IN. It is given to one machine and
   // no other, so the row says which, or that none has asked for it yet. The
@@ -611,6 +698,9 @@ const SIGN_MAIN = String.raw`
       if (x.name.indexOf('secret:') === 0) box.appendChild(secretRow(x));
       if (x.name.indexOf('hypervisor:') === 0) box.appendChild(hypervisorRow(x));
     });
+    // A SANDBOX PROVIDER IS A PERSON'S OWN and never a member's: a machine
+    // rented with it is its owner's, as one on their own hypervisor is.
+    if (!view) box.appendChild(sandboxRow());
     box.appendChild(newSecretRow());
     var custody = !view && vault && vault.custody;
     if (custody && custody.member && (arr(custody.custodians).length || arr(custody.managers).length)) box.appendChild(managersRow(custody));
@@ -725,10 +815,11 @@ const SIGN_MAIN = String.raw`
     return r.el;
   }
 
-  // AN ENGINE'S SIGN-IN (docs/engines.md, "Credentials"): the Codex sign-in
-  // or the GitHub Copilot token. Kept the way a named secret is, pasted
-  // here and never shown again, and the vault says what was wrong with a
-  // paste it refuses.
+  // WHAT AN ENGINE RUNS ON (docs/engines.md, "Credentials"): the Codex
+  // sign-in, the GitHub Copilot token, or the API key of a provider
+  // (docs/api-engines.md). Kept the way a named secret is, pasted here and
+  // never shown again, and the vault says what was wrong with a paste it
+  // refuses.
   //
   // THE CODEX SIGN-IN GOES TO ONE MACHINE, because Codex renews it there
   // and a renewal ends every other copy. So the row says which machine
@@ -760,11 +851,17 @@ const SIGN_MAIN = String.raw`
     if (r.step.hidden) return;
     r.step.textContent = '';
     var codex = name === 'codex';
-    r.step.appendChild(el('p', 'lede', codex ? 'Paste the whole of ~/.codex/auth.json, the file codex login leaves.' : 'Paste one GitHub Copilot token. OpenCode runs on it.'));
+    // The provider this row is the key of, or null for one of the sign-ins.
+    var billed = S.apiProviderOfItem(name);
+    r.step.appendChild(el('p', 'lede', codex ? 'Paste the whole of ~/.codex/auth.json, the file codex login leaves.'
+      : billed ? 'Paste one ' + billed.says + ' API key. OpenCode runs on it.' : 'Paste one GitHub Copilot token. OpenCode runs on it.'));
     if (codex) r.step.appendChild(el('p', null, 'What you paste is a copy. Whichever of the two renews first ends the other.'));
     var form = el('form', 'step');
-    var value = codex ? area('The auth.json file') : field('The GitHub Copilot token', 'password');
+    var value = billed ? field('The ' + billed.says + ' API key', 'password') : codex ? area('The auth.json file') : field('The GitHub Copilot token', 'password');
     form.appendChild(value);
+    // AN API KEY SPENDS MONEY NO BUDGET COUNTS, so the line under its field
+    // says who bills and where its limit is set, before it is kept.
+    if (billed) form.appendChild(el('p', 'lede', S.apiKeyBillingLine(billed.says)));
     var go = el('button', 'primary', replacing ? 'Replace it' : 'Keep it');
     go.type = 'submit';
     form.appendChild(go);
@@ -786,6 +883,119 @@ const SIGN_MAIN = String.raw`
   }
   function hypervisorRow(x) {
     return row(S.itemLabel(x.name), 'Kept from the app, for the machines that make machines on that pool.', true).el;
+  }
+
+  // A SANDBOX PROVIDER (docs/api-engines.md): its API key and the templates
+  // to offer, kept in the person's own vault as sandbox:<provider>. One
+  // row, the shape every row has: what it is, whether it is kept, and what
+  // can be done about it. Nothing kept is read back, so Replace is the
+  // form again, empty, and the form says so.
+  function sandboxRow() {
+    var p = S.SANDBOX_PROVIDERS[0];
+    var name = 'sandbox:' + p.id;
+    var x = item(name);
+    var when = x && Number(x.at) > 0 ? new Date(Number(x.at)) : null;
+    var state = !x ? 'Not kept. With a key of yours, machines can be rented from ' + p.says + '.'
+      : 'Kept' + (when ? ' since ' + when.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '') + '.';
+    var r = row(S.itemLabel(name), state, Boolean(x));
+    button(r.actions, x ? 'Replace' : 'Add a sandbox provider', null, function () { sandboxForm(r, p, Boolean(x)); });
+    if (x) forgetButton(r, name);
+    return r.el;
+  }
+
+  // THE FORM: which provider, as text because there is one; its key, in a
+  // field that hides it; the templates, to add to and remove from; then
+  // what it costs, said before the button and not under it.
+  //
+  // THE KEY IS IN THE FIELD AND NOWHERE ELSE, and the field is emptied the
+  // moment it is read to be sent, whatever the vault answers. It is not
+  // read at all while there is no template to send it with, so a person
+  // who pressed Keep a step early does not have to type it again.
+  function sandboxForm(r, p, replacing) {
+    r.step.hidden = !r.step.hidden;
+    if (r.step.hidden) return;
+    r.step.textContent = '';
+    var name = 'sandbox:' + p.id;
+    var templates = [];
+    var form = el('form', 'step');
+    form.noValidate = true;
+    form.appendChild(el('p', 'lede', 'Provider: ' + p.says + '.'));
+    if (replacing) form.appendChild(el('p', null, 'Nothing kept is shown. Enter the key and every template again.'));
+    var key = field('The ' + p.says + ' API key', 'password');
+    form.appendChild(key);
+    form.appendChild(el('h4', null, 'Templates'));
+    var none = el('p', 'state', 'No templates yet.');
+    form.appendChild(none);
+    var list = el('ul');
+    form.appendChild(list);
+    var id = field('Template id, as ' + p.says + ' names it', 'text');
+    var called = field('Name, optional', 'text');
+    form.appendChild(id);
+    form.appendChild(called);
+    var add = button(form, 'Add the template', null, function () { addTemplate(); });
+    var full = el('p', 'state', 'That is all ' + S.SANDBOX_TEMPLATE_LIMIT + '. Remove one to add another.');
+    form.appendChild(full);
+    form.appendChild(el('p', 'lede', 'The id is the template’s own, from ' + p.says + '. The name is what New session calls it. At most ' + S.SANDBOX_TEMPLATE_LIMIT + '.'));
+    S.sandboxBefore(p.says).forEach(function (line) { form.appendChild(el('p', null, line)); });
+    var go = el('button', 'primary', replacing ? 'Replace it' : 'Keep it');
+    go.type = 'submit';
+    form.appendChild(go);
+
+    // The list as it stands, every template a line with its own Remove,
+    // and the two fields only while there is room for another.
+    function drawTemplates() {
+      list.textContent = '';
+      templates.forEach(function (t) {
+        var li = el('li', 'who');
+        li.appendChild(el('span', null, t.name === t.id ? t.id : t.name + ' (' + t.id + ')'));
+        button(li, 'Remove', null, function () {
+          templates = templates.filter(function (o) { return o.id !== t.id; });
+          drawTemplates();
+          // The button that was pressed is gone, so the keyboard is put
+          // where the next thing to do is.
+          (id.hidden ? go : id).focus();
+        }).setAttribute('aria-label', 'Remove the template ' + t.name);
+        list.appendChild(li);
+      });
+      var room = templates.length < S.SANDBOX_TEMPLATE_LIMIT;
+      none.hidden = templates.length > 0;
+      id.hidden = !room;
+      called.hidden = !room;
+      add.hidden = !room;
+      full.hidden = room;
+    }
+    function addTemplate() {
+      var made = S.sandboxTemplate(id.value, called.value, templates);
+      if (!made.ok) { note(r, made.text, true); id.focus(); return; }
+      templates.push(made.template);
+      id.value = '';
+      called.value = '';
+      note(r, '');
+      drawTemplates();
+      (id.hidden ? go : id).focus();
+    }
+    // ENTER IN A TEMPLATE'S FIELD ADDS THE TEMPLATE. Left alone it would
+    // submit the form, and keep a provider somebody was still filling in.
+    [id, called].forEach(function (f) {
+      f.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        addTemplate();
+      });
+    });
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (!templates.length) { note(r, 'Add at least one template. A machine is made from one.', true); return; }
+      var v = key.value;
+      key.value = '';
+      var record = S.sandboxValue(v, templates);
+      if (!record) { note(r, 'Enter the API key.', true); key.focus(); return; }
+      // Its own vault, whatever is showing by the time it is sent.
+      change(r, 'Keeping it.', function () { return vaultAsk('put', { name: name, value: record, 'for': null }).then(function (t) { return t.text; }); });
+    });
+    drawTemplates();
+    r.step.appendChild(form);
+    key.focus();
   }
 
   // A SECRET IS TYPED HERE AND NOWHERE ELSE. The field is a password field,
@@ -1052,8 +1262,11 @@ const SIGN_MAIN = String.raw`
   // is shown.
   //
   // AND EACH MEMBER'S ENGINES, from the same answer (docs/engines.md): they
-  // say which of the two engine sign-ins a vault's view offers a row for,
-  // and nothing else. Whether one is kept is still the vault's to decide.
+  // say which engine items a vault's view offers a row for, and nothing
+  // else. Each is kept with the model it names, because an OpenCode's
+  // model says whether it runs on a Copilot token or on a provider's API
+  // key (docs/api-engines.md). Whether one is kept is still the vault's to
+  // decide.
   // The person's own member counts as somebody to name, since their own
   // vault is where their own engines' sign-ins go.
   async function readOrg() {
@@ -1067,7 +1280,9 @@ const SIGN_MAIN = String.raw`
       m.body.members.forEach(function (x) {
         if (x && typeof x.id === 'string' && typeof x.name === 'string' && x.name.trim()) read[x.id] = x.name.trim().slice(0, 80);
         if (x && typeof x.id === 'string' && Array.isArray(x.engines)) {
-          runs[x.id] = x.engines.map(function (e) { return e && typeof e.engine === 'string' ? e.engine : ''; });
+          runs[x.id] = x.engines.map(function (e) {
+            return e && typeof e.engine === 'string' ? { engine: e.engine, model: typeof e.model === 'string' ? e.model : '' } : '';
+          });
         }
       });
       names = read;

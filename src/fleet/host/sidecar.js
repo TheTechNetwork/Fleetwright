@@ -65,6 +65,8 @@ import { ConsoleTunnels } from './console-tunnel.js';
 import { BrowseCarrier, parseBrowseHosts } from './browse.js';
 import { XoPools } from './xo-pools.js';
 import { PvePools } from './pve-pools.js';
+import { SandboxPools } from './sandbox-pools.js';
+import { OwnPools, OWN_PROVIDER } from './own-pools.js';
 import { Pools } from './pools.js';
 import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
@@ -303,6 +305,7 @@ export class Sidecar {
    *   xoPools?: XoPools|Pools|null,
    *   edgeWatch?: EdgeWatch|null,
    *   holderFor?: string,
+   *   sandboxProviders?: string[],
    *   vmLogin?: { email: string, token: string|null }|null,
    *   onVmLoginHanded?: (() => void)|null,
    *   browse?: { hosts?: string[], web?: boolean }|null,
@@ -351,6 +354,8 @@ export class Sidecar {
     xoPools = null,
     edgeWatch = null,
     holderFor = '',
+    // The sandbox providers this box's operator turned on (docs/api-engines.md). None unless said.
+    sandboxProviders = [],
     // THIS BOX AS A MACHINE FROM SOMEBODY'S HYPERVISOR: whose it is and the
     // Claude login it runs on, from the file it was booted with
     // (src/fleet/host/vm-join.js), handed to the hub before the first health
@@ -540,7 +545,7 @@ export class Sidecar {
     // (xo-holder.js): its health says so, and the coordinator asks it first.
     // AND PROXMOX'S CLUSTERS beside Xen Orchestra's pools, behind one face
     // (pools.js, docs/proxmox.md).
-    this.pools = xoPools ?? (vaultKey ? new Pools({ xo: new XoPools({ log: this.log, holderFor, boxId: this.hostId }), pve: new PvePools({ log: this.log, holderFor }) }) : null);
+    this.pools = xoPools ?? (vaultKey ? new Pools({ xo: new XoPools({ log: this.log, holderFor, boxId: this.hostId }), pve: new PvePools({ log: this.log, holderFor }), sandbox: new SandboxPools({ providers: sandboxProviders, log: this.log }), own: new OwnPools({ enabled: sandboxProviders.map((p) => String(p).trim().toLowerCase()).includes(OWN_PROVIDER), hub: this.hub, boxId: this.hostId, log: this.log }) }) : null);
     /**
      * THE POOLS' EDGE ROUTERS, read with the key the person's vault keeps
      * beside a pool's token (edge-watch.js), for the pools that have one.
@@ -654,7 +659,7 @@ export class Sidecar {
     this.edgeWatch?.start();
     if (this.pools && this.poolIntervalMs > 0) {
       this.poolTimer = setInterval(() => {
-        if (this.pools?.held.size) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
+        if (this.pools && this.#holdsAny()) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
       }, this.poolIntervalMs);
       this.poolTimer.unref?.();
     }
@@ -1949,7 +1954,7 @@ export class Sidecar {
       // written nowhere (xo-pools.js). Then looked at, and the health frame
       // that says what they have goes out when that is done.
       const accounts = this.pools ? this.pools.adopt(said.accounts) : said.accounts;
-      if (this.pools?.held.size) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
+      if (this.pools && this.#holdsAny()) void this.pools.refresh().then(() => this.#pushHealth()).catch(() => {});
       const r = await this.hub.vault({ accounts }).catch((e) => ({ ok: false, text: /** @type {Error} */ (e).message }));
       if (r.ok) this.log.info(`sidecar: vault: ${r.text}`);
       else this.log.warn(`sidecar: fleetwright did not take the vault's answer: ${r.text}`);
@@ -2086,6 +2091,35 @@ export class Sidecar {
   }
 
   /**
+   * Whether this box holds anything a machine can be made from. The seam
+   * (pools.js) counts a sandbox provider's key; a bare hypervisor driver,
+   * which a test may hand in, counts its own.
+   */
+  #holdsAny() {
+    const p = /** @type {any} */ (this.pools);
+    return Boolean(p && (typeof p.holdsAny === 'boolean' ? p.holdsAny : p.held?.size));
+  }
+
+  /** The API providers this box's hub last said it may bill to. @type {string[]} */
+  apiProviders = [];
+  /** Whether the last vault request asked for API keys, or null before any and once a change has been acted on. @type {boolean|null} */
+  askedForKeys = null;
+
+  /** Keep what the hub says of its API providers, held to short strings. @param {unknown} said @returns {string[]} */
+  #noteApiProviders(said) {
+    this.apiProviders = Array.isArray(said) ? said.filter((/** @type {unknown} */ p) => typeof p === 'string' && /^[a-z0-9-]{1,40}$/.test(p)).slice(0, 8) : [];
+    // WHAT THIS BOX ACCEPTS HAS CHANGED SINCE IT LAST ASKED THE VAULT. A box
+    // that asked before its hub had answered asked for no keys, and the
+    // answer it then filed held none, so the keys it had kept were dropped
+    // until the next ask ten minutes on. Asked again in a moment instead.
+    if (this.askedForKeys !== null && this.askedForKeys !== this.apiProviders.length > 0) {
+      this.askedForKeys = null;
+      this.#vaultChangedSoon();
+    }
+    return this.apiProviders;
+  }
+
+  /**
    * @returns {Promise<{ ok: true, accounts: Array<{ email: string, items: Array<{ name: string, expiresAt: number|null }>, problems?: string[] }> } | { ok: false, forget: boolean, text: string }>}
    */
   async #askVault() {
@@ -2097,7 +2131,13 @@ export class Sidecar {
     // And `engines`: the sign-ins an engine runs on, which this box hands a
     // session's runner over its socket (docs/engines.md). IN ALPHABETICAL
     // ORDER, because the minter checks the signature over the list sorted.
-    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at: Date.now(), reply: publicKey, accepts: ['engines', 'members'] };
+    // And `apikeys`, only while this box's operator has an API provider
+    // turned on: a box that bills nobody is handed no key (docs/api-engines.md).
+    // And `sandboxes`, only while it has a sandbox provider turned on: the
+    // record is a provider's whole account, held here in memory and nowhere else.
+    this.askedForKeys = this.apiProviders.length > 0;
+    const accepts = [...(this.apiProviders.length ? ['apikeys'] : []), 'engines', 'members', ...(/** @type {any} */ (this.pools)?.sandbox?.takes ? ['sandboxes'] : [])];
+    const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at: Date.now(), reply: publicKey, accepts };
     let signature;
     try {
       signature = await key.sign(signingInput('vault-box', request));
@@ -2362,7 +2402,7 @@ export class Sidecar {
       // answering or not, because making a machine is this process's and not
       // the hub's. Absent when it holds none, so an older coordinator sees
       // nothing new.
-      ...(this.pools?.held.size
+      ...(this.pools && this.#holdsAny()
         ? {
             xo: this.pools.report().map(({ problem, ...seen }) => {
               const edges = this.edgeWatch?.reportFor(seen.owner, seen.address);
@@ -2372,7 +2412,10 @@ export class Sidecar {
               // API errors name a path and a status, never the token. Xen
               // Orchestra's stays home, as before: its page asks the pool
               // itself, phone-direct.
-              const why = seen.kind === 'proxmox' && seen.reachable === false && typeof problem === 'string' ? { problem: problem.slice(0, 200) } : {};
+              // And why this box offers no machine of its own just now: its
+              // image is being built, or the build failed. Its own words
+              // about itself, with nobody's token near them.
+              const why = ((seen.kind === 'proxmox' && seen.reachable === false) || /** @type {any} */ (seen).own === true) && typeof problem === 'string' ? { problem: problem.slice(0, 200) } : {};
               return { ...seen, ...why, ...(edges ? { edges } : {}) };
             }),
           }
@@ -2468,6 +2511,10 @@ export class Sidecar {
         // from before engines says nothing, and the coordinator reads that
         // as Claude Code alone.
         ...(Array.isArray(state.engines) ? { engines: state.engines.filter((/** @type {unknown} */ e) => typeof e === 'string').slice(0, 8) } : {}),
+        // The metered API providers an engine here may bill to, when its
+        // operator named any (docs/api-engines.md). Kept, because it is also
+        // what decides whether this box asks a vault for keys (#askVault).
+        ...(this.#noteApiProviders(state.apiProviders).length ? { apiProviders: this.apiProviders } : {}),
         running,
         // The hub's own answer when it gives one (it measures memory and load,
         // core/capacity.js); a hub from before that has only a fixed count.

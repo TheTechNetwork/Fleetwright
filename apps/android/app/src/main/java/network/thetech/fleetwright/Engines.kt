@@ -69,8 +69,56 @@ const val ENGINE_DEFAULT = "claude-code"
 /** How many a member names. One of each is all there are. */
 const val ENGINE_LIMIT = 3
 
-/** The vault items an engine other than Claude Code runs on, by the names the vault keeps them under. */
-val ENGINE_VAULT_ITEMS = listOf("codex", "copilot")
+/**
+ * The vault items an engine other than Claude Code runs on, by the names the
+ * vault keeps them under: the two sign-ins, then one API key for each
+ * provider below (`ENGINE_ITEM_KINDS` in src/fleet/minter/vault.js).
+ */
+val ENGINE_VAULT_ITEMS = listOf("codex", "copilot", "apikey:openrouter", "apikey:ai-gateway")
+
+/**
+ * A provider an OpenCode model may bill by the token, with an API key kept
+ * in the member's vault (docs/api-engines.md). [prefix] is OpenCode's own
+ * name for it, which is how a model on it starts; [item] is the vault item
+ * its key is kept under.
+ */
+data class ApiProvider(val id: String, val says: String, val prefix: String, val item: String)
+
+/**
+ * The providers there are, as the fleet's own table has them (`API_PROVIDERS`
+ * in src/fleet/protocol/engines.js). A model on any other prefix is your
+ * fleet's to refuse, in its own sentence.
+ */
+val API_PROVIDERS = listOf(
+    ApiProvider(id = "openrouter", says = "OpenRouter", prefix = "openrouter", item = "apikey:openrouter"),
+    ApiProvider(id = "ai-gateway", says = "Vercel AI Gateway", prefix = "vercel", item = "apikey:ai-gateway"),
+)
+
+/** The provider a vault item is the API key of, or null for any other item. */
+fun apiProviderOfItem(item: String): ApiProvider? = API_PROVIDERS.firstOrNull { it.item == item }
+
+/**
+ * The provider an engine bills, or null for one that runs on a sign-in: only
+ * OpenCode, and only when its model starts with a provider's prefix
+ * (`providerOf`, the same rule).
+ */
+fun apiProviderOf(choice: EngineChoice): ApiProvider? {
+    if (choice.engine != "opencode") return null
+    val model = choice.model ?: return null
+    val prefix = model.substringBefore("/")
+    return API_PROVIDERS.firstOrNull { it.prefix == prefix }
+}
+
+/** What a provider is called. One this build has never met is shown as the fleet sent it (C-5). */
+fun apiProviderName(id: String): String = API_PROVIDERS.firstOrNull { it.id == id }?.says ?: id
+
+/**
+ * The line under an API key's paste field: who bills, where its limit is
+ * set, and that no budget here sees it. The one thing to know before a key
+ * is kept, said where it is pasted.
+ */
+fun apiKeyBillingLine(provider: ApiProvider): String =
+    "Billed by the token. What it may spend is set at ${provider.says}, and no budget here counts it."
 
 /** What an engine is called. One this build has never met is shown as the fleet sent it (C-5). */
 fun engineName(id: String): String = when (id) {
@@ -87,6 +135,14 @@ fun engineVaultItem(id: String): String? = when (id) {
     "opencode" -> "copilot"
     else -> null
 }
+
+/**
+ * The vault item one of a member's engines runs on: the key of the provider
+ * its model names, or the engine's own sign-in (`credentialOf`, the same
+ * rule). An OpenCode on OpenRouter runs on that key and not on a Copilot
+ * token, so it is the key's row that is offered for it.
+ */
+fun engineVaultItemOf(choice: EngineChoice): String? = apiProviderOf(choice)?.item ?: engineVaultItem(choice.engine)
 
 /** A list as it is said: "Claude Code, then Codex (gpt-5.1-codex)". */
 fun engineListWords(engines: List<EngineChoice>): String =
@@ -182,6 +238,18 @@ fun machineRunsLine(host: Fleet.FleetHost): String? {
 }
 
 /**
+ * "API keys turned on for: OpenRouter", for a machine's page: the providers
+ * its operator turned on, by name (docs/api-engines.md). Null when it names
+ * none, and then nothing is drawn: off is what every machine is until its
+ * operator says otherwise, and a line saying so would be on every page.
+ */
+fun machineApiProvidersLine(reported: List<String>?): String? {
+    val named = reported.orEmpty().filter { it.isNotEmpty() }
+    if (named.isEmpty()) return null
+    return "API keys turned on for: " + named.joinToString(", ") { apiProviderName(it) }
+}
+
+/**
  * What New session says before a start as a member is sent to a machine
  * that does not run the member's first engine: which engines the session
  * will have there. Null when the first engine runs there, when the member
@@ -205,13 +273,14 @@ fun engineStartNote(member: Fleet.Member, host: Fleet.FleetHost): String? {
 }
 
 /**
- * Which of the two engine sign-ins a vault's screen offers: the ones an
- * engine in this list runs on, and any the vault already keeps, so a kept
- * one can always be forgotten. A Codex row for a member with no Codex
- * engine would be a button for nothing (C-2).
+ * Which of the engine items a vault's screen offers: the ones an engine in
+ * this list runs on, and any the vault already keeps, so a kept one can
+ * always be forgotten. A Codex row for a member with no Codex engine, or an
+ * OpenRouter key's for one with no model on OpenRouter, would be a button
+ * for nothing (C-2).
  */
 fun engineItemsOffered(engines: List<EngineChoice>, kept: List<String>): List<String> =
-    ENGINE_VAULT_ITEMS.filter { item -> item in kept || engines.any { engineVaultItem(it.engine) == item } }
+    ENGINE_VAULT_ITEMS.filter { item -> item in kept || engines.any { engineVaultItemOf(it) == item } }
 
 /**
  * Which machine holds a kept Codex sign-in. It is given to one machine and
@@ -235,6 +304,13 @@ internal fun parseEngineChoices(array: JSONArray?): List<EngineChoice> =
     }
 
 /**
+ * The line under OpenCode's model: the three ways one is written, and what
+ * each runs on. The model is also who pays, and two of the three bill by the
+ * token, so it is said before the member is saved.
+ */
+const val OPENCODE_MODEL_LINE = "OpenCode needs a model. Written github-copilot/<model>, it runs on the member’s Copilot token. Written openrouter/<model> or vercel/<model>, it runs on an API key and is billed by the token."
+
+/**
  * What a member's engines are sent as. [list] is null when the list cannot
  * be sent as it stands, and then [problem] is the sentence to show.
  */
@@ -244,7 +320,8 @@ data class EnginesToSend(val list: JSONArray?, val problem: String?)
  * A member's engines as the fleet takes them: the list in its order, each
  * with its model when one is named. Not sent empty, because a member has at
  * least one engine, and not with an OpenCode that names no model. Every
- * other rule is your fleet's to refuse.
+ * other rule is your fleet's to refuse, a model on a provider it has no row
+ * for included.
  */
 fun memberEnginesToSend(engines: List<EngineChoice>): EnginesToSend {
     if (engines.isEmpty()) return EnginesToSend(null, "A member has at least one engine.")
@@ -252,7 +329,7 @@ fun memberEnginesToSend(engines: List<EngineChoice>): EnginesToSend {
     for (choice in engines) {
         val model = choice.model.orEmpty().trim()
         if (choice.engine == "opencode" && model.isEmpty()) {
-            return EnginesToSend(null, "OpenCode needs a model, written github-copilot/<model>.")
+            return EnginesToSend(null, "OpenCode needs a model.")
         }
         val entry = JSONObject().put("engine", choice.engine)
         if (model.isNotEmpty()) entry.put("model", model)
@@ -287,9 +364,10 @@ internal fun SessionEngineLines(session: Fleet.Session) {
 }
 
 /**
- * One engine's sign-in in a vault: the Codex sign-in or the GitHub Copilot
- * token. Whether it is kept and since when, the way to keep or replace it
- * by pasting, and Forget, which asks first on the screen around this.
+ * One engine's item in a vault: the Codex sign-in, the GitHub Copilot token,
+ * or a provider's API key. Whether it is kept and since when, the way to
+ * keep or replace it by pasting, and Forget, which asks first on the screen
+ * around this.
  *
  * WHAT IS PASTED IS NEVER SHOWN AGAIN. The field is emptied when the vault
  * took it and when this row leaves the screen, it is never saved with the
@@ -301,7 +379,10 @@ internal fun SessionEngineLines(session: Fleet.Session) {
  * that pasting it again moves it, and, where it is pasted, that the paste
  * is itself a copy of a file still on somebody's computer.
  *
- * [name] is "codex" or "copilot", as the vault names it; [item] is the kept
+ * AN API KEY SPENDS MONEY NO BUDGET HERE COUNTS, so where one is pasted the
+ * row says who bills and where its limit is set ([apiKeyBillingLine]).
+ *
+ * [name] is "codex", "copilot" or a provider's key, as the vault names it; [item] is the kept
  * one, or null when the vault keeps none. [keep] answers true when the
  * vault took what was pasted.
  */
@@ -323,6 +404,8 @@ internal fun EngineSignInRow(
     DisposableEffect(Unit) { onDispose { pasted = "" } }
     val title = PhoneVault.label(name)
     val plain = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
+    // The provider this row is the key of, or null for one of the sign-ins.
+    val provider = apiProviderOfItem(name)
 
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
         Row(
@@ -379,6 +462,22 @@ internal fun EngineSignInRow(
                     keyboardOptions = plain,
                     modifier = Modifier.fillMaxWidth(),
                 )
+            } else if (provider != null) {
+                Text(
+                    "Paste one ${provider.says} API key. OpenCode runs on it.",
+                    style = Design.Style.bodySmall,
+                    color = Design.Palette.ink.now,
+                )
+                OutlinedTextField(
+                    value = pasted,
+                    onValueChange = { pasted = it.trim() },
+                    label = { Text("${provider.says} API key") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = plain,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Hint(apiKeyBillingLine(provider))
             } else {
                 Text(
                     "Paste one GitHub Copilot token. OpenCode runs on it.",
@@ -440,13 +539,15 @@ internal fun MemberEnginesEditor(engines: List<EngineChoice>, onChange: (List<En
                 },
                 label = { Text("Model") },
                 // OpenCode's model also says whose account pays, so it is
-                // required and the field shows the form it takes.
-                placeholder = { Text(if (choice.engine == "opencode") "github-copilot/<model>" else "Optional") },
+                // required and the field shows the shape it takes. Which
+                // providers there are, and what each runs on, is the line
+                // under it.
+                placeholder = { Text(if (choice.engine == "opencode") "provider/<model>" else "Optional") },
                 singleLine = true,
                 keyboardOptions = plain,
                 modifier = Modifier.fillMaxWidth(),
             )
-            if (choice.engine == "opencode") Hint("OpenCode needs a model, written github-copilot/<model>.")
+            if (choice.engine == "opencode") Hint(OPENCODE_MODEL_LINE)
             if (engines.size > 1) {
                 Row(
                     Modifier.fillMaxWidth(),

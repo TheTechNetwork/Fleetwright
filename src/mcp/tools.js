@@ -261,7 +261,11 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
           'What runs the member, in the order to try: each "claude-code", "codex" or "opencode", with a model after "=" ' +
           '("codex=gpt-5.1-codex"; opencode needs one, written "opencode=github-copilot/<model>"). Up to three, each once. ' +
           'A session starts on the first that its machine runs, and at an account’s limit the next one continues from a ' +
-          'handoff note in the workspace. Each runs on the member’s own sign-in of its kind, kept in its vault.',
+          'handoff note in the workspace. Each runs on the member’s own sign-in of its kind, kept in its vault. ' +
+          'An opencode model written "openrouter/<model>" or "vercel/<model>" bills an API key kept in the ' +
+          'member’s vault, by the token, and no budget here counts it: a start on a member with one waits for ' +
+          'an approval unless an admin turned that off (fleet_budgets), and it goes only to a machine whose ' +
+          'operator turned that provider on (fleet_health).',
       },
       tag: { type: 'string', description: 'The host tag its sessions go to when the person starting one names no machine.' },
       budgetUsdMonth: { type: 'number', description: 'A monthly budget in dollars, at API prices as each session counts its own cost. fleet_budgets shows what has been spent against it, and what the fleet does when it is passed.' },

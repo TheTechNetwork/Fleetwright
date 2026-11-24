@@ -210,11 +210,12 @@ internal class PhoneVault(private val settings: Settings) {
     /**
      * Keep the sign-in an engine other than Claude Code runs on
      * (docs/engines.md, "Credentials"): `codex`, the whole text of the
-     * `auth.json` that `codex login` writes, or `copilot`, one GitHub Copilot
-     * token. Kept the way a named secret is, under its own name, and the
-     * vault checks what it is: its refusal is a sentence, shown as it came.
-     * A Codex file is sent as it was pasted, never trimmed here, because the
-     * vault reads it whole.
+     * `auth.json` that `codex login` writes, `copilot`, one GitHub Copilot
+     * token, or `apikey:<provider>`, one API key (docs/api-engines.md). Kept
+     * the way a named secret is, under its own name, and the vault checks
+     * what it is: its refusal is a sentence, shown as it came. A Codex file
+     * is sent as it was pasted, never trimmed here, because the vault reads
+     * it whole.
      */
     suspend fun keepEngineSignIn(fleet: Fleet, name: String, value: String, member: String? = null): Result<String> = runCatching {
         require(name in ENGINE_VAULT_ITEMS) { "$name is not an engine's sign-in." }
@@ -234,6 +235,22 @@ internal class PhoneVault(private val settings: Settings) {
     suspend fun keepHypervisor(fleet: Fleet, address: String, record: String, box: String? = null): Result<String> = runCatching {
         val name = if (box == null) "hypervisor:$address" else "hypervisor:$address+$box"
         ask(fleet, "put", JSONObject().put("name", name).put("value", record)).first
+    }
+
+    /**
+     * Keep a sandbox provider in this person's own vault
+     * (docs/api-engines.md, "The item"): the provider's API key and the
+     * templates to offer, under `sandbox:<provider>`. Never a member's
+     * vault: a machine rented with it is its owner's, as a machine on their
+     * own hypervisor is.
+     *
+     * THE WHOLE RECORD EVERY TIME. The vault reads nothing back, so keeping
+     * it again replaces the key and every template together.
+     */
+    suspend fun keepSandbox(fleet: Fleet, provider: String, key: String, templates: List<SandboxTemplate>): Result<String> = runCatching {
+        require(templates.isNotEmpty()) { SandboxWords.NEEDS_TEMPLATE }
+        val record = requireNotNull(sandboxRecordText(key, templates)) { SandboxWords.NEEDS_KEY }
+        ask(fleet, "put", JSONObject().put("name", "sandbox:$provider").put("value", record)).first
     }
 
     suspend fun forget(fleet: Fleet, name: String, member: String? = null): Result<String> = runCatching {
@@ -451,7 +468,21 @@ internal class PhoneVault(private val settings: Settings) {
                 "Machines you approved stop being given it. Getting it back means signing in again."
             "codex", "copilot" ->
                 "Machines you approved stop being given it. Getting it back means pasting it again."
-            else -> "Machines you approved stop being given it. Getting it back means typing it in again."
+            else -> {
+                val rented = sandboxProviderNameOfItem(name)
+                when {
+                    // An API key is pasted, as the two sign-ins above are.
+                    apiProviderOfItem(name) != null ->
+                        "Machines you approved stop being given it. Getting it back means pasting it again."
+                    // A SANDBOX PROVIDER: what happens to a machine already
+                    // rented is the question somebody forgetting the key
+                    // has, and its timer is the provider's own, so that
+                    // much is certain.
+                    rented != null ->
+                        "Machines you approved stop being given it. A machine already rented at $rented still ends on its timer. Getting it back means entering the key and the templates again."
+                    else -> "Machines you approved stop being given it. Getting it back means typing it in again."
+                }
+            }
         }
 
         /**
@@ -486,6 +517,8 @@ internal class PhoneVault(private val settings: Settings) {
             name == "cloudflare" -> "Cloudflare"
             name == "codex" -> "Codex sign-in"
             name == "copilot" -> "GitHub Copilot token"
+            apiProviderOfItem(name) != null -> "${apiProviderOfItem(name)?.says} API key"
+            sandboxProviderNameOfItem(name) != null -> "${sandboxProviderNameOfItem(name)}, sandbox provider"
             name.startsWith("secret:") -> name.removePrefix("secret:")
             else -> name
         }

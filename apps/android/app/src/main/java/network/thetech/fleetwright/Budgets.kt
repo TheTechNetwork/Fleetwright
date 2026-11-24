@@ -89,6 +89,13 @@ fun budgetModeLine(mode: String): String = when (mode) {
 /** The switch for a session that runs commands without asking first. */
 const val BUDGET_DANGEROUS_LABEL = "Ask before a session that skips permission prompts"
 
+/**
+ * The switch for a start as a member with an engine on an API key
+ * (docs/api-engines.md), and the one line under it: why it starts on.
+ */
+const val BUDGET_PAID_API_LABEL = "Ask before a session on a paid API key"
+const val BUDGET_PAID_API_LINE = "A key is billed by the token and no budget here counts it, so this is on until an admin turns it off."
+
 /** What counting is, and what it never does, said on the rules whoever is reading them. */
 const val BUDGET_COUNTING_LINE = "Counting is at API prices, as each session counts its own cost. Sessions already running are not stopped."
 
@@ -630,6 +637,11 @@ private fun ApprovalDeclinePage(
  *
  * FOUR STATES: loading, could not load, loaded, and a fleet that answered
  * with no setting and no sentence, which is one from before budgets.
+ *
+ * THE PAID-KEY SWITCH IS DRAWN ONLY FOR A FLEET THAT SENT IT
+ * (docs/api-engines.md). One from before the guard sends no `paidApi`, and
+ * that is unknown, never off: no switch, no word, and nothing about it in
+ * what Save sends (C-5).
  */
 @Composable
 internal fun BudgetSettingsScreen(settings: Settings, onDismiss: () -> Unit) {
@@ -644,6 +656,8 @@ internal fun BudgetSettingsScreen(settings: Settings, onDismiss: () -> Unit) {
     // The draft: what Save would send.
     var mode by remember { mutableStateOf("off") }
     var dangerous by remember { mutableStateOf(false) }
+    // Null when the fleet sent no such switch, and then none is drawn.
+    var paidApi by remember { mutableStateOf<Boolean?>(null) }
     var workTypes by remember { mutableStateOf(listOf<String>()) }
     var newKind by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -655,6 +669,7 @@ internal fun BudgetSettingsScreen(settings: Settings, onDismiss: () -> Unit) {
         saved = now
         mode = now.budgets
         dangerous = now.dangerous
+        paidApi = now.paidApi
         workTypes = now.workTypes
     }
 
@@ -681,7 +696,8 @@ internal fun BudgetSettingsScreen(settings: Settings, onDismiss: () -> Unit) {
 
     val current = saved
     // Whether the draft differs from what the fleet has.
-    val changed = current != null && (mode != current.budgets || dangerous != current.dangerous || workTypes != current.workTypes)
+    val changed = current != null &&
+        (mode != current.budgets || dangerous != current.dangerous || workTypes != current.workTypes || paidApi != current.paidApi)
     val plain = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
 
     FullScreen(title = "What needs approval", onDismiss = onDismiss) {
@@ -740,6 +756,35 @@ internal fun BudgetSettingsScreen(settings: Settings, onDismiss: () -> Unit) {
                         Text(BUDGET_DANGEROUS_LABEL, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
                         Text(if (dangerous) "On" else "Off", style = Design.Style.label, color = Design.Palette.inkDim.now)
                     }
+                }
+                // A PAID API KEY, in the same two shapes, and only when the
+                // fleet sent the switch: `paid` is its answer or the draft
+                // made from it, never a default of this phone's.
+                val paid = paidApi
+                if (paid != null) {
+                    if (isAdmin) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .toggleable(value = paid, enabled = !busy, role = Role.Switch, onValueChange = { paidApi = it }),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+                        ) {
+                            Text(BUDGET_PAID_API_LABEL, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                            Switch(checked = paid, onCheckedChange = null, enabled = !busy)
+                        }
+                    } else {
+                        Row(
+                            Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics(mergeDescendants = true) {},
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+                        ) {
+                            Text(BUDGET_PAID_API_LABEL, style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                            Text(if (paid) "On" else "Off", style = Design.Style.label, color = Design.Palette.inkDim.now)
+                        }
+                    }
+                    Hint(BUDGET_PAID_API_LINE)
                 }
 
                 // THE KINDS OF WORK whose tasks are asked about, every one a
@@ -802,14 +847,30 @@ internal fun BudgetSettingsScreen(settings: Settings, onDismiss: () -> Unit) {
 
                     OutlinedButton(
                         enabled = !busy && changed,
-                        // The choice, the switch and every kind of work, and
-                        // then what the fleet said. Its sentence is the line
+                        // The choice, the switch and every kind of work, then
+                        // the paid-key switch where there is one, and then
+                        // what the fleet said. Its sentence is the line
                         // either way, and a refusal's is all there is.
                         onClick = {
                             scope.launch {
                                 busy = true
                                 result = ""
-                                Fleet(settings).setBudgetSettings(mode, dangerous, workTypes)
+                                var sent = Fleet(settings).setBudgetSettings(mode, dangerous, workTypes)
+                                // THE PAID-KEY SWITCH GOES IN A REQUEST OF ITS
+                                // OWN, after the three, and only when the fleet
+                                // sent the switch and the draft moved it. The
+                                // three are the fleet's by then, so they stop
+                                // being a draft whatever it says of the switch,
+                                // and its answer carries the whole setting and
+                                // is the one shown.
+                                val first = sent.getOrNull()
+                                val kept = first?.settings
+                                val wanted = paidApi
+                                if (first?.ok == true && kept != null && wanted != null && wanted != kept.paidApi) {
+                                    saved = kept
+                                    sent = Fleet(settings).setPaidApiApproval(wanted)
+                                }
+                                sent
                                     .onSuccess { r ->
                                         refused = r.ok != true
                                         result = r.text ?: if (r.ok == true) "Saved." else "Your fleet refused that."
