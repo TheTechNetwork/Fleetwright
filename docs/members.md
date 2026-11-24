@@ -140,15 +140,55 @@ last one cannot be removed. Every manager of the member is a custodian too,
 for as long as the tree says so: move the member out of their team and their
 custody ends with that change, at the minter, at once.
 
-**Custodians of a person member.** A person's vault holds their own sign-ins,
-so a manager holds custody of it only after that person turns it on from
-their own device (`custody`, under You › Credentials). Until then a manager's
-request is refused with a sentence saying who can allow it. The person's own
-`list` names their custodians, and every deposit, change or removal a
-custodian makes is written beside the vault (`clog:`, the last twenty)
-where the person reads it, and told to their phone. The log is the minter's;
-the push is the coordinator's and can be dropped by a dishonest one, which is
-why the log exists.
+**Custodians of a person member.** A person's vault holds their own
+sign-ins, and who else holds custody of it depends on who was there first.
+
+- **Whoever adds a person manages their credentials.** Asked for in so many
+  words, after the first build made this the person's to turn on: *"if a
+  manager created the member they should be able to manage it."* The admin
+  or manager who files a person member is that person's custodian, as the
+  one who files an agent is its first. They need no switch from the person,
+  and they hold it from the person's first sign-in, which is when there is a
+  vault to hold.
+- **Only for a person the vault had not met.** That holds when no GitHub
+  account had ever filed a signing key under the address when it was filed.
+  Somebody who already keeps their own sign-ins there was not created by the
+  record that names them, and making one must not be a way to reach what
+  they kept: any team lead can file a member under their own team, and
+  without this line could take the sign-ins of anybody in the fleet who had
+  no record yet. For them the switch below still decides, and the filing's
+  answer says so. Three ways round it are closed at the minter, each with a
+  test (`test/vault.test.js`):
+  - *Taking a record out and filing it again*, or filing one for somebody
+    whose keys were all removed after a lost phone. The address was met, so
+    it gives nothing.
+  - *Filing a record at an address somebody has not used yet.* When a
+    GitHub account that already has a vault files its first key under that
+    address, the vault had met them after all, and the custody is dropped at
+    that moment.
+  - *Pointing an existing record at another address.* That names another
+    person, so the old one's custodian does not follow it. Whoever made the
+    change added the new one, on the same terms.
+- **The person sees it before they keep anything.** Their own Credentials
+  names who added them and what that person can do, and their `list` carries
+  it. The vault is still theirs: they forget what they keep and remove a
+  machine whenever they like, which no custodian can undo.
+- **It ends with the one who holds it, or an org admin.** The custodian can
+  give it up, and an org admin can remove them (`custodian`). Both phones
+  and the signing page ask first, because it is not given back: the person's
+  own switch does not end it, and nobody is added to a person this way after
+  the first. The next manager, and the one who gave it up, are let in by the
+  person.
+- **Every other manager, by the person's own switch.** A manager by the tree
+  who did not add the person holds custody only after that person turns it
+  on from their own device (`custody`, under You › Credentials). Until then
+  their request is refused with a sentence saying who can allow it.
+
+Either way the person's own `list` names their custodians and managers, and
+every deposit, change or removal somebody else makes is written beside the
+vault (`clog:`, the last twenty) where the person reads it, and told to
+their phone. The log is the minter's; the push is the coordinator's and can
+be dropped by a dishonest one, which is why the log exists.
 
 **What a custodian does** is what a person does for their own vault, with
 `for: <member id>` in the same sealed request: list, Test, keep or forget an
@@ -185,7 +225,8 @@ signed, which it relays to boxes and can read but not write.
 
 **The box decides.** The minter's signed key list (`/vault/keys`) now carries
 each member and who may start as it: for an agent, its custodians; for a
-person, the person, and their managers once they allowed custody. A box runs
+person, the person, whoever added them, and their other managers once they
+allowed custody. A box runs
 a member start only when it is **signed or delegated by somebody on that
 list**, whatever the box's signature mode: an unsigned actor here would be the
 coordinator naming a custodian. Otherwise it refuses, `not_custodian`, saying
@@ -256,15 +297,21 @@ tree as the minter's.
 
 - **The first org admin is first use.** A coordinator compromised before any
   admin filed the tree could vouch for an account of its own. That account
-  could then file agent members and hold their empty vaults. It reaches no
-  person's vault, which needs that person's own switch, and the real admin
-  sees somebody else listed as the org's admin.
+  could then file agent members and hold their empty vaults. It reaches the
+  vault of nobody who was already there, which needs that person's own
+  switch; somebody it adds itself is the last case here but one. The real
+  admin sees somebody else listed as the org's admin.
 - **A member's instructions are the coordinator's word.** A compromised
   coordinator can change what a member's session is told at its start. It
   cannot start one, or change the task, without a custodian's signature.
 - **A custodian can use what they keep.** Approving a box for a member's
-  vault hands that box the member's tokens. Custody is that power; the tree
-  and the person's switch decide who has it.
+  vault hands that box the member's tokens. Custody is that power; who added
+  the member, the tree and the person's switch decide who has it.
+- **Whoever adds a person holds what that person later keeps.** A person
+  added by somebody they do not know, on a fleet whose first admin was
+  vouched for by a dishonest coordinator, would be keeping sign-ins under a
+  stranger's custody. Their own Credentials names that custodian before they
+  keep anything, which is the only defence and is why it is shown first.
 - **Anybody in the fleet reads the org chart**, instructions included.
 
 ## Tests

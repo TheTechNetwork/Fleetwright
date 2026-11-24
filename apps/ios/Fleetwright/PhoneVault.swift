@@ -85,6 +85,11 @@ struct PhoneVault {
         let allow: Bool
         /// The person's own member, by id, or nil when the vault's tree has none for them.
         let member: String?
+        /// Whoever added this person, and so manages what they keep with no
+        /// switch asked (docs/members.md, "Custodians of a person member").
+        /// Empty from a vault older than the rule, which is also the truth there.
+        let custodians: [String]
+        /// Their other managers, who wait on `allow`.
         let managers: [String]
         let log: [Change]
 
@@ -117,7 +122,8 @@ struct PhoneVault {
         let email: String?
         let reportsTo: String?
         let managers: [String]
-        /// An agent member's own custodians. Empty for a person.
+        /// An agent member's own custodians. For a person, whoever added
+        /// them, when the vault had not met them before.
         let custodians: [String]
         /// For a person: "allowed", "off" or "no_vault". Nil for an agent.
         let custody: String?
@@ -172,6 +178,7 @@ struct PhoneVault {
             Custody(
                 allow: c["allow"] as? Bool == true,
                 member: c["member"] as? String,
+                custodians: (c["custodians"] as? [Any])?.map { "\($0)" } ?? [],
                 managers: (c["managers"] as? [Any])?.map { "\($0)" } ?? [],
                 log: (c["log"] as? [[String: Any]] ?? []).map {
                     Custody.Change(at: ($0["at"] as? NSNumber)?.doubleValue ?? 0, by: $0["by"] as? String ?? "",
