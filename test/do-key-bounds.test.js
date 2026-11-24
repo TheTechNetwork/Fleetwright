@@ -104,6 +104,13 @@ const BOUNDED = {
   // The fleet's routing: a mode, MAX_RULES rules of two short checked
   // strings, and one day's count of asks.
   routing: 'src/fleet/protocol/routing.js',
+  // What a budget does: one mode, a flag and MAX_RISKY_WORK_TYPES slugs.
+  budgetSettings: 'src/fleet/protocol/budgets.js',
+  // The number the last approval was given. One integer; the rows it
+  // numbers are one key each under `approvals:`, MAX_APPROVALS of them, and
+  // a member's month is one key under `spend:` holding MAX_SESSIONS_SEEN
+  // sessions' last figures.
+  approvalSeq: 'src/fleet/protocol/budgets.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */

@@ -264,12 +264,44 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
           'handoff note in the workspace. Each runs on the member’s own sign-in of its kind, kept in its vault.',
       },
       tag: { type: 'string', description: 'The host tag its sessions go to when the person starting one names no machine.' },
-      budgetUsdMonth: { type: 'number', description: 'A monthly budget in dollars. Stored; nothing enforces it yet.' },
+      budgetUsdMonth: { type: 'number', description: 'A monthly budget in dollars, at API prices as each session counts its own cost. fleet_budgets shows what has been spent against it, and what the fleet does when it is passed.' },
     },
     requires: ['id'],
     local: true,
     coordinator: '/api/members',
     mutating: true,
+  },
+  {
+    // WHAT MEMBERS HAVE SPENT, AND THE APPROVALS A START WAITS ON
+    // (docs/budgets.md). READ ONLY, BOTH OF THEM, AND ON PURPOSE: an approval
+    // exists so that a person looks, and the tools an agent holds do not
+    // include the one that says a person looked. Nor the one that changes
+    // what needs approval. Both are a phone's.
+    name: 'fleet_budgets',
+    verb: null,
+    description:
+      'What each member you may see has spent this month against its budget, in dollars at API prices as ' +
+      'each session counted its own cost, and what this fleet does when a budget is passed: nothing, ask ' +
+      'for approval, or refuse. Also whether a session that skips permission prompts, or a kind of work, ' +
+      'needs approval first. "At least" means some sessions reported no cost, so the real figure is higher. ' +
+      'A start that needs approval is refused with the approval’s id; a person who manages that member ' +
+      'answers it on their phone, and the same start then goes through.',
+    schema: {},
+    requires: [],
+    local: true,
+    coordinator: '/api/budgets',
+  },
+  {
+    name: 'fleet_approvals',
+    verb: null,
+    description:
+      'The approvals you asked for and the ones waiting on you: who wants to start a session as which ' +
+      'member, why it needs approval, and where it stands. This tool does not answer one. An approval is ' +
+      'a person’s to give, from the app, so tell the person who can and start again once it is given.',
+    schema: {},
+    requires: [],
+    local: true,
+    coordinator: '/api/approvals',
   },
   {
     // WHICH MEMBER A TASK GOES TO (docs/routing.md): the fleet's mode and its

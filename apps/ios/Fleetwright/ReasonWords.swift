@@ -51,6 +51,8 @@ enum ReasonWords {
         "host_busy": "Machine busy",
         "at_capacity": "Machine full",
         "stale_placement": "Out of date. Ask again",
+        "needs_approval": "Needs approval",
+        "over_budget": "Over budget",
         "name_unavailable": "Name in use",
         "ambiguous_host": "Which machine?",
         "no_host_matches": "No machine with those tags",
@@ -85,7 +87,13 @@ enum ReasonWords {
     /// has never met is shown as the kind itself.
     static let activity: [String: String] = [
         "intent": "Asked for",
+        "approval.answered": "Approval answered",
+        "approval.asked": "Approval asked",
+        "approval.used": "Approval used",
         "browse.opened": "Page through a machine",
+        "budget.over": "Over budget",
+        "budget.warn": "Budget nearly spent",
+        "budgets.changed": "Budget rules changed",
         "claude.ended": "Claude login ended",
         "claude.refused": "Claude login refused",
         "claude.deposited": "Claude token saved",

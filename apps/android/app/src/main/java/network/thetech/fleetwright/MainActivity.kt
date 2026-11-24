@@ -159,6 +159,10 @@ class MainActivity : ComponentActivity() {
         notifiedPool.value = poolNamedBy(intent)
         if (custodyNamedBy(intent)) notifiedCustody.value += 1
         notifiedTask.value = taskNamedBy(intent)
+        budgetPageNamedBy(intent)?.let {
+            notifiedBudgetPage.value = it
+            notifiedBudgetTaps.value += 1
+        }
     }
 
     /**
@@ -176,6 +180,27 @@ class MainActivity : ComponentActivity() {
     private fun taskNamedBy(intent: Intent?): String? {
         if (intent?.getStringExtra("kind") != "task") return null
         return taskPageId(TASK_PAGE_PREFIX + intent.getStringExtra("taskId").orEmpty())
+    }
+
+    /**
+     * The page under You a tapped notification about a budget asked for
+     * (docs/budgets.md), or null: Approvals, when a start waits on this
+     * person or their own ask was answered, and a member's page, when it is
+     * near or past its budget. Counted as well as named, so a second tap
+     * for the same page opens it again. Neither carries a session name, so
+     * neither is taken for a session below.
+     *
+     * THE MEMBER'S ID IS HELD TO A MEMBER'S SHAPE (memberPageId): this
+     * activity is exported, so another app can start it with the same
+     * extras.
+     */
+    private val notifiedBudgetPage = mutableStateOf<String?>(null)
+    private val notifiedBudgetTaps = mutableStateOf(0)
+
+    private fun budgetPageNamedBy(intent: Intent?): String? = when (intent?.getStringExtra("kind")) {
+        "approval" -> APPROVALS_PAGE
+        "budget" -> memberPageId(MEMBER_PAGE_PREFIX + intent?.getStringExtra("member").orEmpty())?.let { MEMBER_PAGE_PREFIX + it }
+        else -> null
     }
 
     /**
@@ -305,6 +330,10 @@ class MainActivity : ComponentActivity() {
         notifiedPool.value = poolNamedBy(intent)
         if (custodyNamedBy(intent)) notifiedCustody.value += 1
         notifiedTask.value = taskNamedBy(intent)
+        budgetPageNamedBy(intent)?.let {
+            notifiedBudgetPage.value = it
+            notifiedBudgetTaps.value += 1
+        }
 
         // A fleet app that cannot tell you a session is waiting has lost its
         // main reason to exist, so this is asked as soon as there is a fleet.
@@ -341,6 +370,8 @@ class MainActivity : ComponentActivity() {
                     notifiedPool = notifiedPool.value,
                     notifiedCustody = notifiedCustody.value,
                     notifiedTask = notifiedTask.value,
+                    notifiedBudgetPage = notifiedBudgetPage.value,
+                    notifiedBudgetTaps = notifiedBudgetTaps.value,
                 )
             }
         }
@@ -375,6 +406,8 @@ fun FleetScreen(
     notifiedPool: PoolTap? = null,
     notifiedCustody: Int = 0,
     notifiedTask: String? = null,
+    notifiedBudgetPage: String? = null,
+    notifiedBudgetTaps: Int = 0,
 ) {
     val context = LocalContext.current
     val settings = remember { Settings(context) }
@@ -412,6 +445,12 @@ fun FleetScreen(
     // under Details, collapsed. Null for anything else the card quotes, which
     // is drawn as it always was. Set beside every `status` a refusal can set.
     var statusTitle by rememberSaveable { mutableStateOf<String?>(null) }
+    // A START YOUR FLEET REFUSED AT A BUDGET OR FOR WANT OF APPROVAL
+    // (docs/budgets.md), with the start that was sent, so the same one can
+    // be sent again. Drawn in the status card's place while its sentence is
+    // still the status, and gone with it. Not saved: it is an offer to send
+    // something, and one restored after the process died would be stale.
+    var refusedStart by remember { mutableStateOf<RefusedStart?>(null) }
     // The session list is deliberately NOT saved: it is a cache of what the
     // coordinator said, and a stale list restored across a rotation would show
     // sessions that may since have stopped.
@@ -544,6 +583,7 @@ fun FleetScreen(
         } else {
             "Starting a session. You will get a notification when it is ready."
         }
+        refusedStart = null
         scope.launch {
             val text = try {
                 // ON A TASK: the fleet's own start parameters, signed and
@@ -572,6 +612,10 @@ fun FleetScreen(
                 // is titled as that, not as a failure to try again.
                 LocalNotice.post(context, if (reply.ok) "Session ready" else reply.refusedStartTitle, reply.text.ifBlank { "Started." })
                 statusTitle = if (reply.ok) null else reply.refusedStartTitle
+                // WAITING FOR APPROVAL, OR STOPPED AT A BUDGET: kept with
+                // the start that was sent, so the card can offer to approve
+                // it and send the same one again. Null for any other answer.
+                refusedStart = refusedStartOf(request, reply, reply.text.ifBlank { "Started." })
                 reply.text.ifBlank { "Started." }
             } catch (e: Exception) {
                 statusTitle = null
@@ -632,6 +676,14 @@ fun FleetScreen(
     LaunchedEffect(notifiedTask) {
         if (notifiedTask != null) {
             openYou = TASK_PAGE_PREFIX + notifiedTask
+            tab = "you"
+        }
+    }
+    // A start waiting on this person, their own ask answered, or a member
+    // near or past its budget, tapped: You, on Approvals or on that member.
+    LaunchedEffect(notifiedBudgetTaps) {
+        if (notifiedBudgetTaps > 0 && notifiedBudgetPage != null) {
+            openYou = notifiedBudgetPage
             tab = "you"
         }
     }
@@ -983,7 +1035,14 @@ fun FleetScreen(
                                     onPutOff = { settings.claudeSetupPutOff = true; claudePutOff = true },
                                 )
                             }
-                            if (status.isNotBlank()) {
+                            // A START THAT WAITS FOR APPROVAL, OR STOPPED AT A
+                            // BUDGET, is its sentence in full and what can be
+                            // done about it (RefusedStartCard), in the status
+                            // card's place while that sentence is the status.
+                            val refusedNow = refusedStart?.takeIf { it.text == status }
+                            if (refusedNow != null) {
+                                RefusedStartCard(settings, refusedNow) { startInBackground(refusedNow.request) }
+                            } else if (status.isNotBlank()) {
                                 // Evidence quoted from somewhere else, on an
                                 // inner surface rather than a card of its own.
                                 // A REFUSAL LEADS WITH ITS TITLE (statusTitle),

@@ -55,7 +55,7 @@ function bodyFor(path) {
 
 /** A path with its parameters filled in, so it can actually be requested. */
 function concrete(path, ids = {}) {
-  const id = path.startsWith('/api/runner-tokens') ? ids.runnerTokenId : path.startsWith('/api/enroll/') ? ids.pinId : path.startsWith('/api/members/') ? ids.memberId : path.startsWith('/api/tasks/') ? ids.taskId : ids.clientId;
+  const id = path.startsWith('/api/runner-tokens') ? ids.runnerTokenId : path.startsWith('/api/enroll/') ? ids.pinId : path.startsWith('/api/members/') ? ids.memberId : path.startsWith('/api/tasks/') ? ids.taskId : path.startsWith('/api/approvals/') ? ids.approvalId : ids.clientId;
   return path
     .replace('{hostId}', ids.hostId || 'some-host')
     .replace('{id}', id || 'some-id')
@@ -86,7 +86,9 @@ async function seed(core) {
   // (docs/tasks.md). Made in the store: a task says who made it, and the
   // break-glass token these probes carry names nobody.
   const made = core.tasks.create({ email: 'seed@example.com', admin: true, acts: [] }, { title: 'Seeded', brief: 'A task for the routes to find.' }, () => null);
-  return { taskId: made.ok ? made.task.id : 't1', memberId: 'seeded-member', hostId: 'seeded-host', clientId: client.id, email: 'invited@example.com', runnerTokenId: runner.id, pinId: pin.id };
+  // An approval waiting, so the route that answers one finds it (docs/budgets.md).
+  const asked = core.budgets.ask({ member: 'seeded-member', task: null, reasons: [{ kind: 'dangerous', text: 'Seeded.' }], by: 'seed@example.com' });
+  return { approvalId: asked.approval.id, taskId: made.ok ? made.task.id : 't1', memberId: 'seeded-member', hostId: 'seeded-host', clientId: client.id, email: 'invited@example.com', runnerTokenId: runner.id, pinId: pin.id };
 }
 
 /** The Worker, wired to a real Durable Object rather than a stub. */

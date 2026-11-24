@@ -41,6 +41,10 @@ struct OrgView: View {
     @State private var fileBusy = false
     @State private var fileResult = ""
     @State private var fileFailed = false
+    /// How many approvals wait on this person, once the fleet has said. Nil
+    /// until then, after a failure and from a fleet older than approvals,
+    /// and then the row says nothing beside its name: unknown is not none.
+    @State private var approvalsWaiting: Int?
 
     private var isAdmin: Bool { you?.admin == true }
     private var manages: [String] { you?.manages ?? [] }
@@ -151,6 +155,18 @@ struct OrgView: View {
     /// row is for everybody, and its page draws a control only for an admin.
     @ViewBuilder private var routingSection: some View {
         Section {
+            // THE STARTS THAT WAIT FOR A PERSON (docs/budgets.md), with how
+            // many wait on this one beside the name when any do. The row is
+            // for everybody: it also lists a person's own asks.
+            NavigationLink {
+                ApprovalsView(settings: settings)
+            } label: {
+                LabeledContent("Approvals") {
+                    if let count = approvalsWaiting, let waiting = describeApprovals(waitingOnYou: count) {
+                        Text(waiting).fleetType(.label)
+                    }
+                }
+            }
             NavigationLink("Routing") {
                 RoutingView(settings: settings, members: members)
             }
@@ -234,7 +250,19 @@ struct OrgView: View {
             load = .failed(error.localizedDescription)
             return
         }
+        await countApprovals()
         await checkTeam()
+    }
+
+    /// How many approvals wait on this person, for the row. Only from an
+    /// answer that carries the list: anything else leaves the count unknown.
+    @MainActor
+    private func countApprovals() async {
+        guard let got = try? await Fleet(settings: settings).approvals(), got.ok != false, let list = got.approvals else {
+            approvalsWaiting = nil
+            return
+        }
+        approvalsWaiting = list.filter { approvalWaitsOnYou($0) }.count
     }
 
     /// Ask each team member's vault whether it holds a Claude sign-in. One
@@ -329,6 +357,13 @@ struct MemberView: View {
     @State private var removeResult = ""
     @State private var starting = false
     @State private var startResult = ""
+    /// A start your fleet refused at a budget or for want of approval
+    /// (docs/budgets.md), and the start that was sent, so the same one can
+    /// be sent again.
+    @State private var refusedStart: RefusedStart?
+    @State private var lastStart: StartRequest?
+    /// What this member has spent this month, as the fleet says it.
+    @State private var spend = MemberSpendLoad.asking
 
     private var shown: Fleet.Member { saved ?? member }
     private var vault: PhoneVault { PhoneVault(settings: settings) }
@@ -361,6 +396,9 @@ struct MemberView: View {
     var body: some View {
         Form {
             factsSection
+            // THIS MONTH, in the fleet's sentence, and only for a member the
+            // fleet lists for this person (MemberSpendSection).
+            MemberSpendSection(load: spend)
             if let instructions = shown.instructions, !instructions.isEmpty {
                 instructionsSection(instructions)
             }
@@ -374,6 +412,7 @@ struct MemberView: View {
         .navigationTitle(shown.name)
         .navigationBarTitleDisplayMode(.inline)
         .task { await askVault() }
+        .task(id: member.id) { await askSpend() }
         .sheet(isPresented: $starting) {
             StartSheet(settings: settings, onStart: startSession, asMember: shown)
         }
@@ -479,7 +518,13 @@ struct MemberView: View {
             if mayStart {
                 Button("Start a session as \(shown.name)") { starting = true }
                     .frame(minHeight: 44)
-                if !startResult.isBlank {
+                // A START THAT WAITS FOR APPROVAL, OR STOPPED AT A BUDGET:
+                // the fleet's sentence, and what can be done about it from
+                // here (RefusedStartView). Any other answer is the line it
+                // always was.
+                if let refusedStart, let lastStart {
+                    RefusedStartView(settings: settings, refused: refusedStart) { startSession(lastStart) }
+                } else if !startResult.isBlank {
                     Text(startResult)
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
@@ -652,6 +697,14 @@ struct MemberView: View {
         }
     }
 
+    /// Ask what this member has spent this month. Nothing is drawn until
+    /// the fleet answers, and nothing at all for a member it does not list
+    /// for this person.
+    @MainActor
+    private func askSpend() async {
+        spend = await memberSpend(settings, member.id)
+    }
+
     @MainActor
     private func askVault() async {
         do {
@@ -700,6 +753,8 @@ struct MemberView: View {
     /// a notification, as it is from Sessions.
     private func startSession(_ request: StartRequest) {
         startResult = "Starting a session as \(shown.name). You will get a notification when it is ready."
+        refusedStart = nil
+        lastStart = request
         Task {
             do {
                 let reply = try await Fleet(settings: settings).start(
@@ -714,7 +769,10 @@ struct MemberView: View {
                     member: request.member
                 )
                 let text = reply.text ?? "Started."
-                await MainActor.run { startResult = text }
+                await MainActor.run {
+                    startResult = text
+                    refusedStart = RefusedStart(reply)
+                }
                 LocalNotice.post(title: reply.ok == false ? reply.refusedStartTitle : "Session ready", body: text)
             } catch {
                 // A timeout is not a failure: the start carries an id the
@@ -881,7 +939,7 @@ struct MemberForm: View {
                 field("Monthly budget (USD)", text: $budget, prompt: "Optional")
                     .keyboardType(.decimalPad)
             } footer: {
-                Text("Stored. Nothing enforces it yet.")
+                Text("Dollars a month, at API prices. Approvals decides what happens when it is passed.")
             }
 
             if isAdmin {

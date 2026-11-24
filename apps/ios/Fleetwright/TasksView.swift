@@ -309,6 +309,11 @@ struct TaskView: View {
     @State private var failed = false
     @State private var startResult = ""
     @State private var startFailed = false
+    /// A start your fleet refused at a budget or for want of approval
+    /// (docs/budgets.md), and what was sent, so the same start can be sent
+    /// again: the parameters as the fleet gave them, and the machine.
+    @State private var refusedStart: RefusedStart?
+    @State private var lastStart: (params: [String: String], host: String?)?
     /// Release and Cancel are each waiting on their question.
     @State private var confirmingRelease = false
     @State private var confirmingCancel = false
@@ -623,7 +628,14 @@ struct TaskView: View {
                 }
                 .disabled(busy)
             }
-            if !startResult.isBlank {
+            // A START THAT WAITS FOR APPROVAL, OR STOPPED AT A BUDGET: the
+            // fleet's sentence, and what can be done about it from here
+            // (RefusedStartView). Any other answer is the line it always was.
+            if let refusedStart, let lastStart {
+                RefusedStartView(settings: settings, refused: refusedStart) {
+                    startSession(lastStart.params, host: lastStart.host)
+                }
+            } else if !startResult.isBlank {
                 Text(startResult)
                     .fleetType(.label)
                     .foregroundStyle(startFailed ? Design.Palette.bad : Design.Palette.inkDim)
@@ -787,6 +799,7 @@ struct TaskView: View {
         withAnimation(Design.Motion.change) { task = now }
         start = reply.start
         startResult = ""
+        refusedStart = nil
         onChanged()
         Task { await findLockSession() }
     }
@@ -829,6 +842,8 @@ struct TaskView: View {
     private func startSession(_ params: [String: String], host: String?) {
         startResult = "Starting a session on \(id). You will get a notification when it is ready."
         startFailed = false
+        refusedStart = nil
+        lastStart = (params: params, host: host)
         Task {
             do {
                 let reply = try await Fleet(settings: settings).startOnTask(params, host: host)
@@ -837,6 +852,7 @@ struct TaskView: View {
                 await MainActor.run {
                     startResult = text
                     startFailed = refused
+                    refusedStart = RefusedStart(reply)
                 }
                 LocalNotice.post(title: refused ? reply.refusedStartTitle : "Session ready", body: text)
             } catch {

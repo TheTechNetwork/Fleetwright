@@ -1151,6 +1151,13 @@ class Fleet(
          * too old to say, which titles the refusal by its code alone.
          */
         val why: String? = null,
+        /**
+         * The approval a start is waiting on, when the fleet refused it for
+         * want of one (`needs_approval`, docs/budgets.md). Null on every
+         * other reply, on a start refused outright at a budget
+         * (`over_budget`), and from a fleet older than approvals.
+         */
+        val approval: Approval? = null,
     ) {
         /**
          * The title over a refusal: its code's word ([ReasonWords.refusal]),
@@ -1791,7 +1798,11 @@ class Fleet(
         val engines: List<EngineChoice> = emptyList(),
         /** The machine tag that places it, or null. */
         val tag: String? = null,
-        /** Stored, and enforced by nothing yet. */
+        /**
+         * A monthly budget, in dollars at API prices. The fleet counts
+         * against it, and what happens when it is passed is the fleet's
+         * setting (docs/budgets.md).
+         */
         val budgetUsdMonth: Double? = null,
     ) {
         val isAgent: Boolean get() = kind == "agent"
@@ -2185,6 +2196,203 @@ class Fleet(
      */
     suspend fun startOnTask(params: Map<String, String>, host: String? = null): Reply =
         intent("start", params, host = host)
+
+    /**
+     * What the fleet does at a member's budget, and what else it asks a
+     * person about before a start (docs/budgets.md). An admin writes it and
+     * everybody reads it.
+     */
+    data class BudgetSettings(
+        /** "off", "ask" or "refuse". */
+        val budgets: String,
+        /** Whether a member start that skips permission prompts is asked about. */
+        val dangerous: Boolean,
+        /** The kinds of work whose tasks are asked about, at most 20. */
+        val workTypes: List<String>,
+        /** Who changed it last, and when. Null on a fleet that never set it. */
+        val updatedBy: String?,
+        val updatedAt: Long?,
+    )
+
+    /**
+     * What one member has spent this month, as the fleet says it.
+     *
+     * THE SENTENCE AND NOT THE FIGURES. The fleet sends the dollars beside
+     * `words` and this does not read them: the sentence says "At least" when
+     * a session reported no cost, and a line rebuilt here from a number
+     * would say a floor as a total (C-5). So there is no field a screen
+     * could rebuild one from.
+     */
+    data class MemberSpend(
+        val member: String,
+        /** Whether what was counted is at or past the member's budget. */
+        val over: Boolean,
+        val words: String?,
+    )
+
+    /**
+     * The answer to reading the budgets and to changing the setting.
+     * [settings] is null when the answer carried none: a refusal, which has
+     * [text], or a fleet older than budgets, which has neither. [members]
+     * lists only the members this person may see the spending of, and is
+     * null when the answer carried no list. [admin] is whether this person
+     * may change the setting: null when the answer did not say, which the
+     * answer to a change does not.
+     */
+    data class BudgetsReply(
+        val ok: Boolean?,
+        val settings: BudgetSettings?,
+        val members: List<MemberSpend>?,
+        val admin: Boolean?,
+        val text: String?,
+    )
+
+    suspend fun budgets(): Result<BudgetsReply> = withContext(Dispatchers.IO) {
+        runCatching { parseBudgetsReply(get("/api/budgets")) }
+    }
+
+    /**
+     * Change what a budget does and what needs approval, as an admin. All
+     * three are sent, because the page that sends them shows all three.
+     */
+    suspend fun setBudgetSettings(budgets: String, dangerous: Boolean, workTypes: List<String>): Result<BudgetsReply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("budgets", budgets).put("dangerous", dangerous).put("workTypes", JSONArray(workTypes))
+            parseBudgetsReply(send("PUT", "/api/budgets/settings", body))
+        }
+    }
+
+    private fun parseBudgetsReply(json: JSONObject): BudgetsReply {
+        fun flag(from: JSONObject?, key: String): Boolean? =
+            if (from != null && from.has(key) && !from.isNull(key)) from.optBoolean(key) else null
+        val listed = json.optJSONArray("members")
+        return BudgetsReply(
+            ok = flag(json, "ok"),
+            settings = json.optJSONObject("settings")?.let { s ->
+                BudgetSettings(
+                    budgets = s.optString("budgets").takeIf { it.isNotBlank() && it != "null" } ?: "off",
+                    dangerous = s.optBoolean("dangerous", false),
+                    workTypes = memberStrings(s.optJSONArray("workTypes")),
+                    updatedBy = if (s.isNull("updatedBy")) null else s.optString("updatedBy").takeIf { it.isNotBlank() },
+                    updatedAt = longOrNull(s, "updatedAt")?.takeIf { it > 0 },
+                )
+            },
+            members = listed?.let { a ->
+                (0 until a.length()).mapNotNull { i ->
+                    a.optJSONObject(i)?.let { m ->
+                        val member = m.optString("member")
+                        if (member.isBlank()) {
+                            null
+                        } else {
+                            MemberSpend(
+                                member = member,
+                                over = m.optBoolean("over", false),
+                                words = if (m.isNull("words")) null else m.optString("words").takeIf { it.isNotBlank() },
+                            )
+                        }
+                    }
+                }
+            },
+            admin = flag(json.optJSONObject("you"), "admin"),
+            text = json.optString("text").takeIf { it.isNotBlank() && it != "null" },
+        )
+    }
+
+    /** One reason a start needs approval, with the fleet's sentence for it. */
+    data class ApprovalReason(val kind: String, val text: String)
+
+    /**
+     * A start that waits for a person (docs/budgets.md, "An approval"): who
+     * asked, as which member, on which task, why, and where it stands.
+     * [mayAnswer] is whether it is this person's to answer: the fleet's
+     * word, and the only thing Approve and Decline are drawn from (C-2).
+     * [words] is the whole of it as one sentence, as the fleet wrote it.
+     */
+    data class Approval(
+        val id: String,
+        val member: String?,
+        val memberName: String?,
+        val task: String?,
+        val reasons: List<ApprovalReason>,
+        val askedBy: String?,
+        val askedAt: Long?,
+        /** "waiting", "approved", "declined", "used" or "expired". */
+        val state: String?,
+        val decidedBy: String?,
+        val note: String?,
+        val mayAnswer: Boolean,
+        val words: String?,
+    )
+
+    /**
+     * The approvals this person asked for and the ones they may answer,
+     * newest first. [approvals] is null when the answer carried no list: a
+     * refusal, which has [text], or a fleet older than approvals.
+     */
+    data class ApprovalsReply(val ok: Boolean?, val approvals: List<Approval>?, val text: String?)
+
+    /** The answer to answering one. A refusal carries [text] and no approval. */
+    data class ApprovalReply(val ok: Boolean?, val approval: Approval?, val text: String?)
+
+    suspend fun approvals(): Result<ApprovalsReply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = get("/api/approvals")
+            val list = json.optJSONArray("approvals")
+            ApprovalsReply(
+                ok = if (json.has("ok") && !json.isNull("ok")) json.optBoolean("ok") else null,
+                approvals = list?.let { a -> (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { parseApproval(it) } } },
+                text = json.optString("text").takeIf { it.isNotBlank() && it != "null" },
+            )
+        }
+    }
+
+    /**
+     * Approve or decline one start. [answer] is "approve" or "decline", and
+     * a note goes only when there is one. Who may answer is the fleet's to
+     * check, and its refusal is a sentence.
+     */
+    suspend fun answerApproval(id: String, answer: String, note: String? = null): Result<ApprovalReply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val body = JSONObject().put("answer", answer)
+            if (!note.isNullOrBlank()) body.put("note", note)
+            val json = post("/api/approvals/$id", body)
+            ApprovalReply(
+                ok = if (json.has("ok") && !json.isNull("ok")) json.optBoolean("ok") else null,
+                approval = json.optJSONObject("approval")?.let { parseApproval(it) },
+                text = json.optString("text").takeIf { it.isNotBlank() && it != "null" },
+            )
+        }
+    }
+
+    /**
+     * READ FIELD BY FIELD, AND NEVER REFUSED past its id. One rides on a
+     * start's reply beside the fleet's sentence, so a field that is absent
+     * or of another shape is null here and the sentence is still shown.
+     */
+    private fun parseApproval(o: JSONObject): Approval? {
+        fun text(key: String): String? = if (o.isNull(key)) null else o.optString(key).takeIf { it.isNotBlank() }
+        val id = text("id") ?: return null
+        val reasons = o.optJSONArray("reasons")
+        return Approval(
+            id = id,
+            member = text("member"),
+            memberName = text("memberName"),
+            task = text("task"),
+            reasons = (0 until (reasons?.length() ?: 0)).mapNotNull { i ->
+                reasons?.optJSONObject(i)?.let { r ->
+                    val said = r.optString("text")
+                    if (said.isBlank()) null else ApprovalReason(r.optString("kind"), said)
+                }
+            },
+            askedBy = text("askedBy"),
+            askedAt = longOrNull(o, "askedAt")?.takeIf { it > 0 },
+            state = text("state"),
+            decidedBy = text("decidedBy"),
+            note = text("note"),
+            mayAnswer = o.optBoolean("mayAnswer", false),
+            words = text("words"),
+        )
+    }
 
     private fun parseTask(o: JSONObject): OrgTask? {
         fun text(from: JSONObject, key: String): String? = if (from.isNull(key)) null else from.optString(key).takeIf { it.isNotBlank() }
@@ -3831,6 +4039,7 @@ class Fleet(
                     text = json.optString("text", ""),
                     code = json.optJSONObject("error")?.optString("code")?.takeIf { it.isNotBlank() && it != "null" },
                     why = json.optJSONObject("error")?.optString("why")?.takeIf { it.isNotBlank() && it != "null" },
+                    approval = json.optJSONObject("approval")?.let { parseApproval(it) },
                     sessions = parseSessions(json.optJSONArray("sessions")),
                     boot = json.optJSONObject("boot")?.optJSONArray("machines")?.let { a ->
                         (0 until a.length()).mapNotNull { i ->

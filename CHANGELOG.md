@@ -65,6 +65,14 @@ when that version is cut.
   are asked on your phone, or the fleet's model picks if your operator has
   turned that on. The task says how it was decided. Off until an admin
   turns it on.
+- **A member's page shows what it has spent this month** against its budget,
+  in dollars at API prices as each session counted its own cost. Sessions
+  that reported no cost are said, not counted as free.
+- **Approvals.** An admin can have the fleet ask first before a session is
+  started as a member that is past its budget, before one that skips
+  permission prompts, or before work of a kind they name. Whoever manages
+  that member gets the question on their phone, with the numbers; once they
+  approve, the same start goes through. Off until an admin turns it on.
 
 ## 0.4.16 — 2026-11-04
 

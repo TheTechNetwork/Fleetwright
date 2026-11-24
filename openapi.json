@@ -3336,6 +3336,161 @@
         }
       }
     },
+    "/api/budgets": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "What each member has spent this month, and what a budget does",
+        "description": "For each member the caller may see (an admin: everybody; a manager: their team; a person: their own member), what the coordinator saw its sessions spend this UTC month, in dollars at API prices as each session counted its own cost, against its `budgetUsdMonth`. `unknownSessions` is how many of its sessions reported no cost: the figure is then a floor, never read as nothing. `settings` is what the fleet does at a budget and what else needs approval (docs/budgets.md).",
+        "responses": {
+          "200": {
+            "description": "`{ settings: { budgets, dangerous, workTypes }, members: [{ member, name, budgetUsdMonth, month, usd, unknownSessions, over, words }], you: { admin } }`"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
+      }
+    },
+    "/api/budgets/settings": {
+      "put": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Set what a budget does, and what needs approval",
+        "description": "A fleet admin only. Any field may be left out to keep what it is. Off by default: budgets are counted and stop nothing.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "budgets": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "ask",
+                      "refuse"
+                    ],
+                    "description": "What happens to a start as a member whose month is spent: nothing, an approval is asked for, or it is refused."
+                  },
+                  "dangerous": {
+                    "type": "boolean",
+                    "description": "Whether a member start that skips permission prompts needs approval."
+                  },
+                  "workTypes": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Kinds of work whose tasks need approval before a session starts on one."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "the setting, as it is now"
+          },
+          "400": {
+            "description": "not a mode, a flag or a list of kinds of work"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "not a fleet admin"
+          }
+        }
+      }
+    },
+    "/api/approvals": {
+      "get": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "The approvals you asked for, and the ones you may answer",
+        "description": "A start as a member that is past its budget, skips permission prompts, or is on a kind of work the owner named is refused with an approval. Each one here says who asked, as which member, on which task, why, where it stands, and `mayAnswer`: whether it is the caller\u2019s to answer.",
+        "responses": {
+          "200": {
+            "description": "`{ approvals: [{ id, member, memberName, task, reasons, askedBy, askedAt, state, decidedBy?, decidedAt?, note?, mayAnswer, words }] }`, newest first"
+          },
+          "401": {
+            "description": "no credential"
+          }
+        }
+      }
+    },
+    "/api/approvals/{id}": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Approve or decline a start",
+        "description": "Somebody who manages the member, or a fleet admin. An approval given is for one start by the person who asked, as that member, on that task, within the hour: the same start, sent again, goes through. Nothing is held or queued.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^a[1-9][0-9]{0,8}$"
+            },
+            "description": "The approval\u2019s id: `a` and a number"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "answer"
+                ],
+                "properties": {
+                  "answer": {
+                    "type": "string",
+                    "enum": [
+                      "approve",
+                      "decline"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "Told to the person who asked. At most 300 bytes."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "the approval, as it is now"
+          },
+          "400": {
+            "description": "not approve or decline, or a note too long"
+          },
+          "401": {
+            "description": "no credential"
+          },
+          "403": {
+            "description": "yours to ask for and not yours to answer"
+          },
+          "404": {
+            "description": "no approval by that id that you can see"
+          },
+          "409": {
+            "description": "already answered, used or run out"
+          }
+        }
+      }
+    },
     "/api/runner-repo": {
       "get": {
         "tags": [
