@@ -124,6 +124,9 @@ fun MachinesScreen(
     // The pool whose own machine is to be made again, from that machine's
     // page: the policy sheet for it, opened with the switch on.
     var againFor by rememberSaveable { mutableStateOf<String?>(null) }
+    // The pool whose edge router is to be rebuilt with the memory it needs,
+    // from the pool's page: the policy sheet for it, sent as the pool stands.
+    var fixEdgeFor by rememberSaveable { mutableStateOf<String?>(null) }
     // A pool whose page is open, by address (PoolPage, docs/manage.md).
     // Saveable for the same reason; its connection opens again after a turn.
     var managing by rememberSaveable { mutableStateOf<String?>(null) }
@@ -261,13 +264,18 @@ fun MachinesScreen(
     managing?.let { address ->
         held.firstOrNull { it.address == address }?.let { pool ->
             key(address) {
-                PoolPage(settings, pool, admin, onChangePolicy = { policyFor = address }, onDismiss = { managing = null }, onReconnect = { reconnectVia = null; reconnectFor = address }, onAddWatchdog = { watchdogFor = address })
+                PoolPage(settings, pool, admin, onChangePolicy = { policyFor = address }, onDismiss = { managing = null }, onReconnect = { reconnectVia = null; reconnectFor = address }, onAddWatchdog = { watchdogFor = address }, onFixEdge = { fixEdgeFor = address })
             }
         }
     }
     policyFor?.let { pool ->
         key(pool) {
             HypervisorSheet(settings, policyFor = pool, onDismiss = { policyFor = null })
+        }
+    }
+    fixEdgeFor?.let { pool ->
+        key("fix-edge/$pool") {
+            HypervisorSheet(settings, policyFor = pool, fixEdge = true, onDismiss = { fixEdgeFor = null })
         }
     }
     reconnectFor?.let { pool ->

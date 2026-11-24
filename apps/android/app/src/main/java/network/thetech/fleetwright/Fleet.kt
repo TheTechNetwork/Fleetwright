@@ -2502,7 +2502,19 @@ class Fleet(
             val topBlocked: List<Pair<String, Int>>?,
             val heardAt: Long?,
             val problem: String?,
-        )
+            /** Bytes of memory the hypervisor gives it, and the bytes the machine reading it would build it with (EDGE.memory in edge-router.js). Null is not read, or a machine from before it said either, and null is cannot tell. */
+            val memory: Long? = null,
+            val needs: Long? = null,
+        ) {
+            /**
+             * IT HAS LESS MEMORY THAN IT NEEDS, which it crashes with: the
+             * one thing its page offers a fix for. Only when both numbers
+             * were read. Either one missing is cannot tell, which is never
+             * short and never fine (C-5), so nothing is drawn for it. Same
+             * as iOS (Fleet.VMEdges.Router.short).
+             */
+            val short: Boolean get() = memory != null && needs != null && memory < needs
+        }
         data class Event(val at: Long, val router: String, val kind: String, val text: String)
     }
 
@@ -2544,6 +2556,8 @@ class Fleet(
                             },
                             heardAt = r.num("heardAt")?.toLong(),
                             problem = r.str("problem"),
+                            memory = r.num("memory")?.toLong(),
+                            needs = r.num("needs")?.toLong(),
                         )
                     }
                 } ?: emptyList()

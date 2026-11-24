@@ -94,6 +94,8 @@ internal fun PoolPage(
     onDismiss: () -> Unit,
     onReconnect: () -> Unit = {},
     onAddWatchdog: () -> Unit = {},
+    /** The policy sheet for this pool, sent as the pool stands, to rebuild a router short of memory (HypervisorSheet, `fixEdge`). No default: a button that went nowhere would be worse than none (C-2). */
+    onFixEdge: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val watch = remember(pool.address) { PoolWatch(settings, pool.address, scope) }
@@ -146,6 +148,12 @@ internal fun PoolPage(
     FullScreen(pool.address, onDismiss) {
         StatusCard(watch, masters, onSetUpAgain = if (admin == true) ({ settingUp = true }) else null)
         if (edgesAsked && edgesKnown) EdgeCard(edges, empty = if (edgesFailed) Manage.Words.edgeUnasked else Manage.Words.edgeNobody) { showingEdges = true }
+        // A ROUTER SHORT OF MEMORY, said directly under the card, with the
+        // one button that rebuilds it. An admin's, like the row at the foot
+        // that changes the policy: it is that same sheet, sent as the pool
+        // stands, and the verb refuses a member. Anybody else reads the
+        // sentence and is offered nothing (C-2). Same as iOS.
+        if (edgesAsked && edgesKnown) EdgeShortPrompt(edges, onFix = if (admin == true) onFixEdge else null)
         if (watch.phase == PoolWatch.Phase.Live && watch.snapshot.isEmpty) Hint(Manage.Words.seesNothing)
         for (kind in Manage.Kind.values()) {
             val rows = watch.snapshot.list(kind)
@@ -287,6 +295,52 @@ internal fun EdgeCard(e: Fleet.VmEdges?, empty: String, note: Pair<String, Boole
     }
 }
 
+/**
+ * AN EDGE ROUTER WITH LESS MEMORY THAN IT NEEDS, ON EITHER KIND OF
+ * HYPERVISOR: its own card directly under the Edge routers card, because that
+ * card is one tap through to the routers' page and a button inside it would
+ * be a tap inside a tap. Asked for, once a router with 2 GiB had crashed in
+ * use: "prompt users to one click fix". Same as iOS (EdgeShortPrompt).
+ *
+ * ONE SENTENCE PER SHORT ROUTER, in the attention tone the card sets trouble
+ * in, and the card wears that tone's ring: it is the one card on the page
+ * asking for something (docs/design-system.md, "One card at a time wears a
+ * tone"). The sentence names the router and both sizes, so it reads the same
+ * with the colour gone. Nothing is drawn while no router is short, and a
+ * router whose memory was not read is not short (C-5).
+ *
+ * THEN ONE BUTTON, AND WHAT IT COSTS UNDER IT, only where pressing it can
+ * work ([onFix] is null elsewhere, C-2): the page that draws this says who
+ * that is and where the button goes.
+ */
+@Composable
+internal fun EdgeShortPrompt(e: Fleet.VmEdges?, onFix: (() -> Unit)?) {
+    val short = e?.routers?.filter { it.short } ?: emptyList()
+    if (short.isEmpty()) return
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .fleetCard(radius = Design.Radius.cardSmall, ring = Design.Palette.attention.now.copy(alpha = 0.55f))
+            .padding(Design.Space.groupTight),
+        verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight),
+    ) {
+        short.forEach { r ->
+            val memory = r.memory
+            val needs = r.needs
+            if (memory != null && needs != null) Text(Manage.Words.edgeShort(r.name, memory, needs), style = Design.Style.body, color = Design.Palette.attention.now)
+        }
+        // ONE BUTTON FOR A PAIR TOO: one Apply rebuilds whichever of the two
+        // is short, so it is named for the larger of what they need.
+        val needs = short.mapNotNull { it.needs }.maxOrNull()
+        if (onFix != null && needs != null) {
+            OutlinedButton(onClick = onFix, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text(Manage.Words.edgeFix(needs))
+            }
+            Text(HypervisorWords.MAKE_EDGE_AGAIN_FOOTER, style = Design.Style.label, color = Design.Palette.inkDim.now)
+        }
+    }
+}
+
 /** One router on the card: its name, the one word for it on the right, and its DNS under that. What is wrong is the one thing in the attention tone, and the word carries it without the colour. */
 @Composable
 private fun RouterSummary(r: Fleet.VmEdges.Router) {
@@ -353,6 +407,11 @@ private fun EdgeReport(e: Fleet.VmEdges) {
 private fun RouterRows(r: Fleet.VmEdges.Router) {
     Column(Modifier.semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
         Text(r.name, style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
+        // SHORT OF MEMORY FIRST, whatever else was read of it: it is why a
+        // router that answers now may not later.
+        val memory = r.memory
+        val needs = r.needs
+        if (r.short && memory != null && needs != null) Text(Manage.Words.edgeShort(r.name, memory, needs), style = Design.Style.label, color = Design.Palette.attention.now)
         val problem = r.problem
         // THE VERDICT ON THE ROW, THE SENTENCE UNDER DETAILS. Not reached is the word in the attention tone; not asked is Unknown, never a sentence
         // naming what did not answer (docs/design-system.md, Words, §7). The machine's own words on why open beneath, for whoever is troubleshooting.

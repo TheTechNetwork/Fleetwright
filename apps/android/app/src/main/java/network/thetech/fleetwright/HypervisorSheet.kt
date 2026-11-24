@@ -163,6 +163,16 @@ import kotlinx.coroutines.withContext
  *   pool with none, or a machine that cannot make one ask, opens as any
  *   policy change, and says why nothing was done by itself. Read only with
  *   [policyFor]. The same as iOS (AddHypervisorView, straightThrough).
+ * @param fixEdge opened from the pool's page to rebuild an edge router that
+ *   has less memory than it needs (PoolPage, EdgeShortPrompt). Asked for:
+ *   "prompt users to one click fix". THE SAME STRAIGHT PATH AS
+ *   [makeHolderAgain], AND IT CHANGES NOTHING IN THE CHOICE: the choice is
+ *   the pool as it is, with the router kept on, because the machine rebuilds
+ *   a short router on any Apply (edge-router.js, `sized`). Once the machine
+ *   has read the pool, and the pool has a router on its uplink, the switch
+ *   for it is on and nothing would be refused, it goes by itself. Otherwise
+ *   the form, and one line on why not. Read only with [policyFor], and not
+ *   with [makeHolderAgain]: one thing at a time. The same as iOS.
  */
 @Composable
 internal fun HypervisorSheet(
@@ -172,6 +182,7 @@ internal fun HypervisorSheet(
     reconnectFor: String? = null,
     via: String? = null,
     makeHolderAgain: Boolean = false,
+    fixEdge: Boolean = false,
     /** The address Add a hypervisor found Xen Orchestra at: filled in, and the machines asked at once. */
     startAt: String? = null,
     onDismiss: () -> Unit,
@@ -1101,6 +1112,19 @@ internal fun HypervisorSheet(
                             } else {
                                 straightNote = straightRefusal(opened, c, runningOn.ifBlank { r.hostId ?: "The machine" }, address.trim())
                             }
+                        } else if (policy && fixEdge && c != null) {
+                            // THE SAME FOR A ROUTER SHORT OF MEMORY, from the
+                            // pool's page: the choice is the pool as it
+                            // stands, and the machine rebuilds a short router
+                            // on any Apply. Sent only with a router on the
+                            // uplink, its switch on, and nothing the machine
+                            // would refuse; otherwise the form, with why.
+                            if (c.edge && XoPolicy.edgeOn(opened, c.egress) != null && XoPolicy.problem(opened, c) == null) {
+                                straight = true
+                                applyChoice(r.xosetup)
+                            } else {
+                                straightNote = straightRefusal(opened, c, runningOn.ifBlank { r.hostId ?: "The machine" }, address.trim(), fixEdge = true, canEdge = canEdge)
+                            }
                         }
                     } else {
                         unopened = true
@@ -1849,10 +1873,21 @@ private fun straightLine(name: String, wayOut: String) =
  * Why Make it again from the machine's page did nothing by itself, and
  * opened the form instead: in the order the switch is withheld. The same
  * words as iOS (AddHypervisorView, straightRefusal).
+ *
+ * AND WHY THE REBUILD OF A SHORT ROUTER DID NOT ([fixEdge]), in the same
+ * order for its own switch: a machine that builds no router ([canEdge]),
+ * then no router where the machine looked. That second one says what the
+ * machine found and not that the pool has none, since the page the person
+ * came from had just named one.
  */
-private fun straightRefusal(inv: XoPolicy.Inventory, c: XoPolicy.Choice, machine: String, pool: String): String {
-    if (!c.holderAskChoice) return "$machine needs an update to do this. Choose below instead."
-    if (XoPolicy.holderOn(inv, c.egress) == null) {
+private fun straightRefusal(inv: XoPolicy.Inventory, c: XoPolicy.Choice, machine: String, pool: String, fixEdge: Boolean = false, canEdge: Boolean = false): String {
+    val tooOld = if (fixEdge) !canEdge else !c.holderAskChoice
+    if (tooOld) return "$machine needs an update to do this. Choose below instead."
+    if (fixEdge) {
+        if (XoPolicy.edgeOn(inv, c.egress) == null) {
+            return "$machine found no edge router on $pool’s uplink. Choose below."
+        }
+    } else if (XoPolicy.holderOn(inv, c.egress) == null) {
         return "$pool has no managing VM to replace."
     }
     return "Not done by itself: ${XoPolicy.problem(inv, c) ?: "the choice as it stands would be refused"}. Choose below."

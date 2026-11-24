@@ -108,14 +108,27 @@ struct AddHypervisorView: View {
     /// none, or a machine that cannot make one ask, opens as any policy
     /// change, and says why nothing was done by itself.
     let makeHolderAgain: Bool
+    /// Opened from the pool's page to rebuild an edge router that has less
+    /// memory than it needs (PoolManageView, EdgeShortPrompt). Asked for:
+    /// "prompt users to one click fix". THE SAME STRAIGHT PATH AS
+    /// `makeHolderAgain`, AND IT CHANGES NOTHING IN THE CHOICE: the choice is
+    /// the pool as it is, with the router kept on, because the machine
+    /// rebuilds a short router on any Apply (edge-router.js, `sized`). Once
+    /// the machine has read the pool, and the pool has a router on its
+    /// uplink, the switch for it is on and nothing would be refused, it
+    /// goes by itself. Otherwise the form, and one line on why not.
+    let fixEdge: Bool
     @Environment(\.dismiss) private var dismiss
 
-    init(settings: Settings, policyFor address: String? = nil, reconnectFor pool: String? = nil, via machine: String? = nil, makeHolderAgain: Bool = false, startAt found: String? = nil) {
+    init(settings: Settings, policyFor address: String? = nil, reconnectFor pool: String? = nil, via machine: String? = nil, makeHolderAgain: Bool = false, fixEdge: Bool = false, startAt found: String? = nil) {
         self.settings = settings
         self.policyFor = address
         self.reconnectFor = address == nil ? pool : nil
         self.preferred = machine.flatMap { $0.isEmpty ? nil : $0 }
         self.makeHolderAgain = address != nil && makeHolderAgain
+        // One thing at a time: a screen opened to make the pool's own
+        // machine again is not also rebuilding the router by itself.
+        self.fixEdge = address != nil && fixEdge && !makeHolderAgain
         self.startAt = address == nil && pool == nil ? found.flatMap { $0.isEmpty ? nil : $0 } : nil
         _address = State(initialValue: address ?? pool ?? found ?? "")
     }
@@ -1415,12 +1428,23 @@ struct AddHypervisorView: View {
     /// Why Make it again from the machine's page did nothing by itself, and
     /// opened the form instead: in the order the switch is withheld. The same
     /// words as Android.
+    ///
+    /// AND WHY THE REBUILD OF A SHORT ROUTER DID NOT (`fixEdge`), in the same
+    /// order for its own switch: a machine that builds no router, then no
+    /// router where the machine looked. That second one says what the
+    /// machine found and not that the pool has none, since the page the
+    /// person came from had just named one.
     private func straightRefusal(_ inv: XOPolicy.Inventory) -> String {
         let pool = policyFor ?? trimmedAddress
-        if !choice.holderAskChoice {
+        let tooOld = fixEdge ? (policyJob?.canEdge != true) : !choice.holderAskChoice
+        if tooOld {
             return "\(hostId) needs an update to do this. Choose below instead."
         }
-        if inv.holder(on: choice.egress) == nil {
+        if fixEdge {
+            if inv.edge(on: choice.egress) == nil {
+                return "\(hostId) found no edge router on \(pool)’s uplink. Choose below."
+            }
+        } else if inv.holder(on: choice.egress) == nil {
             return "\(pool) has no managing VM to replace."
         }
         return "Not done by itself: \(choice.problem(in: inv) ?? "the choice as it stands would be refused"). Choose below."
@@ -2347,6 +2371,19 @@ struct AddHypervisorView: View {
                     if choice.holderAgain, choice.problem(in: opened) == nil, let mine = opened.holder(on: choice.egress) {
                         straightName = mine.name
                         straightWayOut = opened.networks.first { $0.id == choice.egress }?.name ?? "its network"
+                        straightThrough = true
+                        await applyPolicy(opened, job: job)
+                    } else {
+                        result = straightRefusal(opened)
+                        failed = false
+                    }
+                } else if fixEdge {
+                    // THE SAME FOR A ROUTER SHORT OF MEMORY, from the pool's
+                    // page: the choice is the pool as it stands, and the
+                    // machine rebuilds a short router on any Apply. Sent only
+                    // with a router on the uplink, its switch on, and nothing
+                    // the machine would refuse; otherwise the form, with why.
+                    if choice.edge, choice.problem(in: opened) == nil, opened.edge(on: choice.egress) != nil {
                         straightThrough = true
                         await applyPolicy(opened, job: job)
                     } else {

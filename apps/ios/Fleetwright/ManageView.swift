@@ -61,6 +61,7 @@ struct PoolManageView: View {
             if edgesAsked && edgesKnown {
                 edgeCard
                     .fleetRow()
+                edgeShort
             }
             if watch.phase == .live && watch.snapshot.isEmpty {
                 Text(Manage.Words.seesNothing)
@@ -164,6 +165,22 @@ struct PoolManageView: View {
     /// page is. Before any machine has read them, what is known is said.
     private var edgeCard: some View {
         EdgeRoutersCard(edges: edges, empty: edgesFailed ? Manage.Words.edgeUnasked : Manage.Words.edgeNobody)
+    }
+
+    /// A ROUTER SHORT OF MEMORY, said directly under the card, with the one
+    /// button that rebuilds it. An admin's, like the row at the foot that
+    /// changes the policy: it is that same screen, sent as the pool stands
+    /// (AddHypervisorView, `fixEdge`), and the verb refuses a member. Anybody
+    /// else reads the sentence and is offered nothing (C-2).
+    @ViewBuilder
+    private var edgeShort: some View {
+        let short = edges?.routers.filter { $0.short } ?? []
+        if !short.isEmpty {
+            EdgeShortPrompt(short: short, offers: settings.showsAdmin) {
+                AddHypervisorView(settings: settings, policyFor: pool.address, fixEdge: true)
+            }
+            .fleetRow()
+        }
     }
 
     // MARK: How current it is
@@ -732,6 +749,62 @@ struct EdgeRoutersCard: View {
     }
 }
 
+/// AN EDGE ROUTER WITH LESS MEMORY THAN IT NEEDS, ON EITHER KIND OF
+/// HYPERVISOR: its own card directly under the Edge routers card, because
+/// that card is one tap through to the routers' page and a button inside it
+/// would be a tap inside a tap. Asked for, once a router with 2 GiB had
+/// crashed in use: "prompt users to one click fix".
+///
+/// ONE SENTENCE PER SHORT ROUTER, in the attention tone the card sets trouble
+/// in, and the card wears that tone's ring: it is the one card on the page
+/// asking for something (docs/design-system.md, "One card at a time wears a
+/// tone"). The sentence names the router and both sizes, so it reads the
+/// same with the colour gone.
+///
+/// THEN ONE BUTTON, AND WHAT IT COSTS UNDER IT, only where pressing it can
+/// work (`offers`, C-2): the page that draws this says who that is and where
+/// the button goes. Elsewhere the sentence stands alone.
+struct EdgeShortPrompt<Fix: View>: View {
+    /// The routers that are short, each with both numbers read (Router.short).
+    let short: [Fleet.VMEdges.Router]
+    let offers: Bool
+    let fix: () -> Fix
+
+    init(short: [Fleet.VMEdges.Router], offers: Bool, @ViewBuilder fix: @escaping () -> Fix) {
+        self.short = short
+        self.offers = offers
+        self.fix = fix
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Design.Space.insideTight) {
+            ForEach(short, id: \.name) { r in
+                if let memory = r.memory, let needs = r.needs {
+                    Text(Manage.Words.edgeShort(r.name, memory: memory, needs: needs))
+                        .fleetType(.body)
+                        .foregroundStyle(Design.Palette.attention)
+                }
+            }
+            // ONE BUTTON FOR A PAIR TOO: one Apply rebuilds whichever of the
+            // two is short, so it is named for the larger of what they need.
+            if offers, let needs = short.compactMap({ $0.needs }).max() {
+                NavigationLink {
+                    fix()
+                } label: {
+                    Text(Manage.Words.edgeFix(needs: needs))
+                        .fleetType(.body)
+                        .frame(minHeight: 44, alignment: .leading)
+                }
+                Text(HypervisorWords.makeEdgeAgainFooter)
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.inkDim)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fleetCard(radius: Design.Radius.cardSmall, ring: Design.Palette.attention.opacity(0.55))
+    }
+}
+
 /// THE ROUTERS' OWN PAGE: everything the machine read of them, which the card
 /// on the pool's page says in one word per router. Which machine read them
 /// and when, the log port, then each router in full, then what they logged
@@ -792,6 +865,13 @@ struct EdgeRoutersView: View {
             Text(r.name)
                 .fleetType(.bodyStrong)
                 .foregroundStyle(Design.Palette.ink)
+            // SHORT OF MEMORY FIRST, whatever else was read of it: it is why
+            // a router that answers now may not later.
+            if r.short, let memory = r.memory, let needs = r.needs {
+                Text(Manage.Words.edgeShort(r.name, memory: memory, needs: needs))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.attention)
+            }
             // THE VERDICT ON THE ROW, THE SENTENCE UNDER DETAILS. Not
             // reached is the word in the attention tone; not asked is
             // Unknown, never a sentence naming what did not answer
