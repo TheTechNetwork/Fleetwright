@@ -43,7 +43,7 @@
 import { readFileSync } from 'node:fs';
 import { resource } from '../../core/resources.js';
 import { connectXo, connectXoPlain, splitAddress } from './xo-ws.js';
-import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, labsEachOf, wanAddressOf } from './edge-router.js';
+import { EDGE, EDGE_HA, GROUP_PREFIX, LAB, edgeMemoryOf, labsEachOf, wanAddressOf } from './edge-router.js';
 import { JOIN_RUNCMD, VM_IMAGE } from './vm-image.js';
 import { HOLDER } from './xo-holder.js';
 import { seal, xolookAad, claudeBindingFor } from '../seal.js';
@@ -540,6 +540,8 @@ export class XoPools {
     this.handing = new Set();
     /** @type {Map<string, Seen>} what the last look found, keyed as `held` */
     this.seen = new Map();
+    /** @type {Map<string, Map<string, number|null>>} how much memory each router had at the last `edgeAddresses`, keyed as `held` */
+    this.edgeMemorySeen = new Map();
     /** Whose each machine is, `<address> <name>` to the person it was made for. @type {Map<string, string>} */
     this.machineOwners = new Map();
     /**
@@ -1288,11 +1290,17 @@ export class XoPools {
         .sort((a, b) => Number(b?.power_state === 'Running') - Number(a?.power_state === 'Running'));
       /** @type {Map<string, string>} */
       const out = new Map();
+      /** @type {Map<string, number|null>} */
+      const memory = new Map();
       for (const v of edges) {
         const name = v.tags.includes(`${EDGE_HA.nodeTag}1`) ? EDGE_HA.second : EDGE.vm;
         const ip = wanAddressOf(v);
         if (ip && !out.has(name)) out.set(name, ip);
+        // The running one's, as its address is: a stopped leftover of the
+        // same name says nothing about the router doing the work.
+        if (!memory.has(name)) memory.set(name, edgeMemoryOf(v));
       }
+      this.edgeMemorySeen.set(key, memory);
       return out;
     } catch {
       return null;
@@ -1303,6 +1311,18 @@ export class XoPools {
         /* closing */
       }
     }
+  }
+
+  /**
+   * How much memory each of a pool's routers has, in bytes, as the last
+   * `edgeAddresses` saw it: the same look, so asking costs Xen Orchestra
+   * nothing more. A router whose memory it did not give is null, and a pool
+   * never looked at is null altogether; neither is "none" (C-5).
+   *
+   * @param {string} key  `owner address` @returns {Map<string, number|null>|null}
+   */
+  edgeMemory(key) {
+    return this.edgeMemorySeen.get(key) ?? null;
   }
 
   /**

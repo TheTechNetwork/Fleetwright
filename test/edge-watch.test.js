@@ -16,6 +16,7 @@ import { EventEmitter } from 'node:events';
 
 import { EdgeWatch, EVENTS, REREAD_MS, TOP_BLOCKED, UNREAD, kindOf, parseSyslog, statusOf } from '../src/fleet/host/edge-watch.js';
 import { newWatch } from '../src/fleet/host/edge-credentials.js';
+import { EDGE } from '../src/fleet/host/edge-router.js';
 
 const ELI = 'eli@example.com';
 
@@ -104,6 +105,9 @@ test('a router is read over TLS held to its certificate, with the key, into the 
     name: 'fleetwright-edge',
     address: '127.0.0.1',
     heardAt: null,
+    // Nothing here said how much memory it has, which is cannot tell; what it needs is the box's own to say.
+    memory: null,
+    needs: 4 * 1024 ** 3,
     reached: true,
     role: 'master',
     dns: true,
@@ -261,6 +265,8 @@ test('where a router is comes from Xen Orchestra now, asked on the first poll an
   /** @type {Map<string, string>|null} */
   let xo = new Map();
   let asked = 0;
+  /** @type {Map<string, number|null>|null} how much memory the same look saw each router with */
+  let memory = null;
   const pools = {
     ...holding(w, [{ name: 'fleetwright-edge', address: null }]),
     async edgeAddresses(/** @type {string} */ k) {
@@ -268,6 +274,7 @@ test('where a router is comes from Xen Orchestra now, asked on the first poll an
       assert.equal(k, `${ELI} xo.lan`);
       return xo;
     },
+    edgeMemory: () => memory,
   };
   const watch = new EdgeWatch({ pools, apiPort: port, createSocket: fakeSocket, now: () => now });
 
@@ -276,7 +283,13 @@ test('where a router is comes from Xen Orchestra now, asked on the first poll an
   assert.equal(r.reached, null);
   assert.match(r.problem, /does not know its address yet: its guest agent has not reported it \(one built before the image carried the agent gets it with its first update, after 10:00 UTC\)/, 'Xen Orchestra was asked and said none, which is not the same as not asked');
 
+  assert.deepEqual([r.memory, r.needs], [null, EDGE.memory], 'how much it has was not said, which is not none; what it needs is');
+
   xo = new Map([['fleetwright-edge', '127.0.0.1']]);
+  // ASKED FOR: "prompt users to one click fix". The look that finds where a
+  // router is also sees how much memory it has, and the report carries it
+  // beside what it needs, so a phone can say it is short and offer to fix it.
+  memory = new Map([['fleetwright-edge', 2 * 1024 ** 3]]);
   now += 60_000;
   await watch.poll();
   assert.equal(asked, 1, 'asked again inside five minutes');
@@ -285,6 +298,7 @@ test('where a router is comes from Xen Orchestra now, asked on the first poll an
   assert.equal(asked, 2);
   r = /** @type {any} */ (watch.reportFor(ELI, 'xo.lan')).routers[0];
   assert.deepEqual([r.address, r.reached, r.role], ['127.0.0.1', true, 'master'], 'read where Xen Orchestra says it is now');
+  assert.deepEqual([r.memory, r.needs], [2 * 1024 ** 3, 4 * 1024 ** 3]);
   assert.ok(seen.length > 0);
 
   xo = null;

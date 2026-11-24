@@ -136,4 +136,9 @@ export class Pools {
   edgeAddresses(key) {
     return this.pve.held.has(key) ? this.pve.edgeAddresses(key) : this.xo.edgeAddresses(key);
   }
+
+  /** How much memory each of them has, as that look saw it. @param {string} key */
+  edgeMemory(key) {
+    return this.pve.held.has(key) ? this.pve.edgeMemory(key) : this.xo.edgeMemory(key);
+  }
 }
