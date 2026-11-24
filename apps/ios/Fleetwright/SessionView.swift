@@ -94,7 +94,11 @@ struct SessionView: View {
                         if let host = session.hostId { Text("on \(host)") }
                         if let workspace = session.workspace { Text("· \(workspace)") }
                         if let age = session.age { Text("· \(age)") }
-                        if let account = session.account, account != "shared" { Text("· \(account)") }
+                        if let asMember = session.asMember {
+                            Text("· \(asMember)")
+                        } else if let account = session.account, account != "shared" {
+                            Text("· \(account)")
+                        }
                         if let context = session.contextLine { Text("· \(context)") }
                     }
                     .fleetType(.micro)

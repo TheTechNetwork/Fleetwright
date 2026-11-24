@@ -261,13 +261,24 @@ struct PhoneGitHub {
     /// it. It exists in the clear only in this function's memory, between the
     /// two seals. A machine from before protocol 15 makes a setup-token where
     /// a sign-in was asked for, and that is kept too, and said.
-    func keepFromMachine(_ fleet: Fleet, host: String, code: String) async throws -> String {
+    ///
+    /// FOR A MEMBER, when one is named (docs/members.md): what the machine
+    /// made is deposited into that member's vault and never this person's
+    /// own. A vault request carries whose vault it is for, which the deposit
+    /// below cannot, so that is the path it takes.
+    func keepFromMachine(_ fleet: Fleet, host: String, code: String, for member: String? = nil) async throws -> String {
         let key = Seal.newKey()
         let reply = try await fleet.setupToken(host: host, code: code, reply: key.publicKey, kind: "login")
         guard reply.ok != false, let sealed = reply.sealed else {
             throw FleetError.message(reply.text ?? "\(host) did not sign you in.")
         }
         let inside = try Seal.open(key, aad: Seal.setupTokenAAD, sealed: sealed)
+        if let member, !member.isEmpty {
+            let signIn = inside["signIn"] as? [String: Any]
+            let token = inside["token"] as? String
+            guard signIn != nil || token?.isEmpty == false else { throw Seal.Failure.notSealed }
+            return try await PhoneVault(settings: settings).keepClaude(fleet, token: token, signIn: signIn, for: member)
+        }
         if let signIn = inside["signIn"] as? [String: Any] {
             return try await depositClaudeSignIn(fleet, signIn: signIn)
         }

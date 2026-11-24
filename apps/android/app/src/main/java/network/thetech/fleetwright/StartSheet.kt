@@ -4,13 +4,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -23,6 +26,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -75,6 +79,13 @@ data class StartRequest(
     val network: String? = null,
     /** And a group network beside it, to reach the other machines started in the same group; null for none. */
     val group: String? = null,
+    /**
+     * THE MEMBER IT RUNS AS, by id, or null for the person themselves
+     * (docs/members.md). With one set, `platform` is null: a member's
+     * session is not sent to a temporary machine, which holds its owner's
+     * sign-in only.
+     */
+    val member: String? = null,
 )
 
 /**
@@ -136,12 +147,31 @@ val newMachineChoices = listOf(
 fun StartSheet(
     settings: Settings,
     preselectedKindId: String? = null,
+    /**
+     * The member this start is for, when the sheet was opened from that
+     * member's page: the button there already said whom, so As offers that
+     * member and nobody else.
+     */
+    asMember: Fleet.Member? = null,
     onDismiss: () -> Unit,
     onStart: (StartRequest) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val kinds = remember { SessionKinds.all(context) }
+
+    // The members this person may start a session as, from the fleet's own
+    // list. Empty until it answers and when there are none, and then nothing
+    // asks As whom (C-2).
+    var startAs by remember { mutableStateOf(listOf<Fleet.Member>()) }
+    // The member chosen under As, by id; empty is the person themselves.
+    var member by remember { mutableStateOf("") }
+    // Whom the session runs as: the member this sheet was opened for, or the
+    // one chosen under As. Empty is the person themselves.
+    val chosenMember = asMember?.id ?: member
+    // The members As offers: the one this sheet was opened for, or every one
+    // the fleet says this person may start as.
+    val asChoices = asMember?.let { listOf(it) } ?: startAs
 
     var brief by remember { mutableStateOf("") }
     var task by remember { mutableStateOf("") }
@@ -253,6 +283,14 @@ fun StartSheet(
         offeredHosts = Fleet(settings).fleetHosts()
             .filter { !it.holder && (it.takesSessions ?: (it.state == "healthy")) }
         hosts = offeredHosts.map { it.hostId }
+        // WHOM THIS PERSON MAY START AS, from the fleet's own list. A failure
+        // offers nobody, and the start is their own.
+        if (asMember == null) {
+            Fleet(settings).members().onSuccess { org ->
+                val allowed = org.you?.startAs.orEmpty()
+                if (org.ok != false) startAs = org.members.orEmpty().filter { it.id in allowed }
+            }
+        }
         // Nullable all the way through: Fleet.profiles() answers null when
         // nobody could say — an old coordinator, or hosts that refuse the verb
         // by name — and that is not the same as a fleet with no profiles.
@@ -459,6 +497,34 @@ fun StartSheet(
                         }
                     }
                 }
+                // AS WHOM, above Where because it decides where: a member's
+                // session runs on that member's sign-ins and goes where its
+                // custodians approved. Asked only of somebody the fleet says
+                // may start as a member, and Yourself is first and chosen.
+                if (asChoices.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+                        Text("As", style = MaterialTheme.typography.labelMedium)
+                        if (asMember == null) {
+                            AsRow(name = "Yourself", role = null, selected = chosenMember.isEmpty()) { member = "" }
+                        }
+                        asChoices.forEach { choice ->
+                            AsRow(name = choice.name, role = choice.role, selected = chosenMember == choice.id) {
+                                member = choice.id
+                                // A member's session is not sent to a new
+                                // machine, so one chosen under Where is put
+                                // back to wherever fits.
+                                platform = ""
+                                template = ""
+                            }
+                        }
+                        asChoices.firstOrNull { it.id == chosenMember }?.let { chosen ->
+                            Text(
+                                "Runs on ${chosen.name}'s sign-ins, on a machine its custodians approved.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
                 // Only when there is a choice. One host is not a decision,
                 // and a picker with one entry is furniture. A fleet that can
                 // start a machine always has a choice: here, or a new one.
@@ -475,10 +541,15 @@ fun StartSheet(
                                 label = { Text(if (host == h) "$h \u2713" else h) },
                             )
                         }
+                        // A NEW MACHINE IS FOR A PERSON'S OWN SESSION. One
+                        // started as a member goes to a machine that member's
+                        // custodians approved, so with a member chosen none
+                        // of these is offered (C-2).
+                        //
                         // FROM YOUR OWN HYPERVISOR, first among the new
                         // machines: up in a minute or two, and billed to
                         // nobody. Asked for: "Still can't run sessions on it".
-                        images.forEach { image ->
+                        (if (chosenMember.isEmpty()) images else emptyList()).forEach { image ->
                             AssistChip(
                                 onClick = {
                                     vmNetwork = ""
@@ -504,20 +575,24 @@ fun StartSheet(
                         }
                         if (canStartMachine) {
                             newMachineChoices.forEach { choice ->
-                                AssistChip(
-                                    onClick = {
-                                        template = ""
-                                        runnerImage = ""
-                                        platform = if (platform == choice.platform) "" else choice.platform
-                                        // A machine that does not exist yet has
-                                        // nothing to do a host, a profile or a
-                                        // secret with, so choosing one clears
-                                        // all three rather than leaving a start
-                                        // that is refused.
-                                        if (platform.isNotEmpty()) { host = ""; profile = ""; secret = "" }
-                                    },
-                                    label = { Text(if (platform == choice.platform) "${choice.label} \u2713" else choice.label) },
-                                )
+                                // Not offered with a member chosen, for the
+                                // reason the machine images above are not.
+                                if (chosenMember.isEmpty()) {
+                                    AssistChip(
+                                        onClick = {
+                                            template = ""
+                                            runnerImage = ""
+                                            platform = if (platform == choice.platform) "" else choice.platform
+                                            // A machine that does not exist yet has
+                                            // nothing to do a host, a profile or a
+                                            // secret with, so choosing one clears
+                                            // all three rather than leaving a start
+                                            // that is refused.
+                                            if (platform.isNotEmpty()) { host = ""; profile = ""; secret = "" }
+                                        },
+                                        label = { Text(if (platform == choice.platform) "${choice.label} \u2713" else choice.label) },
+                                    )
+                                }
                             }
                         }
                         // WHERE IT GOES ON YOUR POOL, offered only when the
@@ -741,6 +816,7 @@ fun StartSheet(
                                 vmNetwork.ifBlank { null }.takeIf { platform == "vm" }
                             },
                             group = vmGroup.ifBlank { null }.takeIf { platform == "vm" && vmLab.isEmpty() },
+                            member = chosenMember.ifBlank { null },
                         ),
                     )
                     onDismiss()
@@ -749,6 +825,24 @@ fun StartSheet(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * One choice under As: the name, the role under it, and a radio button on
+ * the one chosen, 48dp tall and said to TalkBack as a choice of several.
+ */
+@Composable
+private fun AsRow(name: String, role: String?, selected: Boolean, onPick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(selected = selected, enabled = true, role = Role.RadioButton, onClick = onPick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Column(Modifier.weight(1f)) {
+            Text(name, style = Design.Style.body, color = Design.Palette.ink.now)
+            if (!role.isNullOrBlank()) Text(role, style = Design.Style.label, color = Design.Palette.inkDim.now)
+        }
+    }
 }
 
 /**

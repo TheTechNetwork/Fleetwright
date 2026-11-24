@@ -52,7 +52,7 @@ import kotlinx.coroutines.launch
  * Signed in, the address is a fact with "Sign out to change it".
  *
  * Each finished piece of setup is one row: Credentials, Temporary machines,
- * Linked repositories, Devices. What only an admin can do (People)
+ * Linked repositories, Organization, Devices. What only an admin can do (People)
  * is drawn for an admin and nobody else.
  */
 @Composable
@@ -65,6 +65,14 @@ fun YouScreen(
     onSignedIn: () -> Unit,
     onSignedOut: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * The page a notification asked to open, by name: "credentials", when a
+     * manager changed this person's vault. Opened once, then [onOpened].
+     */
+    opening: String? = null,
+    onOpened: () -> Unit = {},
+    /** A start New session described from a member's page, handed to whoever sends starts. */
+    onStart: (StartRequest) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -84,6 +92,9 @@ fun YouScreen(
     // How many roles this person has linked a repository for, once the fleet
     // has said; null until then, and the row is not drawn.
     var linkedCount by remember { mutableStateOf<Int?>(null) }
+    // How many members the organization has, once the fleet has said; null
+    // until then and from a fleet older than members, and the row is not drawn.
+    var orgCount by remember { mutableStateOf<Int?>(null) }
     var open by rememberSaveable { mutableStateOf<String?>(null) }
     // Eggs.kt: taps on the build line. Not saved, so leaving You hides it again.
     var buildTaps by remember { mutableIntStateOf(0) }
@@ -102,12 +113,26 @@ fun YouScreen(
         Fleet(settings).linkedRepos().onSuccess { got ->
             if (got.ok != false) linkedCount = got.links.size
         }
+        // Only from an answer that carries the list: a fleet older than
+        // members answers without one, and "no members yet" would be a claim.
+        Fleet(settings).members().onSuccess { got ->
+            val list = got.members
+            if (got.ok != false && list != null) orgCount = list.size
+        }
+    }
+    // A tapped notification about this person's vault lands on Credentials.
+    LaunchedEffect(opening) {
+        if (opening != null && signedIn) {
+            open = opening
+            onOpened()
+        }
     }
 
     when (open) {
         "credentials" -> CredentialsScreen(settings, onDismiss = { open = null })
         "temporary" -> TemporaryMachinesSheet(settings, onDismiss = { open = null })
         "linked" -> LinkedReposSheet(settings, onDismiss = { open = null })
+        "org" -> OrgScreen(settings, onDismiss = { open = null }, onStart = onStart)
         "devices" -> DevicesSheet(settings, if (viewAsMember) false else admin, onDismiss = { open = null })
         "delegations" -> DelegationsSheet(settings, onDismiss = { open = null })
         "kinds" -> KindsSheet(settings = settings, onDismiss = { open = null })
@@ -238,6 +263,12 @@ fun YouScreen(
                 linkedCount?.let { count ->
                     OpenRow("Linked repositories", value = describeLinkedRepos(count)) { open = "linked" }
                 }
+                // WHO DOES WHAT HERE, for everybody in the fleet: the
+                // members, the tree they sit in, and for a manager their
+                // team (docs/members.md). Drawn only once the list answered.
+                orgCount?.let { count ->
+                    OpenRow("Organization", value = describeOrganization(count)) { open = "org" }
+                }
             }
         }
 
@@ -318,22 +349,96 @@ fun YouScreen(
  * Credentials: everything a session of yours may use, in one place, VAULT
  * FIRST. Android had no fleet-wide screen at all: "Your credentials" opened
  * from one host's card and fanned tokens out to every box from there.
+ *
+ * YOUR MANAGERS, when the organization gives this person any
+ * (docs/members.md, "Custodians of a person member"). A person's vault holds
+ * their own sign-ins, so a manager manages it only after the person turns
+ * that on here, from their own device, and what a manager then changes is
+ * listed under the switch. Drawn from the vault's own answer and from nothing
+ * the fleet says: a vault that could not be asked draws no section. The same
+ * words as iOS (CredentialsHome.swift).
  */
 @Composable
 private fun CredentialsScreen(settings: Settings, onDismiss: () -> Unit) {
+    val scope = rememberCoroutineScope()
     var linked by remember { mutableStateOf(false) }
     var sshKeys by remember { mutableStateOf(false) }
     // Bumped by the sign-in below, so the vault appears the moment it can.
     var generation by remember { mutableIntStateOf(0) }
+    // Who else may manage this vault, as the vault last said. Null until it
+    // has, and from a vault older than the organization.
+    var custody by remember { mutableStateOf<PhoneVault.Custody?>(null) }
+    var custodyBusy by remember { mutableStateOf(false) }
+    var custodyResult by remember { mutableStateOf("") }
+    var custodyFailed by remember { mutableStateOf(false) }
     if (linked) CredentialsSheet(settings, host = null, onDismiss = { linked = false }, linkedOnly = true)
     if (sshKeys) SshKeysScreen(settings, onDismiss = { sshKeys = false })
     FullScreen(title = "Credentials", onDismiss = onDismiss) {
         SectionHead("Your vault")
         if (generation >= 0 && PhoneGitHub(settings).signedIn) {
-            YourVault(settings)
+            YourVault(settings, onListed = { custody = it.custody })
             // FOR THE MACHINES ON YOUR HYPERVISOR: kept like any secret,
             // given its own row because it is pasted, not typed.
             OpenRow("SSH keys") { sshKeys = true }
+            // ONLY FOR SOMEBODY WITH MANAGERS: a member of their own in the
+            // vault's tree, and at least one manager above it. Anybody else
+            // has nothing this switch would do (C-2).
+            val held = custody
+            if (held != null && held.member != null && held.managers.isNotEmpty()) {
+                SectionHead("Your managers")
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Let my managers manage my credentials",
+                        style = Design.Style.body,
+                        color = Design.Palette.ink.now,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(
+                        checked = held.allow,
+                        enabled = !custodyBusy,
+                        onCheckedChange = { allow ->
+                            scope.launch {
+                                custodyBusy = true
+                                val vault = PhoneVault(settings)
+                                val r = vault.setCustody(Fleet(settings), allow)
+                                custodyFailed = r.isFailure
+                                custodyResult = r.getOrElse { it.message ?: "That did not work." }
+                                // Custody as the vault now holds it, so the
+                                // switch stays where the vault left it.
+                                runCatching { vault.list(Fleet(settings)) }.onSuccess { custody = it.custody }
+                                custodyBusy = false
+                            }
+                        },
+                    )
+                }
+                Hint(CUSTODY_SENTENCE)
+                held.managers.forEach { address ->
+                    SelectionContainer {
+                        Text(address, style = Design.Style.body, color = Design.Palette.ink.now)
+                    }
+                }
+                // WHAT THEY CHANGED, newest first, by name and never by
+                // value. The vault keeps this beside what it holds, so it is
+                // here whether or not a notification arrived.
+                Text("What they changed", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
+                if (held.log.isEmpty()) {
+                    Hint("Nothing yet.")
+                } else {
+                    held.log.sortedByDescending { it.at }.forEach { change ->
+                        Text(
+                            PhoneVault.custodyLine(change, relative(change.at).toString()),
+                            style = Design.Style.bodySmall,
+                            color = Design.Palette.ink.now,
+                        )
+                    }
+                }
+                if (custodyResult.isNotBlank()) {
+                    Hint(custodyResult, color = if (custodyFailed) Design.Palette.bad.now else Design.Palette.ink.now)
+                }
+            }
         } else {
             // The vault knows a person by this phone's GitHub sign-in, so the
             // sign-in is offered at the point it is needed.
@@ -735,3 +840,9 @@ private fun describeClient(c: Fleet.Client, me: String, canRevoke: Boolean): Str
     parts.add(c.lastSeenAt?.let { "last used ${relative(it)}" } ?: if (canRevoke) "never used — safe to revoke" else "never used")
     return parts.joinToString(" · ")
 }
+
+/**
+ * What turning the switch on gives a manager, said under it. The same
+ * sentence on both phones (test/members-in-apps.test.js).
+ */
+const val CUSTODY_SENTENCE = "They can keep, test and remove what your vault holds, approve machines for it, and start sessions as you. You can turn this off."

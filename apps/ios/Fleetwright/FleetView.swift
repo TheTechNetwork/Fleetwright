@@ -49,6 +49,10 @@ struct FleetApp: View {
     /// open. The Machines tab pushes it.
     @State private var openPool: PoolAsk?
 
+    /// The page under You a notification asked to open: Credentials, when a
+    /// manager changed this person's vault. The You tab pushes it.
+    @State private var openYou: String?
+
     /// The tab a screenshot run asked for, if this launch is one. The old
     /// names still work, so a screenshot plan written before the rename does
     /// not silently land on the wrong tab.
@@ -76,7 +80,7 @@ struct FleetApp: View {
                 }
             }
             Tab("You", systemImage: "person.crop.circle", value: Tabs.you) {
-                NavigationStack { YouView(settings: settings) }
+                NavigationStack { YouView(settings: settings, opening: $openYou) }
             }
         }
         // A tapped notification lands where it is about: how a hypervisor
@@ -93,6 +97,9 @@ struct FleetApp: View {
             } else if let pool = note.userInfo?["pool"] as? PoolAsk {
                 openPool = pool
                 tab = .machines
+            } else if let page = note.userInfo?["you"] as? String, !page.isEmpty {
+                openYou = page
+                tab = .you
             } else {
                 tab = .sessions
             }
@@ -639,7 +646,8 @@ struct FleetView: View {
                     host: request.host,
                     profile: request.profile,
                     secret: request.secret,
-                    task: request.task
+                    task: request.task,
+                    member: request.member
                 )
                 let text = reply.text ?? "Started."
                 await MainActor.run {
@@ -845,7 +853,11 @@ private struct SessionRow: View {
                 if let host = session.hostId { Text("on \(host)") }
                 if let workspace = session.workspace { Text("· \(workspace)") }
                 if let age = session.age { Text("· \(age)") }
-                if let account = session.account, account != "shared" {
+                if let asMember = session.asMember {
+                    // STARTED AS A MEMBER: whose it runs as, in place of the
+                    // account, which for an agent is an address nobody holds.
+                    Text("· \(asMember)")
+                } else if let account = session.account, account != "shared" {
                     // Only when it is NOT the shared account: on a fleet where
                     // nobody has linked one, this line would say the same
                     // thing on every row and mean nothing.

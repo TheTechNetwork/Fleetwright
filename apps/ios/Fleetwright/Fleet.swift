@@ -91,6 +91,20 @@ struct Fleet {
         let archiveAt: Double?
         let archiveOk: Bool?
         let archiveText: String?
+        /// THE MEMBER IT WAS STARTED AS, by the name it had at the start
+        /// (docs/members.md). Nil for a session somebody started as
+        /// themselves and from a host older than protocol 19, and then
+        /// nothing is drawn.
+        let memberName: String?
+
+        /// "as Debbie", for a session started as a member, or nil for one a
+        /// person started as themselves. Drawn where the account would be:
+        /// a member's session runs on the member's own sign-ins, and for an
+        /// agent that account is an address nobody holds. Same words as Android.
+        var asMember: String? {
+            guard let memberName, !memberName.isEmpty else { return nil }
+            return "as \(memberName)"
+        }
 
         /// The archive line for the session's page, or nil when it has none.
         /// Before the first push it says so rather than implying one landed
@@ -695,10 +709,16 @@ struct Fleet {
         host: String? = nil,
         profile: String? = nil,
         secret: String? = nil,
-        task: String? = nil
+        task: String? = nil,
+        member: String? = nil
     ) async throws -> Reply {
         var params: [String: String] = [:]
         if let name { params["name"] = name }
+        // AS A MEMBER OF THE ORGANIZATION (docs/members.md): the session runs
+        // on that member's sign-ins and opens with its instructions. A
+        // parameter like the others, so it is signed with them, and it is in
+        // the delegation's match when no machine is named.
+        if let member, !member.isEmpty { params["member"] = member }
         if let title, !title.isEmpty { params["title"] = title }
         if let brief, !brief.isEmpty { params["brief"] = brief }
         if let mode, !mode.isEmpty { params["mode"] = mode }
@@ -907,6 +927,108 @@ struct Fleet {
 
     func unlinkRepo(role: String) async throws -> LinkedRepoReply {
         try JSONDecoder().decode(LinkedRepoReply.self, from: try await send("DELETE", "/api/linked-repos/\(role)", body: nil))
+    }
+
+    /// One member of the organization: a person or an agent with a role, a
+    /// place in a tree and standing instructions (docs/members.md). No
+    /// credential is ever in one. Everything past the four the coordinator
+    /// always sends is optional, so a field it stops sending is absent here
+    /// and not a list that fails to load.
+    struct Member: Codable, Hashable, Identifiable {
+        let id: String
+        let name: String
+        /// "person" or "agent".
+        let kind: String
+        let role: String
+        /// A person member's fleet address. Nil for an agent.
+        let email: String?
+        let title: String?
+        /// The id of the member this one reports to, or nil for nobody.
+        let reportsTo: String?
+        /// Fleet addresses an admin named as managers beside the tree.
+        let managers: [String]?
+        let description: String?
+        let workTypes: [String]?
+        let instructions: String?
+        let engines: [Engine]?
+        let hosts: Placement?
+        /// Stored, and enforced by nothing yet.
+        let budgetUsdMonth: Double?
+
+        struct Engine: Codable, Hashable {
+            let engine: String
+            let model: String?
+        }
+
+        /// Where it runs: a machine tag, or nothing.
+        struct Placement: Codable, Hashable {
+            let tag: String?
+        }
+
+        var isAgent: Bool { kind == "agent" }
+    }
+
+    /// Everybody in the organization, and what the tree lets this person do:
+    /// whether they are an admin, which member is theirs, whom they manage,
+    /// and whom they may start a session as.
+    struct Members: Codable {
+        let ok: Bool?
+        let members: [Member]?
+        let you: Standing?
+        /// The fleet's sentence when it refused to list them.
+        let text: String?
+
+        struct Standing: Codable, Hashable {
+            let admin: Bool?
+            let member: String?
+            let manages: [String]?
+            let startAs: [String]?
+        }
+    }
+
+    /// The answer to saving, removing or importing one member. A refusal
+    /// carries `text` and no member.
+    struct MemberReply: Codable {
+        let ok: Bool?
+        let member: Member?
+        let created: Bool?
+        let text: String?
+    }
+
+    /// Every member as a markdown file: the record as front matter, the
+    /// instructions as the body.
+    struct MemberFiles: Codable {
+        let ok: Bool?
+        let files: [File]?
+
+        struct File: Codable, Hashable {
+            let name: String
+            let text: String
+        }
+    }
+
+    func members() async throws -> Members {
+        try JSONDecoder().decode(Members.self, from: try await get("/api/members"))
+    }
+
+    /// Make a member or change one. `fields` is the whole record without its
+    /// id: the coordinator rebuilds the record from what is sent, so a field
+    /// left out is cleared, not kept.
+    func saveMember(id: String, fields: [String: Any]) async throws -> MemberReply {
+        try JSONDecoder().decode(MemberReply.self, from: try await send("PUT", "/api/members/\(id)", body: fields))
+    }
+
+    func removeMember(id: String) async throws -> MemberReply {
+        try JSONDecoder().decode(MemberReply.self, from: try await send("DELETE", "/api/members/\(id)", body: nil))
+    }
+
+    func exportMembers() async throws -> MemberFiles {
+        try JSONDecoder().decode(MemberFiles.self, from: try await get("/api/members/export"))
+    }
+
+    /// One member file, made or changed under the rules of any other write.
+    func importMember(text: String) async throws -> MemberReply {
+        try JSONDecoder().decode(MemberReply.self, from: try await post("/api/members/import", body: ["text": text]))
     }
 
     /// Where to start a runner from this phone, and the ticket to start it with.

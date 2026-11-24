@@ -72,6 +72,66 @@ struct PhoneVault {
     struct Contents: Hashable {
         let items: [Item]
         let grants: [Grant]
+        /// For a person's own vault: whether their managers may manage it,
+        /// who those managers are, and what they changed. Nil for a member's
+        /// vault opened by a custodian, and from a vault older than the
+        /// organization.
+        var custody: Custody? = nil
+    }
+
+    /// Who else may manage a person's vault, as the vault itself holds it
+    /// (docs/members.md, "Custodians of a person member").
+    struct Custody: Hashable {
+        let allow: Bool
+        /// The person's own member, by id, or nil when the vault's tree has none for them.
+        let member: String?
+        let managers: [String]
+        let log: [Change]
+
+        /// One thing a manager did, by name and never by value.
+        struct Change: Hashable {
+            let at: Double
+            let by: String
+            let op: String
+            let name: String?
+        }
+    }
+
+    /// The organization as the vault holds it: its admins, this person's
+    /// standing there, and each member's place and who may act for it. The
+    /// vault's own copy of the tree, which the fleet's list is never shown as
+    /// (docs/members.md, "A member's vault").
+    struct Org: Hashable {
+        let admins: [String]
+        let youAdmin: Bool
+        /// Whether the vault knows this address as this GitHub account's.
+        let youBound: Bool
+        let members: [OrgMember]
+
+        func member(_ id: String) -> OrgMember? { members.first { $0.id == id } }
+    }
+
+    struct OrgMember: Hashable {
+        let id: String
+        let kind: String
+        let email: String?
+        let reportsTo: String?
+        let managers: [String]
+        /// An agent member's own custodians. Empty for a person.
+        let custodians: [String]
+        /// For a person: "allowed", "off" or "no_vault". Nil for an agent.
+        let custody: String?
+        /// Everybody who may act for this member's vault now.
+        let may: [String]
+    }
+
+    /// `extra` with the member whose vault this request opens, when it is
+    /// not the asker's own: the vault's `for` (src/fleet/minter/vault.js).
+    private static func aimed(_ extra: [String: Any], at member: String?) -> [String: Any] {
+        guard let member, !member.isEmpty else { return extra }
+        var out = extra
+        out["for"] = member
+        return out
     }
 
     /// Seal one request, relay it, open the answer.
@@ -98,8 +158,8 @@ struct PhoneVault {
         return (r["text"] as? String ?? "", answer)
     }
 
-    func list(_ fleet: Fleet) async throws -> Contents {
-        let answer = try await ask(fleet, op: "list").answer
+    func list(_ fleet: Fleet, for member: String? = nil) async throws -> Contents {
+        let answer = try await ask(fleet, op: "list", extra: Self.aimed([:], at: member)).answer
         let items = (answer["items"] as? [[String: Any]] ?? []).map {
             Item(name: $0["name"] as? String ?? "", at: ($0["at"] as? NSNumber)?.doubleValue ?? 0, kind: $0["kind"] as? String)
         }
@@ -108,16 +168,44 @@ struct PhoneVault {
                   label: $0["label"] as? String ?? "", email: $0["email"] as? String ?? "",
                   only: ($0["only"] as? [Any])?.map { "\($0)" } ?? [])
         }
-        return Contents(items: items, grants: grants)
+        let custody = (answer["custody"] as? [String: Any]).map { c in
+            Custody(
+                allow: c["allow"] as? Bool == true,
+                member: c["member"] as? String,
+                managers: (c["managers"] as? [Any])?.map { "\($0)" } ?? [],
+                log: (c["log"] as? [[String: Any]] ?? []).map {
+                    Custody.Change(at: ($0["at"] as? NSNumber)?.doubleValue ?? 0, by: $0["by"] as? String ?? "",
+                                   op: $0["op"] as? String ?? "", name: $0["name"] as? String)
+                }
+            )
+        }
+        return Contents(items: items, grants: grants, custody: custody)
     }
 
-    func keepSecret(_ fleet: Fleet, name: String, value: String) async throws -> String {
+    func keepSecret(_ fleet: Fleet, name: String, value: String, for member: String? = nil) async throws -> String {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.isSecretName(n) else {
             throw FleetError.message("A secret's name is up to 64 letters, digits, dots, dashes and underscores.")
         }
         guard !value.isEmpty else { throw FleetError.message("The secret is empty.") }
-        return try await ask(fleet, op: "put", extra: ["name": "secret:\(n)", "value": value]).text
+        return try await ask(fleet, op: "put", extra: Self.aimed(["name": "secret:\(n)", "value": value], at: member)).text
+    }
+
+    /// Keep a Claude login in a MEMBER'S vault: a setup-token, or the whole
+    /// sign-in one of the fleet's machines made. A person's own goes through
+    /// PhoneGitHub.depositClaudeLogin, as it always did; this is the same
+    /// thing as a vault request, because only a vault request can say whose
+    /// vault it is for.
+    func keepClaude(_ fleet: Fleet, token: String?, signIn: [String: Any]?, for member: String) async throws -> String {
+        var extra: [String: Any] = ["name": "claude"]
+        if let signIn {
+            extra["signIn"] = signIn
+        } else {
+            let value = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !value.isEmpty else { throw FleetError.message("The token is empty.") }
+            extra["value"] = value
+        }
+        return try await ask(fleet, op: "put", extra: Self.aimed(extra, at: member)).text
     }
 
     /// Keep a hypervisor's token in the fleet: the record setup handed this
@@ -132,22 +220,22 @@ struct PhoneVault {
         return try await ask(fleet, op: "put", extra: ["name": name, "value": record]).text
     }
 
-    func forget(_ fleet: Fleet, name: String) async throws -> String {
-        try await ask(fleet, op: "forget", extra: ["name": name]).text
+    func forget(_ fleet: Fleet, name: String, for member: String? = nil) async throws -> String {
+        try await ask(fleet, op: "forget", extra: Self.aimed(["name": name], at: member)).text
     }
 
     /// Whether a kept credential still works, asked by the minter of the
     /// service it is for (vault.js, testItem). Anything short of accepted,
     /// cannot tell included, comes back as a failure, so it is drawn as one.
-    func test(_ fleet: Fleet, name: String) async throws -> String {
-        let r = try await ask(fleet, op: "test", extra: ["name": name])
+    func test(_ fleet: Fleet, name: String, for member: String? = nil) async throws -> String {
+        let r = try await ask(fleet, op: "test", extra: Self.aimed(["name": name], at: member))
         guard r.answer["state"] as? String == "accepted" else { throw FleetError.message(r.text) }
         return r.text
     }
 
     /// Sign in to GitHub or Cloudflare for the vault: this phone runs the page, the minter keeps the result.
     @MainActor
-    func connect(_ fleet: Fleet, provider: String) async throws -> String {
+    func connect(_ fleet: Fleet, provider: String, for member: String? = nil) async throws -> String {
         let back: DeviceSignIn.Back
         if provider == "github" {
             let start = try await fleet.githubDeviceStart()
@@ -167,17 +255,17 @@ struct PhoneVault {
                 extra: [URLQueryItem(name: "response_type", value: "code"), URLQueryItem(name: "scope", value: start.scopes ?? "")]
             )
         }
-        return try await ask(fleet, op: "connect", extra: [
+        return try await ask(fleet, op: "connect", extra: Self.aimed([
             "provider": provider, "code": back.code, "verifier": back.verifier, "redirectUri": back.redirectUri,
-        ]).text
+        ], at: member)).text
     }
 
-    func approve(_ fleet: Fleet, host: Fleet.Host) async throws -> String {
+    func approve(_ fleet: Fleet, host: Fleet.Host, for member: String? = nil) async throws -> String {
         guard let key = host.publicJwk else {
             throw FleetError.message("\(host.hostId) cannot be approved yet. Update your fleet first.")
         }
         let jwk: [String: Any] = ["kty": key.kty, "crv": key.crv, "x": key.x, "y": key.y]
-        return try await ask(fleet, op: "grant", extra: ["hostKey": jwk, "label": host.hostId]).text
+        return try await ask(fleet, op: "grant", extra: Self.aimed(["hostKey": jwk, "label": host.hostId], at: member)).text
     }
 
     /// A pool's own machine, approved for its pool's record and nothing else
@@ -187,8 +275,59 @@ struct PhoneVault {
         return try await ask(fleet, op: "grant", extra: ["hostKey": jwk, "label": hostId, "only": ["hypervisor:\(address)"]]).text
     }
 
-    func remove(_ fleet: Fleet, grant: Grant) async throws -> String {
-        try await ask(fleet, op: "revoke", extra: ["key": grant.key]).text
+    func remove(_ fleet: Fleet, grant: Grant, for member: String? = nil) async throws -> String {
+        try await ask(fleet, op: "revoke", extra: Self.aimed(["key": grant.key], at: member)).text
+    }
+
+    // MARK: - the organization, as the vault holds it
+
+    /// The vault's own copy of the tree, and who may act for each member.
+    func org(_ fleet: Fleet) async throws -> Org {
+        let answer = try await ask(fleet, op: "org").answer
+        func strings(_ value: Any?) -> [String] { (value as? [Any])?.map { "\($0)" } ?? [] }
+        let you = answer["you"] as? [String: Any]
+        let members = (answer["members"] as? [[String: Any]] ?? []).map {
+            OrgMember(id: $0["id"] as? String ?? "", kind: $0["kind"] as? String ?? "", email: $0["email"] as? String,
+                      reportsTo: $0["reportsTo"] as? String, managers: strings($0["managers"]),
+                      custodians: strings($0["custodians"]), custody: $0["custody"] as? String, may: strings($0["may"]))
+        }
+        return Org(admins: strings(answer["admins"]), youAdmin: you?["admin"] as? Bool == true,
+                   youBound: you?["bound"] as? Bool == true, members: members)
+    }
+
+    /// Add an admin of the organization in the vault, or remove one. The
+    /// first is somebody who administers the fleet filing themselves.
+    func fileOrgAdmin(_ fleet: Fleet, address: String, remove: Bool = false) async throws -> String {
+        var extra: [String: Any] = ["address": address]
+        if remove { extra["remove"] = true }
+        return try await ask(fleet, op: "orgadmin", extra: extra).text
+    }
+
+    /// File one member's place in the vault's tree, or take it out. Custody
+    /// of the member's vault follows what is filed here, and nothing the
+    /// fleet's own list says.
+    func fileOrgMember(_ fleet: Fleet, id: String, kind: String, address: String?, reportsTo: String?,
+                       managers: [String]? = nil, remove: Bool = false) async throws -> String {
+        var extra: [String: Any] = ["id": id, "kind": kind]
+        // Left out is nobody: the vault reads a missing `reportsTo` as the top of the tree.
+        if let reportsTo, !reportsTo.isEmpty { extra["reportsTo"] = reportsTo }
+        if let address, !address.isEmpty { extra["address"] = address }
+        if let managers { extra["managers"] = managers }
+        if remove { extra["remove"] = true }
+        return try await ask(fleet, op: "orgmember", extra: extra).text
+    }
+
+    /// Add one of an agent member's own custodians, or remove one. The last
+    /// one stays, and the vault says so.
+    func setCustodian(_ fleet: Fleet, member: String, address: String, remove: Bool = false) async throws -> String {
+        var extra: [String: Any] = ["member": member, "address": address]
+        if remove { extra["remove"] = true }
+        return try await ask(fleet, op: "custodian", extra: extra).text
+    }
+
+    /// Let this person's managers manage their own vault, or stop.
+    func setCustody(_ fleet: Fleet, allow: Bool) async throws -> String {
+        try await ask(fleet, op: "custody", extra: ["allow": allow]).text
     }
 
     /// List this phone's signing key under the account it is signed in as, so
@@ -244,6 +383,30 @@ struct PhoneVault {
         default:
             return "Machines you approved stop being given it. Getting it back means typing it in again."
         }
+    }
+
+    /// The same, for a member's vault a custodian is changing: whose sessions
+    /// stop, by the member's name. The same sentences as Android.
+    static func forgetting(_ name: String, for who: String) -> String {
+        name == "claude"
+            ? "Sessions started as \(who) stop using it. Getting it back means adding it again."
+            : "Machines approved for \(who) stop being given it. Getting it back means adding it again."
+    }
+
+    /// One thing a manager did to this person's vault, as a row: who, what
+    /// they did to which item, and when. A machine approved or removed is
+    /// said as that, with no item. The same words as Android.
+    static func custodyLine(_ change: Custody.Change, when: String) -> String {
+        let what = change.name.map { label($0) } ?? ""
+        let did: String
+        switch change.op {
+        case "put", "connect": did = "kept \(what)"
+        case "forget": did = "removed \(what)"
+        case "grant": did = "approved a machine"
+        case "revoke": did = "removed a machine"
+        default: did = change.op
+        }
+        return "\(change.by) \(did.trimmingCharacters(in: .whitespaces)) · \(when)"
     }
 
     /// How a vault item is named to a person.

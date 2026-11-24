@@ -129,7 +129,22 @@ class Fleet(
         val archiveAt: Long? = null,
         val archiveOk: Boolean? = null,
         val archiveText: String? = null,
+        /**
+         * THE MEMBER IT WAS STARTED AS, by the name it had at the start
+         * (docs/members.md). Null for a session somebody started as
+         * themselves and from a host older than protocol 19, and then
+         * nothing is drawn.
+         */
+        val memberName: String? = null,
     ) {
+        /**
+         * "as Debbie", for a session started as a member, or null for one a
+         * person started as themselves. Drawn where the account would be: a
+         * member's session runs on the member's own sign-ins, and for an
+         * agent that account is an address nobody holds. Same words as iOS.
+         */
+        val asMember: String? get() = memberName?.takeIf { it.isNotBlank() }?.let { "as $it" }
+
         /**
          * The archive line for the session's page, or null when it has none.
          * Before the first push it says so rather than implying one landed
@@ -1440,10 +1455,16 @@ class Fleet(
         profile: String? = null,
         secret: String? = null,
         task: String? = null,
+        member: String? = null,
     ): Reply = intent(
         "start",
         buildMap {
             if (!name.isNullOrBlank()) put("name", name)
+            // AS A MEMBER OF THE ORGANIZATION (docs/members.md): the session
+            // runs on that member's sign-ins and opens with its instructions.
+            // A parameter like the others, so it is signed with them, and it
+            // is in the delegation's match when no machine is named.
+            if (!member.isNullOrBlank()) put("member", member)
             if (!title.isNullOrBlank()) put("title", title)
             if (!brief.isNullOrBlank()) put("brief", brief)
             if (!mode.isNullOrBlank()) put("mode", mode)
@@ -1691,6 +1712,139 @@ class Fleet(
     suspend fun unlinkRepo(role: String): Result<LinkedRepoReply> = withContext(Dispatchers.IO) {
         runCatching { parseLinkedRepoReply(send("DELETE", "/api/linked-repos/$role", null)) }
     }
+
+    /**
+     * One member of the organization: a person or an agent with a role, a
+     * place in a tree and standing instructions (docs/members.md). No
+     * credential is ever in one. Everything past the four the coordinator
+     * always sends is nullable or empty, so a field it stops sending is
+     * absent here and not a list that fails to load.
+     */
+    data class Member(
+        val id: String,
+        val name: String,
+        /** "person" or "agent". */
+        val kind: String,
+        val role: String,
+        /** A person member's fleet address. Null for an agent. */
+        val email: String? = null,
+        val title: String? = null,
+        /** The id of the member this one reports to, or null for nobody. */
+        val reportsTo: String? = null,
+        /** Fleet addresses an admin named as managers beside the tree. */
+        val managers: List<String> = emptyList(),
+        val description: String? = null,
+        val workTypes: List<String> = emptyList(),
+        val instructions: String? = null,
+        /** Its engine's model, when one is named. */
+        val model: String? = null,
+        /** The machine tag that places it, or null. */
+        val tag: String? = null,
+        /** Stored, and enforced by nothing yet. */
+        val budgetUsdMonth: Double? = null,
+    ) {
+        val isAgent: Boolean get() = kind == "agent"
+    }
+
+    /**
+     * What the tree lets this person do: whether they are an admin, which
+     * member is theirs, whom they manage, and whom they may start a session as.
+     */
+    data class Standing(val admin: Boolean, val member: String?, val manages: List<String>, val startAs: List<String>)
+
+    /**
+     * Everybody in the organization, and this person's standing. [members]
+     * is null when the answer carried no list: a fleet older than members,
+     * which is not the same as a fleet with none.
+     */
+    data class Members(val ok: Boolean?, val members: List<Member>?, val you: Standing?, val text: String?)
+
+    /** The answer to saving, removing or importing one member. A refusal carries [text] and no member. */
+    data class MemberReply(val ok: Boolean?, val member: Member?, val text: String?)
+
+    /** One member as a markdown file: the record as front matter, the instructions as the body. */
+    data class MemberFile(val name: String, val text: String)
+
+    suspend fun members(): Result<Members> = withContext(Dispatchers.IO) {
+        runCatching {
+            val json = get("/api/members")
+            val list = json.optJSONArray("members")
+            val you = json.optJSONObject("you")
+            Members(
+                ok = if (json.has("ok") && !json.isNull("ok")) json.optBoolean("ok") else null,
+                members = list?.let { a -> (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { parseMember(it) } } },
+                you = you?.let {
+                    Standing(
+                        admin = it.optBoolean("admin", false),
+                        member = it.optString("member").takeIf { m -> m.isNotBlank() && m != "null" && !it.isNull("member") },
+                        manages = memberStrings(it.optJSONArray("manages")),
+                        startAs = memberStrings(it.optJSONArray("startAs")),
+                    )
+                },
+                text = json.optString("text").takeIf { it.isNotBlank() && it != "null" },
+            )
+        }
+    }
+
+    /**
+     * Make a member or change one. [fields] is the whole record without its
+     * id: the coordinator rebuilds the record from what is sent, so a field
+     * left out is cleared, not kept.
+     */
+    suspend fun saveMember(id: String, fields: JSONObject): Result<MemberReply> = withContext(Dispatchers.IO) {
+        runCatching { parseMemberReply(send("PUT", "/api/members/$id", fields)) }
+    }
+
+    suspend fun removeMember(id: String): Result<MemberReply> = withContext(Dispatchers.IO) {
+        runCatching { parseMemberReply(send("DELETE", "/api/members/$id", null)) }
+    }
+
+    suspend fun exportMembers(): Result<List<MemberFile>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val files = get("/api/members/export").optJSONArray("files")
+            (0 until (files?.length() ?: 0)).mapNotNull { i ->
+                files?.optJSONObject(i)?.let { f ->
+                    f.optString("name").takeIf { it.isNotBlank() }?.let { MemberFile(it, f.optString("text")) }
+                }
+            }
+        }
+    }
+
+    /** One member file, made or changed under the rules of any other write. */
+    suspend fun importMember(text: String): Result<MemberReply> = withContext(Dispatchers.IO) {
+        runCatching { parseMemberReply(post("/api/members/import", JSONObject().put("text", text))) }
+    }
+
+    private fun memberStrings(array: JSONArray?): List<String> =
+        (0 until (array?.length() ?: 0)).mapNotNull { i -> array?.optString(i)?.takeIf { it.isNotBlank() } }
+
+    private fun parseMember(o: JSONObject): Member? {
+        fun text(key: String): String? = if (o.isNull(key)) null else o.optString(key).takeIf { it.isNotBlank() }
+        val id = text("id") ?: return null
+        return Member(
+            id = id,
+            name = text("name") ?: id,
+            kind = text("kind") ?: "person",
+            role = text("role").orEmpty(),
+            email = text("email"),
+            title = text("title"),
+            reportsTo = text("reportsTo"),
+            managers = memberStrings(o.optJSONArray("managers")),
+            description = text("description"),
+            workTypes = memberStrings(o.optJSONArray("workTypes")),
+            instructions = text("instructions"),
+            model = o.optJSONArray("engines")?.optJSONObject(0)?.optString("model")?.takeIf { it.isNotBlank() && it != "null" },
+            tag = o.optJSONObject("hosts")?.optString("tag")?.takeIf { it.isNotBlank() && it != "null" },
+            // Null when absent, never optDouble's NaN or a 0 nobody set.
+            budgetUsdMonth = if (o.has("budgetUsdMonth") && !o.isNull("budgetUsdMonth")) o.optDouble("budgetUsdMonth").takeIf { !it.isNaN() } else null,
+        )
+    }
+
+    private fun parseMemberReply(json: JSONObject): MemberReply = MemberReply(
+        ok = if (json.has("ok") && !json.isNull("ok")) json.optBoolean("ok") else null,
+        member = json.optJSONObject("member")?.let { parseMember(it) },
+        text = json.optString("text").takeIf { it.isNotBlank() && it != "null" },
+    )
 
     private fun parseLinkedRepoReply(json: JSONObject): LinkedRepoReply {
         fun maybe(o: JSONObject, key: String): Boolean? =
@@ -3736,6 +3890,7 @@ class Fleet(
                 // missing field read as false would be "the push failed".
                 archiveOk = if (o.has("archiveOk") && !o.isNull("archiveOk")) o.optBoolean("archiveOk") else null,
                 archiveText = o.optString("archiveText").takeIf { it.isNotBlank() && it != "null" },
+                memberName = o.optString("memberName").takeIf { it.isNotBlank() && it != "null" },
             )
         }
     }

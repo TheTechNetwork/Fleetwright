@@ -257,13 +257,21 @@ internal class PhoneGitHub(private val settings: Settings) {
      * two seals. A machine from before protocol 15 makes a setup-token where a
      * sign-in was asked for, and that is kept too, and said.
      */
-    suspend fun keepFromMachine(fleet: Fleet, host: String, code: String): Result<String> = runCatching {
+    suspend fun keepFromMachine(fleet: Fleet, host: String, code: String, member: String? = null): Result<String> = runCatching {
         val key = Seal.newKey()
         val reply = fleet.setupToken(host, code = code, reply = key.publicKey, kind = "login")
         val sealed = reply.sealed
         if (!reply.ok || sealed == null) error(reply.text.ifBlank { "$host did not sign you in." })
         val inside = Seal.open(key, Seal.SETUP_TOKEN_AAD, sealed)
         val signIn = inside.optJSONObject("signIn")
+        // FOR A MEMBER, when one is named (docs/members.md): what the machine
+        // made is deposited into that member's vault and never this person's
+        // own. A vault request carries whose vault it is for, which the
+        // deposit below cannot, so that is the path it takes.
+        if (!member.isNullOrBlank()) {
+            if (signIn == null && inside.optString("token").isBlank()) error("The answer did not open with this phone's key, so it was not used.")
+            return@runCatching PhoneVault(settings).keepClaude(fleet, inside.optString("token"), signIn, member).getOrThrow()
+        }
         if (signIn != null) return@runCatching depositClaudeSignIn(fleet, signIn).getOrThrow()
         val token = inside.optString("token")
         if (token.isBlank()) error("The answer did not open with this phone's key, so it was not used.")
