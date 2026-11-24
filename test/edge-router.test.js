@@ -758,6 +758,36 @@ test('an edge from before it could be measured is rebuilt once: its way out moni
   assert.deepEqual(params['vm.delete'], { id: 'vm-old', deleteDisks: true });
 });
 
+test('an edge with less memory than it needs is rebuilt once with 4 GiB, and one whose memory is not given is left alone', async () => {
+  // ASKED FOR: "fleetwright-edge needs at least 4GB of ram otherwise it
+  // crashes". Every router there was built with 2, so raising what a new one
+  // gets is half of it: the one there has to get it too.
+  const GiB = 1024 ** 3;
+  assert.equal(EDGE.memory, 4 * GiB);
+  const tags = [EDGE.tag, EDGE.updatesTag, EDGE.measuredTag];
+  const old = { id: 'vm-old', $pool: 'p1', tags, power_state: 'Running', memory: { dynamic: [2 * GiB, 2 * GiB], static: [2 * GiB, 2 * GiB], size: 2 * GiB } };
+  const admin = xo(
+    { VM: [old], 'VM-template': [TEMPLATE], VIF: [] },
+    { 'disk.import': () => ({ $sendTo: '/import/abc' }), 'vm.create': () => 'vm-new' },
+  );
+  const { args, said } = edgeArgs(admin);
+  await ensureEdge(args);
+  assert.ok(said.includes('Rebuilding the edge router with 4 GiB of memory: it has less, and it crashes with less. Machines behind it keep their way out while the new one is built, and have none while it starts.'), said.join('\n'));
+  const params = Object.fromEntries(admin.calls);
+  assert.equal(params['vm.create'].memory, 4 * GiB);
+  assert.deepEqual(params['vm.delete'], { id: 'vm-old', deleteDisks: true });
+
+  // ENOUGH, OR NOT SAID: neither is rebuilt. A router whose memory Xen
+  // Orchestra does not give is not known to be short (C-5).
+  for (const memory of [{ static: [4 * GiB, 4 * GiB], size: 4 * GiB }, { size: 8 * GiB }, undefined, {}]) {
+    const kept = xo({ VM: [{ ...old, memory }], VIF: [] });
+    const quiet = edgeArgs(kept);
+    await ensureEdge(quiet.args);
+    assert.equal(kept.calls.some(([m]) => m === 'vm.create' || m === 'vm.delete'), false, JSON.stringify(memory));
+    assert.equal(quiet.said.some((s) => s.startsWith('Rebuilding')), false);
+  }
+});
+
 // THE WAY OUT IS GONE FOR ONE BOOT, not for the build: the download and the
 // disk, up to 490 MB and 3 GiB, go through while the old router still runs,
 // and it is stopped only when the new one is made and about to start. The

@@ -201,7 +201,16 @@ export const EDGE = Object.freeze({
   /** The edge's LAN, which is the uplink: a range a home or office LAN rarely uses. */
   lan: Object.freeze({ address: '10.254.0.1', prefix: 24, from: '10.254.0.100', to: '10.254.0.250' }),
   cpus: 2,
-  memory: 2 * 1024 ** 3,
+  /**
+   * FOUR, because two was not enough. A router built with 2 GiB crashed in
+   * use, said by the person running one as "fleetwright-edge needs at least
+   * 4GB of ram otherwise it crashes" (2026-11-24). What ran it out was not
+   * measured here, so this is the floor they gave and not a figure worked
+   * out from the rules it loads. One built with less is rebuilt once
+   * (edgeState, `sized`), and Proxmox VE's is made with the same
+   * (install/fleetwright-pve-setup, EDGE_MEM).
+   */
+  memory: 4 * 1024 ** 3,
   /**
    * On the kept disk's template (buildEdge, THE KEPT DISK), and as
    * `fleetwright-base:opnsense:<build>` beside it, saying which edge image
@@ -1402,7 +1411,7 @@ export async function ensureEdge(opts) {
   // old single router is removed without ever being started.
   const halfPair = Boolean(second) && !(edge && edge.tags.includes(`${EDGE_HA.nodeTag}0`));
   /** Whether a router differs from what the policy asks of it. @param {Awaited<ReturnType<typeof edgeState>>|null} st */
-  const differs = (st) => Boolean(st && (st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || !st.measured || st.unwatched));
+  const differs = (st) => Boolean(st && (st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || !st.measured || !st.sized || st.unwatched));
   // EITHER OF THEM. Only the first was asked, so a pair whose second differs
   // (finished in two runs that were answered differently) stayed so for good.
   const changed = differs(now) || differs(secondState) || exposed;
@@ -1544,6 +1553,21 @@ export async function ensureEdge(opts) {
 const alone = (withOld) => `${EDGE_HA.second} carries the machines on its own${withOld ? '; the old edge router is left stopped, since it would clash with it,' : ','} and applying again finishes the pair`;
 
 /**
+ * How much memory an edge router is given, in bytes, as Xen Orchestra says
+ * it: the most it may have (`memory.static[1]`), which is what `vm.create`'s
+ * `memory` sets, or its size where that is all there is. Null when neither
+ * is a number, which is cannot tell and never "none".
+ *
+ * @param {any} edge @returns {number|null}
+ */
+export function edgeMemoryOf(edge) {
+  const most = Number(edge?.memory?.static?.[1]);
+  if (Number.isFinite(most) && most > 0) return most;
+  const size = Number(edge?.memory?.size);
+  return Number.isFinite(size) && size > 0 ? size : null;
+}
+
+/**
  * What an edge router has and what the policy asks of it.
  *
  * @param {any} admin @param {any} edge @param {{ block?: boolean|null, labs?: Array<{ id: string, open: boolean }>|null, watch?: unknown }} opts
@@ -1568,6 +1592,11 @@ async function edgeState(admin, edge, { block = null, labs = null, watch = null 
     // rebuilt once, the same way: its way out monitored, Unbound counting,
     // Suricata in syslog, none of which a built router can be given.
     measured: edge?.tags?.includes?.(EDGE.measuredTag) === true,
+    // AN EDGE WITH LESS MEMORY THAN IT NEEDS (EDGE.memory) is rebuilt once,
+    // the same way, since it crashes in use with less. Only when Xen
+    // Orchestra says how much it has: one whose memory it does not give is
+    // not known to be short, and is left alone (C-5).
+    sized: edgeMemoryOf(edge) === null || /** @type {number} */ (edgeMemoryOf(edge)) >= EDGE.memory,
     // AN EDGE WITHOUT THE KEY THE JOB BRINGS (edge-credentials.js), from
     // before it could be watched or with its key lost, is rebuilt once, the
     // same way: the key the phone is handed must be the one the router has.
@@ -1588,7 +1617,7 @@ async function edgeState(admin, edge, { block = null, labs = null, watch = null 
 async function ensureOne(opts, edge, force = false) {
   const { admin, egress, block = null, labs = null, rebuilding, say } = opts;
   const st = edge ? await edgeState(admin, edge, opts) : null;
-  if (edge && st && (force || st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || !st.measured || st.unwatched || st.exposed)) {
+  if (edge && st && (force || st.filterChanged || st.wantLabs !== st.hasLabs || !st.onLabs || !st.updates || !st.measured || !st.sized || st.unwatched || st.exposed)) {
     const keep = block ?? st.blocks;
     rebuilding?.();
     if (!force) {
@@ -1605,6 +1634,8 @@ async function ensureOne(opts, edge, force = false) {
                 ? `Rebuilding the edge router so it keeps itself up to date and gets the Xen guest agent. ${ONE_BOOT}`
                 : !st.measured
                   ? `Rebuilding the edge router so your machines can read whether its way out is up, how many names it answers and refuses, and what it drops. ${ONE_BOOT}`
+                  : !st.sized
+                    ? `Rebuilding the edge router with ${EDGE.memory / 1024 ** 3} GiB of memory: it has less, and it crashes with less. ${ONE_BOOT}`
                   : `Rebuilding the edge router so your machines can read how it is: whether it answers names, has its way out, and what it logs. ${ONE_BOOT}`,
       );
     }
