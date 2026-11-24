@@ -1340,6 +1340,39 @@ to start beside the old; if it has not, the build says so and the old router
 is left running. The phones' line for a pool with no edge says the same size
 (`test/xo-saved-in-apps.test.js` holds it to `EDGE.memory`).
 
+**The phone says so, and offers the fix.** Asked for: *"prompt users to one
+click fix"*. A rebuild on the next Apply is no use to somebody who does not
+know their router is short, or that an Apply would fix it.
+
+- **The box says how much each router has.** The look that finds where a
+  pool's routers are ("Watching the edge routers") also sees each one's
+  memory: the VM's own on Xen Orchestra, `maxmem` on Proxmox VE. Each
+  router's report carries it as `memory`, in bytes, beside `needs`, what the
+  box would build it with. The coordinator passes both on as whole numbers or
+  null. Null is not read, or a box from before this, and is never "none".
+- **A router with less than it needs has a card of its own**, under the Edge
+  routers card on a pool's page and a cluster's: one sentence naming it and
+  both sizes, and the same sentence first under its name on the routers'
+  page. A router whose memory was not read says nothing.
+- **One button, only where it can work.** *Rebuild it with 4 GiB*, and under
+  it what a rebuild costs.
+  - On a Xen Orchestra pool it is for an admin on the phone that holds the
+    pool's token. It sends the pool's policy as it stands, straight through
+    as *Make it again* does: no form and no Apply to press. Signing in to
+    Xen Orchestra is as it always is, so with a kept sign-in it is the
+    phone's unlock and then it runs, and without one the password is typed.
+  - On a Proxmox VE cluster it opens the setup with *Make the edge router
+    again* already on. That setup asks for the node's root password and a
+    tap on *Set it up*, as every run of it does: the phone keeps no root
+    password, so this one is two steps and not one.
+  - Anywhere else (a pool on a phone without its token, or somebody who is
+    not an admin) the sentence stands alone.
+- **What it does not do.** Nothing is sent to a phone that is not open on
+  the page: no notification, and no mark on the list of hypervisors. And the
+  button's job runs on whichever machine the policy job picks; one that is
+  older than this change applies the policy and rebuilds nothing, and the
+  card stays.
+
 ### It keeps itself up to date
 
 > Why don't we install the guest agent and drivers everywhere?
