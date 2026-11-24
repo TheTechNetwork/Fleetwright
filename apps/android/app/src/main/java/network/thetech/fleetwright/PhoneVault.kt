@@ -70,8 +70,18 @@ internal class PhoneVault(private val settings: Settings) {
      * Who else may manage a person's vault, as the vault itself holds it
      * (docs/members.md, "Custodians of a person member"). [member] is the
      * person's own member, by id, or null when the vault's tree has none for them.
+     * [custodians] is whoever added this person, and so manages what they
+     * keep with no switch asked; it is empty from a vault older than the
+     * rule, which is also the truth there. [managers] are their other
+     * managers, who wait on [allow].
      */
-    data class Custody(val allow: Boolean, val member: String?, val managers: List<String>, val log: List<Change>) {
+    data class Custody(
+        val allow: Boolean,
+        val member: String?,
+        val custodians: List<String>,
+        val managers: List<String>,
+        val log: List<Change>,
+    ) {
         /** One thing a manager did, by name and never by value. */
         data class Change(val at: Long, val by: String, val op: String, val name: String?)
     }
@@ -89,7 +99,8 @@ internal class PhoneVault(private val settings: Settings) {
 
     /**
      * One member's place in the vault's tree. [custodians] are an agent
-     * member's own, empty for a person. [custody], for a person, is
+     * member's own; for a person, whoever added them when the vault had not
+     * met them before. [custody], for a person, is
      * "allowed", "off" or "no_vault", and null for an agent. [may] is
      * everybody who may act for this member's vault now.
      */
@@ -146,6 +157,7 @@ internal class PhoneVault(private val settings: Settings) {
             Custody(
                 allow = c.optBoolean("allow", false),
                 member = textOrNull(c, "member"),
+                custodians = strings(c.optJSONArray("custodians")),
                 managers = strings(c.optJSONArray("managers")),
                 log = (0 until (log?.length() ?: 0)).mapNotNull { i ->
                     log?.optJSONObject(i)?.let { Custody.Change(it.optLong("at"), it.optString("by"), it.optString("op"), textOrNull(it, "name")) }

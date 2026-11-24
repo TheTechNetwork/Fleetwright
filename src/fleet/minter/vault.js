@@ -81,7 +81,7 @@ import { claudeSignIn, claudeRenewals, describeRenewals, freshClaude, checkClaud
 import { SIGNIN_PREFIX, deviceSignedIn } from './github.js';
 import { HYPERVISOR_PREFIX, HYPERVISOR_ADDRESS_RE, splitHypervisorItem } from '../protocol/hypervisor-name.js';
 import { memberOfPrincipal } from '../protocol/members.js';
-import { ORG_OPS, runOrgOp, resolveFor, logCustody, ownCustody, membersForBoxes, loadTree, mayActFor } from './org.js';
+import { ORG_OPS, runOrgOp, resolveFor, logCustody, ownCustody, membersForBoxes, loadTree, mayActFor, dropAddedBy } from './org.js';
 
 /** The OAuth providers a vault keeps, and how each is renewed. One entry is the whole of adding one. */
 export const OAUTH_PROVIDERS = Object.freeze({
@@ -671,6 +671,13 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
         github: who.userId, login: who.login, keys: next.filter((k) => !dropped.has(k.kid)),
         ...(kept?.github === who.userId && Array.isArray(kept.revoked) ? { revoked: kept.revoked } : {}),
       });
+      // THIS ACCOUNT'S FIRST KEY UNDER THIS ADDRESS, and it has a vault
+      // already: whoever added a person member at this address did not add
+      // somebody new, and does not get what this account kept before
+      // (org.js, dropAddedBy; docs/members.md, "Custodians of a person member").
+      if (!remove && kept?.github !== who.userId && (await store.get(`v:${who.userId}`))) {
+        await withLock('org', () => dropAddedBy(store, email));
+      }
       return {
         ok: true,
         answer: { kid },

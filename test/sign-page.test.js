@@ -21,14 +21,18 @@ import { memberRoutes } from '../src/fleet/coordinator/member-page.js';
 
 const ELI = 'eli@example.com';
 const DANA = 'dana@example.com';
+/** Somebody the vault has never met until Eli adds him: no sign-in here before his record is filed. */
+const SAM = 'sam@example.com';
 /**
  * Who signs in with each code GitHub's page hands back, and whose each token
- * then is: Eli, as every test here has him, and Dana, who reports to him.
+ * then is: Eli, as every test here has him, Dana, who reports to him, and
+ * Sam, whom Eli adds before Sam has ever signed in.
  * @type {Record<string, { email: string, token: string, id: number, login: string }>}
  */
 const GITHUB_PEOPLE = {
   browsercode1: { email: ELI, token: 'ghu_browser', id: 42, login: 'eli' },
   danacode1234: { email: DANA, token: 'ghu_dana', id: 43, login: 'dana' },
+  samcode12345: { email: SAM, token: 'ghu_sam', id: 44, login: 'sam' },
 };
 const SIGN = 'sign.fleet.test';
 const FLEET = 'https://fleet.test';
@@ -680,7 +684,7 @@ test('in a browser: a custodian opens a member’s vault from My team and keeps 
   const exported = await crypto.subtle.exportKey('jwk', pair.publicKey);
   const boxJwk = { kty: 'EC', crv: 'P-256', x: String(exported.x), y: String(exported.y) };
   const boxHash = await boxKeyHash(boxJwk);
-  const SECRETS = { MINE: 'elis-own-secret-2222', DANAS_OWN: 'danas-own-secret-3333', DEPLOY_KEY: 'debbie-deploy-secret-4444', FOR_DANA: 'kept-for-dana-secret-5555' };
+  const SECRETS = { MINE: 'elis-own-secret-2222', DANAS_OWN: 'danas-own-secret-3333', DEPLOY_KEY: 'debbie-deploy-secret-4444', FOR_DANA: 'kept-for-dana-secret-5555', FOR_SAM: 'kept-for-sam-secret-7777', SAMS_OWN: 'sams-own-secret-8888' };
   const CODE = 'claude-code-for-debbie-6789';
   /** Something to do the moment the vault next tells Eli's page the organization, before the page hears it. @type {null | (() => Promise<void>)} */
   let afterOrg = null;
@@ -748,7 +752,7 @@ test('in a browser: a custodian opens a member’s vault from My team and keeps 
         // THE FLEET'S OWN LIST, which the page takes names from, and each member's
         // engines only to choose which sign-in rows to offer.
         if (u.pathname === '/api/members') {
-          return reply({ ok: true, members: [{ id: 'eli', name: 'Eli', kind: 'person' }, { id: 'dana', name: 'Dana', kind: 'person' }, { id: 'debbie', name: 'Debbie', kind: 'agent' }], you: { admin: email === ELI } });
+          return reply({ ok: true, members: [{ id: 'eli', name: 'Eli', kind: 'person' }, { id: 'dana', name: 'Dana', kind: 'person' }, { id: 'debbie', name: 'Debbie', kind: 'agent' }, { id: 'sam', name: 'Sam', kind: 'person' }], you: { admin: email === ELI } });
         }
         if (u.pathname === '/api/intent') {
           // THE MACHINE: it takes what the custodian's own listed key signed, and seals the sign-in to the key it was handed.
@@ -936,12 +940,49 @@ test('in a browser: a custodian opens a member’s vault from My team and keeps 
     // after her before Eli signed her in, and says what is true now.
     await says(dana.signer, 'Debbie', /Agent \(debbie\)\. Signed in to Claude\./);
 
+    // WHOEVER ADDS A PERSON MANAGES WHAT THEY KEEP (docs/members.md,
+    // "Custodians of a person member"). Eli adds Sam, who has never signed
+    // in here. Sam's page says so where he keeps things, before he has kept
+    // anything, and draws no switch: nobody else manages him, and ending
+    // this is not his to do.
+    const filedSam = await m.phone(ELI, { op: 'orgmember', id: 'sam', kind: 'person', address: SAM, reportsTo: 'eli' });
+    assert.equal(filedSam.ok, true, filedSam.text);
+    const sam = await signedIn(SAM);
+    await says(sam.signer, 'Your managers', /eli@example\.com added you, and manages your credentials\./);
+    await says(sam.signer, 'Your managers', /They or an org admin can end this, and you can still remove anything your vault keeps\./);
+    assert.equal(await sam.signer.locator(`${rowOf('Your managers')} input, ${rowOf('Your managers')} button`).count(), 0, 'nothing drawn that he could not use');
+    // ELI OPENS SAM'S VAULT WITH NO SWITCH ASKED, is told why he may, and
+    // what he keeps there is Sam's.
+    await eli.signer.click('#vault-back');
+    await shows(eli.signer, 'Your vault');
+    await eli.signer.click(`${teamRow('Sam')} button:text-is("Open their credentials")`);
+    await shows(eli.signer, 'Sam’s vault');
+    await says(eli.signer, 'You added them', /You manage Sam’s credentials because you added them\./);
+    assert.match(String(await eli.signer.textContent('#vault-who')), /You are managing their credentials because you added them\./);
+    await keep(eli.signer, 'FOR_SAM');
+    assert.ok(m.rows.get('v:44')?.items?.['secret:FOR_SAM'], 'kept in Sam’s vault');
+    // Sam reads it the next time his page reads his vault, which keeping something of his own does.
+    await keep(sam.signer, 'SAMS_OWN');
+    await says(sam.signer, 'Your managers', /What they changedeli@example\.com kept FOR_SAM, \S/);
+    // HE GIVES IT UP, which is his to do and an org admin's: the vault stops
+    // opening Sam's for him, and his page goes back to his own and says why.
+    // Asked once more, because it is not given back.
+    await eli.signer.click(`${rowOf('You added them')} button:text-is("Stop managing their credentials")`);
+    await says(eli.signer, 'You added them', /This is not given back\./);
+    assert.deepEqual(m.rows.get('orgm:sam')?.custodians, [ELI], 'the first press only asks');
+    await eli.signer.click(`${rowOf('You added them')} button:text-is("Stop managing")`);
+    await shows(eli.signer, 'Your vault');
+    assert.equal(m.rows.get('orgm:sam')?.custodians, undefined);
+    // Sam is off his team's list too, which is everybody whose vault he may open.
+    await eli.signer.waitForSelector(teamRow('Sam'), { state: 'detached' });
+    await sam.context.close();
+
     // WHAT /me CARRIED, which is all a coordinator saw: no secret, no token,
     // and not whose vault any request was for. Five things, one of them the
     // list of members it already serves everybody.
     for (const who of [eli, dana]) {
       const wire = JSON.stringify(who.carried);
-      for (const plain of [...Object.values(SECRETS), 'ghu_browser', 'ghu_dana', 'sk-ant-oat01']) assert.equal(wire.includes(plain), false, `${plain} crossed /me in the clear`);
+      for (const plain of [...Object.values(SECRETS), 'ghu_browser', 'ghu_dana', 'ghu_sam', 'sk-ant-oat01']) assert.equal(wire.includes(plain), false, `${plain} crossed /me in the clear`);
       assert.equal(JSON.stringify(who.carried.filter((c) => c.path === 'POST /api/vault')).includes('debbie'), false, 'whose vault a request is for is inside the seal');
     }
     assert.deepEqual([...new Set(eli.carried.map((c) => c.path))].sort(), ['GET /api/hosts/enrolled', 'GET /api/members', 'POST /api/github/device', 'POST /api/intent', 'POST /api/vault']);
