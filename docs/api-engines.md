@@ -194,6 +194,137 @@ and reports none, and no screen offers one. A box needs no hypervisor to
 hold a provider: one that holds only a provider's key looks at it and
 reports it.
 
+## Part three: a machine on a box of your own
+
+Asked for, reading part two: *"why sandbox provider and not our sandboxes we
+built?"*, and then: *"our own with no third party I mean both are okay but I
+feel like allowing to be fully on prem plus third party is the better
+route"*. Part two rents a machine. This makes one from what the fleet
+already has, and neither replaces the other.
+
+### What it is
+
+A fourth place a machine can be made: **a container on a box that is
+already in the fleet**, from the fleet's own machine image. No hypervisor,
+no provider and no key. It is behind the same seam as the other three, so
+to the coordinator and both phones it is one more source of a machine
+image.
+
+| | a VM on your hypervisor | a machine from a sandbox provider | a machine on a box of your own |
+|---|---|---|---|
+| where | your pool or cluster | the provider's cloud | a box you enrolled |
+| what it is | a virtual machine | whatever the provider runs | a rootless Podman container |
+| the credential | a limited token the setup made | an API key | none |
+| the vault item | `hypervisor:<address>` | `sandbox:<provider>` | none |
+| an image | a template the setup built | a template id you list | one, which the box builds from its own release |
+| it enrols | from a ticket in its boot data | from a ticket in its environment | from a ticket in its environment |
+| its life | minutes, extended or ended | the provider's timeout | minutes, kept by the box |
+| who else can read it | nobody | the provider | nobody |
+
+### What a machine there is
+
+The box's hub runs it, as it runs the container a sandboxed session works
+in: rootless, in the same user namespace arrangement, under the same limits
+on memory, processors and processes that box gives a session. Inside is
+Debian, Node and the fleet's own host, which joins the fleet with the
+ticket it was started with and then takes sessions like any machine.
+Sessions inside it run as plain panes: the container is the sandbox, and
+there is not a second one inside the first.
+
+It is a temporary machine like any other, so the rules for one hold with no
+new code: **it holds its owner's sign-in only**, a member is never started
+there, it is never chosen for work that did not name it, and nobody but its
+owner starts a session on it ([members.md](./members.md), "Where").
+
+### The image is built on the box, from the box's own release
+
+The hub builds the image the first time a machine is asked for, from
+`sandbox/machine/Containerfile` and the release that box is running, and
+again when the box's release changes. So a machine runs the version its box
+runs, and nothing of the fleet's is pulled from a registry. What the build
+does fetch is Debian's and Node's own packages, as the session image's
+build does. A box whose operator has an image already names it in
+`FLEETWRIGHT_MACHINE_IMAGE`, and the hub builds nothing.
+
+The first machine on a box therefore takes as long as the build does, and
+the phone is told the image is being built rather than left to guess.
+
+### The same image is the template a provider needs
+
+Part two says a provider's template has to enrol itself and that building
+one was not done. This is that image. Its entrypoint reads the two
+variables the provider driver sets, `FLEETWRIGHT_TICKET` and
+`FLEETWRIGHT_COORDINATOR`, so a template built from the same Containerfile
+at a provider joins the fleet the same way. **That has not been tried
+against a provider**, and a provider's template build is its own tooling,
+not this repository's.
+
+### Off until the box's operator turns it on
+
+The switch is the one part two has: `FLEETWRIGHT_SANDBOX_PROVIDERS` names
+`own` (beside `e2b`, or alone). With it unset the box makes no machine,
+reports none and builds no image. It also needs Podman on the box, which a
+box that runs sandboxed sessions already has.
+
+A box makes these **for the people whose vault it is approved for**, and
+nobody else. Those are the people who already said this box may hold their
+sign-ins, and a machine on it is handed one.
+
+At most `FLEETWRIGHT_MACHINE_MAX` run on a box at once (two unless set):
+they share the box's memory with its sessions, and a box that is asked for
+a third says so rather than starving the first two.
+
+### What the driver does
+
+- **Report**: for each person the box makes these for, one place named for
+  the box, its one image, and the machines it made for that person, each
+  with its state, when it was made and when it ends. The coordinator passes
+  it on as a `sandbox` place marked `own`, which is how a phone knows not to
+  call it rented.
+- **Make**: the hub is asked to start a container named for the machine
+  (`vm-<12 hex>`, from the ticket), for 5 to 350 minutes and 60 unless
+  said. The ticket and the coordinator's address reach it in a file the hub
+  hands Podman on its standard input, never on a command line, where every
+  user of the box could read it.
+- **Extend** adds minutes to its end, as on a hypervisor. **End** stops it
+  and removes it with its volume.
+- **Its timer is the box's.** The hub ends a machine whose time has run
+  out at its next look, and a machine that outlived a restart of the hub is
+  found again by its labels and ended on the same clock.
+- **Gone when the box says so.** A machine that enrolled and is no longer
+  among the box's containers is retired at the box's next report, as a
+  provider's sandbox is.
+- **Hand the Claude sign-in**: as to a VM the box made, since the box holds
+  it and the machine is the box's own.
+
+### Only with a hypervisor
+
+Some of what a VM has, a container on a box has not, and that is said
+rather than faked: *"its okay to have some features only avail with a
+hyprovisor"*. Refused in words, on the machine's page and from an agent:
+
+- a network, a group or a lab of its own, and the edge router in front of
+  one. It is on the box's network, as that box's sessions are, behind the
+  box's egress list where the box has one on;
+- restart and resize;
+- a console.
+
+And two things it is not:
+
+- **Not a second kernel.** It shares the box's, as a sandboxed session
+  does. It keeps one person's work off another's and off the box, and it is
+  not the boundary a virtual machine is against somebody who breaks out of
+  a container.
+- **Not kept.** Its disk is a volume that goes when it ends.
+
+### What has and has not been run
+
+Podman has not been run for this in any test here: the hub's side is tested
+against a stand-in `podman`, as the session container's is, and the
+sidecar's against a stand-in hub. The image is built and started in CI
+(`sandbox.yml`), where it is checked to refuse a start with no ticket and
+to try to enrol with one. No machine has been made on a real box.
+
 ## Where it shows
 
 - **MCP**: `fleet_member`'s `engines` takes the new models; `fleet_health`
