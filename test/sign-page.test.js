@@ -1154,7 +1154,7 @@ test('in a browser: a sandbox provider is kept in a person’s own vault and an 
     // PASTED INTO A FIELD THAT HIDES IT, with who bills it said under it.
     await signer.click(`${key} button:text-is("Keep")`);
     assert.equal(await signer.getAttribute(`${key} input`, 'type'), 'password');
-    assert.match(String(await signer.textContent(`${key} form`)), new RegExp(S.apiKeyBillingLine('OpenRouter').replace(/[.]/g, '\\.')));
+    assert.ok(String(await signer.textContent(`${key} form`)).includes(S.apiKeyBillingLine('OpenRouter')), 'the form does not say who bills the key');
     // One the vault refuses says why, in the vault's sentence.
     await signer.fill(`${key} input`, 'not a key');
     await signer.click(`${key} button:text-is("Keep it")`);
