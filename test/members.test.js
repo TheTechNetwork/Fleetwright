@@ -43,8 +43,8 @@ test('each field is refused in words that say what it takes', () => {
     [agent({ workTypes: Array.from({ length: 13 }, (_, i) => `t${i}`) }), /at most 12/],
     [agent({ workTypes: ['Back End'] }), /short names/],
     [agent({ instructions: 'x'.repeat(MAX_INSTRUCTIONS + 1) }), /at most 4096 bytes/],
-    [agent({ engines: [{ engine: 'codex' }] }), /claude-code for now/],
-    [agent({ engines: [{ engine: 'claude-code' }, { engine: 'claude-code' }] }), /exactly one engine/],
+    [agent({ engines: [{ engine: 'gemini' }] }), /one of claude-code, codex, opencode/],
+    [agent({ engines: [{ engine: 'claude-code' }, { engine: 'claude-code' }] }), /named twice/],
     [agent({ hosts: { tag: 'two words' } }), /host tag/],
     [agent({ budgetUsdMonth: -1 }), /dollars a month/],
   ];

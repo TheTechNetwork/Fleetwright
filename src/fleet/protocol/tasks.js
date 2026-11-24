@@ -69,6 +69,7 @@ export const RESULT_FOOTER =
  * @property {string} by     who started it
  * @property {number} at
  * @property {number} [readyAt]  when its session last came back to its prompt with no result written
+ * @property {{ engine: string, reason: string, resetsAt?: number }} [stopped]  why, when its engine said (docs/engines.md)
  */
 /**
  * @typedef {object} TaskResult

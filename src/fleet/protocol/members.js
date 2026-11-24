@@ -19,6 +19,7 @@
 // editing a member can act on.
 
 import { oneLine, LABEL_RE } from '../../core/text.js';
+import { ENGINE_IDS, checkEngines } from './engines.js';
 
 /** A member's id: a slug, because it is typed in commands and is a file's name. */
 export const MEMBER_ID_RE = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
@@ -45,11 +46,10 @@ const MAX_BUDGET = 1_000_000;
 export const MEMBER_KINDS = Object.freeze(['person', 'agent']);
 
 /**
- * The engines a member may name. One this step: every other engine is a later
- * step's adapter (docs/members.md), and a name accepted here before its
- * adapter exists would be a member that looks runnable and is not.
+ * The engines a member may name (docs/engines.md). The table, and the rules
+ * a list is held to, are engines.js's.
  */
-export const MEMBER_ENGINES = Object.freeze(['claude-code']);
+export const MEMBER_ENGINES = ENGINE_IDS;
 
 /** The prefix an agent member's principal carries, in the minter and on a box. */
 export const MEMBER_PREFIX = 'member:';
@@ -197,15 +197,10 @@ export function checkMember(input) {
   if (UNPRINTABLE.test(instructions)) return refuse('A member’s instructions are plain text: no control characters.');
   if (bytes(instructions) > MAX_INSTRUCTIONS) return refuse(`A member’s instructions are at most ${MAX_INSTRUCTIONS} bytes. These are ${bytes(instructions)}.`);
 
-  const enginesIn = m.engines === undefined || m.engines === null ? [{ engine: 'claude-code' }] : m.engines;
-  if (!Array.isArray(enginesIn) || enginesIn.length !== 1) return refuse('A member has exactly one engine for now: claude-code.');
-  const e = enginesIn[0];
-  if (!e || typeof e !== 'object' || !MEMBER_ENGINES.includes(String(e.engine))) {
-    return refuse(`A member’s engine is ${MEMBER_ENGINES.join(' or ')} for now. Other engines come in a later step.`);
-  }
-  const model = e.model === undefined || e.model === null || e.model === '' ? null : String(e.model);
-  if (model !== null && !MODEL_RE.test(model)) return refuse('An engine’s model is a model name, like “opus” or a full model id.');
-  const engines = [{ engine: String(e.engine), ...(model ? { model } : {}) }];
+  // What runs it, in the order to try (docs/engines.md).
+  const listed = checkEngines(m.engines);
+  if (!listed.ok) return refuse(listed.text);
+  const engines = listed.engines;
 
   const hostsIn = m.hosts === undefined || m.hosts === null ? {} : m.hosts;
   if (typeof hostsIn !== 'object' || Array.isArray(hostsIn)) return refuse('hosts says where a member runs: { tag }.');

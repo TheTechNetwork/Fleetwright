@@ -28,6 +28,7 @@ import {
   checkTask, checkNote, newTask, changeTask, lockTask, confirmLock, releaseLock, returnTask, actOn, startFor,
   TASK_ID_RE, TASK_STATES, MAX_TASKS,
 } from '../protocol/tasks.js';
+import { cleanTurn } from '../protocol/engines.js';
 
 /** The prefix a task's row is stored under. */
 export const TASKS_PREFIX = 'tasks:';
@@ -277,10 +278,11 @@ export class OrgTasks {
    * follows.
    *
    * @param {string} hostId @param {string} session
-   * @param {{ event: string, task: string, result?: { text: string, truncated?: boolean }|null }} said
+   * @param {{ event: string, task: string, result?: { text: string, truncated?: boolean }|null, turn?: import('../protocol/engines.js').TurnEnded|null }} said
+   *   `turn` is how the session's engine said its turn ended, when it said (docs/engines.md)
    * @returns {{ task: Task, returned: boolean, released: boolean }|null}  null when it changes nothing
    */
-  onSession(hostId, session, { event, task: id, result = null }) {
+  onSession(hostId, session, { event, task: id, result = null, turn = null }) {
     let task = this.byId.get(id);
     if (!task || task.state === 'done' || task.state === 'cancelled') return null;
     const at = this.now();
@@ -307,9 +309,38 @@ export class OrgTasks {
       this.#keep(task);
       return { task, returned: true, released: false };
     }
-    task = { ...task, lock: { .../** @type {NonNullable<Task['lock']>} */ (task.lock), readyAt: at }, updatedAt: at };
+    // And why it stopped, when its engine said and it was not simply done:
+    // which engine, the reason, and when a limit lifts.
+    const stopped = turn && turn.reason !== 'done' ? { stopped: { engine: turn.engine, reason: turn.reason, ...(turn.resetsAt ? { resetsAt: turn.resetsAt } : {}) } } : {};
+    task = { ...task, lock: { .../** @type {NonNullable<Task['lock']>} */ (task.lock), readyAt: at, ...stopped }, updatedAt: at };
     this.#keep(task);
     return { task, returned: false, released: false };
+  }
+
+  /**
+   * The box moved a task's session from one of its member's engines to the
+   * next (docs/engines.md, "At a limit"). Written on the task as a change of
+   * hands: the work is the same member's, on another provider's account.
+   * Only the lock's own session, on its own box, may say so.
+   *
+   * @param {string} hostId @param {string} session
+   * @param {{ task: string, from: string, to: string, reason: string }} moved
+   * @returns {boolean} whether the task changed
+   */
+  onEngine(hostId, session, { task: id, from, to, reason }) {
+    const task = this.byId.get(id);
+    const lock = task?.lock;
+    if (!task || !lock || lock.hostId !== hostId || lock.session !== session) return false;
+    const at = this.now();
+    // The session is working again, so a note that it had stopped goes.
+    const { readyAt: _r, stopped: _s, ...held } = /** @type {any} */ (lock);
+    this.#keep({
+      ...task,
+      lock: held,
+      handoffs: [...task.handoffs, { at, by: lock.member, kind: 'engine', from, to, session, hostId, ...(reason ? { note: reason } : {}) }].slice(-50),
+      updatedAt: at,
+    });
+    return true;
   }
 
   /**
@@ -401,7 +432,7 @@ function readTask(row) {
   const made = newTask({ id: row.id, title: checked.fields.title ?? '', brief: checked.fields.brief ?? '', ...checked.fields }, { by: String(row.createdBy || ''), at: Number(row.createdAt) || 0 });
   const text = (/** @type {unknown} */ v) => (typeof v === 'string' ? v : '');
   const lock = row.lock && typeof row.lock === 'object' && typeof row.lock.hostId === 'string'
-    ? { session: typeof row.lock.session === 'string' ? row.lock.session : null, hostId: row.lock.hostId, member: text(row.lock.member), by: text(row.lock.by), at: Number(row.lock.at) || 0, ...(Number(row.lock.readyAt) ? { readyAt: Number(row.lock.readyAt) } : {}) }
+    ? { session: typeof row.lock.session === 'string' ? row.lock.session : null, hostId: row.lock.hostId, member: text(row.lock.member), by: text(row.lock.by), at: Number(row.lock.at) || 0, ...(Number(row.lock.readyAt) ? { readyAt: Number(row.lock.readyAt) } : {}), ...(cleanTurn(row.lock.stopped) ? { stopped: { engine: row.lock.stopped.engine, reason: row.lock.stopped.reason, ...(Number(row.lock.stopped.resetsAt) > 0 ? { resetsAt: Number(row.lock.stopped.resetsAt) } : {}) } } : {}) }
     : null;
   const result = row.result && typeof row.result === 'object' && typeof row.result.summary === 'string'
     ? {
