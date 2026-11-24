@@ -116,6 +116,38 @@ internal class PhoneVault(private val settings: Settings) {
     )
 
     /**
+     * A request the fleet or the vault refused: the sentence a screen shows,
+     * as it always was, and the `error.code` that came beside it.
+     *
+     * THE CODE IS FOR A CALLER THAT GOES ON AFTER ONE PARTICULAR REFUSAL, and
+     * for nothing drawn. Removing a member asks the vault first, and a vault
+     * that never held the member (`no_member`) has nothing to take out, so
+     * the fleet is asked anyway (OrgScreen, `remove`). Deciding that from the
+     * sentence would be deciding from this week's wording. An
+     * IllegalStateException still, as `error()` threw before, so every other
+     * caller reads its message exactly as it did. PhoneVault.swift has the
+     * same thing under the same name.
+     *
+     * @param code null from a reply that carried none.
+     */
+    class Refused(val code: String?, text: String) : IllegalStateException(text)
+
+    /**
+     * Whether this fleet keeps a vault at all, for a phone that cannot ask
+     * the vault itself because it holds no GitHub sign-in. Asked of the route
+     * that gives the minter's key, which needs only the fleet sign-in and
+     * refuses with one of [saysNoVault]'s two codes when there is no vault.
+     *
+     * NO ANSWER IS NOT "NO VAULT" (C-5). Only the fleet saying so in a code
+     * is; a request that failed, or any other refusal, counts as a vault that
+     * is there, because the caller skips the vault on a false.
+     */
+    suspend fun isKept(fleet: Fleet): Boolean {
+        val said = runCatching { fleet.claudeLoginKey() }.getOrNull() ?: return true
+        return !saysNoVault(said.optJSONObject("error")?.optString("code"))
+    }
+
+    /**
      * [extra] with the member whose vault this request opens, when it is not
      * the asker's own: the vault's `for` (src/fleet/minter/vault.js).
      */
@@ -143,7 +175,12 @@ internal class PhoneVault(private val settings: Settings) {
             .put("at", System.currentTimeMillis())
             .put("reply", reply.publicKey)
         val r = fleet.vault(Seal.seal(pin, Seal.VAULT_REQUEST_AAD, payload))
-        if (r.optBoolean("ok") != true) error(r.optString("text").ifBlank { "Your fleet refused that." })
+        if (r.optBoolean("ok") != true) {
+            throw Refused(
+                r.optJSONObject("error")?.optString("code")?.ifBlank { null },
+                r.optString("text").ifBlank { "Your fleet refused that." },
+            )
+        }
         val answer = Seal.open(reply, Seal.VAULT_REPLY_AAD, r.getJSONObject("sealed"))
         return r.optString("text") to answer
     }
@@ -410,6 +447,14 @@ internal class PhoneVault(private val settings: Settings) {
 
     companion object {
         val SECRET_NAME = Regex("^[A-Za-z0-9_.-]{1,64}$")
+
+        /**
+         * Whether a refusal's code says this fleet keeps no vault at all: the
+         * coordinator's with no minting Worker (`no_minter`), and the minting
+         * Worker's with no deposit key (`no_deposit_key`, "so it keeps no
+         * vault", src/fleet/minter/vault.js).
+         */
+        fun saysNoVault(code: String?): Boolean = code == "no_minter" || code == "no_deposit_key"
 
         /**
          * A box key's fingerprint, worked out here from the key: sixteen hex

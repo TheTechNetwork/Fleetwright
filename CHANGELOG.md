@@ -35,6 +35,11 @@ when that version is cut.
   somebody new: a record made for a person who already keeps their own
   sign-ins gives nobody anything. For every other manager there is a switch,
   off until you turn it on. Either way there is a list of what they changed.
+- **Removing a member tells the vault too.** Remove member says what goes
+  before you confirm: an agent's kept sign-ins and approved machines are
+  forgotten and cannot be brought back, and a person keeps their own. The
+  vault is asked first, and if it refuses nothing is removed. A phone not
+  signed in to GitHub removes nothing and says to sign in under Runners.
 - **Tasks.** A task is a piece of work with a short brief and one member it
   belongs to. Start it and that member's session opens on the brief, on a
   branch named for the task; when the session stops, what it wrote in

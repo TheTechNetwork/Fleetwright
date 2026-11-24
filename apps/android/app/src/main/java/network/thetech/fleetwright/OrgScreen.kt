@@ -473,6 +473,57 @@ private fun MemberPage(
         }
     }
 
+    /**
+     * REMOVING TELLS THE VAULT FIRST, THEN THE FLEET. The vault keeps its own
+     * copy of the tree and decides custody from it (docs/members.md, "A
+     * member's vault"). Told the fleet alone, a removed person went on
+     * holding an agent's credentials, and a removed agent's vault could never
+     * be reached from a phone again.
+     *
+     * IN THIS ORDER, because of what is left when the second half fails. A
+     * member the vault forgot and the fleet still lists is one this page
+     * already has words for: Custody says it is not filed, and File it puts
+     * it back. The other order leaves the fault this is here to end.
+     *
+     * The vault's refusal stops everything, in the vault's own sentence, and
+     * nothing is removed. The one refusal that does not is `no_member`, a
+     * member the vault never held, which leaves nothing there to take out. A
+     * fleet that keeps no vault at all is asked alone, as before.
+     *
+     * A PHONE WITH NO GITHUB SIGN-IN CANNOT ASK THE VAULT, which is the same
+     * test the list behind this page makes before it asks one. On a fleet
+     * that keeps a vault it removes nothing and says where to sign in;
+     * quietly asking the fleet alone is the fault again. OrgView.swift does
+     * the same, in the same order.
+     */
+    suspend fun remove() {
+        val fleet = Fleet(settings)
+        removeResult = ""
+        var toldVault = false
+        if (PhoneGitHub(settings).signedIn) {
+            val told = vault.fileOrgMember(fleet, member.id, member.kind, member.email, member.reportsTo, remove = true)
+            val code = (told.exceptionOrNull() as? PhoneVault.Refused)?.code
+            if (told.isFailure && code != "no_member" && !PhoneVault.saysNoVault(code)) {
+                removeResult = told.exceptionOrNull()?.message ?: "That did not work."
+                return
+            }
+            toldVault = told.isSuccess
+        } else if (vault.isKept(fleet)) {
+            removeResult = REMOVAL_NEEDS_GITHUB
+            return
+        }
+        val reply = fleet.removeMember(member.id)
+        if (reply.getOrNull()?.ok == true) {
+            onChanged()
+            onDismiss()
+            return
+        }
+        removeResult = reply.fold({ it.text ?: "Your fleet refused that." }, { it.message ?: "that did not work" })
+        // THE FLEET KEPT A MEMBER THE VAULT HAS FORGOTTEN. Custody is asked
+        // again so the page says so and offers File it.
+        if (toldVault) askVault()
+    }
+
     LaunchedEffect(member.id, asked) { askVault() }
 
     if (editing) {
@@ -500,27 +551,19 @@ private fun MemberPage(
     if (starting) {
         StartSheet(settings = settings, asMember = member, onDismiss = { starting = false }, onStart = onStart)
     }
-    // REMOVE ASKS FIRST, and says what it costs before it is done.
+    // REMOVE ASKS FIRST, and says what it costs before it is done: an
+    // agent's vault goes with it, a person's stays theirs (removalCost).
     if (removing) {
         AlertDialog(
             onDismissRequest = { removing = false },
             title = { Text("Remove ${member.name}?") },
-            text = { Text("Removes ${member.name} from the organization. Its vault is not deleted; a custodian forgets what it keeps.") },
+            text = { Text(removalCost(member.name, member.kind)) },
             confirmButton = {
                 TextButton(onClick = {
                     removing = false
                     scope.launch {
                         busy = true
-                        Fleet(settings).removeMember(member.id)
-                            .onSuccess { r ->
-                                if (r.ok == true) {
-                                    onChanged()
-                                    onDismiss()
-                                } else {
-                                    removeResult = r.text ?: "Your fleet refused that."
-                                }
-                            }
-                            .onFailure { removeResult = it.message ?: "that did not work" }
+                        remove()
                         busy = false
                     }
                 }) { Text("Remove member") }
@@ -1013,6 +1056,27 @@ fun memberSignInWord(state: MemberSignIn?): String = when (state) {
 
 /** Person or Agent, as a word on the row. */
 fun memberKindWord(kind: String): String = if (kind == "agent") "Agent" else "Person"
+
+/**
+ * What removing a member costs, asked before it is done, by what the member
+ * is. The vault empties an agent member's vault when it is told the agent is
+ * gone, and that is not given back, so it is said here first. A person's
+ * vault is their own and removing them takes nothing from it. The same two
+ * sentences as iOS (test/members-in-apps.test.js).
+ */
+fun removalCost(name: String, kind: String): String =
+    if (kind == "agent") {
+        "Removes $name from the organization. The vault forgets what it kept and the machines approved for it, and that cannot be undone."
+    } else {
+        "Removes $name from the organization. What they keep in the vault is their own and stays theirs."
+    }
+
+/**
+ * Why Remove member did nothing on a phone with no GitHub sign-in, where the
+ * fleet keeps a vault: what to do, then why it is asked. The same sentence
+ * as iOS.
+ */
+const val REMOVAL_NEEDS_GITHUB = "Sign in to GitHub under Runners first. Removing a member also tells the vault, which keeps who may use its credentials."
 
 /**
  * What giving up custody of a person costs, asked before it is done. The

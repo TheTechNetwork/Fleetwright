@@ -150,15 +150,39 @@ test('a person is told who added them and manages what they keep, with nothing d
   assert.match(ANDROID, /if \(held\.managers\.isNotEmpty\(\)\) \{\s*Row\(/);
 });
 
-test('Remove asks first, and says what it costs', () => {
-  const cost = ' from the organization. Its vault is not deleted; a custodian forgets what it keeps.';
-  assert.ok(IOS.includes(cost), 'iOS does not say what removing a member costs');
-  assert.ok(ANDROID.includes(cost), 'Android does not say what removing a member costs');
+test('Remove asks first, says what it costs by kind, and tells the vault before the fleet', () => {
+  // The cost is the vault's to exact, so it differs by what the member is:
+  // an agent's vault goes with it, and a person's stays theirs.
+  for (const words of [
+    ' from the organization. The vault forgets what it kept and the machines approved for it, and that cannot be undone.',
+    ' from the organization. What they keep in the vault is their own and stays theirs.',
+    // A phone that cannot ask the vault removes nothing, and says why.
+    'Sign in to GitHub under Runners first. Removing a member also tells the vault, which keeps who may use its credentials.',
+  ]) {
+    assert.ok(IOS.includes(words), `iOS lost: ${words}`);
+    assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
   // The button opens the question; only the question's own button removes.
   assert.match(IOS, /Button\("Remove member", role: \.destructive\) \{ removing = true \}/);
   assert.match(IOS, /\.confirmationDialog\("Remove \\\(shown\.name\)\?"/);
   assert.match(ANDROID, /onClick = \{ removing = true \},[\s\S]{0,120}Text\("Remove member"/);
   assert.match(ANDROID, /title = \{ Text\("Remove \$\{member\.name\}\?"\) \}/);
+  // THE VAULT FIRST. It keeps its own tree and decides custody from it, so
+  // a member removed from the fleet alone kept its place there: a removed
+  // person went on holding an agent's credentials. Each phone asks the
+  // fleet to remove a member in one place, and in that function the vault
+  // was asked before it. The one refusal it goes on after is the vault
+  // never having held the member.
+  for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
+    const vault = src.search(/fileOrgMember\([^)]*remove(?:: | = )true\)/);
+    const fleet = src.indexOf('.removeMember(');
+    assert.ok(vault > 0, `${name} never tells the vault a member is removed`);
+    assert.ok(fleet > vault, `${name} asks the fleet to remove a member before the vault`);
+    assert.equal(src.lastIndexOf('.removeMember('), fleet, `${name} removes a member somewhere that does not tell the vault`);
+    const between = src.slice(vault, fleet);
+    assert.doesNotMatch(between, /\n\s*(?:\w+ )*(?:func|fun) \w/, `${name} tells the vault and the fleet in different functions`);
+    assert.ok(between.includes('"no_member"'), `${name} does not go on when the vault never held the member`);
+  }
 });
 
 test('the Organization row is drawn only once the fleet answered with its members (C-2)', () => {

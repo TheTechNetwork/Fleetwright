@@ -299,6 +299,19 @@ written from an MCP client, say), the Org screen says custody has not been
 filed for that change and offers to file it. It never shows the coordinator's
 tree as the minter's.
 
+**Remove member on a phone tells the minter first, then the coordinator.**
+`DELETE /api/members/{id}` alone left the member in the minter's tree, where
+custody is decided, so the phone sends `orgmember` with `remove` before it.
+The dialog says the cost first, by what the member is: the vault forgets
+what an agent kept and the machines approved for it, and a person's vault
+stays theirs. A minter that refuses stops the removal, and its sentence is
+shown. The one refusal the phone goes on after is `no_member`, a member the
+minter never held. If the coordinator then refuses, the member stays, the
+page says custody is not filed, and *File it* puts its place back. A phone
+with no GitHub sign-in cannot ask the minter: on a fleet that has one it
+removes nothing and says to sign in under Runners, and on a fleet with no
+minter the coordinator is asked alone.
+
 ## What it does not stop
 
 - **The first org admin is first use.** A coordinator compromised before any

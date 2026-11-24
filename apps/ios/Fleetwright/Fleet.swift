@@ -1534,6 +1534,9 @@ struct Fleet {
         let ok: Bool?
         let key: String?
         let text: String?
+        /// Why there is no key, as a code: `no_minter` and `no_deposit_key`
+        /// are a fleet that keeps no vault (PhoneVault.isKept).
+        var error: Reply.Refusal? = nil
     }
 
     func claudeLoginKey() async throws -> MinterKey {

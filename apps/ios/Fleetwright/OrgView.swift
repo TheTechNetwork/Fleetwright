@@ -416,11 +416,12 @@ struct MemberView: View {
         .sheet(isPresented: $starting) {
             StartSheet(settings: settings, onStart: startSession, asMember: shown)
         }
-        // REMOVE ASKS FIRST, and says what it costs before it is done.
+        // REMOVE ASKS FIRST, and says what it costs before it is done: an
+        // agent's vault goes with it, a person's stays theirs (removalCost).
         .confirmationDialog("Remove \(shown.name)?", isPresented: $removing, titleVisibility: .visible) {
             Button("Remove member", role: .destructive) { Task { await remove() } }
         } message: {
-            Text("Removes \(shown.name) from the organization. Its vault is not deleted; a custodian forgets what it keeps.")
+            Text(removalCost(shown.name, kind: shown.kind))
         }
         // ASKED FIRST, because it is not given back: nobody is made a
         // person's custodian after whoever added them.
@@ -731,21 +732,63 @@ struct MemberView: View {
         }
     }
 
+    /// REMOVING TELLS THE VAULT FIRST, THEN THE FLEET. The vault keeps its
+    /// own copy of the tree and decides custody from it (docs/members.md, "A
+    /// member's vault"). Told the fleet alone, a removed person went on
+    /// holding an agent's credentials, and a removed agent's vault could
+    /// never be reached from a phone again.
+    ///
+    /// IN THIS ORDER, because of what is left when the second half fails. A
+    /// member the vault forgot and the fleet still lists is one this page
+    /// already has words for: Custody says it is not filed, and File it puts
+    /// it back. The other order leaves the fault this is here to end.
+    ///
+    /// The vault's refusal stops everything, in the vault's own sentence,
+    /// and nothing is removed. The one refusal that does not is `no_member`,
+    /// a member the vault never held, which leaves nothing there to take
+    /// out. A fleet that keeps no vault at all is asked alone, as before.
+    ///
+    /// A PHONE WITH NO GITHUB SIGN-IN CANNOT ASK THE VAULT, which is the
+    /// same test the list behind this page makes before it asks one
+    /// (`checkTeam`). On a fleet that keeps a vault it removes nothing and
+    /// says where to sign in; quietly asking the fleet alone is the fault
+    /// again. OrgScreen.kt does the same, in the same order.
     @MainActor
     private func remove() async {
         busy = true
         defer { busy = false }
+        removeResult = ""
+        var toldVault = false
+        if PhoneGitHub(settings: settings).signedIn {
+            do {
+                _ = try await vault.fileOrgMember(fleet, id: shown.id, kind: shown.kind, address: shown.email,
+                                                  reportsTo: shown.reportsTo, remove: true)
+                toldVault = true
+            } catch {
+                let code = (error as? PhoneVault.Refused)?.code
+                guard code == "no_member" || PhoneVault.saysNoVault(code) else {
+                    removeResult = error.localizedDescription
+                    return
+                }
+            }
+        } else if await vault.isKept(fleet) {
+            removeResult = removalNeedsGitHub
+            return
+        }
         do {
             let reply = try await fleet.removeMember(id: member.id)
             if reply.ok == true {
                 onChanged()
                 dismiss()
-            } else {
-                removeResult = reply.text ?? "Your fleet refused that."
+                return
             }
+            removeResult = reply.text ?? "Your fleet refused that."
         } catch {
             removeResult = error.localizedDescription
         }
+        // THE FLEET KEPT A MEMBER THE VAULT HAS FORGOTTEN. Custody is asked
+        // again so the page says so and offers File it.
+        if toldVault { await askVault() }
     }
 
     /// Send the start New session described, as this member. The sheet has
@@ -1099,6 +1142,22 @@ func memberSignInWord(_ state: MemberSignIn?) -> String {
 func memberKindWord(_ kind: String) -> String {
     kind == "agent" ? "Agent" : "Person"
 }
+
+/// What removing a member costs, asked before it is done, by what the member
+/// is. The vault empties an agent member's vault when it is told the agent
+/// is gone, and that is not given back, so it is said here first. A person's
+/// vault is their own and removing them takes nothing from it. The same two
+/// sentences as Android (test/members-in-apps.test.js).
+func removalCost(_ name: String, kind: String) -> String {
+    kind == "agent"
+        ? "Removes \(name) from the organization. The vault forgets what it kept and the machines approved for it, and that cannot be undone."
+        : "Removes \(name) from the organization. What they keep in the vault is their own and stays theirs."
+}
+
+/// Why Remove member did nothing on a phone with no GitHub sign-in, where
+/// the fleet keeps a vault: what to do, then why it is asked. The same
+/// sentence as Android.
+let removalNeedsGitHub = "Sign in to GitHub under Runners first. Removing a member also tells the vault, which keeps who may use its credentials."
 
 /// What giving up custody of a person costs, asked before it is done. The
 /// same sentence as Android and the signing page.
