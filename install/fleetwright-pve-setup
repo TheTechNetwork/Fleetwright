@@ -985,6 +985,11 @@ fi
 # the app, and the app to the boxes it approves for this cluster.
 step edge
 EDGE_TAG=fleetwright-edge
+# ITS MEMORY, in MiB: four GiB, because two was not enough. One made with 2
+# crashed in use ("fleetwright-edge needs at least 4GB of ram otherwise it
+# crashes", 2026-11-24), and a Xen Orchestra pool's is built with the same
+# (src/fleet/host/edge-router.js, EDGE.memory; the test holds the two equal).
+EDGE_MEM=4096
 EDGE_BLOCKS_TAG=fleetwright-edge-blocks
 EDGE_WATCH_TAG=fleetwright-edge-watch
 EDGE_WATCH_FILE=/etc/pve/priv/fleetwright-edge-watch.json
@@ -1003,7 +1008,9 @@ edges() {
       my $has = sub { my ($t, $w) = @_; $t =~ /(^|[;, ])\Q$w\E($|[;, ])/ ? 1 : 0 };
       my $which = sub { my ($t) = @_; $has->($t, "$ENV{NTAG}0") ? 0 : $has->($t, "$ENV{NTAG}1") ? 1 : "-" };
       my $labs = sub { my ($t) = @_; $t =~ /(?:^|[;, ])\Q$ENV{LTAG}\E(o\dc\d)(?:$|[;, ])/ ? $1 : "-" };
-      print map { my $t = $_->{tags} // ""; "$_->{vmid} $_->{node} " . ($_->{status} // "unknown") . " " . $has->($t, $ENV{BTAG}) . " " . $has->($t, $ENV{WTAG}) . " " . $which->($t) . " " . $labs->($t) . "\n" }
+      # THE MEMORY IT IS GIVEN, in bytes, last: `-` when Proxmox does not say, which is cannot tell and not "none".
+      my $mem = sub { my ($m) = @_; defined $m && $m =~ /^\d+$/ && $m > 0 ? $m : "-" };
+      print map { my $t = $_->{tags} // ""; "$_->{vmid} $_->{node} " . ($_->{status} // "unknown") . " " . $has->($t, $ENV{BTAG}) . " " . $has->($t, $ENV{WTAG}) . " " . $which->($t) . " " . $labs->($t) . " " . $mem->($_->{maxmem}) . "\n" }
         sort { $a->{vmid} <=> $b->{vmid} } grep {
         ($_->{type} // "") eq "qemu" && ($_->{pool} // "") ne $ENV{IN_POOL} && ($_->{template} // 0) != 1
           && ($_->{tags} // "") =~ /(^|[;, ])\Q$ENV{TAG}\E($|[;, ])/
@@ -1202,7 +1209,7 @@ build_edge() {
       labnics=""
       for l in $(seq 1 $((LABS_OPEN + LABS_CLOSED))); do labnics="$labnics --net$((l + 1)) virtio,bridge=fwlab$l"; done
       part - "making $ename, VM $eid"
-      qm create "$eid" --name "$ename" --ostype other --cores 2 --memory 2048 --agent 1 --onboot 1 \
+      qm create "$eid" --name "$ename" --ostype other --cores 2 --memory "$EDGE_MEM" --agent 1 --onboot 1 \
         --scsihw virtio-scsi-pci --net0 "virtio,bridge=$BRIDGE" --net1 "virtio,bridge=fwedge" $labnics --serial0 socket --tags "$etags" \
         --description "The fleet's edge router: the way out of every Fleetwright machine on this cluster, filtering what they do for threats. Made by fleetwright-pve-setup; it has no login." >/dev/null
       qm set "$eid" --scsi0 "$STORAGE:0,import-from=$work/edge.raw" --boot order=scsi0 >/dev/null ||
@@ -1237,7 +1244,11 @@ if [ "$EDGE" = 1 ]; then
   # asked to be one, is made again as asked.
   shape="$(awk '{print $4 $5 $6 $7}' <<<"$there" | sort | tr '\n' ' ')"
   if [ "$EDGE_PAIR" = 1 ]; then want="${EDGE_BLOCK}10${LAB_KEY} ${EDGE_BLOCK}11${LAB_KEY} "; else want="${EDGE_BLOCK}1-${LAB_KEY} "; fi
-  if [ -n "$there" ] && [ "$EDGE_AGAIN" = 0 ] && [ "$shape" = "$want" ]; then
+  # AND ONLY WITH THE MEMORY IT NEEDS (EDGE_MEM): one made with less crashes
+  # in use, so it is made again once, like one without the key. One whose
+  # memory Proxmox does not give is not known to be short, and is kept.
+  small="$(awk -v need="$((EDGE_MEM * 1048576))" 'NF >= 8 && $8 != "-" && $8 + 0 < need {print $1}' <<<"$there" | tr '\n' ' ')"
+  if [ -n "$there" ] && [ "$EDGE_AGAIN" = 0 ] && [ "$shape" = "$want" ] && [ -z "$small" ]; then
     while read -r eid enode estatus _ _ _; do
       if [ "$estatus" = stopped ]; then
         pvesh create "/nodes/$enode/qemu/$eid/status/start" >/dev/null
@@ -1247,6 +1258,7 @@ if [ "$EDGE" = 1 ]; then
       fi
     done <<<"$there"
   else
+    [ -z "$small" ] || say "the edge router there (VM ${small% }) has less than $((EDGE_MEM / 1024)) GB of memory, which it crashes with, so it is made again with that much"
     build_edge || true
   fi
 else

@@ -13,7 +13,7 @@ import { closeSync, mkdtempSync, openSync, readFileSync, readSync, statSync, wri
 import os from 'node:os';
 import path from 'node:path';
 
-import { EDGE_IMAGE, EDGE_FILTER, PVE_EDGE, PVE_LAB_LAYOUTS, PVE_WATCH_MARKS, QEMU_AGENT_BLOCKED, edgeConfig, fleetHosts, pveEdgeConfig } from '../src/fleet/host/edge-router.js';
+import { EDGE, EDGE_IMAGE, EDGE_FILTER, PVE_EDGE, PVE_LAB_LAYOUTS, PVE_WATCH_MARKS, QEMU_AGENT_BLOCKED, edgeConfig, fleetHosts, pveEdgeConfig } from '../src/fleet/host/edge-router.js';
 import { LAB_DIR, LAB_OUTPUTS, OUTPUTS } from '../scripts/build-pve-edge.mjs';
 import { newWatch } from '../src/fleet/host/edge-credentials.js';
 import { PvePools, edgeKeyOf, pveRecord } from '../src/fleet/host/pve-pools.js';
@@ -222,6 +222,35 @@ test('an edge without the key is made again once, and the line carries the key o
   assert.match(SCRIPT, /\$r\{edge\} = \{ key => \$j->\{key\}, secret => \$j->\{secret\}, pin => \$j->\{pin\} \};/);
   // The cluster's own machine first, so the router knows where to send its logs.
   assert.ok(SCRIPT.indexOf('\nstep holder\n') < SCRIPT.indexOf('\nstep edge\n'));
+});
+
+test('the router is made with 4 GiB, as a Xen Orchestra pool’s is, and one there with less is made again once', () => {
+  // ASKED FOR: "fleetwright-edge needs at least 4GB of ram otherwise it crashes".
+  assert.equal(Number(pin('EDGE_MEM')) * 1024 * 1024, EDGE.memory, 'the two hypervisors give the router different memory');
+  assert.match(SCRIPT, /qm create "\$eid" --name "\$ename" --ostype other --cores 2 --memory "\$EDGE_MEM" /);
+  // THE SCRIPT'S OWN LISTING AND ITS OWN TEST OF IT, run against an answer
+  // shaped as Proxmox's: memory in bytes, last on each line.
+  const edges = /^edges\(\) \{\n[\s\S]*?\n\}\n/m.exec(SCRIPT)?.[0];
+  const small = /^ {2}small="\$\(awk [^\n]*\n/m.exec(SCRIPT)?.[0];
+  assert.ok(edges && small, 'the script has no edges() or no test of their memory');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-pve-edge-mem-'));
+  const GiB = 1024 ** 3;
+  const ask = (/** @type {any[]} */ resources) => {
+    writeFileSync(path.join(dir, 'pvesh'), `#!/bin/bash\n[ "$*" = "get /cluster/resources --type vm --output-format json" ] || exit 9\necho '${JSON.stringify(resources)}'\n`, { mode: 0o755 });
+    const r = spawnSync('bash', ['-c', `set -Eeuo pipefail; POOL=fleetwright; EDGE_TAG=fleetwright-edge; EDGE_BLOCKS_TAG=b; EDGE_WATCH_TAG=fleetwright-edge-watch; EDGE_NODE_TAG=n-; EDGE_LABS_TAG=l-; EDGE_MEM=${pin('EDGE_MEM')}\n${edges}there="$(edges)"\n${small}printf '%s|%s' "$there" "$small"`], { encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}` } });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.split('|');
+  };
+  const vm = (/** @type {number} */ vmid, /** @type {unknown} */ maxmem) => ({ type: 'qemu', vmid, node: 'pve1', status: 'running', tags: 'fleetwright-edge;fleetwright-edge-watch', ...(maxmem === undefined ? {} : { maxmem }) });
+  // One made with 2 GiB is the one to make again; 4 and more are kept.
+  assert.deepEqual(ask([vm(101, 2 * GiB), vm(102, 4 * GiB), vm(103, 8 * GiB)]), ['101 pve1 running 0 1 - - 2147483648\n102 pve1 running 0 1 - - 4294967296\n103 pve1 running 0 1 - - 8589934592', '101 ']);
+  // Memory Proxmox does not give is cannot tell, and the router is kept.
+  assert.deepEqual(ask([vm(101, undefined), vm(102, 'unknown')]), ['101 pve1 running 0 1 - - -\n102 pve1 running 0 1 - - -', '']);
+  // With no router there, nothing is called short.
+  assert.deepEqual(ask([]), ['', '']);
+  // And being short is a reason to make it again, beside its shape.
+  assert.ok(SCRIPT.includes('if [ -n "$there" ] && [ "$EDGE_AGAIN" = 0 ] && [ "$shape" = "$want" ] && [ -z "$small" ]; then'));
+  assert.ok(SCRIPT.includes('has less than $((EDGE_MEM / 1024)) GB of memory, which it crashes with, so it is made again with that much'));
 });
 
 const RECORD = { kind: 'proxmox', address: '10.69.10.10:8006', token: 'fleetwright@pve!fleet=12345678-1234-1234-1234-123456789abc', pool: 'fleetwright', ca: `-----BEGIN CERTIFICATE-----\n${'A'.repeat(64)}\n${'A'.repeat(64)}\n-----END CERTIFICATE-----\n` };
