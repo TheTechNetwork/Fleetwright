@@ -1873,6 +1873,13 @@ cloud and not on a hypervisor of yours. Its record is the vault item
 networks, groups or labs. See [`api-engines.md`](./api-engines.md), "Part
 two".
 
+And a fourth: `OwnPools` (`src/fleet/host/own-pools.js`), for a machine that
+is a container on the box itself. It holds no record at all, asks the box's
+hub to run the container, and its entries say `kind: "sandbox"` with
+`own: true`. It is asked first for a machine by name, since the hub answers
+at once whether a machine is its own. See the same document, "Part three",
+which also says what a machine there does not have and a VM does.
+
 ## Order of work
 
 Following `CONTRIBUTING.md`, coordinator first. **Done:** protocol 8

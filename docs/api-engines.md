@@ -1,7 +1,8 @@
-# Paid API models, and machines from a sandbox provider
+# Paid API models, and machines from a sandbox provider or a box of your own
 
-> API-key engines as vault items, and a sandbox host type. Built and tested
-> with stand-ins only.
+> API-key engines as vault items, and a sandbox host type: a provider's
+> cloud, or a container on a box you already have. The provider half is
+> built and tested with stand-ins only.
 
 Before this a member ran on subscriptions: a Claude sign-in, a Codex sign-in,
 a Copilot token ([engines.md](./engines.md)). A machine was one you
@@ -11,7 +12,9 @@ enrolled, a GitHub runner, or a VM on your own hypervisor
 Now a member's engine may run on **a metered API key** kept in its vault,
 and a person may make a machine **on a sandbox provider's cloud** with a key
 of their own. Both spend money by the minute or the token, so both are
-behind switches that are off, and a guard that is on.
+behind switches that are off, and a guard that is on. A person may also make
+a machine **on a box of their own**, out of one of that box's containers,
+which spends nothing and involves nobody else (part three).
 
 This is step 7 of the organization work ([ROADMAP.md](../ROADMAP.md)).
 
@@ -231,6 +234,12 @@ ticket it was started with and then takes sessions like any machine.
 Sessions inside it run as plain panes: the container is the sandbox, and
 there is not a second one inside the first.
 
+**Not on a box that keeps its sessions behind an egress allowlist.** A
+machine dials the fleet itself, and its sessions reach what it reaches, so a
+container made there would be one that is not behind the list. Such a box
+refuses to make one and says why. Putting a machine behind the list is not
+built.
+
 It is a temporary machine like any other, so the rules for one hold with no
 new code: **it holds its owner's sign-in only**, a member is never started
 there, it is never chosen for work that did not name it, and nobody but its
@@ -238,16 +247,28 @@ owner starts a session on it ([members.md](./members.md), "Where").
 
 ### The image is built on the box, from the box's own release
 
-The hub builds the image the first time a machine is asked for, from
+The hub builds the image when the box's operator turns this on, from
 `sandbox/machine/Containerfile` and the release that box is running, and
 again when the box's release changes. So a machine runs the version its box
 runs, and nothing of the fleet's is pulled from a registry. What the build
-does fetch is Debian's and Node's own packages, as the session image's
-build does. A box whose operator has an image already names it in
-`FLEETWRIGHT_MACHINE_IMAGE`, and the hub builds nothing.
+does fetch is Debian's and Node's own packages and Claude Code's installer,
+as a box's own install does. A box whose operator has an image already
+names it in `FLEETWRIGHT_MACHINE_IMAGE`, and the hub builds nothing.
 
-The first machine on a box therefore takes as long as the build does, and
-the phone is told the image is being built rather than left to guess.
+**Nobody waits for the build.** It takes a few minutes, so it is started in
+the background at the sidecar's first look and not when a person asks for a
+machine. Until it is done the box offers no image, and its place on the
+phone says why: it is building, or the build failed and what Podman said. A
+build that failed is tried again half an hour later, not every minute.
+
+**A release is not one shape**, so the build's context is not the release
+itself. A packaged box has `lib/` with everything bundled in and no `src/`
+but the web pages; a checkout has `src/` and `node_modules`, and an `apps/`
+and a `.git` that have no business in an image. The hub copies the parts
+that exist into a directory of its own and builds from that
+(`stageMachineContext`). The image's tag is made from the files a host runs
+from, so a release that changed is another image, and the one before it is
+removed once no machine uses it.
 
 ### The same image is the template a provider needs
 
@@ -276,21 +297,40 @@ a third says so rather than starving the first two.
 
 ### What the driver does
 
+The sidecar never touches Podman, so its driver
+(`src/fleet/host/own-pools.js`) asks the hub, which owns the box's
+containers (`src/core/machines.js`), over the loopback API it already uses:
+`GET /api/machines`, `POST /api/machines`, `POST /api/machines/control`,
+behind the hub's token like every route there.
+
 - **Report**: for each person the box makes these for, one place named for
-  the box, its one image, and the machines it made for that person, each
-  with its state, when it was made and when it ends. The coordinator passes
-  it on as a `sandbox` place marked `own`, which is how a phone knows not to
-  call it rented.
+  the box (`own:<box>`), its one image once that is built, and the machines
+  it made for that person, each with its state, when it was made and when
+  it ends. The coordinator passes it on as a `sandbox` place marked `own`,
+  which is how a phone knows not to call it rented. A hub or a Podman that
+  could not be asked is reported as not reachable, with why, and never as
+  "no machines": the coordinator retires a machine that a reachable place
+  no longer lists.
 - **Make**: the hub is asked to start a container named for the machine
   (`vm-<12 hex>`, from the ticket), for 5 to 350 minutes and 60 unless
   said. The ticket and the coordinator's address reach it in a file the hub
   hands Podman on its standard input, never on a command line, where every
   user of the box could read it.
-- **Extend** adds minutes to its end, as on a hypervisor. **End** stops it
-  and removes it with its volume.
-- **Its timer is the box's.** The hub ends a machine whose time has run
-  out at its next look, and a machine that outlived a restart of the hub is
-  found again by its labels and ended on the same clock.
+- **Extend** adds minutes to its end, as on a hypervisor, and never further
+  off than the longest a machine is made for. **End** stops it and removes
+  it with its volume. Both are its owner's alone: to anybody else the
+  machine is not there.
+- **Its timer is the box's.** The hub looks once a minute while it has a
+  machine and ends one whose time has run out. Who a machine is for and
+  when it was made are labels on its container; when it ends is in the
+  hub's state, because more time changes it. A hub that lost that state
+  ends a machine by its labels, and a machine whose container stopped by
+  itself (its sidecar ended, or the box restarted) is cleared away with
+  its volume.
+- **Asked first, by name.** For more time, an end or a sign-in, this
+  driver is asked before a hypervisor's: the hub is on the box and answers
+  at once whether a machine is its own, where a pool that is down would
+  have to be waited out first.
 - **Gone when the box says so.** A machine that enrolled and is no longer
   among the box's containers is retired at the box's next report, as a
   provider's sandbox is.
@@ -304,8 +344,7 @@ rather than faked: *"its okay to have some features only avail with a
 hyprovisor"*. Refused in words, on the machine's page and from an agent:
 
 - a network, a group or a lab of its own, and the edge router in front of
-  one. It is on the box's network, as that box's sessions are, behind the
-  box's egress list where the box has one on;
+  one. It is on the box's network, as that box's sessions are;
 - restart and resize;
 - a console.
 
@@ -319,26 +358,58 @@ And two things it is not:
 
 ### What has and has not been run
 
-Podman has not been run for this in any test here: the hub's side is tested
-against a stand-in `podman`, as the session container's is, and the
-sidecar's against a stand-in hub. The image is built and started in CI
-(`sandbox.yml`), where it is checked to refuse a start with no ticket and
-to try to enrol with one. No machine has been made on a real box.
+In the tests, Podman is a program that stands in for it and remembers what
+it was told (`test/helpers/stub-machine-podman.js`), under the real hub
+routes with the real client and the real driver above them. That proves
+what Podman is asked and what the fleet then says, and nothing about what
+Podman does.
+
+So CI runs the real one (`machine-image.yml`, `scripts/machine-smoke.mjs`),
+through the hub's own code: it builds the image from the checkout, checks
+that a start with nothing to join is refused in words, makes a machine with
+a ticket and a fleet that does not exist (`https://fleet.invalid`), reads in
+its log that the hub inside started and the sidecar tried to enrol, then
+lists it, gives it more time and ends it, and checks nothing is left. That
+run has no memory, processor or process limit on the machine, because a CI
+job's user has no cgroup controllers of its own; that Podman honours the
+limits a box passes is not checked anywhere.
+
+**No machine has been made on a real box, and none has joined a fleet.**
+What is left unproven is the last step: a machine enrolling with a real
+coordinator, being handed its owner's sign-in, and running a session.
+
+Two things to know about the ticket. It reaches the container on Podman's
+standard input and is in no command line, and the entrypoint takes it out
+of the environment before it starts anything, so no session inherits it. It
+is still in the environment the container's first process was started
+with, which root inside the container can read. It is spent the moment the
+machine enrols and is worth nothing after; a VM's ticket sits in its boot
+data in the same way.
 
 ## Where it shows
 
 - **MCP**: `fleet_member`'s `engines` takes the new models; `fleet_health`
   prints a machine's API providers; `fleet_status` lists sandbox templates
-  among the machine images, marked as a sandbox provider's;
-  `fleet_budgets` says whether a paid engine needs approval.
+  among the machine images, marked as a sandbox provider's, and a box's own
+  image marked as one of the person's own machines; `fleet_budgets` says
+  whether a paid engine needs approval.
 - **Both phones**: API keys under a member's Credentials, offered for the
   providers its engines name; the OpenCode model field accepts the new
   prefixes and says what each bills to; Approvals' settings gain the
   switch; Hypervisors, under Machines, offers "Add a sandbox provider" with
   its key and templates; a sandbox template is among the images, marked as
   a rented machine that ends on a timer; and a rented machine's page offers
-  more time and end, and nothing a sandbox does not have.
-- **The signing page**: the same two items.
+  more time and end, and nothing a sandbox does not have. A box of your
+  own is drawn apart from a provider's: *One of your machines* where a
+  provider's row says *Sandbox provider*, its machines under *On one of
+  your machines*, never called rented and never said to be readable by
+  anybody else, with why it offers no image yet while it builds one, and
+  with the line that a network, a lab, a restart, a resize and a console
+  need a hypervisor.
+- **The signing page**: the same two items. A box of your own has no item:
+  there is nothing to keep.
+- **The API**: `GET /api/hosts` marks a place, an image and a machine with
+  `own` ([openapi.json](../openapi.json)).
 
 ## What it does not stop
 
@@ -350,6 +421,11 @@ to try to enrol with one. No machine has been made on a real box.
 - **A sandbox template is trusted to enrol itself and nothing else.** The
   driver cannot look inside one.
 - **A key in a vault is a copy.** Whoever pasted it still has it.
+- **A machine on a box is a container, not a second computer.** It shares
+  the box's kernel. And it is made by whoever the box is approved for, on
+  that box's memory: the cap is how many, and the three limits are how much.
+- **A box behind an egress allowlist makes none**, as above, and that is
+  a refusal and not a guard somebody could turn off.
 
 ## Tests
 
@@ -367,3 +443,17 @@ words), `test/sandbox-coordinator.test.js` (a template offered as the
 provider's, making one, a member never started there, and the machine gone
 at the box's next look), the three new lines in `test/mcp.test.js` and
 `test/budgets-mcp.test.js`, and `test/api-engines-in-apps.test.js`.
+
+For a machine on a box of your own: `test/machines.test.js` (the hub: the
+build from either shape of release, in the background and never waited
+for; the ticket on standard input and in no command line; the cap; the
+box's clock; more time and end; what is refused in words; the API with its
+token), `test/own-pools.test.js` (the driver over the real hub routes: off
+unless named, a place per approved person, the image offered once built,
+the sign-in sealed to the machine's key and to no other, a hub that cannot
+be asked, and its place behind the one seam), `test/machine-image.test.js`
+(the entrypoint run for real against stand-ins for the hub and the
+sidecar), the fourth test in `test/sandbox-coordinator.test.js` (marked
+`own`, named for the box, why it has no image yet, retired at the box's
+next look and not when the box could not look), and the on-box case in
+`test/mcp.test.js`.

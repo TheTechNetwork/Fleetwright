@@ -18,6 +18,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `worker.yml` — `container` | the same PRs, plus `scripts/container-smoke.sh` — builds `worker/Containerfile` under docker and drives it: pin, a real host enrolling, a restart, the state surviving it | none |
 | `worker.yml` — `gate` (`Worker passed`) | every push, PR and merge-queue run | none |
 | `sandbox.yml` — `smoke` | PRs touching `sandbox/` | none |
+| `machine-image.yml` — `smoke` | PRs and pushes touching `sandbox/machine/`, `src/core/machines.js`, `scripts/machine-smoke.mjs` or itself: builds the fleet's machine image with rootless Podman through the hub's own code, starts one with a ticket and a fleet that does not exist, extends it and ends it | none, and nothing is published: a box builds this image itself |
 | `worker.yml` — `deploy` | push to `main` | Cloudflare |
 | `android.yml` — `release` | published release | Android keystore |
 | `ios.yml` — `testflight` | published release | App Store Connect |

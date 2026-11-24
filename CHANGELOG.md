@@ -77,6 +77,14 @@ when that version is cut.
   timer, and runs on your own sign-in only. Off until a machine's operator
   turns the provider on. A template has to be built to join the fleet, and
   building one is not automated yet.
+- **Machines on a machine you already have, with nobody else involved.** A
+  machine's operator can have it make machines out of its own containers:
+  no hypervisor, no provider and no key. It shows under Machines as one of
+  your machines, and its image appears among the ones you can make a machine
+  from. Such a machine ends on a timer, can be given more time or ended, and
+  runs on your own sign-in. A network, a lab, a restart, a resize and a
+  console still need a hypervisor. Off until the operator turns it on; the
+  first time, that machine spends a few minutes building the image.
 - **A member's page shows what it has spent this month** against its budget,
   in dollars at API prices as each session counted its own cost. Sessions
   that reported no cost are said, not counted as free.
