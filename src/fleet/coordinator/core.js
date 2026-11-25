@@ -48,7 +48,7 @@ import { manages } from '../protocol/members.js';
 import { modeFor, decide as decideRoute, candidatesFor, routeWords, routeQuestion, readRouteAnswer, MAX_MODEL_CHOICES } from '../protocol/routing.js';
 import { GATE_PATTERNS } from '../../core/mask-pane.js';
 import { TASK_ID_RE, TASK_STATES, MAX_RESULT, lockTask, startFor, wordsFor, composeTaskMessage, firstBytes } from '../protocol/tasks.js';
-import { ENGINES, API_PROVIDERS, providerOf, anyPaid, cleanTurn, encodeEngines, enginesOn, enginesWords, isPlainDefault, turnWords } from '../protocol/engines.js';
+import { ENGINES, API_PROVIDERS, SIGNIN_ENGINES, SIGNIN_OUTCOMES, providerOf, anyPaid, cleanTurn, encodeEngines, enginesOn, enginesWords, isPlainDefault, turnWords } from '../protocol/engines.js';
 import { runnersCheck } from '../../core/linked-repo-check.js';
 import { VmStandby, MAX_READY, PENDING_MS } from './vm-standby.js';
 import { RUNNER_WORKFLOWS, DEFAULT_MINUTES as DEFAULT_RUNNER_MINUTES } from '../../core/runners.js';
@@ -1253,6 +1253,9 @@ export class CoordinatorCore {
     // that show progress, never the ring every phone reads.
     if (msg.event === 'xosetup.progress') return this.#onSetupProgress(hostId, msg);
     if (msg.event === 'xosetup.holder-removed') return this.#onHolderRemoved(hostId, msg);
+    // AND SO IS AN ENGINE SIGN-IN ENDING: that member's custodians, on their
+    // phones, and never the ring every phone reads.
+    if (msg.event === 'engine.signin') return this.#onEngineSignin(hostId, msg);
     // A HOST REPORTS ON ITS SESSIONS, AND THAT IS ALL IT REPORTS. Every event a
     // sidecar sends is `session.*` and names the session (watcher.js); the
     // rest of the ring, enrolments, revocations, refusals, is the
@@ -4223,7 +4226,14 @@ export class CoordinatorCore {
     // ring is the only memory this coordinator has.
     // A setup phase routed on to its machine by #setup comes through here a
     // second time; it was recorded the first.
-    if (isMutating(spec.verb) && spec.actor && spec.setupRouted !== true) {
+    //
+    // NOT AN ENGINE SIGN-IN'S `status`, which is a read asked every few
+    // seconds while somebody waits on a code: it would push everything else
+    // out of the ring as a `list` would. Its other three actions are kept,
+    // with what was asked for whom, which is what an audit of a sign-in
+    // wants; the validated values, and they are an enum and a member's id.
+    const asksStatus = spec.verb === 'enginesignin' && shaped.params.action === 'status';
+    if (isMutating(spec.verb) && spec.actor && spec.setupRouted !== true && !asksStatus) {
       this.record({
         event: 'intent',
         verb: spec.verb,
@@ -4236,7 +4246,8 @@ export class CoordinatorCore {
           `${spec.actor} asked for ${spec.verb}` +
           `${spec.params?.name ? ` ${spec.params.name}` : ''}` +
           `${spec.params?.provider ? ` ${spec.params.provider}` : ''}` +
-          `${spec.params?.scope === 'host' ? ' for the box itself' : ''}`,
+          `${spec.params?.scope === 'host' ? ' for the box itself' : ''}` +
+          `${spec.verb === 'enginesignin' ? ` ${shaped.params.action} of ${shaped.params.engine} for ${shaped.params.member}` : ''}`,
       });
     }
 
@@ -4366,6 +4377,16 @@ export class CoordinatorCore {
       const params = { ...shaped.params };
       delete params.boxSecrets;
       spec = { ...spec, params };
+    }
+    // AN ENGINE SIGNED IN FOR A MEMBER (docs/engines.md, "Signing in on the
+    // machine") is asked by exactly who may start a session as that member.
+    // Refused here first, in the person's words and before a machine is
+    // chosen, where this coordinator can see it is wrong: no such member, or
+    // somebody who may not act for it. The box makes the check that counts.
+    if (spec.verb === 'enginesignin') {
+      const as = this.#mayActAs(spec.requester, shaped.params.member, 'signin');
+      if (!as.ok) return as;
+      spec = { ...spec, memberSays: as.member.name };
     }
     if (spec.verb === 'provision' && (shaped.params.platform === 'vm' || shaped.params.platform === 'lab')) return this.#provisionVm(spec, shaped.params);
     if (spec.verb === 'vmctl') return this.#vmctl(spec, shaped.params);
@@ -4680,6 +4701,23 @@ export class CoordinatorCore {
     }
     const outdated = placement.host ? this.#cannotCarry(placement.host, spec) : null;
     if (outdated) return outdated;
+    // A MACHINE THAT SAYS WHICH ENGINES IT RUNS, AND NOT THIS ONE, is not
+    // asked to sign it in: said here, with what it does run, so a screen that
+    // draws the action from a machine's `engines` is never answered by a
+    // refusal it could have known (C-2). One that reported no list is asked,
+    // and answers for itself.
+    if (spec.verb === 'enginesignin' && placement.host) {
+      const runs = /** @type {any} */ (placement.host.health)?.engines;
+      const engine = String(spec.params?.engine ?? '');
+      const says = (/** @type {string} */ e) => ENGINES[/** @type {keyof typeof ENGINES} */ (e)]?.says ?? e;
+      if (Array.isArray(runs) && !runs.includes(engine)) {
+        return {
+          ok: false,
+          error: { code: 'no_engine' },
+          text: `${placement.host.hostId} does not run ${says(engine)}. It runs ${runs.filter((/** @type {unknown} */ e) => typeof e === 'string').slice(0, 8).map(says).join(', ') || 'nothing it named'}. Sign ${says(engine)} in on a machine that runs it.`,
+        };
+      }
+    }
 
     // THE TASK'S LOCK, taken now that the box is known and before anything is
     // sent, so of two starts on one task the second is refused here and never
@@ -4766,7 +4804,7 @@ export class CoordinatorCore {
       // is attributed and filtered exactly as the stored frame is.
       if (spec.verb === 'health' && answer?.health && typeof answer.health === 'object') {
         const entry = placement.host;
-        const health = visibleHost({ health: attributed(entry ?? {}, answer.health) }, spec.requester ?? null, entry).health;
+        const health = visibleHost({ health: attributed(entry ?? {}, answer.health) }, spec.requester ?? null, entry, this.#actsFor(spec.requester)).health;
         // AND WHAT THE FLEET SPENT TODAY ASKING A MODEL ABOUT PANES, which is
         // the coordinator's to say and no box's (decide.js). Counters only:
         // nothing a pane said is kept anywhere to show.
@@ -6797,37 +6835,133 @@ export class CoordinatorCore {
    * @returns {{ ok: true, member: import('../protocol/members.js').Member } | { ok: false, error: { code: string }, text: string }}
    */
   #startAs(requester, id, task) {
+    const as = this.#mayActAs(requester, id, 'start');
+    if (!as.ok) return as;
+    const first = composeFirstMessage(as.member.instructions, typeof task === 'string' ? task : '');
+    if (!first.ok) return { ok: false, error: { code: 'bad_params' }, text: first.text };
+    return as;
+  }
+
+  /**
+   * May this person act as this member: start a session as it, or sign one
+   * of its engines in on a machine (docs/engines.md)? ONE RULE FOR BOTH,
+   * because a sign-in is made for the sessions that will run on it, and who
+   * may do the one is exactly who may do the other. What differs is the
+   * words, which say what was being asked for.
+   *
+   * The reasoning is #startAs's: refuse what this coordinator can see is
+   * wrong, say so when it cannot tell, and leave the check that counts to
+   * the box.
+   *
+   * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
+   * @param {unknown} id
+   * @param {'start'|'signin'} doing
+   * @returns {{ ok: true, member: import('../protocol/members.js').Member } | { ok: false, error: { code: string }, text: string }}
+   */
+  #mayActAs(requester, id, doing) {
     const member = this.org.get(id);
     if (!member) return { ok: false, error: { code: 'no_member' }, text: `There is no member called ${oneLine(String(id), 40)}. fleet_members lists them.` };
+    const signin = doing === 'signin';
     const email = String(requester?.email || '').toLowerCase();
     if (!email) {
-      return { ok: false, error: { code: 'not_signed_in' }, text: `Starting as ${member.name} needs a signed-in identity: a member’s session is started by somebody its vault’s custodians can be checked against.` };
+      return {
+        ok: false,
+        error: { code: 'not_signed_in' },
+        text: signin
+          ? `Signing an engine in for ${member.name} needs a signed-in identity: it is done by somebody its vault’s custodians can be checked against.`
+          : `Starting as ${member.name} needs a signed-in identity: a member’s session is started by somebody its vault’s custodians can be checked against.`,
+      };
     }
+    // What is being asked for, as each sentence below needs it.
+    const may = signin ? `sign an engine in for ${member.name}` : `start a session as ${member.name}`;
     if (!this.memberCustody && !requester?.admin) {
       return {
         ok: false,
         error: { code: 'custody_unknown' },
         text: this.minter?.vault
-          ? `The fleet has not heard yet who may start a session as ${member.name}, so it cannot tell whether you may. The vault says when a machine asks it, and a connected machine asks every ten minutes: try again in a few minutes. Nothing was sent.`
-          : `This fleet has no vault to say who may start a session as ${member.name}, so it cannot tell whether you may, and no machine would run it. Nothing was sent.`,
+          ? `The fleet has not heard yet who may ${may}, so it cannot tell whether you may. The vault says when a machine asks it, and a connected machine asks every ten minutes: try again in a few minutes. Nothing was sent.`
+          : `This fleet has no vault to say who may ${may}, so it cannot tell whether you may, and no machine would ${signin ? 'do' : 'run'} it. Nothing was sent.`,
       };
     }
     const listed = this.memberCustody?.get(member.id);
     if (this.memberCustody && !(listed ?? []).includes(email)) {
       const own = member.kind === 'person';
+      const them = own ? 'them' : 'it';
       return {
         ok: false,
         error: { code: 'not_custodian' },
         text: listed === undefined
-          ? `${member.name}’s custody has not been filed yet, so nobody can start a session as ${own ? 'them' : 'it'}. Whoever manages ${own ? 'them' : 'it'} files it from the Org screen, on a phone or the signing page.`
+          ? `${member.name}’s custody has not been filed yet, so nobody can ${signin ? `sign an engine in for ${them}` : `start a session as ${them}`}. Whoever manages ${them} files it from the Org screen, on a phone or the signing page.`
           : own
-            ? `Only ${member.name}, and managers ${member.name} has let manage their credentials, can start a session as them.`
-            : `You are not one of ${member.name}’s custodians, so you cannot start a session as it. A custodian can add you from its Credentials.`,
+            ? `Only ${member.name}, and managers ${member.name} has let manage their credentials, can ${signin ? `sign an engine in for ${them}` : `start a session as ${them}`}.`
+            : `You are not one of ${member.name}’s custodians, so you cannot ${signin ? `sign an engine in for ${them}` : `start a session as ${them}`}. A custodian can add you from its Credentials.`,
       };
     }
-    const first = composeFirstMessage(member.instructions, typeof task === 'string' ? task : '');
-    if (!first.ok) return { ok: false, error: { code: 'bad_params' }, text: first.text };
     return { ok: true, member };
+  }
+
+  /**
+   * A box says an engine sign-in on it ended (`engine.signin`,
+   * docs/engines.md "Signing in on the machine"): an attempt that was
+   * approved, ran out, failed or was lost to a restart, a sign out, or a
+   * sign-in a session found no longer works.
+   *
+   * THE MEMBER'S CUSTODIANS ARE TOLD, ON THEIR PHONES, AND NOBODY ELSE.
+   * Custodians are who the minter's signed list says may start as the
+   * member, the same list that decided who could ask. With no list this
+   * coordinator cannot tell who they are, and tells nobody.
+   *
+   * BY NAME ONLY, IN THIS FILE'S WORDS: which member, which engine, which
+   * machine, how it ended. The box sends an id, an engine and one of seven
+   * states, and nothing it could write a sentence into. The page and the
+   * code are in no event a box sends and none this builds, and nothing is
+   * written to the ring every phone reads.
+   *
+   * ONLY FROM A BOX THAT SPEAKS 22, and only to somebody that box may act
+   * for: a box a member enrolled can say this of any member, and its word
+   * reaches only that one person, and only if they are a custodian. Counted
+   * with the box's other pushes (#mayPush), so a box that says it every
+   * frame is heard once.
+   *
+   * A CANCEL IS TOLD TO NOBODY. Whoever cancelled is looking at it.
+   *
+   * @param {string} hostId @param {any} msg
+   */
+  async #onEngineSignin(hostId, msg) {
+    const host = this.registry.hosts.get(hostId);
+    const speaks = Number(host?.health?.protocol);
+    const member = typeof msg.member === 'string' && MEMBER_ID_RE.test(msg.member) ? this.org.get(msg.member) : null;
+    const engine = String(msg.engine ?? '');
+    const state = String(msg.state ?? '');
+    if (!host || !(Number.isInteger(speaks) && speaks >= ENGINE_SIGNIN_PROTOCOL) || !member || !SIGNIN_ENGINES.includes(engine) || !SIGNIN_OUTCOMES.includes(state)) {
+      this.log.warn(`coordinator: ${hostId} sent an engine sign-in this fleet cannot place`);
+      return;
+    }
+    this.log.info(`coordinator: ${hostId} engine.signin ${member.id} ${engine} ${state}`);
+    if (state === 'cancelled' || !this.push) return;
+    const custodians = (this.memberCustody?.get(member.id) ?? []).filter((email) => mayActFor(host, email));
+    const { admins: devices } = this.#whoToTell(`member:${member.id}`, member.id, custodians);
+    if (!devices.length || !this.#mayPush(hostId, { event: 'engine.signin', name: `${member.id}/${engine}/${state}` })) return;
+    const says = ENGINES[/** @type {keyof typeof ENGINES} */ (engine)].says;
+    const body = {
+      signed_in: `${says} is signed in for ${member.name} on ${hostId}.`,
+      expired: `The ${says} sign-in for ${member.name} on ${hostId} ran out before anybody approved it. Start again for a new code.`,
+      failed: `The ${says} sign-in for ${member.name} on ${hostId} did not complete. ${member.name}’s Credentials says why.`,
+      lost: `${hostId} restarted while a ${says} sign-in for ${member.name} was waiting. Start it again.`,
+      signed_out: `${says} was signed out for ${member.name} on ${hostId}.`,
+      ended: `${says}’s sign-in for ${member.name} on ${hostId} no longer works. Sign it in again from ${member.name}’s Credentials.`,
+    }[state];
+    if (!body) return;
+    try {
+      await this.push.send(devices, {
+        title: `${member.name}’s ${says} sign-in`,
+        body,
+        data: { event: 'engine.signin', name: '', hostId, url: '', member: member.id, engine, state },
+      });
+    } catch (e) {
+      // A push provider being down must never take the coordinator with it.
+      this.log.warn(`coordinator: push failed: ${/** @type {Error} */ (e).message}`);
+    }
   }
 
   /**
@@ -8544,6 +8678,7 @@ export class CoordinatorCore {
    * @param {{ email?: string|null, admin?: boolean }|null} [requester]
    */
   snapshot(requester = null) {
+    const actsFor = this.#actsFor(requester);
     return {
       protocol: PROTOCOL_VERSION,
       // WHETHER EACH CAN TAKE A NEW SESSION FROM THIS PERSON NOW, by the rule
@@ -8561,8 +8696,12 @@ export class CoordinatorCore {
       // alone. Read from the registry entry, which carries `actsFor`; list()
       // leaves it out. A coordinator too old to send it omits it, and absent
       // is cannot-tell.
+      // AND WHICH OF THE MEMBERS THEY MAY ACT FOR ARE SIGNED IN TO WHICH ENGINE
+      // ON IT (health `engineSignins`, signinsSeenBy), so a member's
+      // Credentials can say "Signed in on ops-box" and nobody else is shown
+      // it.
       hosts: this.registry.list().map((h) => ({
-        ...visibleHost(h, requester, this.registry.hosts.get(h.hostId)),
+        ...visibleHost(h, requester, this.registry.hosts.get(h.hostId), actsFor),
         takesSessions: takesSessions(h, requester, this.registry.hosts.get(h.hostId)),
         administers: administers(this.registry.hosts.get(h.hostId), requester),
         ...(runsNoSessions(h.hostId) ? { holder: true, ...holdsFor(this.registry.hosts.get(h.hostId), requester) } : {}),
@@ -10211,6 +10350,46 @@ export function adminsSeenBy(admins, requester) {
 }
 
 /**
+ * A box's word on which members are signed in to which engine there (health
+ * `engineSignins`, docs/engines.md "What a machine reports"), as one person
+ * may see it: a member's id, an engine and since when, for the members that
+ * person may act for.
+ *
+ * WHO SEES WHAT. An admin and the break-glass token see every entry a box
+ * sends. Anybody else sees the entries for members they manage or may start
+ * a session as, which for a person includes their own, and only from a box
+ * that may act for them: a box another member enrolled can say anything of
+ * anybody, and its word about a member is shown to that one person.
+ *
+ * ABSENT IS CANNOT TELL, and stays absent: a box older than the verb, a
+ * frame with no list, or a list that is not one. An empty list is an answer:
+ * this box says nobody this person may see is signed in there. Each entry
+ * is held to its shape, and the rest of what a box put under the name is
+ * dropped with the list's own bound, so nothing a box writes here reaches a
+ * screen as a sentence.
+ *
+ * @param {unknown} list @param {unknown} protocol  what the box speaks
+ * @param {{ email?: string|null, admin?: boolean }|null} requester
+ * @param {{ actsFor?: string|null }|null|undefined} entry  the box's registry entry
+ * @param {string[]} members
+ * @returns {Array<{ member: string, engine: string, since: number }>|undefined}
+ */
+export function signinsSeenBy(list, protocol, requester, entry, members) {
+  if (!Array.isArray(list) || list.length > MAX_ENGINE_SIGNINS) return undefined;
+  if (!(Number.isInteger(protocol) && Number(protocol) >= ENGINE_SIGNIN_PROTOCOL)) return undefined;
+  const all = !requester || Boolean(requester.admin);
+  if (!all && (!entry || !mayActFor(entry, requester?.email))) return [];
+  return list
+    .filter((e) => e && typeof e === 'object' && typeof e.member === 'string' && MEMBER_ID_RE.test(e.member)
+      && SIGNIN_ENGINES.includes(e.engine) && Number.isFinite(e.since) && e.since > 0
+      && (all || members.includes(e.member)))
+    .map((e) => ({ member: e.member, engine: e.engine, since: Math.round(e.since) }));
+}
+
+/** How many engine sign-ins one box's frame may carry: every member there is, on both engines. */
+const MAX_ENGINE_SIGNINS = 400;
+
+/**
  * One host, with everything private to somebody else removed.
  *
  * The host keeps its identity, its state, its capacity and its version. It
@@ -10227,12 +10406,22 @@ export function adminsSeenBy(admins, requester) {
  * @param {{ actsFor?: string|null }|null|undefined} entry  the host's registry
  *   entry, for whom it acts, which `host` may not carry (registry.js list).
  *   Without one no pool entry is believed.
+ * @param {string[]} [members]  the members the requester may act for (core.js
+ *   #actsFor), for which of a box's engine sign-ins they are shown
  */
-function visibleHost(host, requester, entry) {
+function visibleHost(host, requester, entry, members = []) {
   if (host?.health && 'admins' in host.health) {
     const { admins, ...rest } = host.health;
     const seen = adminsSeenBy(admins, requester);
     host = { ...host, health: seen ? { ...rest, admins: seen } : rest };
+  }
+  // WHO IS SIGNED IN TO WHICH ENGINE THERE, shaped for everybody, the admin
+  // included, because what a box sends under this name is not carried as it
+  // came (signinsSeenBy).
+  if (host?.health && 'engineSignins' in host.health) {
+    const { engineSignins, ...rest } = host.health;
+    const seen = signinsSeenBy(engineSignins, host.health.protocol, requester, entry, members);
+    host = { ...host, health: seen ? { ...rest, engineSignins: seen } : rest };
   }
   // WHAT A BOX OPENS FOR A PHONE'S WEB VIEW (docs/browse.md): whether it opens
   // a session's ports is everybody's, because each person's own session is

@@ -486,6 +486,65 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     };
   }
 
+  // AN ENGINE IS SIGNED IN ON ONE MACHINE, AND THE SIGN-IN STAYS THERE
+  // (docs/engines.md, "Signing in on the machine"), so every action of
+  // `enginesignin` goes to the machine that was named: a `status` anywhere
+  // else would answer for another machine's sign-in. Not new work, so a full
+  // machine can still be signed in on.
+  //
+  // A PERMANENT MACHINE THAT ACTS FOR WHOEVER ASKED, which is where a start
+  // as that member could go: a temporary one is gone within hours and holds
+  // only its owner's sign-in, and a box another member enrolled, where that
+  // member has root, is not where a custodian puts a member's sign-in.
+  //
+  // WITH NONE NAMED AND SEVERAL TO CHOOSE FROM IT IS NOT CHOSEN FOR THEM. The
+  // refusal names the ones that say they run the engine, when any do.
+  if (verb === 'enginesignin') {
+    const permanent = registry.reachable().filter((h) => !h.ephemeral);
+    const durable = permanent.filter((h) => mayActFor(h, whose));
+    if (!durable.length) {
+      return { kind: 'refused', code: 'no_hosts', reason: permanent.length ? NO_OWN_MACHINE : describeWhyNoHosts(registry) };
+    }
+    if (preferHost) {
+      const chosen = durable.find((h) => h.hostId === preferHost);
+      if (chosen) return { kind: 'host', host: chosen };
+      if (permanent.some((h) => h.hostId === preferHost)) {
+        return {
+          kind: 'refused',
+          code: 'host_unavailable',
+          why: 'enrolled_by_other',
+          reason: `${preferHost} acts for the person who enrolled it, and keeps nobody else\u2019s sign-ins.`,
+        };
+      }
+      if (registry.reachable().some((h) => h.hostId === preferHost)) {
+        return {
+          kind: 'refused',
+          code: 'host_unavailable',
+          reason: `${preferHost} is a temporary machine. A sign-in is kept on the machine it is made on, and that one is gone within hours. Sign in on a permanent machine: ${durable.map((h) => h.hostId).join(', ')}.`,
+        };
+      }
+      return {
+        kind: 'refused',
+        code: 'host_unavailable',
+        why: 'offline',
+        reason: `${preferHost} is not a connected permanent machine. These are: ${durable.map((h) => h.hostId).join(', ')}.`,
+      };
+    }
+    if (durable.length === 1) return { kind: 'host', host: durable[0] };
+    const engine = String(/** @type {any} */ (intent).params?.engine ?? '');
+    const running = durable.filter((h) => {
+      const runs = /** @type {any} */ (h.health)?.engines;
+      return Array.isArray(runs) && runs.includes(engine);
+    });
+    return {
+      kind: 'refused',
+      code: 'ambiguous_host',
+      reason:
+        `Which machine should it be signed in on? ${(running.length ? running : durable).map((h) => h.hostId).join(', ')}. ` +
+        'A sign-in is kept on the machine it is made on, and used by sessions there.',
+    };
+  }
+
   // ONLY BOXES THAT MAY ACT FOR THE PERSON, for all three: each spends their
   // GitHub connection, and `provision` hands the box a ticket that admits a
   // machine as theirs. A box another member enrolled answered a member's
