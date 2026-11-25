@@ -130,6 +130,10 @@ case "$1" in
   rm)
     # As Podman does: whatever runs under that name is ended, and is gone.
     for last; do :; done
+    # ONE SLOW REMOVAL, once: how a test has an attempt's tidying up still
+    # going when the next attempt begins. It looks for what runs under the
+    # name only when it gets round to it, as a slow Podman would.
+    if [ -e "$D/slow-rm-once" ]; then rm -f "$D/slow-rm-once"; sleep 0.5; fi
     # Everything in it: the hub starts each run as the head of its own process group.
     if [ -e "$D/ctr-$last.pid" ]; then kill -9 "-$(cat "$D/ctr-$last.pid")" 2>/dev/null; rm -f "$D/ctr-$last.pid"; fi
     exit 0 ;;
@@ -188,7 +192,7 @@ exit 127
     volume: (name, ...inside) => path.join(dir, 'volumes', name, ...inside),
     /** What the provider says of the code that is out. */
     provider: (said, words = '') => writeFileSync(path.join(dir, `provider-${said}`), words),
-    /** A switch a stand-in reads: `codex-off`, `no-image`, `fail-run`. */
+    /** A switch a stand-in reads: `codex-off`, `no-image`, `fail-run`, `slow-rm-once`. */
     set: (name, on = true) => (on ? writeFileSync(path.join(dir, name), '') : rmSync(path.join(dir, name), { force: true })),
     codexSaw: () => (existsSync(path.join(dir, 'codex-seen.log')) ? readFileSync(path.join(dir, 'codex-seen.log'), 'utf8').split('\n').filter(Boolean) : []),
     /** Whether a container of that name is still running. */

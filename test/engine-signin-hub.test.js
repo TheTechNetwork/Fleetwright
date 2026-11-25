@@ -207,6 +207,22 @@ test('a cancel tells the engine, ends the container and is written down; with no
   assert.equal((await b.ask('status')).state, 'cancelled');
 });
 
+test('an attempt begun the moment the last one ended is not ended by the last one’s tidying up', async (t) => {
+  // Both run under one name. The removal that follows an attempt was not
+  // waited for, so a slow one found the next attempt's container under the
+  // name and removed that.
+  const b = box(t);
+  await b.ask('start');
+  b.set('slow-rm-once');
+  b.provider('approved');
+  await until(async () => (await b.ask('status')).state === 'signed_in', 'the first sign-in');
+  b.set('provider-approved', false);
+  assert.equal((await b.ask('start')).state, 'waiting');
+  await new Promise((r) => setTimeout(r, 800));
+  assert.equal((await b.ask('status')).state, 'waiting');
+  assert.equal(b.running('fw-signin-codex-debbie'), true);
+});
+
 /**
  * A hub in a process of its own that starts one attempt and is then killed
  * outright, as a hub that crashes or is restarted under it is: its memory

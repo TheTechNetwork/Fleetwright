@@ -100,6 +100,8 @@ export class EngineSignins {
     this.attempts = new Map();
     /** Members and engines being signed out right now. @type {Set<string>} */
     this.signingOut = new Set();
+    /** The removal of each container's name that is under way, so the next one waits for it (#remove). @type {Map<string, Promise<void>>} */
+    this.removing = new Map();
   }
 
   // ── What is kept on disk ──────────────────────────────────────────────────
@@ -280,11 +282,33 @@ export class EngineSignins {
     for (const key of Object.keys(this.#read() ?? {})) this.#lostIfOrphan(key);
   }
 
-  /** Remove a sign-in's container, whatever state it is in. Never throws. @param {string} container */
-  async #remove(container) {
-    try {
-      await podmanAsync(this.cfg, ['rm', '-f', container], { timeout: 20_000 });
-    } catch { /* gone already, or no podman: either way there is nothing running under that name */ }
+  /**
+   * Remove a sign-in's container, whatever state it is in. Never throws.
+   *
+   * ONE AT A TIME FOR ONE NAME. An attempt's container and the next
+   * attempt's run under the same name, and the removal that follows an
+   * attempt is not waited for by whoever is told how it ended. Left to race,
+   * a slow one found the next attempt's container under the name and removed
+   * that: a start answered with a code, and failed a moment later for no
+   * reason anybody could see. So each removal of a name waits for the one
+   * before it, and a new attempt, which removes before it runs, starts only
+   * once every earlier removal is done.
+   *
+   * @param {string} container
+   * @returns {Promise<void>}
+   */
+  #remove(container) {
+    const before = this.removing.get(container) ?? Promise.resolve();
+    const done = before.then(async () => {
+      try {
+        await podmanAsync(this.cfg, ['rm', '-f', container], { timeout: 20_000 });
+      } catch { /* gone already, or no podman: either way there is nothing running under that name */ }
+    });
+    this.removing.set(container, done);
+    void done.then(() => {
+      if (this.removing.get(container) === done) this.removing.delete(container);
+    });
+    return done;
   }
 
   /** The `podman run` for one sign-in or sign out. @param {{ member: string, engine: string, account: string, volume: string }} a @param {'--signin'|'--signout'} mode @param {import('./egress.js').EgressRoute|null} route */
