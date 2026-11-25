@@ -17,7 +17,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `worker.yml` — `check` | PRs touching the bundle (`worker/`, `src/fleet/`, `src/core/`) | none |
 | `worker.yml` — `container` | the same PRs, plus `scripts/container-smoke.sh` — builds `worker/Containerfile` under docker and drives it: pin, a real host enrolling, a restart, the state surviving it | none |
 | `worker.yml` — `gate` (`Worker passed`) | every push, PR and merge-queue run | none |
-| `sandbox.yml` — `smoke` | PRs touching `sandbox/` | none |
+| `sandbox.yml` — `smoke` | PRs touching `sandbox/`: builds the session image and runs it, then the browser variant, then the engines variant, where `codex` and `opencode` each answer `--version` and the minimal image is seen to have neither | none |
 | `machine-image.yml` — `smoke` | PRs and pushes touching `sandbox/machine/`, `src/core/machines.js`, `scripts/machine-smoke.mjs` or itself: builds the fleet's machine image with rootless Podman through the hub's own code, starts one with a ticket and a fleet that does not exist, extends it and ends it | none, and nothing is published: a box builds this image itself |
 | `worker.yml` — `deploy` | push to `main` | Cloudflare |
 | `android.yml` — `release` | published release | Android keystore |
@@ -25,7 +25,7 @@ fork or a fresh clone never shows a red main for something it was never given.
 | `ios.yml` — `release-app-store` | **full** release (not a prerelease) | App Store Connect |
 | `ios-profile.yml` | manual (`workflow_dispatch`) | App Store Connect API key (`ASC_*`) |
 | `codeql.yml` | every push and PR, plus weekly | none |
-| `sandbox.yml` | pushes touching `sandbox/` | none — `GITHUB_TOKEN` with `packages: write`, publishing the session image to GHCR |
+| `sandbox.yml` | pushes touching `sandbox/` | none — `GITHUB_TOKEN` with `packages: write`, publishing the session image to GHCR as `latest`, `web` (with a browser) and `engines` (with Codex and OpenCode) |
 | `edge-image.yml` | PRs and pushes touching `scripts/edge-image/`, `scripts/opnsense-room.mjs` or itself; manual, with a release to build | none — `GITHUB_TOKEN` with `contents: write` publishing the edge router image as a release, which the host downloads (`EDGE_IMAGE`) and Renovate moves the pin to; `id-token`/`attestations: write` for its provenance; a PR only uploads an artifact. See [`scripts/edge-image/README.md`](../scripts/edge-image/README.md) |
 | `host-release.yml` — `package` | PRs and pushes to main touching what a host runs (`bin/`, `src/`, `install/`, `sandbox/`, the builders) | none — builds the tarball twice and compares, runs every entry point the way the unit does |
 | `host-release.yml` — `attach` | published release | none — `GITHUB_TOKEN` with `contents: write`, attaching the host tarball and manifest |
