@@ -112,7 +112,10 @@ test('a start runs the runner with the member’s engine home and nothing of a s
   }
   // AND THE PAGE AND THE CODE ONLY IN THE ANSWERS: nothing kept, nothing logged.
   for (const [where, text] of [['the state file', b.kept()], ['a log line', said()], ['what the box reports', JSON.stringify(b.signins.report())]]) {
-    assert.ok(!text.includes('ABCD-EFGH') && !text.includes('auth.openai.com'), `the code or its page is in ${where}`);
+    // Looked for as the answer gave them, the page by its host: this is a
+    // search of what was kept and logged for something that must not be
+    // there, and not a check that a URL is a safe one to open.
+    assert.ok(!text.includes(waiting.code) && !text.includes(new URL(waiting.url).host), `the code or its page is in ${where}`);
   }
   assert.match(said(), /engines: codex sign-in for debbie, asked by eli@example\.com: signed_in/);
 });
