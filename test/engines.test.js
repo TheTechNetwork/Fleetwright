@@ -143,6 +143,24 @@ test('the next engine is the first after this one that the box runs, and only fo
   assert.equal(nextEngine({ engines: null }, { engine: 'claude-code', reason: 'limit' }, all), -1);
 });
 
+test('the image with the engines in it is built, published and run where the browser one is', () => {
+  // Nothing built it. The Containerfile took WITH_ENGINES=1 and no workflow
+  // passed it, so the layer that installs Codex and OpenCode had never run
+  // in CI and there was no image for a box that names them to pull.
+  const workflow = readFileSync(new URL('../.github/workflows/sandbox.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /build-args: WITH_ENGINES=1/);
+  assert.match(workflow, /type=raw,value=engines,enable=\{\{is_default_branch\}\}/);
+  // AND RUN: each engine answers on the image that was built, and the minimal image is seen to have neither.
+  const smoke = workflow.slice(workflow.indexOf('The engines variant has both engines, and each answers'), workflow.indexOf('THE BUG THIS WHOLE JOB EXISTS FOR'));
+  assert.match(smoke, /docker build --build-arg WITH_ENGINES=1 -t fleetwright-session:engines /);
+  for (const said of ['codex --version', 'opencode --version', 'for tool in fleetwright-engine codex opencode']) assert.ok(smoke.includes(said), said);
+  assert.match(smoke, /fleetwright-session:smoke[\s\S]*the minimal image has \$tool, which no box was told it runs/);
+  // The argument the workflow passes is the one the Containerfile reads.
+  const containerfile = readFileSync(new URL('../sandbox/Containerfile', import.meta.url), 'utf8');
+  assert.match(containerfile, /^ARG WITH_ENGINES=0$/m);
+  assert.match(containerfile, /if \[ "\$WITH_ENGINES" = "1" \]; then \\\n\s+npm install -g "@openai\/codex@\$\{CODEX_VERSION\}" "opencode-ai@\$\{OPENCODE_VERSION\}"/);
+});
+
 /** A box holding a member's vault as the minter hands it over. */
 function boxHolding(/** @type {import('node:test').TestContext} */ t, /** @type {any[]} */ items) {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), 'engines-'));

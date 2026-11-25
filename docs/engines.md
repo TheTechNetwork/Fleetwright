@@ -26,7 +26,9 @@ out. No turn has been sent to a real Codex or OpenCode. The move from one
 engine to the next is run in a test through the real launch, a real tmux pane
 and the real runner, with a script standing in for podman and for each
 engine (`test/engines-launch.test.js`). It has not been run on a box, in a
-container, with a real engine.
+container, with a real engine. The image with the engines in it is built and
+run in CI (`.github/workflows/sandbox.yml`), which this change added and
+which has not run yet: nothing here could build a container.
 
 ## The engines
 
@@ -283,6 +285,57 @@ cheaply, so the operator's word is the whole of it, and a wrong word is a
 session that says the command was not found. The stock image has neither;
 `WITH_ENGINES=1` at build time adds both, at pinned versions
 (`sandbox/Containerfile`).
+
+### Turning them on, on a box
+
+Three things, in `/etc/fleetwright.env`, and all three are needed. Naming the
+engines without the image is the wrong word above.
+
+1. **The image.** `FLEETWRIGHT_SANDBOX_IMAGE` names the image sessions run
+   in, and the default one has no engines. Either the published one,
+
+   ```
+   FLEETWRIGHT_SANDBOX_IMAGE=ghcr.io/thetechnetwork/fleetwright-session:engines
+   ```
+
+   which the `Sandbox image` workflow builds and publishes beside `:latest`
+   and `:web` from the first push that carries it, or one built on the box:
+
+   ```
+   podman build --build-arg WITH_ENGINES=1 -t localhost/fleetwright-session:engines -f sandbox/Containerfile sandbox/
+   FLEETWRIGHT_SANDBOX_IMAGE=localhost/fleetwright-session:engines
+   ```
+
+   Either is an image the box was told by name, so the browser picker
+   ([intents.md](./intents.md), `sandbox`) reports it as `custom` and cannot
+   switch it. A box that wants a browser and the engines builds its own with
+   both arguments (`--build-arg WITH_CHROMIUM=1 --build-arg WITH_ENGINES=1`).
+2. **The engines.** `FLEETWRIGHT_ENGINES=codex,opencode`, or one of them.
+   Sessions must already run in a container with the session's socket
+   (`FLEETWRIGHT_SANDBOX=1`, and the socket not turned off).
+3. **The providers, for an API key.** `FLEETWRIGHT_API_PROVIDERS`, as
+   [api-engines.md](./api-engines.md) describes. Not needed for a
+   subscription.
+
+Then `systemctl restart fleetwright`. Running sessions keep the image they
+started in; the next new one uses the new image. `fleet_health` shows what
+the box now reports, and a member's sign-ins are kept under its Credentials
+as below.
+
+**On a box behind an egress allowlist** (`FLEETWRIGHT_SANDBOX_EGRESS=allowlist`,
+[security.md](./security.md)) no engine but Claude Code reaches its provider
+until the provider's hosts are added to `FLEETWRIGHT_SANDBOX_EGRESS_ALLOW`:
+
+| engine | hosts |
+|---|---|
+| `codex`, on a ChatGPT sign-in | `chatgpt.com`, `auth.openai.com` |
+| `opencode`, on Copilot | `api.githubcopilot.com` (`api.github.com` is already allowed), `models.dev` |
+| `opencode`, on OpenRouter | `openrouter.ai`, `models.dev` |
+| `opencode`, on Vercel AI Gateway | `ai-gateway.vercel.sh`, `models.dev` |
+
+These are read from each engine's documentation and source and have not been
+measured on a box behind a list. An engine that cannot reach its provider
+ends its turn as `error`, with the engine's own words, and hands nothing on.
 
 ## Starting
 
