@@ -397,10 +397,13 @@ code and prints one line; the box answers as soon as it has it:
 ```
 
 The page and the code are not secrets, and they are for whoever asked and
-nobody else: they are in the answer to `start` and to `status` and in
-nothing the box or the fleet keeps, logs, reports or pushes. The container
-then waits, for as long as the code lasts, for the engine to say how it
-ended. **One attempt a member and engine at a time**: a second `start`
+nobody else: they are in the answer to `start` and to `status`, and in no
+file, no log line, no event, no health frame and no push. They are held in
+memory in two places for as long as they are of use: the hub's attempt, and
+the sidecar's cache of replies, which keeps every mutating reply for ten
+minutes to answer a retry of the same request by its id and nothing else.
+The container then waits, for as long as the code lasts, for the engine to
+say how it ended. **One attempt a member and engine at a time**: a second `start`
 while one waits answers with the one in flight (`already: true`) and
 starts nothing. A start that gets no code within 45 seconds is stopped and
 refused, with the engine's sentence when it gave one.
@@ -469,12 +472,27 @@ image pins:
 
 **Refused before anything is sent**, by the coordinator, where it can
 tell: no such member (`no_member`), an asker who may not act for it
-(`not_custodian`, `custody_unknown`), a machine older than the verb
-(`host_outdated`: "update fleetwright on …"), and a machine that reported
-its engines and does not run this one (`no_engine`). A machine that does
-not run the engine refuses in its own words too. The coordinator passes
-the machine's answer through and keeps nothing of a sign-in but what
-machines report.
+(`not_custodian`, `custody_unknown`, `not_signed_in`), a machine older than
+the verb (`host_outdated`: "update fleetwright on …"), and a machine that
+reported its engines and does not run this one (`no_engine`). The machine
+is named and never chosen: with several permanent machines and none named
+the refusal lists the ones that run the engine (`ambiguous_host`), and a
+temporary machine or a box somebody else enrolled is refused
+(`host_unavailable`), because a sign-in is kept where it is made. The
+coordinator passes the machine's answer through, leaves `status` out of
+its audit ring, and keeps nothing of a sign-in but what machines report.
+
+**Refused by the machine**, each with a sentence: it does not run the
+engine (`no_engine`, for every action); its session image is not fetched
+yet (`no_image`); Podman is missing (`no_podman`) or the member's way out
+behind an egress list could not be made (`no_egress`); the engine gave no
+code within 45 seconds (`no_code`) or the container ended before one
+(`signin_failed`); device code is off for the account (`device_code_off`);
+a sign out is under way (`busy`) or the engine would not sign out
+(`signout_failed`, which changes nothing the machine reports); the machine
+cannot read its own record (`state_unreadable`, which is cannot tell and
+is never answered as nobody signed in); its hub is older than its sidecar
+(`hub_outdated`).
 
 ## What a machine reports
 

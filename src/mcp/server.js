@@ -19,7 +19,7 @@
 //
 // Framing is newline-delimited JSON, which is what the stdio transport uses.
 
-import { toolsFor, DEFAULT_DENY } from './tools.js';
+import { toolsFor, verbOfTool, DEFAULT_DENY } from './tools.js';
 import { dispatchRunner } from '../core/runners.js';
 import { describeRunnerAuth } from '../core/runner-auth-words.js';
 import { oneLine, LABEL_RE } from '../core/text.js';
@@ -1018,7 +1018,7 @@ export class McpServer {
       // NAMES WHAT IS AVAILABLE. A verb left out on purpose and a verb that
       // does not exist are different situations, and an agent told only "no"
       // will try again differently rather than stop.
-      const withheld = DEFAULT_DENY.includes(String(name || '').replace(/^fleet_/, ''));
+      const withheld = DEFAULT_DENY.includes(verbOfTool(name));
       return this.#text(
         withheld
           ? `${name} is not exposed by this server. It restarts machines, permanently destroys work, or moves ` +
@@ -1029,7 +1029,7 @@ export class McpServer {
               // lift existed or what it was called. A refusal that hides its
               // own remedy from the one person who can apply it is worse than
               // a flat no.
-              `Whoever runs this server can allow it with FLEETWRIGHT_MCP_ALLOW=${String(name).replace(/^fleet_/, '')} ` +
+              `Whoever runs this server can allow it with FLEETWRIGHT_MCP_ALLOW=${verbOfTool(name)} ` +
               'in its environment. If that is you, that is the whole change.'
           : `No such tool: ${name}. Available: ${this.tools.map((t) => t.name).join(', ')}.`,
         true,

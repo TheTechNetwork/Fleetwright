@@ -890,3 +890,11 @@ the CLI's own prompt after the session was seen working, once per return; it
 carries the NAME of the profile the session was started with, never its
 content, and the coordinator pushes it only for a profile session or a
 session on a temporary machine (`docs/push.md`).
+
+One event is not about a session: `engine.signin`, which a box sends when an
+attempt to sign an engine in on it ends, when one is signed out, and when a
+session finds one no longer works ([engines.md](./engines.md), "Signing in
+on the machine"). It carries a member's id, an engine, one of seven states
+and a time, and nothing a box could write a sentence into. The coordinator
+reads it only from a box that speaks 22, tells that member's custodians on
+their own phones in its own words, and writes nothing to the ring.

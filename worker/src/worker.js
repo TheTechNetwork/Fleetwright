@@ -1011,7 +1011,46 @@ const OPENAPI = JSON.stringify({
               "object",
               "null"
             ],
-            "additionalProperties": true
+            "additionalProperties": true,
+            "properties": {
+              "engines": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The engines this machine runs, `claude-code` first. Absent from a machine older than protocol 21, which runs Claude Code alone."
+              },
+              "engineSignins": {
+                "type": "array",
+                "description": "Which members are signed in to which engine on this machine, as it was told by `enginesignin` (protocol 22). Shown only for members the asker may act for (ones they manage or may start a session as, their own included; every one for an admin), and only from a machine that may act for the asker. ABSENT IS CANNOT TELL, never nobody: a machine older than protocol 22, or one that could not read its own record. An empty list is an answer. A sign-in pasted into the vault is not here: no machine was told it works.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "member",
+                    "engine",
+                    "since"
+                  ],
+                  "properties": {
+                    "member": {
+                      "type": "string",
+                      "description": "The member's id."
+                    },
+                    "engine": {
+                      "type": "string",
+                      "enum": [
+                        "codex",
+                        "opencode"
+                      ]
+                    },
+                    "since": {
+                      "type": "number",
+                      "description": "Since when it is signed in there, epoch ms."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "healthAt": {
             "type": [
@@ -2664,7 +2703,7 @@ const OPENAPI = JSON.stringify({
           "intents"
         ],
         "summary": "Do something to a session",
-        "description": "The fixed verb set is the security model: this API cannot express a shell string even to itself, so a compromised coordinator can start and stop sessions and can never run anything. A caller-supplied `actor` is a label; a signed-in device's verified email overrides it.",
+        "description": "The fixed verb set is the security model: this API cannot express a shell string even to itself, so a compromised coordinator can start and stop sessions and can never run anything. A caller-supplied `actor` is a label; a signed-in device's verified email overrides it. `enginesignin` signs Codex or OpenCode in for one member on one machine with the engine's own device code (docs/engines.md, \"Signing in on the machine\"): `start` answers with `url` and `code`, `status` says where it stands, `cancel` stops it, `signout` has the engine sign out. It is asked by whoever may start a session as that member, and a machine takes it only signed by them or delegated in a grant that names the member. No token is in any answer.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2728,7 +2767,8 @@ const OPENAPI = JSON.stringify({
                   },
                   "params": {
                     "type": "object",
-                    "additionalProperties": true
+                    "additionalProperties": true,
+                    "description": "The verb's parameters. For `enginesignin`: `member` (a member's id), `engine` (`codex` or `opencode`) and `action` (`start`, `status`, `cancel` or `signout`), all three required, and signed by the device with the rest of the intent."
                   },
                   "actor": {
                     "type": "string"
@@ -2739,7 +2779,7 @@ const OPENAPI = JSON.stringify({
                   },
                   "host": {
                     "type": "string",
-                    "description": "Placement preference for `start`: run the session on this host. Beside the intent rather than in params, because `start` declares no host parameter \u2014 a host receiving one would refuse the intent. Ignored for pinned and fan-out verbs. Refused by name if the host is unknown, degraded, or full."
+                    "description": "Placement preference for `start`: run the session on this host. Beside the intent rather than in params, because `start` declares no host parameter \u2014 a host receiving one would refuse the intent. Ignored for pinned and fan-out verbs. Refused by name if the host is unknown, degraded, or full. For `enginesignin` it is the machine the engine is signed in on, and is needed whenever more than one permanent machine could be meant: a sign-in is made and kept on one machine, so all four actions name the same one."
                   },
                   "start": {
                     "type": "object",
@@ -2797,6 +2837,106 @@ const OPENAPI = JSON.stringify({
                           "items": {
                             "type": "object",
                             "additionalProperties": true
+                          }
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "none",
+                            "waiting",
+                            "signed_in",
+                            "expired",
+                            "failed",
+                            "cancelled",
+                            "lost",
+                            "signed_out",
+                            "ended"
+                          ],
+                          "description": "For `enginesignin`: where the sign-in of one member's engine on one machine stands, and never more than that machine knows. `none`: it knows of no attempt and no sign-in. `waiting`: a code is out. `signed_in`: the engine said the sign-in succeeded. `expired`: 15 minutes passed with nobody approving it. `failed`: the engine refused or failed, with its own sentence in `detail`. `cancelled`: somebody cancelled it. `lost`: the machine's hub restarted while a code was out, so that attempt is gone. `signed_out`: the engine was asked to sign out there, and did. `ended`: a session of that member found the sign-in no longer works. A refusal that ends an attempt at its start (`error.code` `device_code_off`, `signin_failed`, `no_code`) carries `failed` here too."
+                        },
+                        "member": {
+                          "type": "string",
+                          "description": "For `enginesignin`: the member's id, as asked."
+                        },
+                        "engine": {
+                          "type": "string",
+                          "enum": [
+                            "codex",
+                            "opencode"
+                          ],
+                          "description": "For `enginesignin`: the engine, as asked."
+                        },
+                        "url": {
+                          "type": "string",
+                          "description": "For `enginesignin` in state `waiting`: the provider's own page to open. Not a secret, and for whoever asked: it is in this answer and in nothing the fleet keeps, logs, reports or pushes."
+                        },
+                        "code": {
+                          "type": "string",
+                          "description": "For `enginesignin` in state `waiting`: the code to enter on that page, as the engine made it (letters, digits and hyphens). The same rule as `url`."
+                        },
+                        "startedAt": {
+                          "type": "number",
+                          "description": "For `enginesignin` in state `waiting`: when the attempt began, epoch ms."
+                        },
+                        "expiresAt": {
+                          "type": "number",
+                          "description": "For `enginesignin` in state `waiting`: when the code runs out, epoch ms: 15 minutes after `startedAt`."
+                        },
+                        "expiresInMinutes": {
+                          "type": "integer",
+                          "description": "For `enginesignin` in state `waiting`: the minutes left, rounded up, by the machine\u2019s clock. 15 at the start."
+                        },
+                        "already": {
+                          "type": "boolean",
+                          "description": "For `enginesignin` `start`: true when an attempt was already waiting for this member and engine there, and this answer is that one. Nothing new was started."
+                        },
+                        "at": {
+                          "type": "number",
+                          "description": "For `enginesignin`: when the state named was reached, epoch ms. Absent for `none` and `waiting`."
+                        },
+                        "detail": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "description": "For `enginesignin` in state `failed`: the engine's own sentence, one line, with anything from a sign-in file taken out."
+                        },
+                        "signedIn": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "description": "For `enginesignin`, beside `state` in every answer that has one: the sign-in this machine was told of for that member and engine, or null. Two facts: a new attempt that expires or fails leaves the sign-in before it in place, and the answer then says `expired` and still says who is signed in.",
+                          "required": [
+                            "since",
+                            "who"
+                          ],
+                          "properties": {
+                            "since": {
+                              "type": "number",
+                              "description": "Since when, epoch ms."
+                            },
+                            "who": {
+                              "type": [
+                                "object",
+                                "null"
+                              ],
+                              "description": "The account, as the engine itself says: an address and a plan for Codex. Null for OpenCode, which keeps a token and no name, and for a Codex that did not say.",
+                              "properties": {
+                                "email": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "plan": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              }
+                            }
                           }
                         }
                       }

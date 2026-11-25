@@ -484,7 +484,7 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
  * the protocol is untouched, because this is presentation and `logs` remains
  * one verb with both parameters.
  */
-/** @type {Record<string, { description?: string, omit?: string[] }>} */
+/** @type {Record<string, { name?: string, description?: string, omit?: string[] }>} */
 const OVERRIDE = {
   logs: {
     description:
@@ -494,7 +494,37 @@ const OVERRIDE = {
       "For what a SESSION printed, use fleet_read_log instead.",
     omit: ['name'],
   },
+  // THE ONE TOOL WHOSE NAME IS NOT ITS VERB'S. A verb is one word on the wire
+  // (`enginesignin`); a tool is read by an agent choosing among sixty, and
+  // `fleet_enginesignin` reads as one word nobody would search for. Still
+  // generated from the verb: its parameters and its refusals are the verb's
+  // own, and `verbOfTool` is how the server finds its way back.
+  enginesignin: {
+    name: 'fleet_engine_signin',
+    description:
+      'Sign Codex or OpenCode in for one member on the machine it runs on, with the engine’s own device code. ' +
+      '`start` answers with a page to open and a code that lasts 15 minutes: give both to the person, who enters the ' +
+      'code under their own account, then ask `status` until it says how it ended. A second `start` while one waits ' +
+      'answers with the one waiting. `cancel` stops an attempt and `signout` has the engine remove its sign-in there. ' +
+      'Name the machine with `host`: one whose engines (fleet_health) include this one. No token is sent or returned. ' +
+      'Only who may start a session as the member may, and the grant this server acts under must carry this and name the member.',
+  },
 };
+
+/** The name a verb's own tool goes by. */
+const toolNameOf = (/** @type {string} */ verb) => OVERRIDE[verb]?.name ?? `fleet_${verb}`;
+
+/**
+ * The verb behind a tool's name, whether or not this server offers it:
+ * `fleet_stop` is `stop`, and `fleet_engine_signin` is `enginesignin`. For a
+ * name that is no verb's tool, what is left when `fleet_` is taken off.
+ *
+ * @param {unknown} name
+ */
+export function verbOfTool(name) {
+  const said = String(name ?? '');
+  return Object.keys(OVERRIDE).find((verb) => OVERRIDE[verb].name === said) ?? said.replace(/^fleet_/, '');
+}
 
 /**
  * JSON Schema for one protocol parameter.
@@ -609,7 +639,7 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       const description = [OVERRIDE[verb]?.description || def.summary || verb, notes[verb]].filter(Boolean).join(' ');
 
       return {
-        name: `fleet_${verb}`,
+        name: toolNameOf(verb),
         description,
         inputSchema: {
           type: 'object',
@@ -675,7 +705,7 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
     // `tool.verb` is null on a coordinator tool, and OVERRIDE is keyed by verb.
     if (!tool.verb) continue;
     for (const gone of OVERRIDE[tool.verb]?.omit || []) {
-      if (tool.name === `fleet_${tool.verb}`) delete tool.inputSchema.properties[gone];
+      if (tool.name === toolNameOf(tool.verb)) delete tool.inputSchema.properties[gone];
     }
   }
 

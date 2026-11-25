@@ -571,6 +571,10 @@ agent-fleet/v1/delegation
   ids, at most 64). A start that names `member` is covered only by a
   delegation whose list has that id, and a delegation with no list covers no
   member start at all ([members.md](./members.md), "Starting as a member").
+  The same list is who it may sign an engine in for: `enginesignin` names a
+  member, and a grant that carries the verb covers it for the members it
+  names and no others ([engines.md](./engines.md), "Signing in on the
+  machine").
   The key is signed only when the grant carries it: with none it is left out
   of the JSON altogether, so a delegation made before the field existed is
   the same bytes it always was and still verifies. With some it is the array

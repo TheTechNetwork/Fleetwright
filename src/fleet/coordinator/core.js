@@ -11181,6 +11181,16 @@ function remedyFor(verb, fromApp) {
       'Apply it from the Fleetwright app, on the machine\u2019s page, or run fleetwright-sidecar update on the box.';
   }
   if (MCP_UNDELEGATED_VERBS.includes(verb)) return `An MCP client is never delegated ${verb}. Do it from the Fleetwright app.`;
+  // SIGNING AN ENGINE IN is withheld from an MCP server by default
+  // (src/mcp/tools.js DEFAULT_DENY), and the delegation a phone makes for an
+  // MCP client is the verbs that server offers by default, so it does not
+  // carry this one: sent to allow that delegation, a person would allow it
+  // and be refused again. Where it is done is the app. This goes when the
+  // phones' delegation carries the verb.
+  if (verb === 'enginesignin') {
+    return 'The delegation a phone makes for an MCP client does not carry signing an engine in. ' +
+      'Do it from the Fleetwright app, on the member\u2019s Credentials, with Sign in on a machine.';
+  }
   return DELEGATION_REMEDY;
 }
 

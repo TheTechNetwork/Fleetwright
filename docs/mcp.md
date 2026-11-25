@@ -132,9 +132,24 @@ reboot, upgrade, restore          restart or unbin what somebody else is using
 purge                             destroy a conversation with no recovery
 writefile, copyfile, deletefile   the workspace's destructive half
 connect, link, unlink, renew      move somebody's credentials around
+enginesignin                      sign an engine in for a member: it ends with
+                                  a person entering a code under their own account
 answer                            ← the interesting one
 labels                            where everybody else's work lands
 ```
+
+**`enginesignin` is offered as `fleet_engine_signin` once allowed**
+(`FLEETWRIGHT_MCP_ALLOW=enginesignin`): the one tool whose name is not its
+verb's, because one word of twelve letters is not what an agent looks for.
+It hands back the provider's page and a code for the person to enter, and
+no token ([engines.md](./engines.md), "Signing in on the machine"). Allowing
+it here is half of it. This server acts on a delegation, and a box takes
+the verb only under one that carries `enginesignin` and names the member.
+The delegation the phones make for an MCP client is the verbs this server
+offers by default, so it does not carry a withheld one: until it does, a box
+refuses, and the refusal says to do it from the app, on the member's
+Credentials, and does not send anybody to allow a delegation that would not
+cover it.
 
 **`sandbox` is offered and `labels` is not,** which looks inconsistent from the
 outside and is the same rule applied twice. The variant decides what the next
