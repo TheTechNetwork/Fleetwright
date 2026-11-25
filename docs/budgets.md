@@ -101,7 +101,7 @@ approval names each one that is:
 |---|---|
 | `over-budget` | `budgets` is `ask`, the member has a budget, and its counted spend this month is at or past it |
 | `dangerous` | `dangerous` is on and the start asks for a session that does not ask before it runs commands |
-| `risky-work` | the start is on a task whose `workType` is in `workTypes` |
+| `risky-work` | the start is on a task whose `workType` is in `workTypes`. Changing the kind of work on such a task, or on one that was such a task, takes the standing that could approve the start ([tasks.md](./tasks.md), "Who sees and changes one") |
 | `paid-api` | `paidApi` is on and any engine in the member's list bills an API key, whichever machine the start goes to |
 
 A start as yourself, with no member, is not looked at: it runs on your own
@@ -119,7 +119,7 @@ approval is given, the same start is sent again and goes through.
 |---|---|
 | `id` | `a` and a number |
 | `member`, `task` | who the start is as, and the task when there is one |
-| `reasons` | `over-budget`, `dangerous`, `risky-work`, `paid-api`, each with its sentence |
+| `reasons` | `over-budget`, `dangerous`, `risky-work`, `paid-api`, each with its sentence. As a client is sent it, the last sentence ends with what the session is to be told: the start of its words on one line, at most 160 characters |
 | `askedBy`, `askedAt` | who tried to start it |
 | `state` | `waiting`, `approved`, `declined`, `used` or `expired` |
 | `decidedBy`, `decidedAt`, `note` | who answered, when, and what they said, at most 300 bytes |
@@ -134,6 +134,15 @@ approval is given, the same start is sent again and goes through.
   was one, and the reasons it names, for the person who asked, once, within
   an hour of being given. A start that has since gained a reason (the member
   went over budget while a risky-work approval waited) needs a new one.
+- **And for what its session is to be told.** The coordinator keeps a
+  SHA-256 digest of the words the start carried when the approval was asked
+  for (or of the profile it named), and the approval covers only a start
+  with the same digest. A task whose title or brief was rewritten since, or
+  other words on a start with no task, is another start: it is refused, in
+  words that say the approval was for something else, and asks for a new
+  one. The words themselves are not kept. Whoever is asked reads the start
+  of them, after the last reason, in the list, on their phone and in the
+  push. The digest is the coordinator's own check and is sent to nobody.
 - **A second ask for the same thing is the same approval**, so trying again
   does not fill a manager's phone.
 - A waiting approval nobody answers expires after a day.

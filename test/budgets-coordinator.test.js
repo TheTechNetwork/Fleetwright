@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { OrgMembers } from '../src/fleet/coordinator/org-members.js';
 import { budgetsRoute, SPEND_PREFIX, APPROVALS_PREFIX } from '../src/fleet/coordinator/org-budgets.js';
+import { tasksRoute } from '../src/fleet/coordinator/org-tasks.js';
 import { APPROVAL_USE_MS, APPROVAL_WAIT_MS, MAX_APPROVALS } from '../src/fleet/protocol/budgets.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { Fleet } from '../worker/src/fleet-do.js';
@@ -218,7 +219,9 @@ test('an approval is for the task it was asked about, and a start that has gaine
   const other = /** @type {any} */ (f.core.createTask(dana, { title: 'Ship the other', brief: 'Deploy the site.', assignee: 'debbie', workType: 'deploy' }));
   const refused = await f.start(dana, 'debbie', task.start);
   assert.deepEqual([refused.error.code, refused.approval.task], ['needs_approval', 't1']);
-  assert.equal(refused.approval.reasons[0].text, 't1 is deploy work, which this fleet asks about first.');
+  // What the session is to be told is said after the last reason, where a phone draws it.
+  assert.equal(refused.approval.reasons[0].text, 't1 is deploy work, which this fleet asks about first. The session is told: “Ship it Deploy the API.”');
+  assert.deepEqual([refused.approval.digest, refused.approval.told], [undefined, undefined], 'and the digest it is bound by is the coordinator’s own');
   assert.equal(/** @type {any} */ (f.core.tasks.get('t1')).lock, null, 'and no lock was taken for a start that waits');
   await f.core.answerApproval(admin, 'a1', 'approve');
   // The approval for t1 does not start t2.
@@ -229,6 +232,74 @@ test('an approval is for the task it was asked about, and a start that has gaine
   // As asked, it goes through, on a1.
   assert.equal((await f.start(dana, 'debbie', task.start)).ok, true);
   assert.equal(/** @type {any} */ (f.core.tasks.get('t1')).lock.session, 'cc-1');
+});
+
+test('an approval is for what the session was to be told: a rewritten brief, or other words, needs a new one, and the refusal says so', async () => {
+  // Found by an outside review. An approval named a member, a task's id, the
+  // asker and the kinds of reason. Sam had "deploy the docs site" approved,
+  // rewrote the brief to "force-push main to production", and started it on
+  // the same approval.
+  const f = fleet();
+  f.set({ workTypes: ['deploy'], dangerous: true });
+  await f.reports();
+  const task = /** @type {any} */ (f.core.createTask(sam, { title: 'Deploy the docs site', brief: 'Run the docs deploy job.', assignee: 'debbie', workType: 'deploy' }));
+  assert.equal((await f.start(sam, 'debbie', task.start)).approval.id, 'a1');
+  f.pushes.length = 0;
+  const given = /** @type {any} */ (await f.core.answerApproval(dana, 'a1', 'approve'));
+  assert.match(given.text, /t1 is deploy work, which this fleet asks about first\. The session is told: “Deploy the docs site Run the docs deploy job\.”$/);
+  assert.equal(/** @type {any} */ (f.core.changeTask(sam, 't1', { title: 'Deploy to production', brief: 'Force-push main to production.' })).ok, true);
+  const again = await f.start(sam, 'debbie', /** @type {any} */ (f.core.taskFor(sam, 't1')).start);
+  assert.deepEqual([again.error.code, again.approval.id], ['needs_approval', 'a2']);
+  assert.equal(again.text, 't1 is deploy work, which this fleet asks about first. a1 was approved for what the session was to be told then, and t1 has been changed since: it does not cover this. dana@example.com or eli@example.com, or a fleet admin, must approve it first: a2. Start it again once it is approved; nothing was sent.');
+  assert.equal(f.sent.length, 0, 'nothing reached the box');
+  // Whoever is asked is told what the session would now be told, on their phone and in the list.
+  assert.equal(f.pushes.at(-1).body, 'sam@example.com asks, on t1. t1 is deploy work, which this fleet asks about first. The session is told: “Deploy to production Force-push main to production.”');
+  assert.match(/** @type {any} */ (f.core.approvalsFor(dana)).approvals[0].reasons.at(-1).text, /The session is told: “Deploy to production Force-push main to production\.”$/);
+  // Put back as it was approved, a1 is good again: it is the same start.
+  assert.equal(/** @type {any} */ (f.core.changeTask(sam, 't1', { title: 'Deploy the docs site', brief: 'Run the docs deploy job.' })).ok, true);
+  assert.equal((await f.start(sam, 'debbie', /** @type {any} */ (f.core.taskFor(sam, 't1')).start)).ok, true);
+  assert.equal(f.sent.at(-1).params.task, 'Deploy the docs site\n\nRun the docs deploy job.');
+
+  // WITH NO TASK, the words are all there is to approve.
+  const g = fleet();
+  g.set({ dangerous: true });
+  await g.reports();
+  assert.equal((await g.start(sam, 'debbie', { mode: 'dangerous', task: 'Tidy the README.' })).approval.reasons[0].text, 'This session would not ask before it runs commands, on Debbie’s sign-ins. The session is told: “Tidy the README.”');
+  await g.core.answerApproval(dana, 'a1', 'approve');
+  const other = await g.start(sam, 'debbie', { mode: 'dangerous', task: 'rm -rf the release bucket.' });
+  assert.deepEqual([other.error.code, other.approval.id], ['needs_approval', 'a2']);
+  assert.match(other.text, /a1 was approved for what the session was to be told then, and this start says something else: it does not cover this\./);
+  assert.equal((await g.start(sam, 'debbie', { mode: 'dangerous', task: 'Tidy the README.' })).ok, true);
+});
+
+test('the kind of work on a task the fleet asks about is changed only by somebody who could approve it, and the change is written down', async () => {
+  // `risky-work` needed no approval at all: take `deploy` off, start, put it back.
+  const f = fleet();
+  f.set({ workTypes: ['deploy'] });
+  await f.reports();
+  const task = /** @type {any} */ (f.core.createTask(sam, { title: 'Deploy prod', brief: 'Deploy it.', assignee: 'debbie', workType: 'deploy' }));
+  assert.equal((await f.start(sam, 'debbie', task.start)).error.code, 'needs_approval');
+  for (const workType of ['', 'docs']) {
+    const tried = /** @type {any} */ (f.core.changeTask(sam, 't1', { workType }));
+    assert.equal(tried.error?.code, 'not_manager');
+    assert.equal(tried.text, 't1 is deploy work, which this fleet asks about before a session starts on it. Changing what kind of work it is takes somebody who could give that approval: dana@example.com or eli@example.com, or a fleet admin.');
+  }
+  assert.equal((await tasksRoute(f.core, 'PUT', '/api/tasks/t1', null, sam, async () => ({ workType: '' })))?.status, 403);
+  // The rest of the task is still his to change, and so is saying the same kind again.
+  assert.equal(/** @type {any} */ (f.core.changeTask(sam, 't1', { workType: 'deploy', repo: 'acme/app' })).ok, true);
+  // Dana manages Debbie and could have approved the start: the kind is hers to change, and the history says she did.
+  assert.equal(/** @type {any} */ (f.core.changeTask(dana, 't1', { workType: 'docs' })).ok, true);
+  assert.deepEqual(f.core.tasks.get('t1')?.handoffs.filter((h) => h.kind === 'work-type').map((h) => [h.by, h.from, h.to]), [[dana.email, 'deploy', 'docs']]);
+  // IT WAS deploy work, and the history remembers: putting it back is anybody's, taking it further is not Sam's.
+  const after = /** @type {any} */ (f.core.changeTask(sam, 't1', { workType: '' }));
+  assert.match(after.text, /^t1 was deploy work, which this fleet asks about/);
+  // With no assignee there is nobody yet whose managers would be asked: an admin's.
+  assert.equal(/** @type {any} */ (f.core.createTask(sam, { title: 'Deploy later', brief: 'Deploy it.', workType: 'deploy' })).ok, true);
+  assert.match(/** @type {any} */ (f.core.changeTask(sam, 't2', { workType: '' })).text, /takes somebody who could give that approval: a fleet admin\.$/);
+  assert.equal(/** @type {any} */ (f.core.changeTask(admin, 't2', { workType: '' })).ok, true);
+  // A kind the fleet does not ask about is whoever's the task is to change.
+  assert.equal(/** @type {any} */ (f.core.createTask(sam, { title: 'Write the notes', brief: 'Write them.', assignee: 'debbie', workType: 'docs' })).ok, true);
+  assert.equal(/** @type {any} */ (f.core.changeTask(sam, 't3', { workType: 'deploy' })).ok, true, 'and making it one the fleet asks about takes nobody’s leave');
 });
 
 test('a start the box refuses gives its approval back; one that never reaches a box does not spend it', async () => {

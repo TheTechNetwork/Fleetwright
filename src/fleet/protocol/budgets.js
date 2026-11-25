@@ -4,8 +4,8 @@
 // WHY IT IS HERE AND NOT IN THE COORDINATOR. The coordinator counts and
 // gates; the MCP server and both phones say the same figures and reasons in
 // words. One file, so the sentence a refusal carries and the one a screen
-// draws cannot come to differ. No imports beyond its neighbours here, so the
-// Worker bundles take it.
+// draws cannot come to differ. No imports beyond its neighbours here and
+// text.js, which has none, so the Worker bundles take it.
 //
 // THE COUNT IS OF WHAT WAS SEEN BEING SPENT, and nothing else: a session's
 // own running total goes up, and the difference is added. Nothing here
@@ -15,6 +15,7 @@
 //
 // NEVER THROWS. Every refusal is `{ ok: false, code, text }`.
 
+import { oneLine } from '../../core/text.js';
 import { MEMBER_ID_RE } from './members.js';
 import { TASK_ID_RE } from './tasks.js';
 
@@ -35,6 +36,8 @@ export const APPROVAL_WAIT_MS = 24 * 60 * 60_000;
 export const APPROVAL_USE_MS = 60 * 60_000;
 /** A note beside an answer, in bytes of UTF-8. */
 export const MAX_APPROVAL_NOTE = 300;
+/** How much of what a session is to be told an approval shows, in characters. Its digest is of all of it. */
+export const MAX_TOLD_SHOWN = 160;
 /** The share of a budget at which a member's managers are told it is nearly spent. */
 export const BUDGET_WARN_AT = 0.8;
 /**
@@ -72,6 +75,8 @@ export const monthOf = (/** @type {number} */ t) => new Date(t).toISOString().sl
  * @property {string} member
  * @property {string|null} task
  * @property {Reason[]} reasons
+ * @property {string} [digest]  SHA-256, hex, of what the session was to be told when this was asked for (startDigest)
+ * @property {string} [told]    the start of that, as one sentence for whoever answers (toldWords)
  * @property {string} askedBy
  * @property {number} askedAt
  * @property {'waiting'|'approved'|'declined'|'used'|'expired'} state
@@ -294,13 +299,48 @@ function note(/** @type {unknown} */ v) {
 }
 
 /**
+ * What a start's session is to be told, as the one thing an approval is
+ * bound to: the words it carries, or the profile it names.
+ *
+ * WHY A DIGEST. An approval covered a member, a task's id, the asker and the
+ * kinds of reason, and none of what the session would be told. One given for
+ * a docs deploy started "force-push main to production" under the same id,
+ * and one given for a session that skips prompts to tidy a README started
+ * any words at all. The words are not kept: a start's first message is up
+ * to 8000 bytes and is the asker's, and two hundred of them are not this
+ * record's to hold. Their digest is enough to tell the same start from
+ * another, and nobody can find other words that give the same one.
+ *
+ * @param {{ task?: unknown, profile?: unknown }} start
+ * @returns {Promise<string>} SHA-256, hex
+ */
+export async function startDigest({ task, profile }) {
+  const said = JSON.stringify([typeof task === 'string' ? task : '', typeof profile === 'string' ? profile : '']);
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(said)));
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * The same, as a sentence for the person asked to approve: the start of the
+ * words on one line. They approve a start, and a start is what it says.
+ *
+ * @param {{ task?: unknown, profile?: unknown }} start
+ */
+export function toldWords({ task, profile }) {
+  const words = typeof task === 'string' ? oneLine(task, MAX_TOLD_SHOWN + 1) : '';
+  if (words) return `The session is told: “${words.length > MAX_TOLD_SHOWN ? `${words.slice(0, MAX_TOLD_SHOWN - 1)}…` : words}”`;
+  if (typeof profile === 'string' && profile) return `The session is given the profile ${oneLine(profile, 40)}, as its machine holds it.`;
+  return 'The session is told nothing, and starts idle.';
+}
+
+/**
  * A new approval, waiting.
  *
- * @param {{ id: string, member: string, task?: string|null, reasons: Reason[], by: string, at: number }} q
+ * @param {{ id: string, member: string, task?: string|null, reasons: Reason[], digest?: string, told?: string, by: string, at: number }} q
  * @returns {Approval}
  */
-export function newApproval({ id, member, task = null, reasons, by, at }) {
-  return { id, member, task: task || null, reasons: reasons.map((r) => ({ kind: r.kind, text: r.text })), askedBy: by, askedAt: at, state: 'waiting' };
+export function newApproval({ id, member, task = null, reasons, digest, told, by, at }) {
+  return { id, member, task: task || null, reasons: reasons.map((r) => ({ kind: r.kind, text: r.text })), ...(digest ? { digest } : {}), ...(told ? { told } : {}), askedBy: by, askedAt: at, state: 'waiting' };
 }
 
 /** The same approval as time has left it: a waiting one past a day, or a given one past its hour, is over. */
@@ -311,15 +351,28 @@ export function aged(/** @type {Approval} */ a, /** @type {number} */ now) {
 }
 
 /**
- * Is this approval about this start: the same person asking, as the same
- * member, on the same task or none, and naming every reason the start has
- * now? A start that has since gained a reason is not covered by an approval
- * that was given without it.
+ * Is this approval about a start like this one: the same person asking, as
+ * the same member, on the same task or none, and naming every reason the
+ * start has now? A start that has since gained a reason is not covered by an
+ * approval that was given without it.
  *
  * @param {Approval} a @param {{ member: string, task?: string|null, kinds: string[], by: string }} start
  */
-export function covers(a, { member, task = null, kinds, by }) {
+export function sameAsk(a, { member, task = null, kinds, by }) {
   return a.member === member && (a.task ?? null) === (task || null) && a.askedBy === by && kinds.every((k) => a.reasons.some((r) => r.kind === k));
+}
+
+/**
+ * Is this approval for this start: all of the above, and the session is to
+ * be told what it was to be told when the approval was asked for
+ * (startDigest)? A task whose brief was rewritten since, or other words on a
+ * start with no task, is another start. An approval from before digests
+ * were kept names none and covers nothing.
+ *
+ * @param {Approval} a @param {{ member: string, task?: string|null, kinds: string[], by: string, digest: string }} start
+ */
+export function covers(a, start) {
+  return sameAsk(a, start) && Boolean(start.digest) && a.digest === start.digest;
 }
 
 /**
@@ -347,7 +400,20 @@ export function approvalWords(/** @type {Approval} */ a, /** @type {(id: string)
     used: `${a.id} was approved by ${a.decidedBy} and has been used: ${what}.`,
     expired: `${a.id} ran out before it was ${a.decidedBy ? 'used' : 'answered'}: ${what}.`,
   }[a.state];
-  return `${state} ${a.reasons.map((r) => r.text).join(' ')}${a.note ? ` Note: ${a.note}` : ''}`.trim();
+  return `${state} ${a.reasons.map((r) => r.text).join(' ')}${a.told ? ` ${a.told}` : ''}${a.note ? ` Note: ${a.note}` : ''}`.trim();
+}
+
+/**
+ * An approval's reasons as a screen draws them, with what the session is to
+ * be told said after the last. Both phones draw each reason's sentence as
+ * sent and nothing else of an approval's, so this is where the person asked
+ * to approve reads what they are approving.
+ *
+ * @param {readonly Reason[]} reasons @param {string|undefined} told
+ * @returns {Reason[]}
+ */
+export function withTold(reasons, told) {
+  return reasons.map((r, i) => (told && i === reasons.length - 1 ? { kind: r.kind, text: `${r.text} ${told}` } : { kind: r.kind, text: r.text }));
 }
 
 /**
@@ -368,6 +434,8 @@ export function readApproval(row) {
     member: row.member,
     task: typeof row.task === 'string' && TASK_ID_RE.test(row.task) ? row.task : null,
     reasons,
+    ...(typeof row.digest === 'string' && /^[0-9a-f]{64}$/.test(row.digest) ? { digest: row.digest } : {}),
+    ...(typeof row.told === 'string' && row.told ? { told: oneLine(row.told, MAX_TOLD_SHOWN + 60) } : {}),
     askedBy: String(row.askedBy ?? '').slice(0, 200),
     askedAt: Number(row.askedAt) || 0,
     state: row.state,

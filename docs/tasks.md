@@ -37,7 +37,7 @@ Nothing here runs unless somebody makes a task.
 | `result` | what came back: `{ outcome, summary, session, hostId, member, at, truncated }` | the summary is at most 4000 bytes |
 | `routing` | this task's own routing mode, `auto`, `manual` or `off` ([routing.md](./routing.md)) | optional; absent follows the fleet's |
 | `route` | the last routing decision about it: how, who, among whom, and why | set by the coordinator |
-| `handoffs` | every change of hands, oldest first | the last 50 |
+| `handoffs` | every change of hands, oldest first, and every change of the kind of work (`work-type`, where `from` and `to` are kinds of work) | the last 50 |
 | `createdBy`, `createdAt`, `updatedAt` | who made it, and when | set by the coordinator |
 
 **No credential is ever in a task.** A brief and a result are words a person
@@ -64,6 +64,13 @@ and `test/tasks.test.js` measures that they do.
   standing over the member, because an assignment is the step before a start.
 - **Changes, reassigns, releases, accepts, reopens or cancels it**: the same
   people who see it.
+- **Changes its kind of work, where the fleet asks about that kind**
+  ([budgets.md](./budgets.md), `risky-work`): somebody who manages its
+  assignee, or a fleet admin, which is who could approve a start on it. With
+  no assignee, a fleet admin. The same holds for a task that was of such a
+  kind, as its history shows. Taken off by anybody who could see the task,
+  the kind of work was no gate: clear it, start, put it back. Every change
+  of it is a line in `handoffs`.
 
 ## One assignee, one lock
 
@@ -126,7 +133,12 @@ shows the brief it is about to sign and signs exactly that.
 
 **The coordinator refuses first**, in the person's words: no such task; not
 assigned; assigned to somebody else than `member` names; not open; locked; a
-branch that is not the task's.
+branch that is not the task's; words that are not the task's (`task_words`).
+The words are the person's to sign, so the coordinator cannot write them. It
+compares them with the task's title and brief as they are now, and a start
+that carries anything else is refused before a machine is chosen. A task
+changed after somebody opened it is refused the same way, and the refusal
+says where the words as they are now can be read.
 
 **The box composes the first message** (`composeTaskMessage`,
 `src/fleet/protocol/tasks.js`):

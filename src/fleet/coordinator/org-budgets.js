@@ -15,7 +15,7 @@
 
 import {
   checkBudgetSettings, NO_BUDGET_SETTINGS, monthOf, newSpend, startCounting, resumeCounting, countSpend, readSpend, overBudget,
-  newApproval, aged, covers, answerApproval, readApproval, APPROVAL_ID_RE, MAX_APPROVALS, BUDGET_WARN_AT,
+  newApproval, aged, covers, sameAsk, answerApproval, readApproval, APPROVAL_ID_RE, MAX_APPROVALS, BUDGET_WARN_AT,
 } from '../protocol/budgets.js';
 
 export const SPEND_PREFIX = 'spend:';
@@ -166,11 +166,23 @@ export class OrgBudgets {
    * sent (`take`): a start refused on the way for some other reason, a
    * machine that is full, has not spent it.
    *
-   * @param {{ member: string, task?: string|null, kinds: string[], by: string }} start
+   * @param {{ member: string, task?: string|null, kinds: string[], by: string, digest: string }} start
    * @returns {Approval|null}
    */
   given(start) {
     return this.all().find((a) => a.state === 'approved' && covers(a, start)) ?? null;
+  }
+
+  /**
+   * An approval given for a start like this one whose session was to be
+   * told something else, or null: so the refusal can say why the approval
+   * the person is holding does not let this through.
+   *
+   * @param {{ member: string, task?: string|null, kinds: string[], by: string, digest: string }} start
+   * @returns {Approval|null}
+   */
+  givenForOtherWords(start) {
+    return this.all().find((a) => a.state === 'approved' && sameAsk(a, start) && !covers(a, start)) ?? null;
   }
 
   /**
@@ -195,12 +207,12 @@ export class OrgBudgets {
   /**
    * Ask for an approval, or find the one already waiting for the same thing.
    *
-   * @param {{ member: string, task?: string|null, reasons: import('../protocol/budgets.js').Reason[], by: string }} q
+   * @param {{ member: string, task?: string|null, reasons: import('../protocol/budgets.js').Reason[], digest: string, told?: string, by: string }} q
    * @returns {{ approval: Approval, fresh: boolean }}
    */
-  ask({ member, task = null, reasons, by }) {
+  ask({ member, task = null, reasons, digest, told, by }) {
     const kinds = reasons.map((r) => r.kind);
-    const waiting = this.all().find((a) => a.state === 'waiting' && covers(a, { member, task, kinds, by }));
+    const waiting = this.all().find((a) => a.state === 'waiting' && covers(a, { member, task, kinds, by, digest }));
     if (waiting) return { approval: waiting, fresh: false };
     if (this.approvals.size >= MAX_APPROVALS) {
       // The oldest that is finished goes; with none finished, the oldest of all.
@@ -211,7 +223,7 @@ export class OrgBudgets {
     }
     this.seq += 1;
     this.seqDirty = true;
-    const approval = newApproval({ id: `a${this.seq}`, member, task, reasons, by, at: this.now() });
+    const approval = newApproval({ id: `a${this.seq}`, member, task, reasons, digest, told, by, at: this.now() });
     this.#keepApproval(approval);
     return { approval, fresh: true };
   }

@@ -300,8 +300,10 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     verb: null,
     description:
       'The approvals you asked for and the ones waiting on you: who wants to start a session as which ' +
-      'member, why it needs approval, and where it stands. This tool does not answer one. An approval is ' +
-      'a person’s to give, from the app, so tell the person who can and start again once it is given.',
+      'member, why it needs approval, what the session would be told, and where it stands. An approval is ' +
+      'for those words: a start that says something else, or a task whose brief changed since, needs a new ' +
+      'one. This tool does not answer one. An approval is a person’s to give, from the app, so tell the ' +
+      'person who can and start again once it is given.',
     schema: {},
     requires: [],
     local: true,

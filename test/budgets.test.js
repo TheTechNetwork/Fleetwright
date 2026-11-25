@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   checkBudgetSettings, newSpend, startCounting, resumeCounting, countSpend, readSpend, spendWords, overBudget, dollars, monthOf,
-  approvalNeeded, newApproval, aged, covers, answerApproval, approvalWords, readApproval,
+  approvalNeeded, newApproval, aged, covers, sameAsk, startDigest, toldWords, answerApproval, approvalWords, readApproval,
   MAX_SESSIONS_SEEN, MAX_RISKY_WORK_TYPES, APPROVAL_WAIT_MS, APPROVAL_USE_MS, MAX_APPROVAL_NOTE,
 } from '../src/fleet/protocol/budgets.js';
 
@@ -152,12 +152,31 @@ test('the setting holds a mode, a flag and a short list, and says what is wrong 
   assert.match(refused({ workTypes: Array.from({ length: MAX_RISKY_WORK_TYPES + 1 }, (_, i) => `k${i}`) }), new RegExp(`at most ${MAX_RISKY_WORK_TYPES}`));
 });
 
-const asked = () => newApproval({ id: 'a7', member: 'debbie', task: 't4', reasons: [{ kind: 'over-budget', text: 'Debbie has spent $52.10 of a budget of $50.00 this month.' }], by: 'dana@example.com', at: NOV });
+/** What two different starts' sessions would be told, as digests. */
+const DOCS = 'd'.repeat(64);
+const PROD = 'e'.repeat(64);
+const asked = () => newApproval({ id: 'a7', member: 'debbie', task: 't4', reasons: [{ kind: 'over-budget', text: 'Debbie has spent $52.10 of a budget of $50.00 this month.' }], digest: DOCS, by: 'dana@example.com', at: NOV });
 
-test('an approval covers the same person, member and task, and every reason the start has now', () => {
+test('an approval covers the same person, member, task and words, and every reason the start has now', async () => {
   const a = asked();
-  const start = { member: 'debbie', task: 't4', kinds: ['over-budget'], by: 'dana@example.com' };
+  const start = { member: 'debbie', task: 't4', kinds: ['over-budget'], by: 'dana@example.com', digest: DOCS };
   assert.equal(covers(a, start), true);
+  // THE SAME START IS ONE WHOSE SESSION IS TOLD THE SAME THING. Other words
+  // under the same task id, or on a start with no task, are another start.
+  assert.equal(covers(a, { ...start, digest: PROD }), false, 'what the session is told has changed');
+  assert.equal(sameAsk(a, { ...start, digest: PROD }), true, 'and it is still the same ask, which is how the refusal can say so');
+  const { digest: _none, ...old } = a;
+  assert.equal(covers(old, start), false, 'an approval kept from before digests names none and covers nothing');
+  // The digest is of the words or of the profile named, and of all of them.
+  const digests = await Promise.all([{ task: 'Tidy the README.' }, { task: 'Tidy the README. ' }, { profile: 'Tidy the README.' }, {}, { task: 'Tidy the README.', extra: 1 }].map((x) => startDigest(x)));
+  assert.equal(new Set(digests).size, 4);
+  assert.equal(digests[0], digests[4]);
+  assert.match(digests[0], /^[0-9a-f]{64}$/);
+  // And what the person asked to approve is shown of it.
+  assert.equal(toldWords({ task: 'Tidy the\nREADME.' }), 'The session is told: “Tidy the README.”');
+  assert.equal(toldWords({ task: 'x'.repeat(400) }), `The session is told: “${'x'.repeat(159)}…”`);
+  assert.equal(toldWords({ profile: 'nightly' }), 'The session is given the profile nightly, as its machine holds it.');
+  assert.equal(toldWords({}), 'The session is told nothing, and starts idle.');
   assert.equal(covers(a, { ...start, by: 'sam@example.com' }), false, 'somebody else’s start');
   assert.equal(covers(a, { ...start, member: 'ines' }), false);
   assert.equal(covers(a, { ...start, task: 't5' }), false);
