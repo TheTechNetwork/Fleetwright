@@ -22,10 +22,13 @@ exactly as it did.
 **What has and has not been run.** The two adapters are tested against
 stand-in servers that speak each engine's published protocol, and the Codex
 adapter's opening was checked against the real `codex app-server`, signed
-out. No turn has been sent to a real Codex or OpenCode, and the move from one
-engine to the next has not been run on a box: the note, the commit, the
-choice of engine and the launch command each have tests, and the tmux and
-podman steps between them do not.
+out. No turn has been sent to a real Codex or OpenCode. The move from one
+engine to the next is run in a test through the real launch, a real tmux pane
+and the real runner, with a script standing in for podman and for each
+engine (`test/engines-launch.test.js`). It has not been run on a box, in a
+container, with a real engine. The image with the engines in it is built and
+run in CI (`.github/workflows/sandbox.yml`), which this change added and
+which has not run yet: nothing here could build a container.
 
 ## The engines
 
@@ -43,7 +46,7 @@ engines:
   - engine: codex
     model: gpt-5.1-codex
   - engine: opencode
-    model: github-copilot/gpt-5
+    model: github-copilot/claude-sonnet-5.5
 ```
 
 `model` is optional for `claude-code` and `codex`, and required for
@@ -51,6 +54,11 @@ engines:
 since step 7 an API key's provider: [api-engines.md](./api-engines.md)). A
 model from any other OpenCode provider is refused by name: those run on API
 keys, which are step 7.
+
+**The account's own list decides which models there are.** The one above is
+in OpenCode's catalog for Copilot; whether a member's Copilot plan has it is
+the plan's to say. A name the account does not have is found before a turn
+(below) and ends as `model`, so the member's next engine takes over.
 
 **Across providers, never across accounts.** A member has one vault and a
 vault keeps one item of each kind, so there is no second account of the same
@@ -74,13 +82,26 @@ TurnEnded { engine, reason, detail, model, usage, resetsAt }
 | reason | what happened | Claude Code | Codex | ACP |
 |---|---|---|---|---|
 | `done` | the turn ended | the `Stop` hook | `turn/completed`, status `completed` | `stopReason: end_turn` |
-| `limit` | the account's limit | `StopFailure` naming a rate or usage limit | `usageLimitExceeded`, or a failed turn while a rate-limit window stands at 100% | an error naming a rate limit or quota |
-| `auth` | not signed in, or the sign-in ended | `StopFailure` naming the sign-in | `account/read` with no account, or `unauthorized` | error `-32000`, Authentication required |
-| `model` | not the model that was asked for | | `thread/start` answers another model, `model/rerouted`, `modelNotFound` | the session reports another model, or none |
+| `limit` | the account's limit, or its money | `StopFailure` with `rate_limit` or `billing_error` | `usageLimitExceeded`, or a failed turn while a rate-limit window stands at 100% | an error naming a rate limit, a quota, or credits that ran out |
+| `auth` | not signed in, or the sign-in ended | `StopFailure` with `authentication_failed`, `oauth_org_not_allowed`, `account_on_hold` or `cloud_credential_error` | `account/read` with no account, or `unauthorized` | error `-32000`, Authentication required |
+| `model` | not the model that was asked for | `StopFailure` with `model_not_found` | `thread/start` answers another model, `model/rerouted`, `modelNotFound` | the session reports another model, or none, or the agent says it has no such model |
 | `refused` | the provider declined the work | | a policy error | `stopReason: refusal` |
-| `cut` | the turn ran out of room | | `contextWindowExceeded` | `max_tokens`, `max_turn_requests` |
+| `cut` | the turn ran out of room | `StopFailure` with `max_output_tokens` | `contextWindowExceeded` | `max_tokens`, `max_turn_requests`, a context that overflowed |
 | `cancelled` | somebody stopped it | | status `interrupted` | `stopReason: cancelled` |
 | `error` | anything else, with the engine's first line as `detail` | `StopFailure` otherwise | status `failed` otherwise | any other error |
+
+**Running out of money is a limit.** A metered key does not usually stop at a
+rate limit, it stops when its credits are gone: OpenRouter answers 402, "Your
+account or API key has insufficient credits", and other providers say
+insufficient funds or balance, payment required, or an allowance exceeded.
+Each is read as `limit`, and the member's next engine takes over.
+
+**A limit may be reported late.** OpenCode retries a rate limit itself, up to
+five times, waiting as long as the provider's `retry-after` says, and answers
+with the error only when it gives up. The runner waits for that answer with
+no deadline of its own, as it waits for any turn. So a session on OpenCode
+can sit at a rate limit for as long as the provider asked before the box
+hears of it and hands on.
 
 `usage` is the tokens the engine counted, when it says. `resetsAt` is when a
 limit lifts, when the engine says. Neither is worked out here.
@@ -112,10 +133,41 @@ run outside a container, or without the socket, runs Claude Code alone and
 reports that, whatever its operator names.
 
 What these sessions do not have is said where it would be offered: no Remote
-Control link, and no dialog a phone can answer. A session that asks before it
+Control link, and no dialog a phone can answer. A start does not wait for a
+link on one, and its reply names the engine the session is on. A session that
+moves from Claude Code to another engine drops the link its last pane had.
+A session that asks before it
 runs commands (`safe`) declines what the engine asks to do and prints that it
 did; one that does not (`dangerous`) allows it, inside the box's container as
 Claude Code's are.
+
+**OpenCode is told to ask.** Its permissions default to allow, so left alone
+it never asks and there is nothing for the runner to decline. In a `safe`
+session the runner writes OpenCode's machine settings
+(`/etc/opencode/opencode.json`, inside the container) before it starts the
+engine: every permission asks, except reading a file and the two searches.
+OpenCode's machine settings override a project's, so an `opencode.json` in
+the workspace cannot turn the asking off. A `safe` session on OpenCode
+therefore looks and answers, and each edit and each command is asked about,
+declined, and said in the pane. If the settings cannot be written the engine
+is not started. This is OpenCode's documented configuration
+([config](https://opencode.ai/docs/config/),
+[permissions](https://opencode.ai/docs/permissions/)), tested against a
+stand-in that reads the file. It has not been run against a real OpenCode.
+Codex is told on `thread/start`, as it always was.
+
+**Not restarted for being still.** The watcher stops and resumes a Claude
+Code session whose pane has not moved for an hour. A session on another
+engine has no conversation to resume, so it is left alone: a stop would be
+the end of it.
+
+**What the runner will not say, and how much it will read.** Anything it was
+handed is taken out of what it prints and reports: a key, a Copilot token,
+and each token inside a Codex sign-in file, as handed over and as Codex
+renews it. A line of an engine's error output is passed on up to 64 KiB and
+the rest of that line is dropped. A message from an engine longer than 8 MiB
+ends the conversation with it, says so as the turn's error, and the next
+line typed starts the engine again.
 
 ## Before a turn
 
@@ -131,7 +183,9 @@ uses another one and says nothing. So a turn runs only when the engine
 itself reports the model it is on and that is the model the member names:
 from `thread/start` for Codex, and for an ACP agent from the session's model
 option, set and then read back (an older agent, which lists its models and
-has no option to read, must list the model and accept being set to it). An
+has no option to read, must list the model and accept being set to it).
+OpenCode's own server refuses a model the account does not have ("model not
+found"), and that refusal is the same ending. An
 engine that does not say which model it is on is *cannot tell*, and cannot
 tell is not a match. That is a TurnEnded with reason `model`, before anything
 was asked of it. Codex is also stopped mid-turn if it says it was moved to
@@ -145,7 +199,10 @@ member's list has an engine after this one that the machine has, the box:
 1. writes `HANDOFF.md` at the top of the session's workspace: the task and
    branch when the session is on one, which engine stopped, why, when it
    says its limit lifts, what `git status` and the last five commits say when
-   the workspace is a checkout, and the last of what the engine said;
+   the workspace is a checkout, and the last of what the engine said. It does
+   not hold what the session was asked: those words are in no file on the
+   box, and the note says the next engine is given them again and that the
+   task's page has the brief;
 2. commits that file, and only that file, inside the checkout, when the
    session is on a task and the checkout is on that task's own branch. On
    any other branch, or with no task, the note is written and not committed.
@@ -159,6 +216,18 @@ The session keeps its name, its workspace and its task's lock. Its record
 says which engine it is on and each change, and the box says so as it
 happens (`session.engine`), which the coordinator writes on the task as a
 handoff of kind `engine`.
+
+**One move at a time, and no ending lost.** While a session is being moved
+the box starts no second move for it. A turn's end that arrives in that time
+(the next engine is not signed in, or Claude Code is at its limit while its
+Remote Control link is still awaited) is kept and acted on when the move is
+over, so the member's third engine is tried.
+
+**The task is on the record from the start.** Which member a session runs as,
+who asked, and its task and branch are written with the record's first write,
+before the first engine can report, so a session whose first engine stops in
+its first seconds still gets a note that names the task and is committed on
+its branch.
 
 **The note is mechanical.** An engine at its limit cannot be asked to
 summarize, so the box writes what it can see and labels it as that. It is a
@@ -213,9 +282,13 @@ hub (`/internal/engine-credential`) for the item its engine runs on. The hub
 answers only for the session whose socket it is, only for an item one of
 that session's engines runs on, and only from that member's vault on this
 box. The runner writes it where the engine reads its sign-in, inside the
-container. When Codex has renewed its file by the end of a run, the runner
-hands the new one back the same way and the box keeps it in place of the
-old, so the next session on this machine is not signed out.
+container. The runner looks at Codex's file every couple of seconds while
+the engine is live and hands a renewed one back the same way when it sees
+one, and once more as the session is stopped, so a session stopped in the
+middle of the turn that renewed does not leave the box with a used-up
+sign-in. The box keeps the copy that was renewed later, by the file's own
+`last_refresh`, and refuses an older one: two sessions of one member each
+hand back their own copy, and the last to arrive is not always the newest.
 
 ## What a machine reports
 
@@ -227,6 +300,57 @@ cheaply, so the operator's word is the whole of it, and a wrong word is a
 session that says the command was not found. The stock image has neither;
 `WITH_ENGINES=1` at build time adds both, at pinned versions
 (`sandbox/Containerfile`).
+
+### Turning them on, on a box
+
+Three things, in `/etc/fleetwright.env`, and all three are needed. Naming the
+engines without the image is the wrong word above.
+
+1. **The image.** `FLEETWRIGHT_SANDBOX_IMAGE` names the image sessions run
+   in, and the default one has no engines. Either the published one,
+
+   ```
+   FLEETWRIGHT_SANDBOX_IMAGE=ghcr.io/thetechnetwork/fleetwright-session:engines
+   ```
+
+   which the `Sandbox image` workflow builds and publishes beside `:latest`
+   and `:web` from the first push that carries it, or one built on the box:
+
+   ```
+   podman build --build-arg WITH_ENGINES=1 -t localhost/fleetwright-session:engines -f sandbox/Containerfile sandbox/
+   FLEETWRIGHT_SANDBOX_IMAGE=localhost/fleetwright-session:engines
+   ```
+
+   Either is an image the box was told by name, so the browser picker
+   ([intents.md](./intents.md), `sandbox`) reports it as `custom` and cannot
+   switch it. A box that wants a browser and the engines builds its own with
+   both arguments (`--build-arg WITH_CHROMIUM=1 --build-arg WITH_ENGINES=1`).
+2. **The engines.** `FLEETWRIGHT_ENGINES=codex,opencode`, or one of them.
+   Sessions must already run in a container with the session's socket
+   (`FLEETWRIGHT_SANDBOX=1`, and the socket not turned off).
+3. **The providers, for an API key.** `FLEETWRIGHT_API_PROVIDERS`, as
+   [api-engines.md](./api-engines.md) describes. Not needed for a
+   subscription.
+
+Then `systemctl restart fleetwright`. Running sessions keep the image they
+started in; the next new one uses the new image. `fleet_health` shows what
+the box now reports, and a member's sign-ins are kept under its Credentials
+as below.
+
+**On a box behind an egress allowlist** (`FLEETWRIGHT_SANDBOX_EGRESS=allowlist`,
+[security.md](./security.md)) no engine but Claude Code reaches its provider
+until the provider's hosts are added to `FLEETWRIGHT_SANDBOX_EGRESS_ALLOW`:
+
+| engine | hosts |
+|---|---|
+| `codex`, on a ChatGPT sign-in | `chatgpt.com`, `auth.openai.com` |
+| `opencode`, on Copilot | `api.githubcopilot.com` (`api.github.com` is already allowed), `models.dev` |
+| `opencode`, on OpenRouter | `openrouter.ai`, `models.dev` |
+| `opencode`, on Vercel AI Gateway | `ai-gateway.vercel.sh`, `models.dev` |
+
+These are read from each engine's documentation and source and have not been
+measured on a box behind a list. An engine that cannot reach its provider
+ends its turn as `error`, with the engine's own words, and hands nothing on.
 
 ## Starting
 
@@ -261,7 +385,17 @@ the engines this machine does not run.
   and runs another is not caught. What is caught is the case that was seen:
   an agent that says which model it fell back to.
 - **`HANDOFF.md` holds what the engine printed last**, which may be anything
-  the session had on its screen.
+  the session had on its screen. It is quoted in a fence the text cannot
+  close, so it stays a quotation, and it is still the session's own words in
+  a file the next engine is told to read.
+- **Two sessions of one member share one Codex sign-in.** Each is handed its
+  own copy of the file, and when one renews, the other's copy is used up: its
+  next renewal fails and its turn ends as `auth`. The box keeps the newer
+  file, so the next session started is signed in. Signing in on the machine
+  itself, which ends this, is not built yet.
+- **A session on OpenCode or Codex that sits still is not restarted**, and
+  nothing says it is stuck. An engine waiting out a provider's rate limit
+  looks the same from the pane.
 - **A session can say its own turn ended any way it likes.** TurnEnded comes
   over the session's socket from a process inside the session. A lie there
   puts a wrong word on a screen, or starts the member's own next engine in
@@ -269,9 +403,11 @@ the engines this machine does not run.
 - **A member's custodians are not told separately that an engine's sign-in
   ended.** The session says so; the fifteen-minute check that tells
   custodians about a Claude sign-in does not look at these.
-- **Limit detection for Claude Code and ACP agents reads the error's words**,
-  because neither has a field for it. A limit worded in a way nobody has seen
-  is an `error`, and hands nothing on.
+- **Limit detection for an ACP agent reads the error's words**, because the
+  protocol has no field for it. A limit worded in a way nobody has seen is an
+  `error`, and hands nothing on. Claude Code names the error in its
+  `StopFailure` hook (`rate_limit`, `billing_error` and the rest) and is read
+  by that name; its words are read only where a version sends no name.
 
 ## Tests
 
@@ -279,10 +415,14 @@ the engines this machine does not run.
 from Claude Code's hooks, the choice of the next engine, the handoff note,
 the commit on a real checkout and only on the task's branch, what the
 session manager records, and that the runner's copies of the shared words
-match), `test/engines-run.test.js` (each adapter and the runner against a
+match), `test/engines-launch.test.js` (a start from the fleet through the
+real launch, tmux and the runner: no wait for a link, the task on the first
+note, and three engines in turn), `test/engines-run.test.js` (each adapter and the runner against a
 stand-in server speaking the published protocol: sign-in, the model check,
 a turn, a limit, a refusal, a permission request, the sign-in staged and
-handed back), `test/engines-hub.test.js` (TurnEnded and the sign-in on a
+handed back when it changes and as the session stops, OpenCode told to ask,
+the tokens in a sign-in withheld, a line and a message bounded),
+`test/engines-hub.test.js` (TurnEnded and the sign-in on a
 session's socket, the launch command, what the watcher says as a session
 moves), `test/engines-coordinator.test.js` (the list a start carries, the
 protocol 20 refusal, the task's handoff), the engine items in

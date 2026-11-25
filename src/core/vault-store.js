@@ -435,6 +435,14 @@ export function vaultEngineItem(cfg, email, kind) {
  * that still reads as one. What a session can do with it is spoil its own
  * member's sign-in on this box, which it could do by using it badly.
  *
+ * THE NEWER ONE STAYS. Two sessions of one member each have their own copy
+ * of the file, and each hands its own back. Whichever arrived last used to
+ * win, so a session that had renewed nothing, or renewed earlier, put a
+ * used-up sign-in back over the good one. A file says when it was last
+ * renewed (`last_refresh`, which Codex writes each time it renews), and one
+ * that is not later than the copy held here is refused, as is one that does
+ * not say, over one that does.
+ *
  * @param {{ stateDir: string }} cfg @param {string|null} email @param {string} kind @param {string} value
  * @returns {boolean} whether it was kept
  */
@@ -451,9 +459,21 @@ export function keepEngineItem(cfg, email, kind, value) {
   const item = held?.items?.codex;
   if (!held || !item) return false;
   if (item.value === value) return true;
+  const mine = codexRenewedAt(item.value);
+  if (mine && codexRenewedAt(value) <= mine) return false;
   held.items.codex = { ...item, value };
   writePrivate(path.join(vaultDir(cfg), `${who}.json`), `${JSON.stringify(held)}\n`);
   return true;
+}
+
+/** When a Codex sign-in says it was last renewed, in epoch ms, or 0 for one that does not say. */
+function codexRenewedAt(/** @type {string} */ text) {
+  try {
+    const at = Date.parse(String(JSON.parse(text)?.last_refresh ?? ''));
+    return Number.isFinite(at) ? at : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /**

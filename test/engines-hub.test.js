@@ -144,3 +144,30 @@ test('a session that stops with nothing to hand on to comes back to its prompt s
   assert.deepEqual(ready?.turn, { engine: 'codex', reason: 'limit', detail: 'You have hit your usage limit.', model: 'gpt-5.1-codex', usage: null, resetsAt: 1_795_500_000_000 });
   assert.equal(ready?.taskId, 't12');
 });
+
+test('a still pane on an engine that cannot be resumed is left alone, where Claude Code’s is stopped and resumed', async (t) => {
+  // The restart for a pane that has not moved in an hour is a stop and a
+  // resume, and only Claude Code has a conversation to resume. On Codex the
+  // stop was the end of the session and the resume was refused: which is
+  // what happened to an engine an hour into waiting out a rate limit.
+  const working = { phase: 'working', event: 'UserPromptSubmit', detail: null, at: Date.now() };
+  for (const [session, restarted] of /** @type {Array<[any, boolean]>} */ ([
+    [{ engines, engineAt: 1, activity: working }, false],
+    // Claude Code with its conversation recorded comes back, and still is.
+    [{ engines, engineAt: 0, activity: working }, true],
+    // One whose conversation was never recorded would not.
+    [{ activity: working, uuid: null }, false],
+  ])) {
+    const stub = await startStubHub({ sessions: [sessionRecord('on-t12', { status: 'running', ...session })], panes: { 'on-t12': 'nothing has moved for an hour' } });
+    t.after(() => stub.close());
+    /** @type {Record<string, any>[]} */
+    const events = [];
+    const watcher = new SessionWatcher({ hub: new HubClient({ baseUrl: stub.baseUrl, readTimeoutMs: 2000 }), emit: (e) => events.push(e), idleRestartMs: 60 * 60_000 });
+    await watcher.tick({ quiet: true });
+    const still = watcher.idle.get('on-t12');
+    if (still) still.since = Date.now() - 90 * 60_000;
+    await watcher.tick();
+    assert.deepEqual(stub.commands, restarted ? ['/stop on-t12', '/resume on-t12 summary'] : [], JSON.stringify(session));
+    assert.equal(events.filter((e) => e.event === 'session.restarted').length, restarted ? 1 : 0);
+  }
+});

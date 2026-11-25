@@ -60,13 +60,16 @@ test('a start on a task records the task’s id and branch on the session, and n
   const r = await command({ command: '/new on-t12', task: 'Task t12. Branch task/t12-fix-it.\n\nFix it.', taskId: 't12', taskBranch: 'task/t12-fix-it', member: 'debbie', actor: 'fleet:debbie@members.invalid' });
   assert.equal(r.body.ok, true, r.body.text);
   assert.equal(started.length, 1);
-  assert.deepEqual(recorded.find((x) => 'taskId' in x.patch), { name: 'on-t12', patch: { taskId: 't12', taskBranch: 'task/t12-fix-it' } });
-  assert.ok(!JSON.stringify(recorded).includes('Fix it.'), 'the record keeps which task, never what it said');
+  // Handed to the start itself, which writes them with the record's first
+  // write: added afterwards, they reached the record later than the session's
+  // first engine could report (test/engines-launch.test.js).
+  assert.deepEqual(started[0].onRecord, { member: 'debbie', memberName: null, memberRole: null, startedBy: null, taskId: 't12', taskBranch: 'task/t12-fix-it' });
+  assert.ok(!JSON.stringify(started[0].onRecord).includes('Fix it.'), 'the record keeps which task, never what it said');
+  assert.deepEqual(recorded, [], 'and nothing is added to the record once the start has answered');
 
   // A start on no task records none.
-  recorded.length = 0;
   assert.equal((await command({ command: '/new plain', task: 'Just this.' })).body.ok, true);
-  assert.deepEqual(recorded.filter((x) => 'taskId' in x.patch), []);
+  assert.deepEqual(started[1].onRecord, {});
 });
 
 test('the door takes a task’s id and branch only in their own shapes', async (t) => {

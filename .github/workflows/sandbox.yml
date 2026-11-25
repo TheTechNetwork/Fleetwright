@@ -101,6 +101,36 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # AND THE SAME IMAGE WITH THE OTHER ENGINES IN IT (docs/engines.md):
+      # Codex and OpenCode, at the versions the Containerfile pins. A third
+      # tag for the reason `:web` is a second: a box that runs them is pointed
+      # at `:engines` with FLEETWRIGHT_SANDBOX_IMAGE and names them in
+      # FLEETWRIGHT_ENGINES, and every other box keeps the minimal image.
+      #
+      # NOTHING BUILT THIS BEFORE. The Containerfile took WITH_ENGINES=1 and
+      # no workflow ever passed it, so the one layer that installs the
+      # engines had never run anywhere but on an operator's own box, and a
+      # box could report engines for which no image existed to pull.
+      - id: meta-engines
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/fleetwright-session
+          tags: |
+            type=raw,value=engines,enable={{is_default_branch}}
+            type=sha,format=long,suffix=-engines
+
+      - uses: docker/build-push-action@v7.4.0
+        with:
+          context: sandbox
+          file: sandbox/Containerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: WITH_ENGINES=1
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-engines.outputs.tags }}
+          labels: ${{ steps.meta-engines.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   # THE IMAGE, RUNNING. Everything above this line proves the Containerfile
   # builds; nothing proved the thing it built works, and the difference is not
   # academic — this image shipped for weeks with a PATH SHIM FOR `gh` AND NO
@@ -190,6 +220,40 @@ jobs:
               echo "chromium is installed and will not render a page either way"
               exit 1
             fi
+          '
+
+      # THE ENGINES VARIANT, RUN, for the reason the browser one is: an image
+      # that builds is not one that works, and "the npm line names both
+      # packages" is not "both commands start". Each ships a binary for the
+      # machine it is installed on, chosen at install time, which is the part
+      # that can build and not run.
+      #
+      # The runner that speaks to them is on every image, and is checked on
+      # this one because this is where it has something to start. The minimal
+      # image is checked for the other half of the same claim: a box that
+      # does not name the engines must not turn out to have them.
+      #
+      # NO ENGINE IS ASKED ANYTHING and none is signed in: `--version` is the
+      # whole of it.
+      - name: The engines variant has both engines, and each answers
+        timeout-minutes: 15
+        run: |
+          set -eu
+          docker build --build-arg WITH_ENGINES=1 -t fleetwright-session:engines -f sandbox/Containerfile sandbox/
+          docker run --rm --entrypoint sh fleetwright-session:engines -euc '
+            for tool in fleetwright-engine codex opencode; do
+              command -v "$tool" >/dev/null || { echo "MISSING: $tool"; exit 1; }
+            done
+            codex --version
+            opencode --version
+            echo "--- both engines answer ---"
+          '
+          docker run --rm --entrypoint sh fleetwright-session:smoke -euc '
+            command -v fleetwright-engine >/dev/null || { echo "MISSING: fleetwright-engine"; exit 1; }
+            for tool in codex opencode; do
+              if command -v "$tool" >/dev/null; then echo "the minimal image has $tool, which no box was told it runs"; exit 1; fi
+            done
+            echo "--- the minimal image has neither ---"
           '
 
       # THE BUG THIS WHOLE JOB EXISTS FOR, and the shim is what makes it
