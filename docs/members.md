@@ -232,8 +232,12 @@ sign-ins, and who else holds custody of it depends on who was there first.
 
 Either way the person's own `list` names their custodians and managers, and
 every deposit, change or removal somebody else makes is written beside the
-vault (`clog:`, the last twenty) where the person reads it, and told to
-their phone. The log is the minter's; the push is the coordinator's and can
+vault (`clog:`, the last hundred) where the person reads it, and told to
+their phone. Each line names what was changed as the vault itself read it,
+never a name the request carried beside it: a sign-in is logged as its
+provider, a machine as its fingerprint. A machine a custodian approved says
+so for as long as it is approved (`by`, on that machine in `list`), since a
+log line can scroll away and the approval does not. The log is the minter's; the push is the coordinator's and can
 be dropped by a dishonest one, which is why the log exists.
 
 **What a custodian does** is what a person does for their own vault, with

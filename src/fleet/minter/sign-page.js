@@ -1192,8 +1192,12 @@ const SIGN_MAIN = String.raw`
   }
 
   function machineRow(name, hash, key, grant) {
+    // WHO APPROVED IT is said when that was a custodian and not the vault's
+    // own person: the vault keeps it on the approval, so it is still said
+    // after the line in "What they changed" has scrolled away.
+    var approved = grant && typeof grant.by === 'string' && grant.by ? 'Approved by ' + (device && grant.by === device.email ? 'you' : grant.by) : 'Approved';
     var state = !grant ? 'Not approved. Fingerprint ' + S.fingerprint(hash) + '.'
-      : (grant.only && grant.only.length ? 'Approved for ' + grant.only.map(S.itemLabel).join(', ') + ' only.' : 'Approved to hold ' + owner() + ' credentials.') + ' Fingerprint ' + S.fingerprint(hash) + '.' + (key ? '' : ' Not enrolled in this fleet any more.');
+      : (grant.only && grant.only.length ? approved + ' for ' + grant.only.map(S.itemLabel).join(', ') + ' only.' : approved + ' to hold ' + owner() + ' credentials.') + ' Fingerprint ' + S.fingerprint(hash) + '.' + (key ? '' : ' Not enrolled in this fleet any more.');
     var r = row(name, state, Boolean(grant));
     if (grant) {
       button(r.actions, 'Remove', null, function () {

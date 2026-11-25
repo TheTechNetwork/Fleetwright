@@ -72,7 +72,11 @@ export const CUSTODY_LOG_PREFIX = 'clog:';
 /** Org admins a fleet keeps, and explicit custodians one agent member keeps. */
 export const MAX_ORG_ADMINS = 8;
 export const MAX_CUSTODIANS = 8;
-const MAX_LOG = 20;
+/**
+ * Lines a vault's log keeps. A hundred: at twenty, a custodian's twenty
+ * harmless changes pushed out the one that mattered before its owner looked.
+ */
+const MAX_LOG = 100;
 const ADDRESS_RE = /^[A-Za-z0-9._+-]{1,64}@[A-Za-z0-9.-]{1,63}$/;
 const KEY_HASH_RE = /^[0-9a-f]{64}$/;
 
@@ -290,7 +294,8 @@ export async function resolveFor(store, forId, email, who) {
 
 /**
  * What a custodian did to a vault, kept beside it for its owner: the last
- * twenty, by name and never by value.
+ * hundred, by name and never by value. The name is the caller's to get right
+ * and never the asker's to choose (vault.js, `did`).
  *
  * @param {Store} store @param {string} vaultId
  * @param {{ at: number, by: string, op: string, name?: string }} entry

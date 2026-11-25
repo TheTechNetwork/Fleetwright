@@ -870,7 +870,8 @@ test('in a browser: a custodian opens a member’s vault from My team and keeps 
 
     // A MACHINE is approved for this vault and no other.
     await eli.signer.click('#machines .item:has(h3:text-is("box1")) button:text-is("Approve")');
-    await says(eli.signer, 'box1', /Approved to hold Debbie’s credentials/);
+    // Said with who approved it, since for a member that is always a custodian.
+    await says(eli.signer, 'box1', /Approved by you to hold Debbie’s credentials/);
     assert.ok(m.rows.get('v:member:debbie')?.grants?.[boxHash]?.jwk, 'the grant is in Debbie’s vault');
     assert.equal(m.rows.get('v:42')?.grants?.[boxHash], undefined, 'and not in Eli’s');
 

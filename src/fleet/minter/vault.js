@@ -640,7 +640,12 @@ export async function answerVaultDevice(ask, config) {
   /** @type {{ notify?: { email: string, text: string } }} */
   let told = {};
   if (acting && CUSTODY_LOGGED.includes(inside.op)) {
-    const name = String(inside.name ?? inside.provider ?? (inside.op === 'grant' || inside.op === 'revoke' ? 'a machine' : '')).slice(0, 96);
+    // NAMED BY WHAT THE OP DID (`did`, runDeviceOp), never by a field of the
+    // request. It used to be `name`, then `provider`, as sent: a sign-in to
+    // Cloudflare takes `provider` and reads no `name`, so a custodian who
+    // sent both replaced a person's Cloudflare sign-in and had it written
+    // here, and pushed to their phone, as a note they kept.
+    const name = String(result.did ?? '').slice(0, 96);
     await logCustody(store, vault.userId, { at, by: acting.by, op: inside.op, name });
     if (acting.kind === 'person') told = { notify: { email: acting.owner, text: custodySentence(acting.by, inside.op, name) } };
   }
@@ -673,7 +678,10 @@ function custodySentence(by, op, name) {
  * @param {string} email  the asker's fleet address
  * @param {number} at
  * @param {Acting|null} [acting]  set when a custodian opened somebody else's vault (org.js, resolveFor)
- * @returns {Promise<{ ok: true, answer?: any, text: string } | { ok: false, error: { code: string }, text: string }>}
+ * @returns {Promise<{ ok: true, answer?: any, text: string, did?: string } | { ok: false, error: { code: string }, text: string }>}
+ *   `did` is what a change was made to, as the op itself read it: the item
+ *   kept or forgotten, the provider signed in to, the machine's fingerprint.
+ *   It is what the custody log names (answerVaultDevice).
  */
 async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
   const store = /** @type {VaultStore} */ (config.store);
@@ -821,7 +829,8 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
     const kind = itemKind(name);
     if (kind === 'claude') {
       const what = inside.op === 'forget' ? null : inside.signIn !== undefined ? { signIn: inside.signIn } : String(inside.value ?? '');
-      return putClaude(store, key, who, owner, at, what, config.fetchImpl);
+      const kept = await putClaude(store, key, who, owner, at, what, config.fetchImpl);
+      return kept.ok ? { ...kept, did: 'claude' } : kept;
     }
     if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor' && kind !== 'engine' && kind !== 'sandbox') {
       return refuse('bad_name', 'A value put in a vault is a named secret (secret:NAME), a hypervisor’s token or a Claude token. GitHub and Cloudflare are kept by signing in.');
@@ -834,7 +843,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       // request inside its ten minutes cannot bring the item back.
       row.items[name] = { at, forgotten: true };
       await save();
-      return { ok: true, text: `Forgot ${label(name)}. Boxes stop being given it when they next ask.` };
+      return { ok: true, did: name, text: `Forgot ${label(name)}. Boxes stop being given it when they next ask.` };
     }
     const value = String(inside.value ?? '');
     if (!value || value.length > MAX_SECRET) {
@@ -866,6 +875,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
     if (kind === 'engine') {
       return {
         ok: true,
+        did: name,
         text: name === 'codex'
           ? 'Kept the Codex sign-in. It is handed to one approved machine, the first that runs Codex and asks for it, because Codex renews it there and a renewal ends every other copy, the one on the computer it was pasted from included.'
           : API_KEY_ITEMS.includes(name)
@@ -875,6 +885,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
     }
     return {
       ok: true,
+      did: name,
       text: kind === 'sandbox'
         ? `Kept ${label(name)}. Approved machines whose operator turned that provider on can make machines there, and hold its key in memory only. The key is that whole account: what it may spend is set at the provider.`
         : kind === 'hypervisor'
@@ -927,7 +938,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       }),
     };
     await save();
-    return { ok: true, answer: { account }, text: `Kept ${p.label}${account ? ` as ${account}` : ''} for the boxes you approve.` };
+    return { ok: true, did: provider, answer: { account }, text: `Kept ${p.label}${account ? ` as ${account}` : ''} for the boxes you approve.` };
   }
 
   if (inside.op === 'grant') {
@@ -956,7 +967,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       await store.put(`box:${hash}`, index);
     });
     const what = only ? only.map(label).join(', ') : 'your credentials';
-    return { ok: true, answer: { fingerprint: hash.slice(0, 16) }, text: `Approved ${boxLabel || 'that box'} (${hash.slice(0, 16)}) to hold ${what}.` };
+    return { ok: true, did: hash.slice(0, 16), answer: { fingerprint: hash.slice(0, 16) }, text: `Approved ${boxLabel || 'that box'} (${hash.slice(0, 16)}) to hold ${what}.` };
   }
 
   if (inside.op === 'revoke') {
@@ -973,7 +984,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       delete accounts[who.userId];
       await store.put(`box:${hash}`, { accounts });
     });
-    return { ok: true, text: `${boxLabel} is no longer approved. It stops being given your credentials when it next asks, and forgets what it holds then.` };
+    return { ok: true, did: hash.slice(0, 16), text: `${boxLabel} is no longer approved. It stops being given your credentials when it next asks, and forgets what it holds then.` };
   }
 
   return refuse('bad_params', `A vault does not do “${String(inside.op).slice(0, 40)}”.`);
@@ -1182,7 +1193,12 @@ async function describe(row, store, userId) {
   items.sort((x, y) => (x.name < y.name ? -1 : 1));
   const grants = Object.entries(row.grants)
     .filter(([, g]) => g && !g.revoked && g.jwk)
-    .map(([hash, g]) => ({ key: hash, fingerprint: hash.slice(0, 16), label: String(g.label || ''), email: String(g.email || ''), at: Number(g.at), ...(Array.isArray(g.only) ? { only: g.only.map(String) } : {}) }))
+    // WHO APPROVED IT, when that was a custodian and not the vault's own
+    // person (`by`, kept on the grant since custodians could approve one):
+    // the log of what a custodian did is a hundred lines, and a machine that
+    // holds a person's sign-ins should say whose doing that is for as long
+    // as it holds them.
+    .map(([hash, g]) => ({ key: hash, fingerprint: hash.slice(0, 16), label: String(g.label || ''), email: String(g.email || ''), at: Number(g.at), ...(Array.isArray(g.only) ? { only: g.only.map(String) } : {}), ...(typeof g.by === 'string' && g.by ? { by: g.by } : {}) }))
     .sort((x, y) => (x.label < y.label ? -1 : 1));
   return { login: row.login, items, grants };
 }

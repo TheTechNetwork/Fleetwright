@@ -2903,6 +2903,40 @@ test('an address is its first GitHub account’s for good, and changes hands onl
   assert.doesNotMatch(await hers(), /danas-own/);
 });
 
+test('the log names what a custodian changed and not what they called it, keeps a hundred lines, and a machine says who approved it', async (t) => {
+  const { as, tree } = await orgMinter(t);
+  await tree();
+  assert.equal((await as(DANA, { op: 'custody', allow: true })).ok, true);
+  const log = async () => (await as(DANA, { op: 'list' })).answer.custody.log.map((/** @type {any} */ e) => [e.by, e.op, e.name]);
+  // Eli, her manager, replaces her Cloudflare sign-in with one he made, and
+  // sends a name beside it that a sign-in never reads. The log said he kept
+  // a note called NOTES, and so did the message to her phone.
+  const replaced = await as(ELI, { op: 'connect', provider: 'cloudflare', code: 'cfcode1234', verifier: 'v'.repeat(64), redirectUri: 'https://fleet.test/oauth/cloudflare/callback', name: 'secret:NOTES', for: 'dana' });
+  assert.equal(replaced.ok, true, replaced.text);
+  assert.deepEqual(await log(), [[ELI, 'connect', 'cloudflare']]);
+  assert.deepEqual(replaced.notify, { email: DANA, text: `${ELI} kept cloudflare in your vault, as one of your managers.` });
+
+  // A MACHINE HE APPROVES is logged by its fingerprint, which he cannot
+  // choose, and says who approved it for as long as it is approved. One she
+  // approves herself says nothing of the kind.
+  const his = await generateKeyPair();
+  const hers = await generateKeyPair();
+  assert.equal((await as(ELI, { op: 'grant', hostKey: his.publicJwk, label: 'elis-box', name: 'secret:TIDY', for: 'dana' })).ok, true);
+  assert.equal((await as(DANA, { op: 'grant', hostKey: hers.publicJwk, label: 'danas-box' })).ok, true);
+  const fingerprint = (await boxKeyHash({ kty: 'EC', crv: 'P-256', x: his.publicJwk.x, y: his.publicJwk.y })).slice(0, 16);
+  assert.deepEqual((await log()).at(-1), [ELI, 'grant', fingerprint]);
+  const machines = (await as(DANA, { op: 'list' })).answer.grants.map((/** @type {any} */ g) => [g.label, g.by]);
+  assert.deepEqual(machines, [['danas-box', undefined], ['elis-box', ELI]]);
+
+  // TWENTY HARMLESS LINES pushed the one that mattered out. A hundred are kept.
+  for (let i = 0; i < 20; i += 1) assert.equal((await as(ELI, { op: i % 2 ? 'forget' : 'put', name: 'secret:TIDY', value: 'x', for: 'dana' })).ok, true);
+  const after = await log();
+  assert.equal(after.length, 22);
+  assert.deepEqual(after[0], [ELI, 'connect', 'cloudflare'], 'the sign-in he replaced is still the first thing she reads');
+  for (let i = 0; i < 90; i += 1) assert.equal((await as(ELI, { op: i % 2 ? 'forget' : 'put', name: 'secret:TIDY', value: 'x', for: 'dana' })).ok, true);
+  assert.equal((await log()).length, 100);
+});
+
 test('removing an agent empties its vault, and whoever files the id again is handed nothing of it', async (t) => {
   const { m, as, tree } = await orgMinter(t);
   await tree();
