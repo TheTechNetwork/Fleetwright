@@ -3589,7 +3589,7 @@ const OPENAPI = JSON.stringify({
           "identity"
         ],
         "summary": "Remove a member",
-        "description": "Refused while anybody reports to it. Its vault is not deleted by this: a custodian forgets what it keeps.",
+        "description": "Refused while anybody reports to it. Removes it from the fleet's list only. The vault keeps its own record of who may use a member's credentials, and this does not tell it: a phone's Org screen tells the vault first when it removes a member.",
         "parameters": [
           {
             "name": "id",
