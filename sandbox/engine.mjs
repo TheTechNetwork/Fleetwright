@@ -45,8 +45,16 @@ export const TURN_REASONS = Object.freeze(['done', 'limit', 'auth', 'model', 're
  * Words that mean an account's limit, for the engines with no field for it.
  * Mirrored in src/fleet/protocol/engines.js. A limit worded some way nobody
  * has seen is an `error`, and hands nothing on: that is the safe side.
+ *
+ * MONEY RUNNING OUT IS A LIMIT, and is how a metered key usually reaches
+ * one. OpenRouter answers 402 "Your account or API key has insufficient
+ * credits" (its `payment_required`, https://openrouter.ai/docs/api_reference/errors-and-debugging),
+ * or "This request requires more credits"; a gateway says "Insufficient
+ * funds"; Copilot says its premium request allowance is exceeded. Every one
+ * of those read as an `error`, so the member's next engine was never
+ * started for the ordinary way a paid engine stops.
  */
-export const LIMIT_WORDS = /rate.?limit|usage.?limit|quota|too many requests|\b429\b|credit balance|limit (?:reached|exceeded)|out of (?:credits|usage)/i;
+export const LIMIT_WORDS = /rate.?limit|usage.?limit|quota|too many requests|\b429\b|credit balance|limit (?:reached|exceeded)|out of (?:credits|usage)|insufficient (?:credits?|funds|balance)|more credits|payment.?required|\b402\b|exceeded your [a-z ]{0,40}allowance/i;
 /** Words that mean the sign-in is missing or ended. Mirrored the same way. */
 export const AUTH_WORDS = /not (?:logged|signed) in|unauthori[sz]ed|authentication|\b401\b|invalid (?:api key|token|credentials)|(?:token|credentials|session) (?:has |have )?expired|log ?in required|please (?:log|sign) in/i;
 
@@ -386,11 +394,27 @@ export function acpModel(session) {
   return null;
 }
 
-/** An ACP error, as a reason. `-32000` is the protocol's own Authentication required. */
+/**
+ * An ACP error, as a reason. `-32000` is the protocol's own Authentication
+ * required.
+ *
+ * WHAT OPENCODE SENDS, from its own source (packages/opencode/src/acp/error.ts
+ * and service.ts, 1.19.6). A model it does not have is invalid params,
+ * "model not found: <id>", with the provider and model as data: that is the
+ * wrong model, and was read as an `error`, so a member whose OpenCode model
+ * is not on the account's list was never handed on. A failed prompt is an
+ * internal error whose message is the provider's own words and whose data
+ * is `{ service, errorName }`: the name says a context that overflowed or a
+ * sign-in the provider refused, and for anything else the words are all
+ * there is. The data was searched for a limit's words and never held any.
+ */
 export function reasonFromAcpError(e) {
   const said = String(e?.message ?? '');
-  if (e?.code === -32000 || AUTH_WORDS.test(said)) return 'auth';
-  if (LIMIT_WORDS.test(said) || LIMIT_WORDS.test(JSON.stringify(e?.data ?? ''))) return 'limit';
+  const name = typeof e?.data?.errorName === 'string' ? e.data.errorName : '';
+  if (e?.code === -32000 || name === 'ProviderAuthError' || AUTH_WORDS.test(said)) return 'auth';
+  if (e?.code === -32602 && (typeof e?.data?.modelId === 'string' || /model not found/i.test(said))) return 'model';
+  if (name === 'ContextOverflowError' || name === 'MessageOutputLengthError') return 'cut';
+  if (LIMIT_WORDS.test(said)) return 'limit';
   return 'error';
 }
 
@@ -422,6 +446,8 @@ export function acpAdapter(peer, { engine, model, cwd, mode, say, note }) {
   return {
     /** Signed in, and on the model asked for? Sends no prompt. */
     async open() {
+      /** The model the agent last said it was on, for an ending that is about the model. @type {string|null} */
+      let on = null;
       try {
         await peer.request('initialize', {
           protocolVersion: 1,
@@ -436,6 +462,7 @@ export function acpAdapter(peer, { engine, model, cwd, mode, say, note }) {
         // CANNOT TELL IS NOT A MATCH. An agent that does not say which model
         // it is on is not asked anything.
         if (!says) return ended(engine, 'model', { detail: `asked for ${model}, and the agent does not say which model it is on` });
+        on = says.now;
         if (says.now !== model) {
           if (says.option) {
             // Set, then read back from the agent's own answer.
@@ -451,7 +478,9 @@ export function acpAdapter(peer, { engine, model, cwd, mode, say, note }) {
         if (says.now !== model) return ended(engine, 'model', { model: says.now || null, detail: `asked for ${model}` });
         return null;
       } catch (e) {
-        return ended(engine, reasonFromAcpError(e), { detail: e?.message });
+        const reason = reasonFromAcpError(e);
+        // Refused the model: it is still on the one it said, and says so.
+        return ended(engine, reason, { detail: e?.message, model: reason === 'model' ? on : null });
       }
     },
 
@@ -459,7 +488,12 @@ export function acpAdapter(peer, { engine, model, cwd, mode, say, note }) {
     async turn(prompt) {
       usage = null;
       try {
-        // No deadline: a turn takes as long as the work does.
+        // No deadline: a turn takes as long as the work does. That includes
+        // OpenCode's own waiting: it retries a rate limit itself, five
+        // times, for as long as the provider's retry-after says
+        // (packages/opencode/src/session/retry.ts), and only then answers
+        // with the error. So a limit is reported when OpenCode gives up and
+        // not when the provider first says so.
         const answer = await peer.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: prompt }] }, 0);
         say('\n');
         const u = answer?.usage;

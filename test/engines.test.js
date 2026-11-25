@@ -100,6 +100,16 @@ test('Claude Code’s two hooks read as a TurnEnded: done, a limit, a sign-in, o
   // Overloaded is the provider's bad minute, not this account's limit: nothing is handed on for it.
   assert.equal(turnFromHook('StopFailure', 'API Error: 529 overloaded_error')?.reason, 'error');
   assert.equal(turnFromHook('StopFailure')?.reason, 'error');
+  // CLAUDE CODE NAMES THE ERROR, and the name is what the hook sends. An
+  // account that cannot pay is at its limit; one on hold, shut out by its
+  // organization, or with no cloud credential has no sign-in to use. The
+  // last four of those came out `error` and handed nothing on.
+  for (const [named, reason] of Object.entries({
+    rate_limit: 'limit', billing_error: 'limit',
+    authentication_failed: 'auth', oauth_org_not_allowed: 'auth', account_on_hold: 'auth', cloud_credential_error: 'auth',
+    model_not_found: 'model', max_output_tokens: 'cut',
+    server_error: 'error', invalid_request: 'error', unknown: 'error',
+  })) assert.equal(turnFromHook('StopFailure', named)?.reason, reason, named);
   assert.equal(turnFromHook('PostToolUse', 'Bash'), null);
   assert.deepEqual([...HANDS_ON], ['limit', 'auth', 'model']);
 });

@@ -166,18 +166,38 @@ test('Codex: what it asks to do is declined in a session that asks first and sai
 
 // ── An ACP agent ────────────────────────────────────────────────────────────
 
-/** An ACP agent. `session` is what session/new answers; `set` what setting the model answers; `prompt` how a turn goes. */
-function acpServer({ session = /** @type {any} */ ({}), set = /** @type {((m: any) => any)|null} */ (null), prompt = /** @type {(send: (m: any) => void, m: any) => void} */ ((send, m) => send({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } })) } = {}) {
+const modelOption = (/** @type {string} */ now) => [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: now, options: [] }];
+/**
+ * What OpenCode 1.19.6 answers when it is set to a model: its options on
+ * that model when one of its providers has it, and otherwise invalid params,
+ * "model not found: <id>", with the provider and the model as data
+ * (packages/opencode/src/acp/error.ts, ACPInvalidModelError). `has` is what
+ * the account's providers list.
+ */
+const openCodeSet = (/** @type {string[]} */ has) => (/** @type {any} */ m) => {
+  const asked = String(m.params.value ?? m.params.modelId);
+  return has.includes(asked)
+    ? { result: { configOptions: modelOption(asked) } }
+    : { error: { code: -32602, message: `Invalid params: model not found: ${asked}`, data: { providerId: asked.split('/')[0], modelId: asked } } };
+};
+/** How OpenCode's ACP server answers a prompt its provider failed: an internal error with the provider's words and the error's name (acp/service.ts). */
+const openCodeFailed = (/** @type {string} */ words, errorName = 'APIError') => ({ error: { code: -32603, message: `Internal error: ${words}`, data: { service: 'session', errorName } } });
+
+/**
+ * An ACP agent. `session` is what session/new answers; `set` what setting the
+ * model answers, which unless a test says otherwise is OpenCode's own answer
+ * for an account with no model but its free one; `prompt` how a turn goes.
+ */
+function acpServer({ session = /** @type {any} */ ({}), set = /** @type {(m: any) => any} */ (openCodeSet(['opencode/big-pickle'])), prompt = /** @type {(send: (m: any) => void, m: any) => void} */ ((send, m) => send({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } })) } = {}) {
   return standIn((m, send) => {
     const reply = (/** @type {any} */ body) => send({ jsonrpc: '2.0', id: m.id, ...body });
     if (m.method === 'initialize') reply({ result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } });
     else if (m.method === 'session/new') reply(session.error ? { error: session.error } : { result: { sessionId: 's-1', ...session } });
-    else if (m.method === 'session/set_config_option' || m.method === 'session/set_model') reply(set ? set(m) : { error: { code: -32601, message: 'Method not found' } });
+    else if (m.method === 'session/set_config_option' || m.method === 'session/set_model') reply(set(m));
     else if (m.method === 'session/prompt') prompt(send, m);
   });
 }
-const modelOption = (/** @type {string} */ now) => [{ id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: now, options: [] }];
-const ASKED = 'github-copilot/gpt-5';
+const ASKED = 'github-copilot/claude-sonnet-5.5';
 function acpOn(/** @type {ReturnType<typeof standIn>} */ server, /** @type {any} */ opts = {}) {
   /** @type {string[]} */
   const said = [];
@@ -187,9 +207,26 @@ function acpOn(/** @type {ReturnType<typeof standIn>} */ server, /** @type {any}
   return { adapter, said, notes };
 }
 
-test('ACP: an agent that falls back to another model without a word is caught by its own report, and asked nothing', async () => {
-  // What OpenCode did in the step 1 probe: asked for a model it could not
-  // reach, it took the request and stayed on its free one.
+test('ACP: OpenCode’s own answer to a model the account does not have is the wrong model, said with the one it is on, and asked nothing', async () => {
+  // The account's Copilot plan does not list the model, or Copilot is not
+  // signed in at all: either way OpenCode has no such model to set. This
+  // ended as `error`, which hands nothing on, so the member's next engine
+  // never started for a model name that was simply not on the list.
+  const server = acpServer({ session: { configOptions: modelOption('opencode/big-pickle') } });
+  const { adapter } = acpOn(server);
+  assert.deepEqual(await adapter.open(), { engine: 'opencode', reason: 'model', detail: `Invalid params: model not found: ${ASKED}`, model: 'opencode/big-pickle', usage: null, resetsAt: null });
+  assert.ok(!server.methods().includes('session/prompt'), 'no prompt reached a model nobody asked for');
+  // The older way of setting a model is refused the same way, by an agent that lists the model and then has none.
+  const older = acpServer({ session: { models: { currentModelId: 'opencode/big-pickle', availableModels: [{ modelId: ASKED }] } } });
+  assert.equal((await acpOn(older).adapter.open())?.reason, 'model');
+  // An account that has it is set to it, and says so.
+  const has = acpServer({ session: { configOptions: modelOption('opencode/big-pickle') }, set: openCodeSet([ASKED]) });
+  assert.equal(await acpOn(has).adapter.open(), null);
+});
+
+test('ACP: an agent that takes the request and stays on another model is caught by its own report, and asked nothing', async () => {
+  // Not what OpenCode's ACP server does (above). The guard is for an agent
+  // that falls back without a word, which is what the step 1 probe saw.
   const server = acpServer({ session: { configOptions: modelOption('opencode/big-pickle') }, set: () => ({ result: { configOptions: modelOption('opencode/big-pickle') } }) });
   const { adapter } = acpOn(server);
   const failed = await adapter.open();
@@ -260,6 +297,37 @@ test('ACP: a turn prints the agent’s words and ends as the reason its stop mea
   assert.equal((await withStop({ error: { code: -32603, message: 'Provider returned 429: rate limit exceeded' } })).turn.reason, 'limit');
   assert.equal((await withStop({ error: { code: -32603, message: 'quota exhausted for this billing period' } })).turn.reason, 'limit');
   assert.equal((await withStop({ error: { code: -32603, message: 'stream closed unexpectedly' } })).turn.reason, 'error');
+});
+
+test('ACP: a provider out of money is a limit, in each provider’s own words, as OpenCode passes them on', async () => {
+  const session = { configOptions: modelOption(ASKED) };
+  const reason = async (/** @type {any} */ answer) => {
+    const { adapter } = acpOn(acpServer({ session, prompt: (send, m) => send({ jsonrpc: '2.0', id: m.id, ...answer }) }));
+    await adapter.open();
+    return (await adapter.turn('go')).reason;
+  };
+  // THE ORDINARY WAY A METERED KEY STOPS, and each of these was an `error`:
+  // nothing was handed on when the money ran out.
+  for (const words of [
+    // OpenRouter's 402, as its error reference words it, and its two other wordings.
+    'Your account or API key has insufficient credits. Add more credits and retry the request.',
+    'Insufficient credits. Add more using https://openrouter.ai/settings/credits',
+    'This request requires more credits, or fewer max_tokens.',
+    'Provider returned error: 402 Payment Required',
+    // A gateway, and Copilot's allowance.
+    'Insufficient funds. Please add credits to your account to continue using AI services.',
+    'You have exceeded your premium request allowance.',
+    'Key limit exceeded',
+  ]) assert.equal(await reason(openCodeFailed(words)), 'limit', words);
+  // WHAT IS NOT ONE. A key the provider does not know is the sign-in; a
+  // provider's bad minute and a request it will not take are errors, and
+  // hand nothing on.
+  assert.equal(await reason(openCodeFailed('Invalid API key')), 'auth');
+  assert.equal(await reason(openCodeFailed('Provider is overloaded')), 'error');
+  assert.equal(await reason(openCodeFailed('User not found.')), 'error');
+  // The error's name, where OpenCode gives one that says more than the words.
+  assert.equal(await reason(openCodeFailed('prompt is too long', 'ContextOverflowError')), 'cut');
+  assert.equal(await reason({ error: { code: -32000, message: 'provider authentication required', data: { providerId: 'openrouter' } } }), 'auth');
 });
 
 test('ACP: a permission request is answered with the agent’s own option, to reject in a session that asks first and to allow in one that does not', async () => {

@@ -44,7 +44,7 @@ engines:
   - engine: codex
     model: gpt-5.1-codex
   - engine: opencode
-    model: github-copilot/gpt-5
+    model: github-copilot/claude-sonnet-5.5
 ```
 
 `model` is optional for `claude-code` and `codex`, and required for
@@ -52,6 +52,11 @@ engines:
 since step 7 an API key's provider: [api-engines.md](./api-engines.md)). A
 model from any other OpenCode provider is refused by name: those run on API
 keys, which are step 7.
+
+**The account's own list decides which models there are.** The one above is
+in OpenCode's catalog for Copilot; whether a member's Copilot plan has it is
+the plan's to say. A name the account does not have is found before a turn
+(below) and ends as `model`, so the member's next engine takes over.
 
 **Across providers, never across accounts.** A member has one vault and a
 vault keeps one item of each kind, so there is no second account of the same
@@ -75,13 +80,26 @@ TurnEnded { engine, reason, detail, model, usage, resetsAt }
 | reason | what happened | Claude Code | Codex | ACP |
 |---|---|---|---|---|
 | `done` | the turn ended | the `Stop` hook | `turn/completed`, status `completed` | `stopReason: end_turn` |
-| `limit` | the account's limit | `StopFailure` naming a rate or usage limit | `usageLimitExceeded`, or a failed turn while a rate-limit window stands at 100% | an error naming a rate limit or quota |
-| `auth` | not signed in, or the sign-in ended | `StopFailure` naming the sign-in | `account/read` with no account, or `unauthorized` | error `-32000`, Authentication required |
-| `model` | not the model that was asked for | | `thread/start` answers another model, `model/rerouted`, `modelNotFound` | the session reports another model, or none |
+| `limit` | the account's limit, or its money | `StopFailure` with `rate_limit` or `billing_error` | `usageLimitExceeded`, or a failed turn while a rate-limit window stands at 100% | an error naming a rate limit, a quota, or credits that ran out |
+| `auth` | not signed in, or the sign-in ended | `StopFailure` with `authentication_failed`, `oauth_org_not_allowed`, `account_on_hold` or `cloud_credential_error` | `account/read` with no account, or `unauthorized` | error `-32000`, Authentication required |
+| `model` | not the model that was asked for | `StopFailure` with `model_not_found` | `thread/start` answers another model, `model/rerouted`, `modelNotFound` | the session reports another model, or none, or the agent says it has no such model |
 | `refused` | the provider declined the work | | a policy error | `stopReason: refusal` |
-| `cut` | the turn ran out of room | | `contextWindowExceeded` | `max_tokens`, `max_turn_requests` |
+| `cut` | the turn ran out of room | `StopFailure` with `max_output_tokens` | `contextWindowExceeded` | `max_tokens`, `max_turn_requests`, a context that overflowed |
 | `cancelled` | somebody stopped it | | status `interrupted` | `stopReason: cancelled` |
 | `error` | anything else, with the engine's first line as `detail` | `StopFailure` otherwise | status `failed` otherwise | any other error |
+
+**Running out of money is a limit.** A metered key does not usually stop at a
+rate limit, it stops when its credits are gone: OpenRouter answers 402, "Your
+account or API key has insufficient credits", and other providers say
+insufficient funds or balance, payment required, or an allowance exceeded.
+Each is read as `limit`, and the member's next engine takes over.
+
+**A limit may be reported late.** OpenCode retries a rate limit itself, up to
+five times, waiting as long as the provider's `retry-after` says, and answers
+with the error only when it gives up. The runner waits for that answer with
+no deadline of its own, as it waits for any turn. So a session on OpenCode
+can sit at a rate limit for as long as the provider asked before the box
+hears of it and hands on.
 
 `usage` is the tokens the engine counted, when it says. `resetsAt` is when a
 limit lifts, when the engine says. Neither is worked out here.
@@ -135,7 +153,9 @@ uses another one and says nothing. So a turn runs only when the engine
 itself reports the model it is on and that is the model the member names:
 from `thread/start` for Codex, and for an ACP agent from the session's model
 option, set and then read back (an older agent, which lists its models and
-has no option to read, must list the model and accept being set to it). An
+has no option to read, must list the model and accept being set to it).
+OpenCode's own server refuses a model the account does not have ("model not
+found"), and that refusal is the same ending. An
 engine that does not say which model it is on is *cannot tell*, and cannot
 tell is not a match. That is a TurnEnded with reason `model`, before anything
 was asked of it. Codex is also stopped mid-turn if it says it was moved to
@@ -278,9 +298,11 @@ the engines this machine does not run.
 - **A member's custodians are not told separately that an engine's sign-in
   ended.** The session says so; the fifteen-minute check that tells
   custodians about a Claude sign-in does not look at these.
-- **Limit detection for Claude Code and ACP agents reads the error's words**,
-  because neither has a field for it. A limit worded in a way nobody has seen
-  is an `error`, and hands nothing on.
+- **Limit detection for an ACP agent reads the error's words**, because the
+  protocol has no field for it. A limit worded in a way nobody has seen is an
+  `error`, and hands nothing on. Claude Code names the error in its
+  `StopFailure` hook (`rate_limit`, `billing_error` and the rest) and is read
+  by that name; its words are read only where a version sends no name.
 
 ## Tests
 
