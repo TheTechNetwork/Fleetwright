@@ -19,7 +19,10 @@ import SwiftUI
 /// person may start as (`you.startAs`, the fleet's answer) are each a switch,
 /// all off until one is turned on, and the ones that are on go into the grant
 /// this phone signs. Nothing is drawn for somebody the fleet lists none for.
-/// A delegation that names members says which on its row.
+/// A delegation that names members says which on its row. A MACHINE FROM
+/// BEFORE THE FIELD checks a signature over a grant without it, so it refuses
+/// one that names members as badly signed: the switches say so, and what to
+/// do, before anybody meets that refusal.
 struct DelegationsView: View {
     let settings: Settings
 
@@ -70,6 +73,10 @@ struct DelegationsView: View {
                 }
                 if !startable.isEmpty {
                     Text(mcpMembersSentence)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(mcpMembersOlderMachine)
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
                         .fixedSize(horizontal: false, vertical: true)
@@ -182,3 +189,7 @@ struct DelegationsView: View {
 /// What turning on a member under An MCP client does, in one sentence. The
 /// same sentence as Android.
 let mcpMembersSentence = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member."
+
+/// What to do when a machine refuses a start as a member under such a grant.
+/// The same sentence as Android.
+let mcpMembersOlderMachine = "If a machine refuses a start as a member, update that machine: an older one does not take a grant that names members."

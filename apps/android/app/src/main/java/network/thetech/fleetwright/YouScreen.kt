@@ -814,7 +814,10 @@ private fun DevicesSheet(settings: Settings, admin: Boolean?, onDismiss: () -> U
  * person may start as (`you.startAs`, the fleet's answer) are each a switch,
  * all off until one is turned on, and the ones that are on go into the grant
  * this phone signs. Nothing is drawn for somebody the fleet lists none for.
- * A delegation that names members says which on its row.
+ * A delegation that names members says which on its row. A MACHINE FROM
+ * BEFORE THE FIELD checks a signature over a grant without it, so it refuses
+ * one that names members as badly signed: the switches say so, and what to
+ * do, before anybody meets that refusal.
  */
 @Composable
 private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
@@ -905,7 +908,10 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
                 )
             }
         }
-        if (startable.isNotEmpty()) Hint(MCP_MEMBERS_SENTENCE)
+        if (startable.isNotEmpty()) {
+            Hint(MCP_MEMBERS_SENTENCE)
+            Hint(MCP_MEMBERS_OLDER_MACHINE)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((label, days) in listOf("Allow for a day" to 1, "Allow for a week" to 7)) {
                 OutlinedButton(
@@ -939,6 +945,12 @@ internal fun describeDelegation(d: Fleet.Delegation): String = when {
  * same sentence as iOS.
  */
 const val MCP_MEMBERS_SENTENCE = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member."
+
+/**
+ * What to do when a machine refuses a start as a member under such a grant.
+ * The same sentence as iOS.
+ */
+const val MCP_MEMBERS_OLDER_MACHINE = "If a machine refuses a start as a member, update that machine: an older one does not take a grant that names members."
 
 /**
  * Whom a delegation may start sessions as, for the end of its row: by name

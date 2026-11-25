@@ -63,6 +63,9 @@ test('both phones offer the members an MCP client may start as, none chosen unti
   for (const words of [
     'Start sessions as ',
     "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member.",
+    // A box from before the field refuses such a grant as badly signed, so
+    // the switches say what to do about that refusal.
+    'If a machine refuses a start as a member, update that machine: an older one does not take a grant that names members.',
     ' · starts sessions as ',
   ]) {
     assert.ok(ios.includes(words), `iOS does not say "${words}"`);
