@@ -417,7 +417,9 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       'session wrote, the branch it was told and where it ran. THE BRIEF IS ALL THE OTHER MEMBER GETS: ' +
       'nothing of this conversation travels, so say what to do, where, and what to hand back. If the wait ' +
       'runs out the work is still going: call again with `task` set to the id you were given. You must be ' +
-      'allowed to start a session as the member. The session is yours to stop with fleet_stop once you have ' +
+      'allowed to start a session as the member. A start the fleet refuses cancels the task it was made ' +
+      'for, so call again once that is put right; one that waits for approval keeps its task, to start ' +
+      'with fleet_start and `taskId`. The session is yours to stop with fleet_stop once you have ' +
       'the result, and the task is accepted or reopened with fleet_task.',
     schema: {
       to: { type: 'string', description: 'The member to hand the work to, by id (fleet_members lists them and the work each takes). Leave out to let the fleet’s routing choose among the members you may hand work to.' },

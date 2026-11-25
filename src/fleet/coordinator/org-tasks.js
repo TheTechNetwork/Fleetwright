@@ -130,6 +130,34 @@ export class OrgTasks {
   }
 
   /**
+   * What somebody refused at the cap is told: whose the tasks are, how many
+   * of them this person can clear, and who can clear the rest.
+   *
+   * "Accept or cancel some first" was all it said, to somebody who could see
+   * none of them: one person with no team made five hundred, and a manager
+   * was then told to clear tasks her own list did not show. A task is seen
+   * by whoever made it, whoever acts for its assignee, and an admin, so
+   * those are the people named.
+   *
+   * @param {Who} who
+   */
+  #fullWords(who) {
+    /** @type {Map<string, number>} */
+    const made = new Map();
+    for (const t of this.all()) made.set(t.createdBy || 'nobody named', (made.get(t.createdBy || 'nobody named') ?? 0) + 1);
+    const most = [...made].sort((a, b) => b[1] - a[1]);
+    const named = most.slice(0, 3).map(([by, n]) => `${by} made ${n}`);
+    const rest = most.slice(3).reduce((sum, [, n]) => sum + n, 0);
+    const yours = this.all().filter((t) => this.maySee(who, t)).length;
+    return (
+      `The fleet keeps ${MAX_TASKS} tasks and every one of them is unfinished, so there is no room for another. ` +
+      `${named.join(', ')}${rest ? `, and others made ${rest}` : ''}. ` +
+      `${yours ? `${yours === MAX_TASKS ? 'All of them are' : `${yours} of them ${yours === 1 ? 'is' : 'are'}`} on your own list, to accept or cancel. ` : 'None of them is on your list. '}` +
+      'A task is accepted or cancelled by whoever made it, by whoever acts for its assignee, or by a fleet admin, whose list shows every task.'
+    );
+  }
+
+  /**
    * @param {Who} who @param {unknown} input
    * @param {(id: string) => { name: string }|null} member  the member by that id, or null
    * @returns {{ ok: true, task: Task, text: string } | { ok: false, error: { code: string }, text: string }}
@@ -146,9 +174,7 @@ export class OrgTasks {
       const parent = this.find(who, fields.parent);
       if (!parent.ok) return refuse('no_task', `There is no task ${fields.parent} that you can see, so nothing can be delegated from it.`);
     }
-    if (!this.#makeRoom()) {
-      return refuse('too_many', `The fleet keeps ${MAX_TASKS} tasks and every one of them is unfinished. Accept or cancel some first.`);
-    }
+    if (!this.#makeRoom()) return refuse('too_many', this.#fullWords(who));
     const at = this.now();
     this.seq += 1;
     this.seqDirty = true;

@@ -401,10 +401,20 @@ test('a fleet keeps five hundred tasks: the oldest finished one makes room, and 
   let t = 1;
   const tasks = new OrgTasks({ now: () => t++ });
   const who = { email: 'eli@example.com', admin: true, acts: [] };
-  for (let i = 0; i < MAX_TASKS; i++) assert.equal(tasks.create(who, { title: `Task ${i}`, brief: 'B' }, () => null).ok, true);
+  // Sam, on nobody's team, made nearly all of them; Dana made two.
+  const sams = { email: 'sam@example.com', admin: false, acts: [] };
+  const danas = { email: 'dana@example.com', admin: false, acts: [] };
+  for (let i = 0; i < MAX_TASKS; i++) assert.equal(tasks.create(i < 2 ? danas : sams, { title: `Task ${i}`, brief: 'B' }, () => null).ok, true);
   const full = /** @type {any} */ (tasks.create(who, { title: 'One more', brief: 'B' }, () => null));
   assert.equal(full.error.code, 'too_many');
-  assert.match(full.text, /keeps 500 tasks and every one of them is unfinished/);
+  // WHOSE THEY ARE AND WHO CAN CLEAR THEM. "Accept or cancel some first" was
+  // said to somebody whose list showed none of them.
+  const rest = 'A task is accepted or cancelled by whoever made it, by whoever acts for its assignee, or by a fleet admin, whose list shows every task.';
+  const said = 'The fleet keeps 500 tasks and every one of them is unfinished, so there is no room for another. sam@example.com made 498, dana@example.com made 2.';
+  assert.equal(full.text, `${said} All of them are on your own list, to accept or cancel. ${rest}`);
+  assert.equal(tasks.visibleTo(who).length, MAX_TASKS, 'an admin’s list shows every task');
+  assert.equal(/** @type {any} */ (tasks.create(danas, { title: 'One more', brief: 'B' }, () => null)).text, `${said} 2 of them are on your own list, to accept or cancel. ${rest}`);
+  assert.equal(/** @type {any} */ (tasks.create({ email: 'ines@example.com', admin: false, acts: [] }, { title: 'One more', brief: 'B' }, () => null)).text, `${said} None of them is on your list. ${rest}`);
   assert.equal(tasks.act(who, 't7', 'cancel', '').ok, true);
   const made = /** @type {any} */ (tasks.create(who, { title: 'One more', brief: 'B' }, () => null));
   assert.equal(made.task.id, `t${MAX_TASKS + 1}`, 'a number is never used twice');

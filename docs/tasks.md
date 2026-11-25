@@ -47,7 +47,10 @@ Tasks are kept by the coordinator (`src/fleet/coordinator/org-tasks.js`), one
 Durable Object value a task under `tasks:<id>`, for the reason members are:
 a value holds 128 KiB. A fleet keeps 500. Past that the oldest task that is
 `done` or `cancelled` goes, and a fleet with 500 unfinished tasks is refused a
-new one.
+new one. The refusal says who made how many of them, how many are on the
+asker's own list to accept or cancel, and who can clear the rest: whoever
+made a task, whoever acts for its assignee, or a fleet admin, whose list
+shows every task.
 
 The brief is short on purpose. A task is handed over as a fresh brief and
 never as a transcript: the largest member's instructions (4 KiB) and the
@@ -213,6 +216,18 @@ A wait that runs out is not a failure. The tool says the task is still being
 worked on, and `fleet_delegate` with `task` set to its id picks the wait back
 up. The session it started is left at its prompt: `fleet_stop` ends it, and
 `fleet_task` accepts or reopens the task.
+
+**A start that is refused takes its task with it.** The tool made the task
+for that start, so when the fleet or the box refuses the start it cancels the
+task and says so. Left open, each refused start was one more unfinished task,
+and an agent retrying a start that could not work filled the fleet's 500.
+Two answers are not a refusal, and the task stays:
+
+- **the start waits for approval** ([budgets.md](./budgets.md)). The approval
+  names the task, and `fleet_start` with `taskId` starts it once a person has
+  given it;
+- **the box did not answer in time.** It may have started the session all the
+  same. The tool says that it cannot tell, and how to look.
 
 The brief is all the other member gets. Nothing of the caller's conversation
 travels, which is the point: a brief that only makes sense with the

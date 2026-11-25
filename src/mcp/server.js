@@ -1573,12 +1573,34 @@ export class McpServer {
       if (!made.body.start) return this.#text(`${made.body.text}\n\n${unstarted}`, true);
       /** @type {any} */
       let reply;
+      // NO ANSWER IS NOT "NOTHING STARTED" (C-5). A machine that did not
+      // answer in time may have started the session all the same, and this
+      // used to say the task was open with nothing working on it, which
+      // nobody here knew.
+      const unanswered =
+        `${id} was made, and whether a session started on it is not known: no answer came back in time, and one may have started all the same. ` +
+        `fleet_tasks with \`id: "${id}"\` shows whether a session holds it. If none does in a few minutes, start it with fleet_start and \`taskId\`, or cancel it with fleet_task.`;
       try {
         reply = await this.#intent('start', made.body.start, null, null);
       } catch (e) {
-        return this.#text(`${describeFailure(e)}\n\n${unstarted}`, true);
+        return this.#text(`${describeFailure(e)}\n\n${unanswered}`, true);
       }
-      if (reply?.ok === false) return this.#text(`${String(reply.text ?? 'The fleet refused the start.')}\n\n${unstarted}`, true);
+      if (reply?.ok === false) {
+        const said = String(reply.text ?? 'The fleet refused the start.');
+        const code = String(reply.error?.code ?? '');
+        if (code === 'host_timeout') return this.#text(`${said}\n\n${unanswered}`, true);
+        // WAITING ON A PERSON, and the approval names this task: it stays.
+        if (code === 'needs_approval') {
+          return this.#text(`${said}\n\n${id} was made and is open, waiting on that approval. Once it is given, start it with fleet_start and \`taskId: "${id}"\`. The approval is for the task as it is now, so changing its title or brief asks for a new one.`, true);
+        }
+        // REFUSED: THE TASK MADE FOR IT GOES TOO. Each refused start used to
+        // leave an open task behind, and a fleet keeps five hundred: an
+        // agent retrying a start that could not work filled the table, and
+        // then nobody could make a task (docs/tasks.md).
+        const cancelled = await this.#org('POST', `/api/tasks/${encodeURIComponent(id)}/act`, { action: 'cancel', note: 'its start was refused' }, NO_TASKS);
+        if ('failed' in cancelled || cancelled.body?.ok !== true) return this.#text(`${said}\n\n${unstarted}`, true);
+        return this.#text(`${said}\n\n${id} was made for this and has been cancelled, since nothing was started on it. Call fleet_delegate again once that is put right.`, true);
+      }
       const session = sessionFrom(reply);
       const named = String(session?.name || '');
       if (named) {
