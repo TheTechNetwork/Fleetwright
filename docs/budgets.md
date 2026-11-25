@@ -69,8 +69,22 @@ spend is then shown as "at least" its total, with how many sessions that is
 about. Unknown is never read as nothing, and never blocks a start: a budget
 is enforced on what was counted.
 
-One row a member (`spend:<id>`): the month, the total, and the last figure
-seen for at most 60 of its sessions. One row a member for who may start as
+**A start no box answered is unknown too.** A start as a member is sent to a
+box and waited for. A box too busy to answer in time may have started the
+session all the same, and nothing was then counting it: the member's month
+read "$0.00 of $50.00" while its box reported the cost. So a start that
+times out is kept as one whose spend is not known, and the member's spend
+says so: "At least", and that a start got no answer from its machine. When
+that box next reports a session as that member which the fleet is not
+already counting, and which did not begin before the start was sent, it is
+that start's: counted from nothing, like any session the fleet started, and
+no longer unknown. One session a start. Like every unknown it blocks
+nothing, in `ask` and in `refuse`: what stops the next start is the figure
+once the box reports it. A start nobody ever answers stays unknown for the
+month.
+
+One row a member (`spend:<id>`): the month, the total, the last figure
+seen for at most 60 of its sessions, and the starts nobody answered. One row a member for who may start as
 it (`custody:<id>`), as the minter last signed it.
 
 ## The setting
@@ -168,14 +182,17 @@ budget bites.
 ## Where it shows
 
 ```
-GET  /api/budgets                 { settings, members: [{ member, budgetUsdMonth, month, usd, unknownSessions, over }], you }
+GET  /api/budgets                 { settings, members: [{ member, name, budgetUsdMonth, month, usd, unknownSessions, over, words }], you }
 PUT  /api/budgets/settings        { budgets?, dangerous?, paidApi?, workTypes? }   an admin
 GET  /api/approvals               { approvals }      the ones you asked for, and the ones you may answer
 POST /api/approvals/{id}          { answer: approve | decline, note? }
 ```
 
 `GET /api/budgets` shows an admin every member, a manager their team, and a
-person member themselves.
+person member themselves. `unknownSessions` counts every session whose cost
+is not all counted: one that reported none, one that reported more at once
+than is counted, and a start no box answered. `words` is the sentence that
+says which, and it is what a screen draws.
 
 - **MCP**: `fleet_budgets` reads what each member has spent against its
   budget, and the setting. `fleet_approvals` lists approvals. **No MCP tool
@@ -219,11 +236,13 @@ person member themselves.
 ## Tests
 
 `test/budgets.test.js` (the ledger: growth, a first sighting, a figure that
-goes down, the month's turn, unknown cost; what needs approval; an
-approval's life), `test/budgets-coordinator.test.js` (spend counted from
-health frames, a start refused and then let through, each reason, who may
-answer, one use, the same ask twice, refuse mode, the routes and who sees
-what, the pushes, the Durable Object's rows),
+goes down, the month's turn, unknown cost, the most one report adds, a start
+nobody answered; what needs approval; an approval's life and what it is
+bound to), `test/budgets-coordinator.test.js` (spend counted from health
+frames, a start that timed out, a start refused and then let through, each
+reason, an approval for other words, the kind of work, who may answer, one
+use, the same ask twice, refuse mode, the routes and who sees what, the
+pushes, the Durable Object's rows),
 `test/members-coordinator.test.js` (the custody list kept across a rebuilt
 Durable Object, and the refusal while there is none), `test/budgets-mcp.test.js`
 (`fleet_budgets`, `fleet_approvals`, and that no tool answers one), and

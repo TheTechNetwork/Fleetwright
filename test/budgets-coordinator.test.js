@@ -117,6 +117,37 @@ test('a session that reports no cost is counted as unknown, and does not stop a 
   assert.equal((await f.start(dana, 'debbie')).ok, true);
 });
 
+test('a start as a member that its box never answers is spend the fleet cannot tell, and is counted once the box reports the session', async () => {
+  // Found by an outside review: the start timed out, the box had started
+  // the session, and its reports were ignored. The row read "$0.00 of
+  // $50.00" and a budget that refuses let the next start through.
+  const f = fleet();
+  f.set({ budgets: 'refuse' });
+  await f.reports();
+  f.answers(() => {
+    f.as.set('cc-late', 'debbie');
+    throw new Error('deb132 did not answer in time');
+  });
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'host_timeout');
+  assert.deepEqual([f.spendOf('debbie').usd, f.spendOf('debbie').unknownSessions], [0, 1]);
+  assert.equal(f.spendOf('debbie').words, 'At least $0.00 of $50.00 this month, at API prices as each session counted it. One start got no answer from its machine, so whether it ran, and what it cost, is not known.');
+  // The box reports the session it started, and what it cost is Debbie's.
+  await f.cost('cc-late', 62);
+  assert.deepEqual([f.spendOf('debbie').usd, f.spendOf('debbie').unknownSessions, f.spendOf('debbie').over], [62, 0, true]);
+  f.answers((spec) => ({ ok: true, text: 'Started.', sessions: [{ name: 'cc-next', status: 'running', member: spec.params.member }] }));
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
+  // UNKNOWN IS NOT A REFUSAL (docs/budgets.md): a budget is enforced on what
+  // was counted, so a start nobody answered, with nothing heard since, stops nothing.
+  const g = fleet();
+  g.set({ budgets: 'refuse' });
+  await g.reports();
+  g.answers(() => { throw new Error('deb132 did not answer in time'); });
+  await g.start(dana, 'debbie');
+  g.answers((spec) => ({ ok: true, text: 'Started.', sessions: [{ name: 'cc-2', status: 'running', member: spec.params.member }] }));
+  assert.equal((await g.start(dana, 'debbie')).ok, true);
+  assert.equal(g.spendOf('debbie').unknownSessions, 1);
+});
+
 test('with enforcing off, a member past its budget starts as before and nobody is asked', async () => {
   const f = fleet();
   await f.reports();

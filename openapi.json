@@ -3387,7 +3387,7 @@
           "identity"
         ],
         "summary": "What each member has spent this month, and what a budget does",
-        "description": "For each member the caller may see (an admin: everybody; a manager: their team; a person: their own member), what the coordinator saw its sessions spend this UTC month, in dollars at API prices as each session counted its own cost, against its `budgetUsdMonth`. `unknownSessions` is how many of its sessions reported no cost: the figure is then a floor, never read as nothing. `settings` is what the fleet does at a budget and what else needs approval (docs/budgets.md).",
+        "description": "For each member the caller may see (an admin: everybody; a manager: their team; a person: their own member), what the coordinator saw its sessions spend this UTC month, in dollars at API prices as each session counted its own cost, against its `budgetUsdMonth`. `unknownSessions` is how many of its sessions have a cost that is not all counted: one that reported none, one that reported more in one report than the fleet counts, and a start as the member that its machine never answered. The figure is then a floor, never read as nothing, and `words` is the sentence that says which. `settings` is what the fleet does at a budget and what else needs approval (docs/budgets.md).",
         "responses": {
           "200": {
             "description": "`{ settings: { budgets, dangerous, paidApi, workTypes }, members: [{ member, name, budgetUsdMonth, month, usd, unknownSessions, over, words }], you: { admin } }`"

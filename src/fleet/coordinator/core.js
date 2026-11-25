@@ -4696,6 +4696,7 @@ export class CoordinatorCore {
       this.onStateChanged?.();
     }
 
+    const sentAt = this.now();
     try {
       const answer = explainUnsupportedVersion(
         explainUnknownVerb(await this.send(placement.host, spec), placement.host),
@@ -4772,6 +4773,17 @@ export class CoordinatorCore {
     } catch (e) {
       // NOT GIVEN BACK: a box that did not answer may have started the
       // session all the same, and an approval is for one start.
+      //
+      // AND FOR THE SAME REASON ITS SPEND IS NOT KNOWN (docs/budgets.md). A
+      // start as a member that got no answer was never counted: the session
+      // ran, its box reported what it cost, and the member's month read
+      // $0.00 because nothing here had heard it start. It is kept as a start
+      // whose spend is unknown, which the member's row says, until that box
+      // speaks of the session and it is counted from nothing.
+      if (spec.verb === 'start' && typeof spec.params?.member === 'string' && lockedOn && this.org.get(spec.params.member)) {
+        this.budgets.unanswered(spec.params.member, lockedOn, sentAt);
+        this.onStateChanged?.();
+      }
       return { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
     }
   }
@@ -6044,7 +6056,7 @@ export class CoordinatorCore {
       const member = this.org.get(s.member);
       if (!member) continue;
       const before = this.budgets.spendOf(member.id);
-      const crossed = this.budgets.count(member.id, `${hostId}\n${s.name}`, s.spent, member.budgetUsdMonth);
+      const crossed = this.budgets.count(member.id, `${hostId}\n${s.name}`, s.spent, member.budgetUsdMonth, { startedAt: s.startedAt });
       const after = this.budgets.spendOf(member.id);
       if (after !== before) changed = true;
       if (!crossed || !after) continue;

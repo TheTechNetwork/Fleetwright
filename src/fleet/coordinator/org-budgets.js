@@ -14,7 +14,7 @@
 // NEVER THROWS. Every refusal is a code and a sentence.
 
 import {
-  checkBudgetSettings, NO_BUDGET_SETTINGS, monthOf, newSpend, startCounting, resumeCounting, countSpend, readSpend, overBudget,
+  checkBudgetSettings, NO_BUDGET_SETTINGS, monthOf, newSpend, startCounting, startUnanswered, resumeCounting, countSpend, readSpend, overBudget,
   newApproval, aged, covers, sameAsk, answerApproval, readApproval, APPROVAL_ID_RE, MAX_APPROVALS, BUDGET_WARN_AT,
 } from '../protocol/budgets.js';
 
@@ -93,6 +93,16 @@ export class OrgBudgets {
     this.#keepSpend(member, startCounting(this.spend.get(member) ?? newSpend(this.now()), key, this.now()));
   }
 
+  /**
+   * The fleet sent a start as this member to a box that never answered: its
+   * spend is not known until that box speaks of the session (`count`).
+   *
+   * @param {string} member @param {string} hostId @param {number} at when it was sent
+   */
+  unanswered(member, hostId, at) {
+    this.#keepSpend(member, startUnanswered(this.spend.get(member) ?? newSpend(this.now()), hostId, at, this.now()));
+  }
+
   /** The fleet resumed a session as this member: it counts from the first figure heard. @param {string} member @param {string} key */
   resumed(member, key) {
     this.#keepSpend(member, resumeCounting(this.spend.get(member) ?? newSpend(this.now()), key, this.now()));
@@ -104,12 +114,13 @@ export class OrgBudgets {
    * budget nearly spent, or spent. Each goes out once a month.
    *
    * @param {string} member @param {string} key @param {unknown} spent @param {number|null|undefined} budget
+   * @param {{ startedAt?: unknown }} [session]  when the box says the session began, if it says
    * @returns {'warn'|'over'|null}
    */
-  count(member, key, spent, budget) {
+  count(member, key, spent, budget, session = {}) {
     const was = this.spend.get(member);
     if (!was) return null;
-    let next = countSpend(was, key, spent, this.now());
+    let next = countSpend(was, key, spent, this.now(), session);
     /** @type {'warn'|'over'|null} */
     let crossed = null;
     if (typeof budget === 'number' && budget > 0) {

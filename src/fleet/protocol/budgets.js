@@ -51,6 +51,14 @@ export const BUDGET_WARN_AT = 0.8;
  * a session that reported no cost.
  */
 export const MAX_USD_PER_REPORT = 100;
+/**
+ * How far before a start was sent a session may say it began and still be
+ * that start's (countSpend): the two clocks are a box's and this
+ * coordinator's, and they need not agree to the second.
+ */
+export const UNANSWERED_SKEW_MS = 5 * 60_000;
+/** How long a start nobody answered is still waited for across the turn of a month. */
+export const UNANSWERED_KEPT_MS = 24 * 60 * 60_000;
 
 const WORK_TYPE_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
@@ -67,6 +75,7 @@ export const monthOf = (/** @type {number} */ t) => new Date(t).toISOString().sl
  * @property {number} usd                    what was seen being spent this month
  * @property {string[]} unknown              sessions this month whose cost is unknown, by key
  * @property {string[]} [capped]             sessions this month that reported more at once than is counted (MAX_USD_PER_REPORT), by key
+ * @property {Array<{ host: string, at: number }>} [unanswered]  starts as this member sent to a box that never answered: which box, and when
  * @property {Record<string, number>} seen   the last figure seen for each session, by key, newest last
  * @property {{ warn?: boolean, over?: boolean }} told  which of the month's two notices went out
  * @typedef {{ kind: 'over-budget'|'dangerous'|'risky-work'|'paid-api', text: string }} Reason
@@ -130,10 +139,16 @@ export function newSpend(now) {
   return { month: monthOf(now), usd: 0, unknown: [], seen: {}, told: {} };
 }
 
-/** The same row in the month `now` is in: at the month's turn the total starts again and the last figures stay. */
+/**
+ * The same row in the month `now` is in: at the month's turn the total
+ * starts again and the last figures stay. So does a start nobody has
+ * answered in the last day, whose session may yet be heard from.
+ */
 function inMonth(/** @type {Spend} */ row, /** @type {number} */ now) {
   const month = monthOf(now);
-  return row.month === month ? row : { month, usd: 0, unknown: [], seen: row.seen, told: {} };
+  if (row.month === month) return row;
+  const unanswered = (row.unanswered ?? []).filter((u) => now - u.at < UNANSWERED_KEPT_MS);
+  return { month, usd: 0, unknown: [], ...(unanswered.length ? { unanswered } : {}), seen: row.seen, told: {} };
 }
 
 /** `seen` with this session's figure newest, and no more than the row keeps. */
@@ -154,6 +169,36 @@ function remember(/** @type {Record<string, number>} */ seen, /** @type {string}
 export function startCounting(row, key, now) {
   const r = inMonth(row, now);
   return { ...r, seen: remember(r.seen, key, 0) };
+}
+
+/**
+ * A start as this member was sent to a box, and the box never answered. It
+ * may have started the session all the same, and then nothing was counting
+ * it: the row read "$0.00 of $50.00" while the box reported $180, and a
+ * budget that refuses let the next start through. So the start is kept as
+ * one whose spend is not known, which the row says, until its box speaks of
+ * the session (countSpend).
+ *
+ * @param {Spend} row @param {string} host @param {number} at when the start was sent @param {number} now
+ * @returns {Spend}
+ */
+export function startUnanswered(row, host, at, now) {
+  const r = inMonth(row, now);
+  return { ...r, unanswered: [...(r.unanswered ?? []), { host, at }].slice(-MAX_SESSIONS_SEEN) };
+}
+
+/**
+ * The start nobody answered that this session is, if it is one: sent to the
+ * box now reporting it, and not after the session says it began. A box that
+ * gives no time for a session says nothing against it.
+ *
+ * @param {Spend} row @param {string} key @param {unknown} startedAt
+ * @returns {number} its place in `unanswered`, or -1
+ */
+function unansweredFor(row, key, startedAt) {
+  const host = key.slice(0, Math.max(0, key.indexOf('\n')));
+  const began = typeof startedAt === 'number' && Number.isFinite(startedAt) ? startedAt : null;
+  return (row.unanswered ?? []).findIndex((u) => u.host === host && (began === null || began >= u.at - UNANSWERED_SKEW_MS));
 }
 
 /** The figure a session is waiting to be first heard at (resumeCounting). */
@@ -180,15 +225,28 @@ export function resumeCounting(row, key, now) {
  * @param {string} key    the session, as `<host>\n<name>`; one the fleet did not start or resume as this member is not counted
  * @param {unknown} spent what the box reported: `{ usd, complete }`, or nothing
  * @param {number} now
+ * @param {{ startedAt?: unknown }} [session]  when the box says the session began, if it says
  * @returns {Spend} the same object when nothing changed
  */
-export function countSpend(row, key, spent, now) {
-  const r = inMonth(row, now);
+export function countSpend(row, key, spent, now, session = {}) {
+  let r = inMonth(row, now);
   // ONLY A SESSION THE FLEET ITSELF STARTED OR RESUMED AS THIS MEMBER. Which
   // member a session is, in a health frame, is the box's word; counted on
   // that alone, a box could spend any member's budget by naming it.
-  const last = r.seen[key];
-  if (last === undefined) return r === row ? row : r;
+  let last = r.seen[key];
+  if (last === undefined) {
+    // OR ONE IT STARTED AND WAS NEVER TOLD OF: a start sent to this box that
+    // got no answer. The session is that start's, counted from nothing like
+    // any other the fleet started, and the start is no longer unknown. One
+    // session a start, on the box the start went to, so a box gains nothing
+    // by it that the answer it never sent would not have given.
+    const at = unansweredFor(r, key, session.startedAt);
+    if (at < 0) return r === row ? row : r;
+    const unanswered = (r.unanswered ?? []).filter((_, i) => i !== at);
+    const { unanswered: _was, ...rest } = r;
+    r = { ...rest, ...(unanswered.length ? { unanswered } : {}), seen: remember(r.seen, key, 0) };
+    last = 0;
+  }
   const s = /** @type {any} */ (spent);
   const usd = s && typeof s.usd === 'number' && Number.isFinite(s.usd) && s.usd >= 0 ? s.usd : null;
   // NO DOLLARS, OR DOLLARS IT SAYS ARE NOT ALL OF THEM: a session whose cost
@@ -209,13 +267,14 @@ export function countSpend(row, key, spent, now) {
 
 /**
  * How many of a member's sessions this month have a cost that is not all
- * counted: ones that reported none, and ones that reported more at once
- * than is counted. A session that is both is one session.
+ * counted: ones that reported none, ones that reported more at once than is
+ * counted, and starts no box answered, each of which may be a session. A
+ * session that is two of these is one session.
  *
- * @param {{ unknown: string[], capped?: string[] }|null|undefined} row
+ * @param {{ unknown: string[], capped?: string[], unanswered?: unknown[] }|null|undefined} row
  */
 export function uncounted(row) {
-  return row ? new Set([...row.unknown, ...(row.capped ?? [])]).size : 0;
+  return row ? new Set([...row.unknown, ...(row.capped ?? [])]).size + (row.unanswered?.length ?? 0) : 0;
 }
 
 /** Dollars as a person reads them. */
@@ -225,19 +284,25 @@ export const dollars = (/** @type {number} */ usd) => `$${(Math.round(usd * 100)
  * What a member has spent against its budget, as one sentence, the same on
  * every surface.
  *
- * @param {{ usd: number, unknown: string[], capped?: string[] }|null} row @param {number|null|undefined} budget
+ * @param {{ usd: number, unknown: string[], capped?: string[], unanswered?: unknown[] }|null} row @param {number|null|undefined} budget
  */
 export function spendWords(row, budget) {
   const usd = row?.usd ?? 0;
   const unknown = row?.unknown.length ?? 0;
   const capped = row?.capped?.length ?? 0;
-  const least = unknown || capped ? 'At least ' : '';
+  const unanswered = row?.unanswered?.length ?? 0;
+  const least = unknown || capped || unanswered ? 'At least ' : '';
   const of_ = typeof budget === 'number' ? ` of ${dollars(budget)}` : '';
   /** @param {number} n */
   const sessions = (n) => (n === 1 ? 'One session' : `${n} sessions`);
   const more = unknown ? ` ${sessions(unknown)} reported no cost, so the real figure is higher by an amount nobody counted.` : '';
   const over = capped ? ` ${sessions(capped)} reported more than ${dollars(MAX_USD_PER_REPORT)} spent between two reports. The fleet counts at most that much from one report, so the rest was not counted.` : '';
-  return `${least}${dollars(usd)}${of_} this month, at API prices as each session counted it.${more}${over}`;
+  const silent = unanswered
+    ? unanswered === 1
+      ? ' One start got no answer from its machine, so whether it ran, and what it cost, is not known.'
+      : ` ${unanswered} starts got no answer from their machines, so whether they ran, and what they cost, is not known.`
+    : '';
+  return `${least}${dollars(usd)}${of_} this month, at API prices as each session counted it.${more}${over}${silent}`;
 }
 
 /** Is this member at or past its budget on what was counted? A member with no budget never is. */
@@ -464,5 +529,9 @@ export function readSpend(row) {
   const keys = (list) => (Array.isArray(list) ? list : []).filter((/** @type {unknown} */ k) => typeof k === 'string' && k.length <= 300).slice(-MAX_SESSIONS_SEEN);
   const unknown = keys(row.unknown);
   const capped = keys(row.capped);
-  return { month: row.month, usd, unknown, ...(capped.length ? { capped } : {}), seen, told: { ...(row.told?.warn === true ? { warn: true } : {}), ...(row.told?.over === true ? { over: true } : {}) } };
+  const unanswered = (Array.isArray(row.unanswered) ? row.unanswered : [])
+    .filter((/** @type {any} */ u) => u && typeof u.host === 'string' && u.host.length <= 200 && Number(u.at) > 0)
+    .map((/** @type {any} */ u) => ({ host: u.host, at: Number(u.at) }))
+    .slice(-MAX_SESSIONS_SEEN);
+  return { month: row.month, usd, unknown, ...(capped.length ? { capped } : {}), ...(unanswered.length ? { unanswered } : {}), seen, told: { ...(row.told?.warn === true ? { warn: true } : {}), ...(row.told?.over === true ? { over: true } : {}) } };
 }

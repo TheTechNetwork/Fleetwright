@@ -287,7 +287,9 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       'What each member you may see has spent this month against its budget, in dollars at API prices as ' +
       'each session counted its own cost, and what this fleet does when a budget is passed: nothing, ask ' +
       'for approval, or refuse. Also whether a session that skips permission prompts, or a kind of work, ' +
-      'needs approval first. "At least" means some sessions reported no cost, so the real figure is higher. ' +
+      'needs approval first. "At least" means the fleet could not count all of it, so the real figure is ' +
+      'higher: a session reported no cost, or more at once than is counted, or a start got no answer from ' +
+      'its machine. The sentence says which. ' +
       'A start that needs approval is refused with the approval’s id; a person who manages that member ' +
       'answers it on their phone, and the same start then goes through.',
     schema: {},
