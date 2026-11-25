@@ -3951,7 +3951,15 @@ class Fleet(
     }
 
     /** What this person signed for the fleet to send in their name later (docs/signed-intents.md, "Delegations"). */
-    data class Delegation(val id: String, val verbs: List<String>, val hosts: List<String>, val issuedAt: Long, val expires: Long)
+    data class Delegation(
+        val id: String,
+        val verbs: List<String>,
+        val hosts: List<String>,
+        val issuedAt: Long,
+        val expires: Long,
+        /** The members a start under it may name, by id. Empty when the grant names none, and from a fleet older than the field. */
+        val members: List<String> = emptyList(),
+    )
 
     suspend fun delegations(): Result<List<Delegation>> = withContext(Dispatchers.IO) {
         runCatching {
@@ -3959,14 +3967,18 @@ class Fleet(
             (0 until arr.length()).mapNotNull { i ->
                 val o = arr.optJSONObject(i) ?: return@mapNotNull null
                 val strings = { key: String -> o.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList() }
-                Delegation(o.optString("id"), strings("verbs"), strings("hosts"), o.optLong("issuedAt"), o.optLong("expires"))
+                Delegation(o.optString("id"), strings("verbs"), strings("hosts"), o.optLong("issuedAt"), o.optLong("expires"), strings("members"))
             }
         }
     }
 
-    /** Let an MCP client act as you, on any box, for [days]. */
-    suspend fun allowMcp(days: Int): Reply = withContext(Dispatchers.IO) {
-        val d = DeviceSigning(settings).delegation(MCP_DELEGATED_VERBS, listOf("*"), emptyMap(), days * 24L * 3600 * 1000)
+    /**
+     * Let an MCP client act as you, on any box, for [days]. [members] are the
+     * members it may start sessions as, by id: none unless the person chose
+     * them, and then they are in what this phone signs.
+     */
+    suspend fun allowMcp(days: Int, members: List<String> = emptyList()): Reply = withContext(Dispatchers.IO) {
+        val d = DeviceSigning(settings).delegation(MCP_DELEGATED_VERBS, listOf("*"), emptyMap(), days * 24L * 3600 * 1000, members)
             ?: return@withContext Reply(false, "This phone signs once its key is listed, which happens after you sign in to GitHub under Runners.", emptyList())
         runCatching {
             val json = post("/api/delegations", JSONObject().put("delegation", d))
@@ -4163,10 +4175,18 @@ class Fleet(
                 // until the machine a provision makes has joined gets its own,
                 // for an hour, over the fields the coordinator keeps of it
                 // (docs/signed-intents.md).
+                //
+                // A START AS A MEMBER NAMES THAT MEMBER IN ITS GRANT, beside
+                // the parameter it must match: a box takes a delegated start
+                // as a member only from a grant that names it. Any other
+                // request names none, and signs what it always did.
                 val signing = DeviceSigning(settings)
                 val delegations = JSONArray()
-                signing.delegation(listOf(verb), listOf("*"), buildMap<String, Any> { putAll(params); putAll(numeric) }, 600_000L)
-                    ?.let { delegations.put(it) }
+                val startsAs = if (verb == "start") params["member"].orEmpty() else ""
+                signing.delegation(
+                    listOf(verb), listOf("*"), buildMap<String, Any> { putAll(params); putAll(numeric) }, 600_000L,
+                    if (startsAs.isEmpty()) emptyList() else listOf(startsAs),
+                )?.let { delegations.put(it) }
                 val start = extra["start"] as? JSONObject
                 if (verb == "provision" && start != null) {
                     val kept = listOf("title", "brief", "mode", "task")

@@ -807,6 +807,14 @@ private fun DevicesSheet(settings: Settings, admin: Boolean?, onDismiss: () -> U
  * request the fleet places. They are listed because a standing permission
  * nobody can see is one nobody can take back. Taking one back goes to the
  * minter first: only the minter's list, which boxes check, makes a box refuse it.
+ *
+ * WHOM AN MCP CLIENT MAY START SESSIONS AS IS CHOSEN HERE, AND SIGNED. A
+ * session as a member runs on that member's sign-ins, and a box refuses a
+ * delegated start as a member the grant does not name. So the members this
+ * person may start as (`you.startAs`, the fleet's answer) are each a switch,
+ * all off until one is turned on, and the ones that are on go into the grant
+ * this phone signs. Nothing is drawn for somebody the fleet lists none for.
+ * A delegation that names members says which on its row.
  */
 @Composable
 private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
@@ -816,12 +824,27 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("") }
     var confirmRevoke by remember { mutableStateOf<Fleet.Delegation?>(null) }
+    // The members this person may start a session as, as the fleet lists
+    // them. Empty until it answers, and from a fleet older than members.
+    var startable by remember { mutableStateOf<List<Fleet.Member>>(emptyList()) }
+    // The members the next grant to an MCP client names. None, until chosen.
+    var chosen by remember { mutableStateOf(setOf<String>()) }
 
     suspend fun load() {
         Fleet(settings).delegations()
             .onSuccess { delegations = it }
             .onFailure { if (delegations.isEmpty()) result = it.message ?: "could not reach your fleet" }
         loaded = true
+        // WHO THIS PERSON MAY START AS, for the switches under An MCP client.
+        // Only from an answer that carries the list. Anything else leaves
+        // what was there, and with nothing there no switch is drawn.
+        val got = Fleet(settings).members().getOrNull()
+        val list = got?.members
+        if (got != null && got.ok != false && list != null) {
+            val ids = got.you?.startAs.orEmpty()
+            startable = list.filter { it.id in ids }
+            chosen = chosen.filter { it in ids }.toSet()
+        }
     }
     LaunchedEffect(Unit) { load() }
 
@@ -857,7 +880,7 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(describeDelegation(d), style = Design.Style.body, color = Design.Palette.ink.now)
-                    Hint(delegationScope(d))
+                    Hint(delegationScope(d) + delegationStartsAs(d, startable))
                 }
                 TextButton(onClick = { confirmRevoke = d }) { Text("Revoke") }
             }
@@ -869,6 +892,20 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
             "Lets an MCP client signed in as you start, read, stop and resume sessions and make machines, on any machine, until it runs out. " +
                 "It cannot reboot or upgrade a machine, or move your credentials.",
         )
+        startable.forEach { member ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Start sessions as ${member.name}", style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = member.id in chosen,
+                    enabled = !busy,
+                    onCheckedChange = { on -> chosen = if (on) chosen + member.id else chosen - member.id },
+                )
+            }
+        }
+        if (startable.isNotEmpty()) Hint(MCP_MEMBERS_SENTENCE)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((label, days) in listOf("Allow for a day" to 1, "Allow for a week" to 7)) {
                 OutlinedButton(
@@ -877,7 +914,7 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
                     onClick = {
                         scope.launch {
                             busy = true
-                            result = Fleet(settings).allowMcp(days).text
+                            result = Fleet(settings).allowMcp(days, chosen.toList()).text
                             load()
                             busy = false
                         }
@@ -895,6 +932,23 @@ internal fun describeDelegation(d: Fleet.Delegation): String = when {
     d.verbs == listOf("provision") && d.expires - d.issuedAt > 24L * 3600 * 1000 -> "Making machines kept ready"
     d.verbs.size > 8 -> "An MCP client"
     else -> "Sent in your name: ${d.verbs.joinToString(", ")}"
+}
+
+/**
+ * What turning on a member under An MCP client does, in one sentence. The
+ * same sentence as iOS.
+ */
+const val MCP_MEMBERS_SENTENCE = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member."
+
+/**
+ * Whom a delegation may start sessions as, for the end of its row: by name
+ * where this page has the name, by id where it does not. Empty for a
+ * delegation that names nobody.
+ */
+internal fun delegationStartsAs(d: Fleet.Delegation, names: List<Fleet.Member>): String {
+    if (d.members.isEmpty()) return ""
+    val said = d.members.map { id -> names.firstOrNull { it.id == id }?.name ?: id }
+    return " · starts sessions as ${said.joinToString(", ")}"
 }
 
 /** Where, and until when. */

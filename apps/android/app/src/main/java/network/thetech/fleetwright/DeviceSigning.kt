@@ -50,7 +50,9 @@ object IntentSigning {
     /**
      * The bytes signed for a delegation, as `delegationSigningInput`: the
      * grant, every field of it (`v`, `id`, `actor`, `verbs`, `hosts`, `match`,
-     * `issuedAt`, `expires`).
+     * `issuedAt`, `expires`, and `members` when the grant names any). A key
+     * the grant does not carry is not in the bytes, so a grant that names no
+     * member signs exactly what it signed before members could be named.
      */
     fun delegationInput(grant: Map<String, Any?>): String = signingInput("delegation", grant)
 
@@ -244,17 +246,32 @@ internal class DeviceSigning(private val settings: Settings) {
      * name for [lifetimeMs], each parameter in [match] exactly as given
      * (docs/signed-intents.md, "Delegations"). A box checks it as it checks a
      * signature. Null until this phone's key is listed, as [signature] is.
+     *
+     * [members] ARE THE MEMBERS A START UNDER IT MAY NAME, by id. A box
+     * refuses a delegated start as a member the grant does not name, so the
+     * ids are in the grant and in the bytes signed, each once and in order.
+     * WITH NONE THE KEY IS LEFT OUT, never sent empty: the grant is then byte
+     * for byte what it was before the field, and a box from before it still
+     * takes it.
      */
-    fun delegation(verbs: List<String>, hosts: List<String>, match: Map<String, Any?>, lifetimeMs: Long): JSONObject? {
+    fun delegation(
+        verbs: List<String>,
+        hosts: List<String>,
+        match: Map<String, Any?>,
+        lifetimeMs: Long,
+        members: List<String> = emptyList(),
+    ): JSONObject? {
         if (email.isEmpty()) return null
         val key = runCatching { DeviceKey.load() }.getOrNull() ?: return null
         if (!isListed(key)) return null
         val now = System.currentTimeMillis()
         // A delegation's id is what it is revoked by, so never reused.
-        val grant = mapOf(
+        val unnamed: Map<String, Any> = mapOf(
             "v" to 1, "id" to java.util.UUID.randomUUID().toString().replace("-", ""), "actor" to email,
             "verbs" to verbs, "hosts" to hosts, "match" to match, "issuedAt" to now, "expires" to now + lifetimeMs,
         )
+        val named = members.distinct().sorted()
+        val grant = if (named.isEmpty()) unnamed else unnamed + ("members" to named)
         val sig = runCatching { key.sign(IntentSigning.delegationInput(grant)) }.getOrNull() ?: return null
         return JSONObject().put("grant", JSONObject(grant)).put("sig", sig).put("kid", key.kid)
     }

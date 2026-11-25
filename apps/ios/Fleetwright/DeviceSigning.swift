@@ -34,7 +34,9 @@ enum IntentSigning {
 
     /// The bytes signed for a delegation, as `delegationSigningInput`: the grant,
     /// every field of it (`v`, `id`, `actor`, `verbs`, `hosts`, `match`,
-    /// `issuedAt`, `expires`).
+    /// `issuedAt`, `expires`, and `members` when the grant names any). A key
+    /// the grant does not carry is not in the bytes, so a grant that names no
+    /// member signs exactly what it signed before members could be named.
     static func delegationInput(_ grant: [String: Any]) -> String {
         signingInput("delegation", grant)
     }
@@ -215,13 +217,23 @@ struct DeviceSigning {
     /// name for `lifetime` seconds, each parameter in `match` exactly as given
     /// (docs/signed-intents.md, "Delegations"). A box checks it as it checks a
     /// signature. Nil until this phone's key is listed, as `signature` is.
-    func delegation(verbs: [String], hosts: [String], match: [String: Any], lifetime: TimeInterval) -> [String: Any]? {
+    ///
+    /// `members` ARE THE MEMBERS A START UNDER IT MAY NAME, by id. A box
+    /// refuses a delegated start as a member the grant does not name, so the
+    /// ids are in the grant and in the bytes signed, each once and in order.
+    /// WITH NONE THE KEY IS LEFT OUT, never sent empty: the grant is then
+    /// byte for byte what it was before the field, and a box from before it
+    /// still takes it.
+    func delegation(verbs: [String], hosts: [String], match: [String: Any], lifetime: TimeInterval,
+                    members: [String] = []) -> [String: Any]? {
         guard !email.isEmpty, let key = try? DeviceKey.load(), isListed(key) else { return nil }
         let now = Int(Date().timeIntervalSince1970 * 1000)
-        let grant: [String: Any] = [
+        var grant: [String: Any] = [
             "v": 1, "id": Self.delegationId(), "actor": email, "verbs": verbs, "hosts": hosts, "match": match,
             "issuedAt": now, "expires": now + Int(lifetime * 1000),
         ]
+        let named = Array(Set(members)).sorted()
+        if !named.isEmpty { grant["members"] = named }
         guard let sig = try? key.sign(IntentSigning.delegationInput(grant)) else { return nil }
         return ["grant": grant, "sig": sig, "kid": key.kid]
     }

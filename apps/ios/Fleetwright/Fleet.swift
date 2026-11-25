@@ -3003,6 +3003,9 @@ struct Fleet {
         let hosts: [String]
         let issuedAt: Double
         let expires: Double
+        /// The members a start under it may name, by id. Nil when the grant
+        /// names none, and from a fleet older than the field.
+        let members: [String]?
     }
 
     func delegations() async throws -> [Delegation] {
@@ -3020,10 +3023,12 @@ struct Fleet {
         "forget", "verify", "provision", "vmctl", "runnerrepo", "linkrepo", "xoprobe",
     ]
 
-    /// Let an MCP client act as you, on any box, for `days`.
-    func allowMCP(days: Int) async throws -> Reply {
+    /// Let an MCP client act as you, on any box, for `days`. `members` are
+    /// the members it may start sessions as, by id: none unless the person
+    /// chose them, and then they are in what this phone signs.
+    func allowMCP(days: Int, members: [String] = []) async throws -> Reply {
         guard let d = DeviceSigning(settings: settings).delegation(
-            verbs: Self.mcpVerbs, hosts: ["*"], match: [:], lifetime: TimeInterval(days) * 24 * 3600,
+            verbs: Self.mcpVerbs, hosts: ["*"], match: [:], lifetime: TimeInterval(days) * 24 * 3600, members: members,
         ) else {
             return Reply(ok: false, text: "This phone signs once its key is listed, which happens after you sign in to GitHub under Runners.", sessions: nil)
         }
@@ -3854,9 +3859,16 @@ struct Fleet {
             // box it lands on, for ten minutes. A start held until the machine
             // a provision makes has joined gets its own, for an hour, over the
             // fields the coordinator keeps of it (docs/signed-intents.md).
+            //
+            // A START AS A MEMBER NAMES THAT MEMBER IN ITS GRANT, beside the
+            // parameter it must match: a box takes a delegated start as a
+            // member only from a grant that names it. Any other request
+            // names none, and signs what it always did.
             let signing = DeviceSigning(settings: settings)
             var delegations: [[String: Any]] = []
-            if let d = signing.delegation(verbs: [verb], hosts: ["*"], match: typed, lifetime: 600) { delegations.append(d) }
+            let startsAs = verb == "start" ? (params["member"] ?? "") : ""
+            if let d = signing.delegation(verbs: [verb], hosts: ["*"], match: typed, lifetime: 600,
+                                          members: startsAs.isEmpty ? [] : [startsAs]) { delegations.append(d) }
             if verb == "provision", let start = extra["start"] as? [String: String] {
                 let kept = start.filter { ["title", "brief", "mode", "task"].contains($0.key) && !$0.value.isEmpty }
                 if let d = signing.delegation(verbs: ["start"], hosts: ["*"], match: kept, lifetime: 3600) { delegations.append(d) }

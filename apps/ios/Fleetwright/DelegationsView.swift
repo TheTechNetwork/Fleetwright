@@ -12,6 +12,14 @@ import SwiftUI
 /// TAKING ONE BACK goes to the minter first. The coordinator carries
 /// delegations, so only the minter's list, which boxes check, makes a box
 /// refuse it.
+///
+/// WHOM AN MCP CLIENT MAY START SESSIONS AS IS CHOSEN HERE, AND SIGNED. A
+/// session as a member runs on that member's sign-ins, and a box refuses a
+/// delegated start as a member the grant does not name. So the members this
+/// person may start as (`you.startAs`, the fleet's answer) are each a switch,
+/// all off until one is turned on, and the ones that are on go into the grant
+/// this phone signs. Nothing is drawn for somebody the fleet lists none for.
+/// A delegation that names members says which on its row.
 struct DelegationsView: View {
     let settings: Settings
 
@@ -20,6 +28,11 @@ struct DelegationsView: View {
     @State private var busy = false
     @State private var confirmingRevoke: Fleet.Delegation?
     @State private var result = ""
+    /// The members this person may start a session as, as the fleet lists
+    /// them. Empty until it answers, and from a fleet older than members.
+    @State private var startable: [Fleet.Member] = []
+    /// The members the next grant to an MCP client names. None, until chosen.
+    @State private var chosen: Set<String> = []
 
     var body: some View {
         List {
@@ -31,7 +44,7 @@ struct DelegationsView: View {
                 ForEach(delegations) { d in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(Self.what(d)).fleetType(.body)
-                        Text(Self.scope(d)).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
+                        Text(Self.scope(d) + Self.startsAs(d, names: startable)).fleetType(.label).foregroundStyle(Design.Palette.inkDim)
                     }
                     .swipeActions {
                         Button("Revoke", role: .destructive) { confirmingRevoke = d }
@@ -45,6 +58,22 @@ struct DelegationsView: View {
             }
 
             Section {
+                ForEach(startable) { member in
+                    Toggle("Start sessions as \(member.name)", isOn: Binding(
+                        get: { chosen.contains(member.id) },
+                        set: { on in
+                            if on { chosen.insert(member.id) } else { chosen.remove(member.id) }
+                        }
+                    ))
+                    .disabled(busy)
+                    .frame(minHeight: 44)
+                }
+                if !startable.isEmpty {
+                    Text(mcpMembersSentence)
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button("Allow for a day") { Task { await allowMCP(days: 1) } }
                     .disabled(busy)
                 Button("Allow for a week") { Task { await allowMCP(days: 7) } }
@@ -97,12 +126,22 @@ struct DelegationsView: View {
         return "\(machines) · until \(until)"
     }
 
+    /// Whom a delegation may start sessions as, for the end of its row: by
+    /// name where this page has the name, by id where it does not. Empty for
+    /// a delegation that names nobody.
+    static func startsAs(_ d: Fleet.Delegation, names: [Fleet.Member]) -> String {
+        let ids = d.members ?? []
+        if ids.isEmpty { return "" }
+        let said = ids.map { id in names.first { $0.id == id }?.name ?? id }
+        return " · starts sessions as \(said.joined(separator: ", "))"
+    }
+
     @MainActor
     private func allowMCP(days: Int) async {
         busy = true
         defer { busy = false }
         do {
-            let reply = try await Fleet(settings: settings).allowMCP(days: days)
+            let reply = try await Fleet(settings: settings).allowMCP(days: days, members: Array(chosen))
             result = reply.text ?? ""
         } catch {
             result = error.localizedDescription
@@ -129,5 +168,17 @@ struct DelegationsView: View {
             if delegations.isEmpty { result = error.localizedDescription }
         }
         loaded = true
+        // WHO THIS PERSON MAY START AS, for the switches under An MCP client.
+        // Only from an answer that carries the list. Anything else leaves
+        // what was there, and with nothing there no switch is drawn.
+        if let got = try? await Fleet(settings: settings).members(), got.ok != false, let list = got.members {
+            let ids = got.you?.startAs ?? []
+            startable = list.filter { ids.contains($0.id) }
+            chosen = chosen.intersection(ids)
+        }
     }
 }
+
+/// What turning on a member under An MCP client does, in one sentence. The
+/// same sentence as Android.
+let mcpMembersSentence = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member."
