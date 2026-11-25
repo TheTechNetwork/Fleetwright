@@ -112,6 +112,24 @@ test('making one asks the hub, which starts the container; the person’s machin
   assert.match((await own.make(ask({ ticket: ticket('d'.repeat(12)) }))).text, /^This machine already runs 2 of the 2 machines it may \(FLEETWRIGHT_MACHINE_MAX\)/);
 });
 
+test('a machine that stopped by itself is said on its owner’s place with how its log ended, and on nobody else’s', async (t) => {
+  const { podman, own } = await box(t);
+  await own.make(ask());
+  const s = podman.state();
+  s.containers[0].state = 'exited';
+  s.containers[0].log = [{ at: '2026-11-24T10:00:03.000000001Z', err: true, line: '2026-11-24T10:00:03.000Z ERROR sidecar: this machine’s key could not be written: no space left on device' }];
+  podman.set({ containers: s.containers });
+  await own.refresh();
+  const [eli, sam] = own.report();
+  // WHERE THE PLACE SAYS WHY IT HAS NO IMAGE, which both phones draw: the
+  // machine is gone from the list, and this is why. The image is still
+  // offered, since the box can make another.
+  assert.deepEqual([eli.machines, eli.images.length, eli.problem], [[], 1, `This machine found ${VM} stopped just now and removed it with its disk. Its log ends: sidecar: this machine’s key could not be written: no space left on device`]);
+  assert.ok(String(eli.problem).length <= 200, 'whole, within what the coordinator passes on');
+  // A LOG IS ITS OWNER'S TO READ: the other person this box makes machines for is told nothing.
+  assert.equal(sam.problem, undefined);
+});
+
 test('more time and ending go to the hub; a restart and a resize are refused in words; another person’s machine is not theirs', async (t) => {
   const { podman, own } = await box(t);
   await own.make(ask());

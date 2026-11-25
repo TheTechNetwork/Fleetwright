@@ -15,18 +15,43 @@ name: Machine image
 # the image builds from the context the hub lays out, refuses a start with
 # nothing to join, starts the fleet's host with a ticket, and is listed,
 # extended and ended by the hub's own code. No fleet is dialled.
+#
+# TWICE, ONCE FOR EACH SHAPE A BOX RUNS. A box runs a checkout or a packaged
+# release, and the host in the image is whichever its box has: `src/` and
+# `node_modules`, or `lib/` with everything in one bundle. This built the
+# image from a checkout only. So a path that was right in `src/` and one
+# directory too high in the bundle, the SessionStart hook's, reached a
+# release with nothing here to see it, and no session in a machine made
+# from a release could be resumed. The second leg packs a release as
+# host-release.yml does, unpacks it, and builds the image from that.
+#
+# WHAT STARTS IT IS WHAT THE IMAGE IS BUILT FROM, which is the host itself
+# and not only this directory: `bin/`, `src/`, the two files beside them,
+# what npm installs for a checkout, and the packager that makes a release
+# of them. It watched `sandbox/machine/` and `machines.js` alone, so a
+# change to the host that broke the host in a machine never ran it.
 on:
   push:
     branches: [main]
     paths:
       - 'sandbox/machine/**'
-      - 'src/core/machines.js'
+      - 'bin/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'openapi.json'
+      - 'tools/build-host-package.mjs'
       - 'scripts/machine-smoke.mjs'
       - '.github/workflows/machine-image.yml'
   pull_request:
     paths:
       - 'sandbox/machine/**'
-      - 'src/core/machines.js'
+      - 'bin/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'openapi.json'
+      - 'tools/build-host-package.mjs'
       - 'scripts/machine-smoke.mjs'
       - '.github/workflows/machine-image.yml'
   workflow_dispatch:
@@ -40,9 +65,15 @@ permissions:
 
 jobs:
   smoke:
-    name: the machine image builds, joins and ends
+    name: the machine image builds, joins and ends (from a ${{ matrix.from }})
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    strategy:
+      # Each shape says its own piece: one failing is no reason to stop
+      # hearing from the other.
+      fail-fast: false
+      matrix:
+        from: [checkout, release]
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
@@ -51,7 +82,25 @@ jobs:
           cache: npm
       # What a box running from a checkout has: the runtime dependencies and
       # nothing else, so the image carries no test tooling.
-      - run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+      - name: A checkout, as a box has one
+        if: matrix.from == 'checkout'
+        run: npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+      # WHAT A PACKAGED BOX HAS: the tarball host-release.yml publishes,
+      # built the same way and unpacked. The packager needs esbuild, so this
+      # leg installs everything; none of it reaches the image, which is
+      # built from the unpacked release and holds its one bundle. The script
+      # that drives Podman still runs from this checkout, and wants what a
+      # checkout runs with, which the same install gives it.
+      - name: A packaged release, unpacked as a box has one
+        if: matrix.from == 'release'
+        run: |
+          set -eu
+          npm ci --no-audit --no-fund
+          export RELEASE_OUT_DIR="$RUNNER_TEMP/dist"
+          node tools/build-host-package.mjs
+          mkdir "$RUNNER_TEMP/release"
+          tar -xzf "$RELEASE_OUT_DIR"/fleetwright-host-*.tar.gz -C "$RUNNER_TEMP/release" --strip-components=1
+          ls "$RUNNER_TEMP/release" "$RUNNER_TEMP/release/lib"
       # ROOTLESS PODMAN, which is what a box runs these under. The runner
       # image carries it; this says which, and installs it where one does not.
       - name: Podman
@@ -64,6 +113,12 @@ jobs:
       # login session gets and a job's shell does not, so Podman would refuse
       # the start here for a reason no box has. That the flags are passed is
       # test/machines.test.js; that Podman honours them is not checked
-      # anywhere, and is Podman's.
-      - name: Build it, start one, end it
+      # anywhere, and is Podman's. Nor, for the same reason, is the hub
+      # inside seen to count its sessions against a limit
+      # (src/core/cgroup-memory.js): there is none here to count against.
+      - name: Build it from the checkout, start one, end it
+        if: matrix.from == 'checkout'
         run: node scripts/machine-smoke.mjs --no-limits
+      - name: Build it from the release, start one, end it
+        if: matrix.from == 'release'
+        run: node scripts/machine-smoke.mjs --no-limits --release "$RUNNER_TEMP/release"

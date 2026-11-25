@@ -6,7 +6,7 @@
 // that is two small programs standing in for the hub and the sidecar: what
 // they are started with is the contract, and neither can be started here for
 // real without a fleet to join. The image itself is built and started in CI
-// (.github/workflows/sandbox.yml); nothing here needs a container engine.
+// (.github/workflows/machine-image.yml); nothing here needs a container engine.
 //
 //   node --test test/machine-image.test.js
 

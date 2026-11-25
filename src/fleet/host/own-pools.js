@@ -14,7 +14,10 @@
 // hub, which owns them (src/core/machines.js), over the loopback it already
 // talks to it on. So everything here is a question to the hub and its
 // answer in a person's words, and a hub that cannot be asked is said as
-// that and never as "no machines".
+// that and never as "no machines". A machine that stopped by itself is said
+// too, on its owner's place and nobody else's, with how its log ended: the
+// hub read that before it removed the machine. It travels as the place's
+// `problem`, which both phones already draw, so nothing new is on the wire.
 //
 // OFF UNLESS THE BOX'S OPERATOR NAMED `own` in FLEETWRIGHT_SANDBOX_PROVIDERS.
 // Then it makes machines for the people whose vault this box is approved
@@ -180,7 +183,16 @@ export class OwnPools {
           memory: null,
           image: typeof image.name === 'string' ? image.name : null,
         }));
-      this.seen.set(k, this.#entry(h.owner, { reachable: true, ready: image.ready === true, image: typeof image.name === 'string' ? image.name : null, machines, problem: image.ready === true ? null : line(image.problem) || null }));
+      // A MACHINE OF THEIRS THAT STOPPED BY ITSELF and was removed, said
+      // where this place says why it has no image: the hub read how its log
+      // ended before removing it, and keeps that for an hour. The newest, if
+      // there are two. Nobody else's: a log is its owner's to read. Why
+      // there is no image comes first, since that is why nothing can be made.
+      const ended = (Array.isArray(said.ended) ? said.ended : [])
+        .filter((/** @type {any} */ e) => NAME_RE.test(String(e?.name)) && String(e?.owner || '').toLowerCase() === h.owner && Number.isFinite(e.at) && typeof e.text === 'string')
+        .sort((/** @type {any} */ a, /** @type {any} */ b) => b.at - a.at)[0];
+      const noImage = image.ready === true ? null : line(image.problem) || null;
+      this.seen.set(k, this.#entry(h.owner, { reachable: true, ready: image.ready === true, image: typeof image.name === 'string' ? image.name : null, machines, problem: noImage ?? (ended ? line(ended.text) || null : null) }));
     }
   }
 

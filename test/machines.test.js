@@ -11,13 +11,14 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Machines, machineImage, machineNames, releaseTag, stageMachineContext, MACHINE_MAX_MINUTES } from '../src/core/machines.js';
 import { HttpAdapter } from '../src/adapters/http.js';
 import { ensureApiToken } from '../src/core/api-token.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
+import { setLogStream } from '../src/log.js';
 import { stubMachinePodman } from './helpers/stub-machine-podman.js';
 
 const ELI = 'eli@example.com';
@@ -57,10 +58,25 @@ test('the image is built from whichever shape of release the box has, and from n
 test('a release that changed is another image, so a machine runs what its box runs', (t) => {
   const podman = stubMachinePodman(t);
   const root = podman.release('packaged');
+  // EVERY FILE OF A RELEASE CARRIES ONE TIME: the packager stamps them all
+  // 2020, so that two builds of one commit are the same bytes.
+  const bundle = path.join(root, 'lib', 'fleetwright.mjs');
+  const packed = new Date('2020-01-01T00:00:00Z');
+  utimesSync(bundle, packed, packed);
   const before = machineImage({ installDir: root });
   assert.match(before, /^localhost\/fleetwright-machine:[0-9a-f]{12}$/);
   assert.equal(machineImage({ installDir: root }), before, 'the same release is the same image');
-  utimesSync(path.join(root, 'lib', 'fleetwright.mjs'), new Date(1_900_000_000_000), new Date(1_900_000_000_000));
+  // THE SAME BYTES UNPACKED AGAIN, somewhere else and with other times on
+  // them, are the same image: a box that reinstalled its release builds nothing.
+  assert.equal(machineImage({ installDir: podman.release('packaged') }), before);
+  // A FIX THAT KEEPS A FILE'S LENGTH. The next release's copy of this file
+  // has the size and the time the last one had, and the tag was made of
+  // those two: the machines of a box that had updated went on running the
+  // host from before.
+  const was = statSync(bundle);
+  writeFileSync(bundle, 'y\n');
+  utimesSync(bundle, packed, packed);
+  assert.deepEqual([statSync(bundle).size, statSync(bundle).mtimeMs], [was.size, was.mtimeMs]);
   assert.notEqual(releaseTag(root), before.split(':')[1]);
   // The operator's own image is used as named, whatever the release is.
   assert.equal(machineImage({ installDir: root, machineImage: 'registry.example/ours:1' }), 'registry.example/ours:1');
@@ -137,7 +153,7 @@ test('a machine is refused in words where one cannot be made, and nothing is sta
   podman.set({ failRun: true });
   const r = await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET });
   assert.equal(r.text, `Podman did not start ${VM}: Error: crun: cannot set memory limit`);
-  assert.deepEqual(podman.calls().filter((a) => a[0] === 'rm' || a[0] === 'volume').map((a) => a.join(' ')), [`rm -f fwm-${VM}`, `volume rm -f fwm-${VM}-state`]);
+  assert.deepEqual(podman.calls().filter((a) => a[0] === 'rm' || (a[0] === 'volume' && a[1] === 'rm')).map((a) => a.join(' ')), [`rm -f fwm-${VM}`, `volume rm -f fwm-${VM}-state`]);
   assert.deepEqual(podman.state().volumes, [], 'the volume that held its ticket went with it');
   // AND REFUSING TO PREPARE IT, before any machine is started.
   podman.set({ failRun: false, failSeed: true });
@@ -295,6 +311,94 @@ test('a machine the hub has no note of ends by its label, and one that stopped b
   // machine's container has is not one, and is left alone.
   podman.set({ containers: [{ name: 'my-own-thing', state: 'running', labels: { 'fleetwright.machine': VM, 'fleetwright.owner': ELI, 'fleetwright.until': '1' } }] });
   assert.deepEqual((await fresh.list()).ok && podman.state().containers.length, 1);
+});
+
+test('a machine that stopped by itself is removed with how its log ended kept for its owner, and no ticket or token in it', async (t) => {
+  const { podman, cfg, clock, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 60 });
+  await machines.make({ owner: SAM, ticket: ticket('b'.repeat(12)), coordinator: FLEET, minutes: 5 });
+  const TOKEN = 'sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789';
+  // What this hub writes to its own log, which a phone can read.
+  let journal = '';
+  setLogStream(/** @type {any} */ ({ write: (/** @type {string} */ l) => { journal += l; return true; } }));
+  t.after(() => setLogStream(null));
+  // ELI'S SIDECAR ENDED, and its container with it. Its warning went out as
+  // an error and everything else did not, which is how Podman hands the two
+  // back: apart. The reason is the last thing it said, by the time on it.
+  const s = podman.state();
+  s.containers[0].state = 'Exited (1) 3 seconds ago';
+  s.containers[0].log = [
+    { at: '2026-11-24T10:00:01.000000001Z', line: 'fleetwright-machine: joining https://fleet.example as its owner\'s temporary machine' },
+    { at: '2026-11-24T10:00:02.000000001Z', err: true, line: '2026-11-24T10:00:02.000Z WARN  sidecar: could not enrol itself, and will try again' },
+    { at: '2026-11-24T10:00:03.000000001Z', line: `2026-11-24T10:00:03.000Z INFO  sidecar: the fleet refused ${ticket()} (Bearer ${TOKEN}), so this is over` },
+    { at: '2026-11-24T10:00:04.000000001Z', line: 'fleetwright-machine: the sidecar ended with status 1, so this machine is ending' },
+  ];
+  podman.set({ containers: s.containers });
+  const seen = await machines.list();
+  assert.deepEqual(seen.ok && seen.machines.map((m) => m.name), ['vm-bbbbbbbbbbbb']);
+  assert.deepEqual(seen.ok && seen.ended, [{
+    name: VM, owner: ELI, at: clock.now,
+    text: `This machine found ${VM} stopped just now and removed it with its disk. Its log ends: sidecar: the fleet refused [ticket] (Bearer [removed]), so this is over`,
+  }]);
+  assert.deepEqual([podman.state().containers.length, podman.state().volumes], [1, [machineNames('vm-bbbbbbbbbbbb').volume]]);
+  // THE WHOLE END OF IT IS IN THIS HUB'S LOG, and neither there nor in
+  // anything this hub keeps is the ticket or the sign-in the machine printed.
+  assert.match(journal, new RegExp(`machines: ${VM} \\| fleetwright-machine: joining`));
+  const kept = readdirSync(cfg.stateDir, { recursive: true, withFileTypes: true }).filter((f) => f.isFile()).map((f) => readFileSync(path.join(f.parentPath, f.name), 'utf8')).join('\n');
+  for (const secret of [ticket(), TOKEN]) assert.equal(`${journal}${kept}${JSON.stringify(seen)}`.includes(secret), false);
+  // KEPT WHERE A RESTARTED HUB READS IT, and said for an hour and no longer.
+  clock.now += 12 * 60_000;
+  const later = await new Machines(cfg, { now: () => clock.now }).list();
+  assert.match(String(later.ok && later.ended[0]?.text), new RegExp(`^This machine found ${VM} stopped 12 minutes ago and removed it`));
+  // SAM'S TIME IS UP by now. This box ended that one, and its owner knows
+  // why: it is not among the ones that stopped by themselves.
+  assert.deepEqual(later.ok && [later.machines, later.ended.map((e) => e.name)], [[], [VM]]);
+  clock.now += 49 * 60_000;
+  const gone = await machines.list();
+  assert.deepEqual(gone.ok && gone.ended, []);
+});
+
+test('a stopped machine whose log cannot be read, or is empty, is said as that and not as a reason', async (t) => {
+  const { podman, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET });
+  await machines.make({ owner: SAM, ticket: ticket('b'.repeat(12)), coordinator: FLEET });
+  const s = podman.state();
+  s.containers[0].state = 'exited';
+  podman.set({ containers: s.containers, failLogs: true });
+  const unread = await machines.list();
+  assert.equal(unread.ok && unread.ended[0].text, `This machine found ${VM} stopped just now and removed it with its disk. Podman could not read its log.`);
+  // And one that printed nothing at all is said as that.
+  const again = podman.state();
+  again.containers[0].state = 'exited';
+  podman.set({ containers: again.containers, failLogs: false });
+  const empty = await machines.list();
+  assert.equal(empty.ok && empty.ended[1].text, 'This machine found vm-bbbbbbbbbbbb stopped just now and removed it with its disk. Its log was empty.');
+});
+
+test('a volume left by a making that never finished is removed at the next look, and no other volume is', async (t) => {
+  const { podman, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET });
+  const mine = machineNames(VM).volume;
+  // A HUB THAT STOPPED BETWEEN THE TWO STEPS OF A MAKING left the first:
+  // a volume with the ticket in it and no container. Beside it, a volume of
+  // somebody's own, and one whose name only looks like a machine's.
+  const left = machineNames('vm-cccccccccccc').volume;
+  podman.set({ volumes: [mine, left, 'my-own-data', 'fwm-vm-notamachine-state'] });
+  await machines.list();
+  assert.deepEqual(podman.state().volumes, [mine, 'my-own-data', 'fwm-vm-notamachine-state']);
+  // NEVER FORCED: Podman's own refusal is what keeps a running machine's volume.
+  assert.deepEqual(podman.calls().filter((a) => a[0] === 'volume' && a[1] === 'rm').map((a) => a.join(' ')), [`volume rm ${left}`]);
+  // AND NOT THE VOLUME OF A MACHINE BEING MADE THIS MOMENT, which has no
+  // container yet either: a look that fell between its two steps would
+  // have started it with an empty volume and no ticket to join with.
+  podman.set({ startMs: 400 });
+  const making = machines.make({ owner: SAM, ticket: ticket('b'.repeat(12)), coordinator: FLEET });
+  const B = machineNames('vm-bbbbbbbbbbbb').volume;
+  for (let i = 0; i < 100 && !podman.state().volumes.includes(B); i += 1) await new Promise((r) => setTimeout(r, 10));
+  await machines.list();
+  assert.equal((await making).ok, true);
+  assert.deepEqual(podman.state().volumes, [mine, 'my-own-data', 'fwm-vm-notamachine-state', B]);
+  assert.equal(podman.calls().some((a) => a[0] === 'volume' && a[1] === 'rm' && a.includes(B)), false);
 });
 
 test('a machine is its owner’s to end, and what needs a hypervisor is said', async (t) => {
