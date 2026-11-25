@@ -23,7 +23,8 @@ import { DECIDE_P_AWAITING } from '../../core/decide-questions.js';
 import { isRemoteControlOnline, extractRcUrl } from './pane.js';
 import { readPrompt, promptId, describePrompt, answerActions } from './prompt.js';
 import { RESULT_FILE, MAX_RESULT, TASK_ID_RE, firstBytes } from '../protocol/tasks.js';
-import { ENGINES, cleanTurn } from '../protocol/engines.js';
+import { ENGINES, SIGNIN_ENGINES, SIGNIN_OUTCOMES, cleanTurn } from '../protocol/engines.js';
+import { MEMBER_ID_RE } from '../protocol/members.js';
 
 const DEFAULT_INTERVAL_MS = 20_000;
 
@@ -292,6 +293,12 @@ export class SessionWatcher {
      * @type {Map<string, { status: string, awaiting: boolean, rcUrl: string|null, ready?: boolean, worked?: boolean, readyAt?: number|null, awaitingSince?: number|null, engineAt?: number }>}
      */
     this.seen = new Map();
+    // When the last attempt to sign each member's engine in on this box
+    // ended, as of the last look, and whether there has been a look at all
+    // (#signins).
+    /** @type {Map<string, number>} */
+    this.signins = new Map();
+    this.signinsSeen = false;
     /** @type {any} */
     this.timer = null;
     this.started = false;
@@ -329,6 +336,8 @@ export class SessionWatcher {
       // every session "starts" again when it comes back.
       return;
     }
+
+    this.#signins(quiet, state.engineSignins);
 
     const sessions = Array.isArray(state.sessions) ? state.sessions : [];
     const live = new Set();
@@ -898,6 +907,39 @@ export class SessionWatcher {
     } catch (e) {
       this.log.warn(`watcher: could not read ${name}'s ${RESULT_FILE}: ${/** @type {Error} */ (e).message}`);
       return {};
+    }
+  }
+
+  /**
+   * An engine sign-in on this box that ended since the last look
+   * (docs/engines.md, "Signing in on the machine"): an attempt that was
+   * approved, ran out, failed, was cancelled or was lost to a restart, a
+   * sign out, or a sign-in a session found no longer works.
+   *
+   * ON A CHANGE, like everything here: the hub says how the last one for
+   * each member and engine ended and when, and it is news the first time
+   * that moment is seen. What is already there when this watcher first
+   * looks is not: a restart of the sidecar is not a sign-in ending.
+   *
+   * WHAT IS SAID IS A MEMBER'S ID, AN ENGINE, A STATE AND A TIME. Never the
+   * page or the code, which the hub does not put in its state, nor who
+   * asked, nor a word the engine said.
+   *
+   * @param {boolean} quiet @param {unknown} list  the hub's `engineSignins`
+   */
+  #signins(quiet, list) {
+    // A hub from before sign-ins says nothing, and nothing is then known.
+    if (!Array.isArray(list)) return;
+    const first = !this.signinsSeen;
+    this.signinsSeen = true;
+    for (const e of list.slice(0, 400)) {
+      if (!e || typeof e.member !== 'string' || !MEMBER_ID_RE.test(e.member) || !SIGNIN_ENGINES.includes(e.engine)) continue;
+      if (!SIGNIN_OUTCOMES.includes(e.state) || !Number.isFinite(e.at)) continue;
+      const key = `${e.member}/${e.engine}`;
+      const before = this.signins.get(key);
+      this.signins.set(key, e.at);
+      if (first || before === e.at) continue;
+      this.#fire(quiet, { event: 'engine.signin', member: e.member, engine: e.engine, state: e.state, at: e.at });
     }
   }
 

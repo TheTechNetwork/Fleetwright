@@ -57,7 +57,7 @@ import { redactCommandLine } from '../../core/redact.js';
 import { emailFromActor } from '../../core/accounts.js';
 import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
 import { verifyRunnerJob } from '../coordinator/oidc.js';
-import { newSealKey, bindingFor, claudeBindingFor, seal, open, VAULT_BOX_AAD } from '../seal.js';
+import { newSealKey, bindingFor, claudeBindingFor, seal, open, canSealTo, VAULT_BOX_AAD, ENGINE_SIGNIN_AAD } from '../seal.js';
 import { signingInput, fingerprint } from '../crypto.js';
 import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
@@ -71,8 +71,9 @@ import { Pools } from './pools.js';
 import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
 import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
-import { actorEmail, needsSignature } from '../protocol/intent-signature.js';
-import { accountOfMember, memberOfAccount, composeFirstMessage } from '../protocol/members.js';
+import { actorEmail, needsSignature, keyId, signinAnswerInput } from '../protocol/intent-signature.js';
+import { accountOfMember, memberOfAccount, composeFirstMessage, MEMBER_ID_RE } from '../protocol/members.js';
+import { ENGINE_IDS, DEFAULT_ENGINE, SIGNIN_ENGINES } from '../protocol/engines.js';
 import { composeTaskMessage, TASK_BRANCH_RE } from '../protocol/tasks.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 import { CLAUDE_REFRESH_AHEAD_MS } from '../minter/claude-login.js';
@@ -128,6 +129,29 @@ function reasonsAfter(list) {
   return list.map((c) => (typeof c === 'string' && REASON_RE.test(c) ? c : 'unreadable'));
 }
 
+/** How many sign-ins one frame carries. A fleet has at most 200 members, and each has two such engines. */
+const SIGNINS_MAX = 400;
+
+/**
+ * Which members are signed in to which engine on this box, out of what its
+ * hub says of every sign-in it knows: only the ones signed in now, each as
+ * a member's id, an engine and since when, shape-checked.
+ *
+ * An entry that does not read is left out, which here is the safe side: a
+ * sign-in the frame does not carry is one nobody is told of, never one
+ * somebody is wrongly told of (C-5).
+ *
+ * @param {unknown[]} list
+ * @returns {Array<{ member: string, engine: string, since: number }>}
+ */
+function signedInOn(list) {
+  return list
+    .filter((/** @type {any} */ e) => e && typeof e === 'object' && typeof e.member === 'string' && MEMBER_ID_RE.test(e.member)
+      && SIGNIN_ENGINES.includes(e.engine) && Number.isFinite(e.since) && e.since > 0)
+    .slice(0, SIGNINS_MAX)
+    .map((/** @type {any} */ e) => ({ member: e.member, engine: e.engine, since: Math.round(e.since) }));
+}
+
 /**
  * The facts out of a /api/state reply, shape-checked.
  *
@@ -181,6 +205,25 @@ export function factsFrom(state) {
 // mutating intent carries an idempotency key and its result is remembered.
 export const REPLAY_TTL_MS = 10 * 60_000;
 const REPLAY_MAX = 512;
+/** What is remembered of a reply that carried an engine sign-in's page and code: that its id was answered, and nothing of it (handle). */
+const CODE_NOT_KEPT = Object.freeze({ codeNotKept: true });
+
+/**
+ * Whose vaults a vault's answer to a box names: an agent member's by its id
+ * (`member`), a person's by the address it is filed under (`email`).
+ *
+ * @param {Array<any>} accounts
+ * @returns {{ members: Set<string>, people: Set<string> }}
+ */
+function approvalsIn(accounts) {
+  const members = new Set();
+  const people = new Set();
+  for (const a of accounts) {
+    if (typeof a?.member === 'string' && MEMBER_ID_RE.test(a.member)) members.add(a.member);
+    else if (typeof a?.email === 'string' && a.email.trim()) people.add(a.email.trim().toLowerCase());
+  }
+  return { members, people };
+}
 
 // How many panes to read at once when enriching a session list. Loopback HTTP
 // is cheap but each one is a `tmux capture-pane` on the host, and a box at its
@@ -950,9 +993,11 @@ export class Sidecar {
     let verdict = null;
     /** @type {'taken'|'failed'|'held'|undefined} */
     let askedAgain;
+    /** The members a delegation names, when that is the one thing it lacks for this start. @type {string[]|undefined} */
+    let grantNames;
     if (this.intentKeys) {
       try {
-        ({ verdict, askedAgain } = await this.intentKeys.check(intent, this.hostId));
+        ({ verdict, askedAgain, members: grantNames } = await this.intentKeys.check(intent, this.hostId));
         if (verdict === 'bad-signature' || verdict === 'unknown-key' || verdict === 'revoked') {
           const what = intent.sig ? 'a signature' : 'a delegation';
           this.log.warn(`sidecar: ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'} carries ${what} that does not hold (${verdict})${this.requireSigned !== 'off' ? '' : '; not refused, as this box does not enforce'}`);
@@ -960,6 +1005,30 @@ export class Sidecar {
       } catch (e) {
         this.log.warn(`sidecar: could not check ${intent.id}'s signature: ${/** @type {Error} */ (e).message}`);
       }
+    }
+    // A DELEGATION THAT DOES NOT NAME THE MEMBER, on a start as one. Its
+    // signer's key is listed and the grant holds in every other way, so this
+    // is said in its own words on every box, enforcing or not: what the grant
+    // does name, and that the way on is a grant made again on the phone. A
+    // delegation used to carry a start as any member its signer could act
+    // for, which let the coordinator alone start a session on a member's
+    // sign-ins with words of its own (intent-signature.js, `members`).
+    //
+    // AND ON AN ENGINE SIGN-IN FOR ONE (`enginesignin`), by the same list and
+    // in the same code: it puts a sign-in where that member's sessions run.
+    if (verdict === 'not-covered' && grantNames) {
+      const id = String(intent.params?.member ?? '');
+      const name = typeof intent.params?.memberName === 'string' && intent.params.memberName ? intent.params.memberName : id;
+      const names = grantNames.length ? grantNames.join(', ') : 'no member';
+      this.log.warn(`sidecar: refused ${intent.verb} ${intent.id} as ${id} from ${intent.actor ?? 'nobody'}: the delegation it carries names ${names}`);
+      return {
+        v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'member_not_delegated' },
+        text: intent.verb === 'enginesignin'
+          ? `What ${intent.actor} granted this connection does not cover signing an engine in for ${name}: it names ${names}. ` +
+            `Grant it again from the Fleetwright app on a phone, under You \u2192 Delegations, with ${name} among its members. Nothing was done.`
+          : `What ${intent.actor} granted this connection does not cover starting a session as ${name}: it names ${names}. ` +
+            `Grant it again from the Fleetwright app on a phone, under You \u2192 Delegations, with ${name} among the members it may start as. Nothing was started.`,
+      };
     }
     if (this.#enforces(intent) && verdict !== 'signed' && verdict !== 'delegated' && needsSignature(intent.verb)) {
       const why = unsignedReason(verdict, intent, this.intentKeys?.problem ?? null, askedAgain);
@@ -992,6 +1061,18 @@ export class Sidecar {
       intent = as.intent;
     }
 
+    // AN ENGINE SIGNED IN FOR A MEMBER (docs/engines.md, "Signing in on the
+    // machine"), held to the rule a start as that member is, here and for
+    // every one of its actions: `status` answers with the code.
+    if (intent.verb === 'enginesignin') {
+      const as = this.#signInAs(intent, verdict);
+      if (!as.ok) {
+        this.log.warn(`sidecar: refused enginesignin ${intent.id} for ${String(intent.params.member)} from ${intent.actor ?? 'nobody'}: ${as.text}`);
+        return { v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: as.code }, text: as.text };
+      }
+      intent = as.intent;
+    }
+
     if (!isMutating(intent.verb)) return this.#run(intent, verdict);
 
     // Idempotency. The PROMISE is cached, not just the result, so a retry that
@@ -1000,11 +1081,33 @@ export class Sidecar {
     // second session.
     const cached = this.#recall(intent.id);
     if (cached) {
+      const was = await cached;
+      // AN ENGINE SIGN-IN'S PAGE AND CODE WERE NOT KEPT (below), so there is
+      // no first reply to replay. The retry is answered with where the
+      // sign-in stands now, which never starts anything: the attempt in
+      // flight while there is one, with its code, signed over this same id.
+      if (was === CODE_NOT_KEPT) {
+        this.log.info(`sidecar: enginesignin ${intent.id} already answered; its page and code are not kept, so it is answered with where the sign-in stands now`);
+        return { ...(await this.#run({ ...intent, params: { ...intent.params, action: 'status' } }, verdict)), replayed: true };
+      }
       this.log.info(`sidecar: ${intent.verb} ${intent.id} already handled — replaying the original reply`);
-      return { ...(await cached), replayed: true };
+      return { ...was, replayed: true };
     }
     const pending = this.#run(intent, verdict);
-    this.#remember(intent.id, pending);
+    // WHAT IS REMEMBERED IS THE REPLY, EXCEPT A CODE. The page and the code
+    // of an engine sign-in are for whoever asked, for as long as they are of
+    // use, and ten minutes in this map is neither: of such a reply only the
+    // id is remembered, as answered. The id still cannot be run twice. A
+    // sealed reply is not kept either: it is the same page and code, and a
+    // retry is sealed to its own `reply`, which need not be the first one's.
+    if (intent.verb === 'enginesignin') {
+      const kept = pending.then((r) => (typeof r?.code === 'string' || typeof r?.url === 'string' || typeof r?.signature === 'string' || r?.sealed ? CODE_NOT_KEPT : r));
+      // Whoever asked is told of a failure by `pending` itself; this copy of it is only for a retry.
+      kept.catch(() => {});
+      this.#remember(intent.id, kept);
+    } else {
+      this.#remember(intent.id, pending);
+    }
     // A VERB THAT CHANGES WHAT THIS HOST IS CAPABLE OF PUSHES HEALTH AT ONCE.
     //
     // Health is volunteered every fifteen seconds, which is right for a number
@@ -1098,7 +1201,10 @@ export class Sidecar {
    * (core.js, #startAs): it is the party this box does not believe. What
    * this box believes is the minter's signed list of who may start as each
    * member, and a signature or delegation, by a key the same list names for
-   * that person, over this start with this member in it.
+   * that person, over this start with this member in it. A delegation says
+   * so by naming the member (`members`), and one that does not never gets
+   * here: checkDelegation finds it does not cover the start, and handle()
+   * refuses it first.
    *
    *  - SIGNED OR DELEGATED, WHATEVER THE MODE. A box set to take unsigned
    *    work takes the coordinator's word for who asked. Here that word would
@@ -1117,25 +1223,17 @@ export class Sidecar {
    * @returns {{ ok: true, intent: any } | { ok: false, code: string, text: string }}
    */
   #startAs(intent, verdict) {
-    const id = String(intent.params.member);
-    const name = typeof intent.params.memberName === 'string' && intent.params.memberName ? intent.params.memberName : id;
     /** @param {string} code @param {string} text */
     const refuse = (code, text) => /** @type {const} */ ({ ok: false, code, text: `${text} Nothing was started.` });
-    const members = this.intentKeys?.currentMembers ?? null;
-    if (!members) {
-      const why = this.intentKeys?.problem ? ` (${this.intentKeys.problem})` : '';
-      return refuse('member_unchecked', `${this.hostId} holds no list from the vault of who may start a session as a member${why}, so it starts nobody as one.`);
+    const as = this.#actingAs(intent, verdict);
+    const { id, name, asker } = as;
+    if (!as.ok) {
+      if (as.why === 'unchecked') return refuse('member_unchecked', `${this.hostId} holds no list from the vault of who may start a session as a member${as.problem}, so it starts nobody as one.`);
+      if (as.why === 'unknown') return refuse('no_member', `The vault lists no member called ${id}. Whoever manages ${name} files it from the Org screen first.`);
+      if (as.why === 'unlisted') return refuse('not_custodian', `${asker || 'Nobody named'} may not start a session as ${name}. The vault lists ${as.listed}.`);
+      return refuse('signature_required', `A session as ${name} runs on ${name}’s sign-ins, so ${this.hostId} starts one only when ${asker} signed for it, or delegated it in a grant that names ${name}, and this was neither.`);
     }
-    const member = members.get(id);
-    if (!member) return refuse('no_member', `The vault lists no member called ${id}. Whoever manages ${name} files it from the Org screen first.`);
-    const asker = String(intent.actor || '').trim().toLowerCase();
-    if (!asker || !member.may.includes(asker)) {
-      const who = member.may.length ? member.may.join(', ') : 'nobody in the fleet now';
-      return refuse('not_custodian', `${asker || 'Nobody named'} may not start a session as ${name}. The vault lists ${who}.`);
-    }
-    if (verdict !== 'signed' && verdict !== 'delegated') {
-      return refuse('signature_required', `A session as ${name} runs on ${name}’s sign-ins, so ${this.hostId} starts one only when ${asker} signed for it or delegated it, and this was neither.`);
-    }
+    const member = as.member;
     const instructions = typeof intent.params.memberBrief === 'string' ? intent.params.memberBrief : '';
     const words = typeof intent.params.task === 'string' ? intent.params.task : '';
     // ON A TASK (docs/tasks.md, "Starting on a task"): which task and branch
@@ -1155,7 +1253,174 @@ export class Sidecar {
     delete params.memberBrief;
     if (first.text) params.task = first.text;
     else delete params.task;
-    return { ok: true, intent: { ...intent, actor: member.kind === 'agent' ? accountOfMember(id) : member.email, startedBy: asker, params } };
+    return { ok: true, intent: { ...intent, actor: as.account, startedBy: asker, params } };
+  }
+
+  /**
+   * May whoever sent this act as the member it names? THE ONE RULE a start
+   * as a member and an engine sign-in for one are both held to, so the two
+   * cannot come to disagree about who a member's sign-ins are open to.
+   *
+   * What this box believes is the minter's signed list of who may start as
+   * each member, and a signature or delegation, by a key the same list names
+   * for that person, over this request with this member in it.
+   *
+   *  - NO LIST IS A REFUSAL (`unchecked`), as it is for signatures.
+   *  - A member the list does not have (`unknown`), and an asker it does not
+   *    name for that member (`unlisted`).
+   *  - SIGNED OR DELEGATED, WHATEVER THE MODE (`unsigned`): a box set to take
+   *    unsigned work would otherwise take the coordinator's word for who
+   *    asked, and here that word would name a custodian.
+   *
+   * It words nothing: each caller says what was being asked for. `account`
+   * is what the member's sessions run as on this box, the member's own
+   * address for a person and `<id>@members.invalid` for an agent.
+   *
+   * @param {any} intent @param {string|null} verdict
+   * @returns {{ ok: true, id: string, name: string, asker: string, member: any, account: string }
+   *   | { ok: false, why: 'unchecked'|'unknown'|'unlisted'|'unsigned', id: string, name: string, asker: string, problem: string, listed: string }}
+   */
+  #actingAs(intent, verdict) {
+    const id = String(intent.params.member);
+    const name = typeof intent.params.memberName === 'string' && intent.params.memberName ? intent.params.memberName : id;
+    const asker = String(intent.actor || '').trim().toLowerCase();
+    /** @param {'unchecked'|'unknown'|'unlisted'|'unsigned'} why @param {{ problem?: string, listed?: string }} [said] */
+    const no = (why, said = {}) => /** @type {const} */ ({ ok: false, why, id, name, asker, problem: said.problem ?? '', listed: said.listed ?? '' });
+    const members = this.intentKeys?.currentMembers ?? null;
+    if (!members) return no('unchecked', { problem: this.intentKeys?.problem ? ` (${this.intentKeys.problem})` : '' });
+    const member = members.get(id);
+    if (!member) return no('unknown');
+    if (!asker || !member.may.includes(asker)) return no('unlisted', { listed: member.may.length ? member.may.join(', ') : 'nobody in the fleet now' });
+    if (verdict !== 'signed' && verdict !== 'delegated') return no('unsigned');
+    return { ok: true, id, name, asker, member, account: member.kind === 'agent' ? accountOfMember(id) : String(member.email ?? '') };
+  }
+
+  /**
+   * May this engine sign-in be made for the member it names?
+   *
+   * EXACTLY WHO MAY START A SESSION AS THAT MEMBER (#actingAs), because what
+   * it does is put a sign-in where that member's sessions run on it. For all
+   * four actions: `status` answers with the code a person types, and a sign
+   * out ends what those sessions run on.
+   *
+   * What comes back carries the member's account on this box beside the
+   * intent, for the hub to name the engine home by, and who asked. Neither
+   * is a parameter: a caller cannot say whose home is opened.
+   *
+   * @param {any} intent @param {string|null} verdict
+   * @returns {{ ok: true, intent: any } | { ok: false, code: string, text: string }}
+   */
+  #signInAs(intent, verdict) {
+    /** @param {string} code @param {string} text */
+    const refuse = (code, text) => /** @type {const} */ ({ ok: false, code, text: `${text} Nothing was done.` });
+    const as = this.#actingAs(intent, verdict);
+    const { id, name, asker } = as;
+    if (!as.ok) {
+      if (as.why === 'unchecked') return refuse('member_unchecked', `${this.hostId} holds no list from the vault of who may start a session as a member${as.problem}, so it signs no member’s engine in.`);
+      if (as.why === 'unknown') return refuse('no_member', `The vault lists no member called ${id}. Whoever manages ${name} files it from the Org screen first.`);
+      if (as.why === 'unlisted') return refuse('not_custodian', `${asker || 'Nobody named'} may not sign an engine in for ${name}. That is for whoever may start a session as ${name}, and the vault lists ${as.listed}.`);
+      return refuse('signature_required', `An engine signed in for ${name} is what ${name}’s sessions run on, so ${this.hostId} does it only when ${asker} signed for it, or delegated it in a grant that names ${name}, and this was neither.`);
+    }
+    // ONLY ON A MACHINE APPROVED FOR THAT MEMBER'S VAULT, for a start. A
+    // sign-in made here is a credential here, and the one identity of this
+    // box a phone can check without believing the coordinator is the key a
+    // custodian approved for the member's vault: its hash is in the vault's
+    // own sealed answer to the phone, and it is the key the answer to this
+    // start is signed with (#signAnswer). On a box nobody approved, the
+    // phone would have nothing to hold that signature to.
+    //
+    // CANNOT TELL IS NOT "NOT APPROVED": a box the vault has not answered
+    // yet says so. And only a start: a sign-in is still signed out, and
+    // asked after, on a machine whose approval has since been removed.
+    if (intent.params.action === 'start') {
+      const held = this.approvedFor;
+      if (!held) {
+        const asks = this.vaultKey && this.vaultIntervalMs > 0 && !this.jobToken;
+        return refuse('approval_unknown',
+          `${this.hostId} has not heard from the vault whose credentials it is approved to hold, so it cannot tell whether it is approved for ${name}’s. ` +
+          (asks ? `It asks every ${Math.round(this.vaultIntervalMs / 60_000)} minutes: try again in a few minutes.` : 'It does not ask the vault by itself, so the sign-in is made on a machine that does.'));
+      }
+      const approved = as.member.kind === 'agent' ? held.members.has(id) : held.people.has(as.account.trim().toLowerCase());
+      if (!approved) {
+        return refuse('not_approved',
+          `${this.hostId} is not approved to hold ${name}’s credentials, and an engine signed in here would be one of them. ` +
+          `Approve this machine from ${name}’s Credentials in the Fleetwright app first, then sign in. If it was approved a moment ago, ask again shortly.`);
+      }
+    }
+    return { ok: true, intent: { ...intent, signInAs: { account: as.account, by: asker } } };
+  }
+
+  /**
+   * The hub's answer to an engine sign-in, signed by this box and, for a
+   * phone, sealed to it (docs/engines.md, "The machine signs what it
+   * answers").
+   *
+   * SIGNED WITH THE KEY THIS BOX SIGNS ITS VAULT REQUESTS WITH, and by the
+   * same function, so the signature is in the one encoding everything here
+   * uses and under the key a custodian approved. Over the id of the request
+   * it answers, so an answer to one request is not an answer to another; a
+   * status asked under a new id is signed over that id.
+   *
+   * SEALED TO `reply`, WHEN THE REQUEST CARRIES ONE, which is a key the
+   * asking phone made and signed for with the rest of the request. Then the
+   * page, the code and who is signed in go inside, with this box's key and
+   * its signature over them, and NOTHING OF THEM GOES ON IN THE CLEAR: the
+   * coordinator carries a state, some times and ciphertext. Every answer
+   * that says where a sign-in stands is sealed then, whatever the state,
+   * because who it ended signed in as is the thing a person checks, and it
+   * should be this box's word. The signature is what makes it so: anybody
+   * can seal to a public key.
+   *
+   * WITHOUT ONE, as it was: in the clear, and signed only while it carries
+   * the page and the code. That is an MCP client, which has no key to seal
+   * to and is told the code is unverified.
+   *
+   * WHAT THIS BOX CANNOT SIGN OR SEAL IS NOT PASSED ON. It is refused
+   * instead, in words that say so.
+   *
+   * @param {import('../protocol/intents.js').Intent} intent
+   * @param {Record<string, any>} said
+   * @returns {Promise<Record<string, any>>}
+   */
+  async #signAnswer(intent, said) {
+    const sealTo = typeof intent.params?.reply === 'string' ? intent.params.reply : null;
+    const coded = typeof said?.url === 'string' && typeof said?.code === 'string';
+    // A refusal says nothing of a page, a code or an account, and goes as it is.
+    if (said?.ok !== true || !(coded || (sealTo && typeof said.state === 'string'))) return said;
+    /** What goes on in the clear. Under a `reply`, nothing of the page, the code or the account. @type {Record<string, any>} */
+    const clear = { ...said };
+    if (sealTo) {
+      delete clear.url;
+      delete clear.code;
+      clear.signedIn = said.signedIn ? { since: said.signedIn.since } : null;
+    }
+    const key = this.vaultKey;
+    const at = Date.now();
+    try {
+      if (!key) throw new Error('it has no key of its own');
+      const hostKey = { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y };
+      const who = said.signedIn?.who ? { email: said.signedIn.who.email ?? null, plan: said.signedIn.who.plan ?? null } : null;
+      const signed = {
+        id: intent.id, host: await keyId(hostKey), member: String(intent.params.member), engine: String(intent.params.engine),
+        ...(coded ? { url: said.url, code: said.code } : {}), at,
+        ...(sealTo ? { signedIn: said.signedIn ? { since: Number(said.signedIn.since), who } : null } : {}),
+      };
+      const signature = await key.sign(signinAnswerInput(signed));
+      if (!sealTo) return { ...said, signedAt: at, hostKey, signature };
+      return { ...clear, sealed: await seal({ to: sealTo, aad: ENGINE_SIGNIN_AAD, payload: { v: 1, ...signed, hostKey, signature } }) };
+    } catch (e) {
+      // The reason only: nothing of the answer is logged.
+      this.log.warn(`sidecar: could not sign the answer to enginesignin ${intent.id}: ${/** @type {Error} */ (e).message}`);
+      delete clear.url;
+      delete clear.code;
+      return {
+        ...clear, ok: false, error: { code: 'answer_unsigned' },
+        text: coded
+          ? `${this.hostId} could not sign its answer, so the page and the code are not passed on: a code this machine has not signed is one nobody can tell is its own. ` +
+            'The sign-in is still waiting there. Ask where it stands again, or cancel it.'
+          : `${this.hostId} could not sign its answer, so what it says of this sign-in is not passed on. Ask where it stands again.`,
+      };
+    }
   }
 
   /**
@@ -1263,6 +1528,36 @@ export class Sidecar {
         return reply({ ok: true, text, xoprobe });
       }
       if (intent.verb === 'xosetup') return reply(await this.#xosetup(intent));
+
+      // AN ENGINE SIGN-IN NEVER BECOMES A COMMAND LINE EITHER: a command is
+      // something every surface that types one can reach, and who may is
+      // decided in this process, against the minter's list (#signInAs). The
+      // hub is asked on a route of its own, with the account handle() worked
+      // out and no parameter can name. Its answer is passed on whole: where
+      // the sign-in stands, and for whoever asked the page and the code,
+      // which this box signs (#signAnswer). Nothing of it is logged here.
+      if (intent.verb === 'enginesignin') {
+        const as = /** @type {any} */ (intent).signInAs;
+        if (!as || typeof as.account !== 'string') {
+          return reply({ ok: false, error: { code: 'member_unchecked' }, text: `${this.hostId} did not check who may sign this member’s engine in. Nothing was done.` });
+        }
+        // A `reply` NOTHING CAN BE SEALED TO is refused here, before the hub
+        // is asked and so before any container: found afterwards, it would
+        // leave an attempt out whose code nobody could be given. The
+        // protocol checked its length and alphabet, which is all a pattern
+        // can; whether it is a point on the curve is checked by using it.
+        const sealTo = typeof intent.params.reply === 'string' ? intent.params.reply : null;
+        if (sealTo && !(await canSealTo(sealTo))) {
+          return reply({
+            ok: false, error: { code: 'bad_params' },
+            text: 'enginesignin.reply is not a key an answer can be sealed to. It is the public half of a P-256 key the asking phone makes for this one request, as for a vault request. Nothing was done.',
+          });
+        }
+        return reply(await this.#signAnswer(intent, await this.hub.engineSignin({
+          member: String(intent.params.member), account: as.account, engine: String(intent.params.engine), action: String(intent.params.action),
+          by: String(as.by ?? ''), box: this.hostId, ...(sealTo ? { sealed: true } : {}),
+        })));
+      }
 
       // A MACHINE FROM A HYPERVISOR IS THIS PROCESS'S TOO: the pool's token
       // is in its memory and nowhere else (xo-pools.js), and the ticket the
@@ -1940,7 +2235,9 @@ export class Sidecar {
    * never holds a refresh token and never renews one. An answer that is an
    * answer (nobody approved this box, or this is not the key it enrolled
    * with) clears what was held, which is how removing a box from a phone
-   * reaches it. Silence keeps what was held until it runs out.
+   * reaches it. Silence keeps what was held until it runs out, and so does
+   * every other refusal (#askVault): a vault that could not read the
+   * question has not said this box is approved for nothing.
    *
    * @returns {Promise<number>} how long until the next ask
    */
@@ -1950,6 +2247,7 @@ export class Sidecar {
     void this.intentKeys?.refresh();
     const said = await this.#askVault();
     if (said.ok) {
+      this.approvedFor = approvalsIn(said.accounts);
       // POOLS OUT, before the hub sees the answer: kept in this process and
       // written nowhere (xo-pools.js). Then looked at, and the health frame
       // that says what they have goes out when that is done.
@@ -1969,6 +2267,7 @@ export class Sidecar {
       return askAgainIn(soonest, this.vaultIntervalMs);
     }
     if (said.forget) {
+      this.approvedFor = approvalsIn([]);
       this.pools?.adopt([]);
       await this.hub.vault({ accounts: [] }).catch(() => {});
     }
@@ -2100,10 +2399,51 @@ export class Sidecar {
     return Boolean(p && (typeof p.holdsAny === 'boolean' ? p.holdsAny : p.held?.size));
   }
 
+  /**
+   * Whose vaults the vault last said this box is approved to hold: agent
+   * members by id and people by address, as its answer names them
+   * (minter/vault.js, itemsFor). An engine is signed in here only for one of
+   * them (#signInAs).
+   *
+   * NULL UNTIL THE VAULT HAS ANSWERED, which is cannot tell and never
+   * nobody: a box that has not been answered is not a box approved for
+   * nothing. An answer that names nobody is nobody, and so is the one
+   * refusal that forgets what was held. Silence, and every other refusal,
+   * keep what was last heard, as they keep what is held (syncVault).
+   *
+   * @type {{ members: Set<string>, people: Set<string> }|null}
+   */
+  approvedFor = null;
+
   /** The API providers this box's hub last said it may bill to. @type {string[]} */
   apiProviders = [];
   /** Whether the last vault request asked for API keys, or null before any and once a change has been acted on. @type {boolean|null} */
   askedForKeys = null;
+
+  /** The engines beside Claude Code this box's hub last said it runs, in the order they are signed in. @type {string[]} */
+  engines = [];
+  /** The engines the last vault request named, as one string, or null before any and once a change has been acted on. @type {string|null} */
+  askedForEngines = null;
+
+  /**
+   * Keep what the hub says it runs beside Claude Code (engine-box.js,
+   * boxEngines), held to the engines there are. Asked again in a moment when
+   * it has changed since the vault was last asked, for the reason API
+   * providers are: a box that asked before its hub had answered asked for no
+   * engine's sign-in, and would hold none for ten minutes.
+   *
+   * @param {unknown} said @returns {string[]}
+   */
+  #noteEngines(said) {
+    this.engines = Array.isArray(said)
+      ? [...new Set(said.filter((/** @type {unknown} */ e) => typeof e === 'string' && e !== DEFAULT_ENGINE && ENGINE_IDS.includes(e)))].sort()
+      : [];
+    if (this.askedForEngines !== null && this.askedForEngines !== this.engines.join(',')) {
+      this.askedForEngines = null;
+      this.#vaultChangedSoon();
+    }
+    return this.engines;
+  }
 
   /** Keep what the hub says of its API providers, held to short strings. @param {unknown} said @returns {string[]} */
   #noteApiProviders(said) {
@@ -2129,14 +2469,24 @@ export class Sidecar {
     // an account of its own (vault-store.js, applyVault), so the minter may
     // hand it one. A box from before members sends none and is handed none.
     // And `engines`: the sign-ins an engine runs on, which this box hands a
-    // session's runner over its socket (docs/engines.md). IN ALPHABETICAL
+    // session's runner over its socket (docs/engines.md). ONLY WHEN IT RUNS
+    // ONE, and with which beside it (`codex`, `opencode`): the vault hands a
+    // Codex sign-in to one machine, the first that asks, and every box used
+    // to say `engines` whatever it ran, so the sign-in went to whichever
+    // asked first, a box with no Codex on it included, and the machine that
+    // could run it was refused. A vault from before the names reads `engines`
+    // as it always did. IN ALPHABETICAL
     // ORDER, because the minter checks the signature over the list sorted.
     // And `apikeys`, only while this box's operator has an API provider
     // turned on: a box that bills nobody is handed no key (docs/api-engines.md).
     // And `sandboxes`, only while it has a sandbox provider turned on: the
     // record is a provider's whole account, held here in memory and nowhere else.
     this.askedForKeys = this.apiProviders.length > 0;
-    const accepts = [...(this.apiProviders.length ? ['apikeys'] : []), 'engines', 'members', ...(/** @type {any} */ (this.pools)?.sandbox?.takes ? ['sandboxes'] : [])];
+    this.askedForEngines = this.engines.join(',');
+    const accepts = [
+      ...(this.apiProviders.length ? ['apikeys'] : []), ...(this.engines.length ? ['engines', ...this.engines] : []), 'members',
+      ...(/** @type {any} */ (this.pools)?.sandbox?.takes ? ['sandboxes'] : []),
+    ].sort();
     const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at: Date.now(), reply: publicKey, accepts };
     let signature;
     try {
@@ -2167,9 +2517,24 @@ export class Sidecar {
     });
     if (!answer) return { ok: false, forget: false, text: 'the fleet did not answer; a coordinator from before the vault drops the question' };
     if (answer.ok !== true) {
-      // DEFINITE ANSWERS forget what was held; anything that could be a blip keeps it.
-      const forget = ['not_this_box', 'bad_signature', 'no_deposit_key', 'no_minter'].includes(String(answer.error?.code || ''));
-      return { ok: false, forget, text: String(answer.text || 'the fleet refused') };
+      // ONE REFUSAL FORGETS WHAT WAS HELD: the one that says this is not the
+      // key this box enrolled with. Beside it only an answer the vault
+      // itself sealed does (above, an answer naming nobody). Everything else
+      // is cannot tell, and keeps what is held until it runs out.
+      //
+      // `bad_signature` used to forget, as did a fleet saying it has no
+      // vault. A vault from before `accepts` checks the signature without
+      // it, so it answered every request from a box that signs one with
+      // `bad_signature`, and such a box, upgraded first, dropped every
+      // credential it held within ten minutes and never got them back. A
+      // vault that could not read the question has not answered it.
+      const code = String(answer.error?.code || '');
+      const said = String(answer.text || 'the fleet refused');
+      if (code === 'not_this_box') return { ok: false, forget: true, text: said };
+      const why = code === 'bad_signature'
+        ? `the vault could not check this box’s request (${said}), which is what a vault older than this box answers`
+        : `the vault did not answer for this box (${said})`;
+      return { ok: false, forget: false, text: `${why}. Nothing this box holds was forgotten, and it asks again in ${Math.round(this.vaultIntervalMs / 60_000)} minutes.` };
     }
     try {
       const inside = /** @type {any} */ (await open({ privateKey, publicKey, aad: VAULT_BOX_AAD, sealed: answer.sealed }));
@@ -2503,6 +2868,9 @@ export class Sidecar {
     if (state) {
       const sessions = /** @type {any[]} */ (Array.isArray(state.sessions) ? state.sessions : []);
       const running = sessions.filter((s) => s?.status === 'running').length;
+      // WHAT THE HUB RUNS BESIDE CLAUDE CODE, kept because it is also what
+      // this box tells the vault it can be handed a sign-in for (#askVault).
+      this.#noteEngines(state.engines);
       return {
         ...base,
         hub: { reachable: true, host: state.host ?? null },
@@ -2511,6 +2879,12 @@ export class Sidecar {
         // from before engines says nothing, and the coordinator reads that
         // as Claude Code alone.
         ...(Array.isArray(state.engines) ? { engines: state.engines.filter((/** @type {unknown} */ e) => typeof e === 'string').slice(0, 8) } : {}),
+        // WHICH MEMBERS ARE SIGNED IN TO WHICH ENGINE HERE, as the hub was told
+        // (docs/engines.md, "What a machine reports"): a member's id, an
+        // engine and since when. Only the ones signed in now, and no account.
+        // A hub from before sign-ins says nothing, and the frame then has no
+        // list, which is cannot tell and never nobody.
+        ...(Array.isArray(state.engineSignins) ? { engineSignins: signedInOn(state.engineSignins) } : {}),
         // The metered API providers an engine here may bill to, when its
         // operator named any (docs/api-engines.md). Kept, because it is also
         // what decides whether this box asks a vault for keys (#askVault).

@@ -28,7 +28,7 @@
 // pinned admin signed, and that check runs whatever the switch says
 // (pinned-admins.js, Sidecar#boxWide).
 
-import { MEMBER_ID_RE } from '../protocol/members.js';
+import { MEMBER_ACCOUNT_DOMAIN, MEMBER_ID_RE } from '../protocol/members.js';
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 
@@ -123,6 +123,13 @@ export async function keyListFrom({ payload, signature, pinned, host, now }) {
       if (!MEMBER_ID_RE.test(id) || (m.kind !== 'person' && m.kind !== 'agent') || !Array.isArray(m.may)) continue;
       const email = m.kind === 'person' ? String(m.email || '').trim().toLowerCase() : null;
       if (m.kind === 'person' && !email) continue;
+      // A PERSON IS NEVER AT AN AGENT'S ACCOUNT HERE. This box runs a person
+      // member's session as their address, and `<id>@members.invalid` is
+      // where it files an agent's vault, so such a record would be a session
+      // on that agent's sign-ins for anybody listed under it. The minter
+      // refuses to file one (org.js, isAddress); this is the same rule where
+      // it is acted on, for a minter from before it did.
+      if (email && (email.endsWith(`@${MEMBER_ACCOUNT_DOMAIN}`) || email.endsWith(`.${MEMBER_ACCOUNT_DOMAIN}`))) continue;
       members.set(id, { kind: m.kind, email, may: m.may.slice(0, 64).map((/** @type {unknown} */ a) => String(a).trim().toLowerCase()).filter(Boolean) });
     }
   }
@@ -318,9 +325,11 @@ export class IntentKeys {
    * @param {{ actor?: string, id: string, issuedAt: number, params?: Record<string, unknown>, verb: string, sig?: string, kid?: string, delegation?: unknown }} intent
    * @param {string} host  this box's id
    * @returns {Promise<{ verdict: import('../protocol/intent-signature.js').Verdict | import('../protocol/intent-signature.js').DelegationVerdict, label?: string, gap?: string,
-   *   askedAgain?: 'taken'|'failed'|'held' }>}
+   *   askedAgain?: 'taken'|'failed'|'held', members?: string[] }>}
    *   `askedAgain`, for an unknown key: whether the box asked again and took a
-   *   list, asked and got none, or held back because it asked moments ago
+   *   list, asked and got none, or held back because it asked moments ago;
+   *   `members`, for a delegation that covers a start in everything but the
+   *   member it names: the members the grant does name (checkDelegation)
    */
   async check(intent, host) {
     const once = async () => {

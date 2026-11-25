@@ -31,6 +31,7 @@
 
 import { signingInput, verify } from '../crypto.js';
 import { VERBS, SIG_RE, KID_RE } from './intents.js';
+import { MEMBER_ID_RE } from './members.js';
 
 export { SIG_RE, KID_RE };
 
@@ -99,6 +100,21 @@ export function intentSigningInput(intent, host) {
 // The box checks every one, against the same key list it checks a signature
 // with, so a delegation is worth no more than the phone that made it.
 //
+// AND THE MEMBERS IT MAY START A SESSION AS (`members`, ids), signed with the
+// rest. A session as a member runs on that member's sign-ins, and a delegation
+// that named none used to carry a start as any member its signer could act
+// for: a grant made to hold one start called "held" let the coordinator alone
+// start a session as an agent with words of its own. So a start that names
+// `member` is covered only by a delegation that names that member. ABSENT
+// MEANS NONE, which is also what makes this safe to add: a delegation from a
+// phone that has never heard of the field signs the bytes it always did, and
+// starts as nobody's member.
+//
+// AND THE MEMBERS IT MAY SIGN AN ENGINE IN FOR, by the same list
+// (`enginesignin`, docs/engines.md). That puts a sign-in where the member's
+// sessions run on it, and its answer carries the code a person types, so a
+// grant that names no member carries it for nobody.
+//
 // WHAT A COORDINATOR CAN STILL DO WITH ONE is exactly that, as many times as it
 // likes inside the window: it is a standing permission, not a single request,
 // and that is the whole reason a phone keeps them short and narrow. `id` is what
@@ -110,7 +126,7 @@ export const DELEGATION_MAX_MS = 31 * 24 * 60 * 60_000;
 /** How far ahead of a box's clock a delegation may say it was made. */
 export const DELEGATION_SKEW_MS = 5 * 60_000;
 /** Size bounds a box holds a delegation to before it checks anything. */
-export const DELEGATION_LIMITS = Object.freeze({ verbs: 32, hosts: 32, match: 16, value: 8192, bytes: 16 * 1024 });
+export const DELEGATION_LIMITS = Object.freeze({ verbs: 32, hosts: 32, match: 16, members: 64, value: 8192, bytes: 16 * 1024 });
 
 const DELEGATION_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
 const DELEGATION_HOST_RE = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -123,6 +139,7 @@ const DELEGATION_HOST_RE = /^[A-Za-z0-9._:-]{1,128}$/;
  * @property {string[]} verbs
  * @property {string[]} hosts  box ids, or exactly ['*']
  * @property {Record<string, string|number>} match
+ * @property {string[]} [members]  member ids a start under it may name; absent is none
  * @property {number} issuedAt
  * @property {number} expires
  */
@@ -150,11 +167,21 @@ export function grantShape(raw) {
   for (const v of Object.values(match)) {
     if (typeof v === 'number' ? !Number.isFinite(v) : typeof v !== 'string' || v.length > DELEGATION_LIMITS.value) return null;
   }
+  // `members`, when the grant carries it: ids, each once, in the order they
+  // were signed, because the order is in the bytes. Anything else under that
+  // name is not a delegation, where dropping it would leave a box checking a
+  // signature over a grant that is not the one that arrived.
+  const members = g.members;
+  if (members !== undefined) {
+    if (!Array.isArray(members) || members.length > DELEGATION_LIMITS.members) return null;
+    if (members.some((/** @type {unknown} */ m) => typeof m !== 'string' || !MEMBER_ID_RE.test(m)) || new Set(members).size !== members.length) return null;
+  }
   if (!Number.isSafeInteger(g.issuedAt) || !Number.isSafeInteger(g.expires)) return null;
   if (g.expires <= g.issuedAt || g.expires - g.issuedAt > DELEGATION_MAX_MS) return null;
   return {
     v: 1, id: g.id, actor: String(g.actor), verbs: [...verbs], hosts: [...hosts],
-    match: /** @type {Record<string, string|number>} */ ({ ...match }), issuedAt: g.issuedAt, expires: g.expires,
+    match: /** @type {Record<string, string|number>} */ ({ ...match }), ...(members !== undefined ? { members: [...members] } : {}),
+    issuedAt: g.issuedAt, expires: g.expires,
   };
 }
 
@@ -183,13 +210,41 @@ export function delegationShape(raw) {
 /**
  * The bytes a device signs for a delegation.
  *
+ * `members` IS IN THEM ONLY WHEN THE GRANT CARRIES IT: the key is left out
+ * altogether for a grant with none (signingInput drops what is undefined), so
+ * a delegation made before the field existed is the same bytes it was and
+ * still verifies. When it is there it is the array as the grant carries it,
+ * in that order, and the key sorts between `match` and `v`. A phone that
+ * names no member leaves the key out and does not send `[]`: an empty list is
+ * signed as one, and a box from before the field would not check it.
+ *
  * @param {Grant} grant
  */
 export function delegationSigningInput(grant) {
   return signingInput('delegation', {
     actor: grant.actor, expires: grant.expires, hosts: grant.hosts, id: grant.id,
-    issuedAt: grant.issuedAt, match: grant.match, v: 1, verbs: grant.verbs,
+    issuedAt: grant.issuedAt, match: grant.match, members: grant.members, v: 1, verbs: grant.verbs,
   });
+}
+
+/** The verbs that act as a member, which a grant covers only by naming that member. */
+const MEMBER_VERBS = Object.freeze(['start', 'enginesignin']);
+
+/**
+ * Why a grant does not cover the member a start or an engine sign-in names,
+ * or null when it does or when the intent names no member. Apart from
+ * delegationGap so a box can tell this refusal from the others and say what
+ * to do about it: the grant is made again on the phone, naming the member.
+ *
+ * @param {Grant} grant
+ * @param {{ verb: string, params?: Record<string, unknown> }} intent
+ * @returns {string|null}
+ */
+export function delegationMemberGap(grant, intent) {
+  const member = MEMBER_VERBS.includes(intent.verb) ? intent.params?.member : undefined;
+  if (member === undefined) return null;
+  if ((grant.members ?? []).includes(String(member))) return null;
+  return intent.verb === 'start' ? `it does not cover starting a session as ${String(member)}` : `it does not cover signing an engine in for ${String(member)}`;
 }
 
 /**
@@ -213,7 +268,9 @@ export function delegationGap(grant, intent, host, now) {
   }
   if (now > grant.expires) return 'it has run out';
   if (grant.issuedAt - now > DELEGATION_SKEW_MS) return 'it says it was made in the future';
-  return null;
+  // LAST, so a box that says "this grant names other members" is speaking of
+  // a grant that holds in every other way.
+  return delegationMemberGap(grant, intent);
 }
 
 /**
@@ -224,13 +281,15 @@ export function delegationGap(grant, intent, host, now) {
  * What a box finds when it checks a delegation an unsigned intent carries.
  *
  *   delegated     signed by a key the minter lists for the person, covering this intent, here, now
- *   not-covered   a real delegation that does not cover this intent (verb, box, parameters or time)
+ *   not-covered   a real delegation that does not cover this intent (verb, box, parameters, member or time)
  *   revoked       its maker revoked it, and the minter's list says so
  *   unknown-key, bad-signature, no-directory  as checkIntentSignature
  *
  * @param {{ intent: { actor?: string, verb: string, params?: Record<string, unknown> }, delegation: unknown, host: string,
  *   directory: Map<string, DirectoryKey[]>|null, revoked?: Map<string, Set<string>>|null, now: number }} args
- * @returns {Promise<{ verdict: DelegationVerdict, label?: string, gap?: string, id?: string }>}
+ * @returns {Promise<{ verdict: DelegationVerdict, label?: string, gap?: string, id?: string, members?: string[] }>}
+ *   `members`, on a `not-covered` whose only gap is the member a start names:
+ *   the members the grant does name, which may be none
  */
 export async function checkDelegation({ intent, delegation, host, directory, revoked = null, now }) {
   const d = delegationShape(delegation);
@@ -242,7 +301,9 @@ export async function checkDelegation({ intent, delegation, host, directory, rev
   if (!(await verify(listed.key, d.sig, delegationSigningInput(d.grant)))) return { verdict: 'bad-signature', label: listed.label, id: d.grant.id };
   if (person && revoked?.get(person)?.has(d.grant.id)) return { verdict: 'revoked', label: listed.label, id: d.grant.id };
   const gap = delegationGap(d.grant, intent, host, now);
-  return gap ? { verdict: 'not-covered', label: listed.label, gap, id: d.grant.id } : { verdict: 'delegated', label: listed.label, id: d.grant.id };
+  if (!gap) return { verdict: 'delegated', label: listed.label, id: d.grant.id };
+  const asMember = gap === delegationMemberGap(d.grant, intent);
+  return { verdict: 'not-covered', label: listed.label, gap, id: d.grant.id, ...(asMember ? { members: [...(d.grant.members ?? [])] } : {}) };
 }
 
 /**
@@ -303,4 +364,38 @@ export async function checkIntentSignature({ intent, sig, kid, host, directory }
 export function actorEmail(actor) {
   const s = String(actor ?? '').trim().toLowerCase();
   return s.includes('@') ? s : null;
+}
+
+/**
+ * The exact bytes a box signs when it answers an engine sign-in
+ * (docs/engines.md, "The machine signs what it answers"), and so the bytes
+ * a phone checks before it shows a code or an account.
+ *
+ * WHY IT IS SIGNED AT ALL. The answer reaches the phone through the
+ * coordinator, which could put a code of its own in it: one from a sign-in
+ * it began on a machine of its own, which the person would then approve
+ * under their account. The box's key is the one a custodian approved for the
+ * member's vault, and its hash reaches the phone in the vault's own sealed
+ * answer, so a signature by it is something the coordinator cannot make.
+ * Sealing the answer to the phone does not replace this: what it is sealed
+ * to is a public key, which the coordinator has too.
+ *
+ *   id      the id of the request being answered, which the phone chose and
+ *           signed. An older genuine answer is over another id, so it does
+ *           not pass for this one.
+ *   host    the whole SHA-256 of the box's key, hex (keyId, above): what the
+ *           vault names a grant by (minter/vault.js, boxKeyHash).
+ *   member, engine   the request's own.
+ *   url, code        the engine's, while a code is out. Left out otherwise.
+ *   at      when the box signed, epoch ms.
+ *   signedIn         who is signed in there, `{ since, who }` or null, in an
+ *           answer that is sealed. LEFT OUT of a clear one, whose bytes are
+ *           what they were before answers were sealed. signingInput drops
+ *           what is undefined and keeps a null.
+ *
+ * @param {{ id: string, host: string, member: string, engine: string, url?: string, code?: string, at: number,
+ *   signedIn?: { since: number, who: { email: string|null, plan: string|null }|null }|null }} answer
+ */
+export function signinAnswerInput({ id, host, member, engine, url, code, at, signedIn }) {
+  return signingInput('engine-signin-answer', { v: 1, id, host, member, engine, url, code, at, signedIn });
 }

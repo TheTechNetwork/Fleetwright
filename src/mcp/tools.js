@@ -77,6 +77,13 @@ export const DEFAULT_DENY = ([
   // phone, which an agent has no use for, and an action on somebody's pool
   // is the page's to offer with its confirmation, not a tool's.
   'xolook', 'xoact',
+  // SIGNING AN ENGINE IN FOR A MEMBER puts a sign-in where that member's
+  // sessions run on it, and ends with a person entering a code at the
+  // provider under their own account. It is with `connect` and `link`: not
+  // something to reach for unasked. An operator who wants it says so
+  // (FLEETWRIGHT_MCP_ALLOW=enginesignin), and a box still takes it from an
+  // MCP client only under a grant that carries the verb and names the member.
+  'enginesignin',
   // NOT `forget`, ANY MORE. It was withheld as "destroys a conversation that
   // cannot be recovered", and that stopped being true when the seven-day
   // recycle bin shipped — `forget` is now the RECOVERABLE one and `purge` is
@@ -220,7 +227,8 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       'The organization: every member of the fleet, each a person or an AI agent, with its role, who it ' +
       'reports to, the kinds of work it takes and where it runs. Read this to choose who a piece of work ' +
       'belongs to, then pass a member’s id as `member` to fleet_start. It also says which members you may ' +
-      'start a session as.',
+      'start a session as. Starting as one from here also needs the grant you act under to name that member: ' +
+      'its person makes that grant on their phone, under You \u2192 Delegations, and picks the members there.',
     schema: {},
     requires: [],
     local: true,
@@ -233,13 +241,18 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     // holds and a person files from their own phone or the signing page with
     // their own sign-in inside. An MCP client holds no such thing, so nothing
     // here can reach a vault, and the description says so.
+    //
+    // NOR A BUDGET. `budgetUsdMonth` was a field here, and it is what a start
+    // past it waits on a person for (docs/budgets.md): the tools an agent
+    // holds do not include the one that says a person looked.
     name: 'fleet_member',
     verb: null,
     description:
       'Add a member to the organization, change one, or remove one. Give `id` and the fields to set; a field ' +
       'you leave out keeps its value. An admin may write any member, and a manager the members of their own ' +
       'team. This changes the record only: it holds no credential, and who may sign the member in or start a ' +
-      'session as it (custody) is filed by a person from the app or the signing page.',
+      'session as it (custody) is filed by a person from the app or the signing page. It does not set a ' +
+      'budget either: a person sets one in the app, and fleet_budgets shows it.',
     schema: {
       id: { type: 'string', description: 'The member’s id: lowercase letters, digits and hyphens, at most 40. Naming one that does not exist adds it.' },
       remove: { type: 'boolean', description: 'Remove this member. Refused while anybody reports to it.' },
@@ -268,7 +281,6 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
           'operator turned that provider on (fleet_health).',
       },
       tag: { type: 'string', description: 'The host tag its sessions go to when the person starting one names no machine.' },
-      budgetUsdMonth: { type: 'number', description: 'A monthly budget in dollars, at API prices as each session counts its own cost. fleet_budgets shows what has been spent against it, and what the fleet does when it is passed.' },
     },
     requires: ['id'],
     local: true,
@@ -287,7 +299,9 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       'What each member you may see has spent this month against its budget, in dollars at API prices as ' +
       'each session counted its own cost, and what this fleet does when a budget is passed: nothing, ask ' +
       'for approval, or refuse. Also whether a session that skips permission prompts, or a kind of work, ' +
-      'needs approval first. "At least" means some sessions reported no cost, so the real figure is higher. ' +
+      'needs approval first. "At least" means the fleet could not count all of it, so the real figure is ' +
+      'higher: a session reported no cost, or more at once than is counted, or a start got no answer from ' +
+      'its machine. The sentence says which. ' +
       'A start that needs approval is refused with the approval’s id; a person who manages that member ' +
       'answers it on their phone, and the same start then goes through.',
     schema: {},
@@ -300,8 +314,10 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     verb: null,
     description:
       'The approvals you asked for and the ones waiting on you: who wants to start a session as which ' +
-      'member, why it needs approval, and where it stands. This tool does not answer one. An approval is ' +
-      'a person’s to give, from the app, so tell the person who can and start again once it is given.',
+      'member, why it needs approval, what the session would be told, and where it stands. An approval is ' +
+      'for those words: a start that says something else, or a task whose brief changed since, needs a new ' +
+      'one. This tool does not answer one. An approval is a person’s to give, from the app, so tell the ' +
+      'person who can and start again once it is given.',
     schema: {},
     requires: [],
     local: true,
@@ -409,7 +425,9 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       'session wrote, the branch it was told and where it ran. THE BRIEF IS ALL THE OTHER MEMBER GETS: ' +
       'nothing of this conversation travels, so say what to do, where, and what to hand back. If the wait ' +
       'runs out the work is still going: call again with `task` set to the id you were given. You must be ' +
-      'allowed to start a session as the member. The session is yours to stop with fleet_stop once you have ' +
+      'allowed to start a session as the member. A start the fleet refuses cancels the task it was made ' +
+      'for, so call again once that is put right; one that waits for approval keeps its task, to start ' +
+      'with fleet_start and `taskId`. The session is yours to stop with fleet_stop once you have ' +
       'the result, and the task is accepted or reopened with fleet_task.',
     schema: {
       to: { type: 'string', description: 'The member to hand the work to, by id (fleet_members lists them and the work each takes). Leave out to let the fleet’s routing choose among the members you may hand work to.' },
@@ -466,7 +484,7 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
  * the protocol is untouched, because this is presentation and `logs` remains
  * one verb with both parameters.
  */
-/** @type {Record<string, { description?: string, omit?: string[] }>} */
+/** @type {Record<string, { name?: string, description?: string, omit?: string[] }>} */
 const OVERRIDE = {
   logs: {
     description:
@@ -476,7 +494,42 @@ const OVERRIDE = {
       "For what a SESSION printed, use fleet_read_log instead.",
     omit: ['name'],
   },
+  // THE ONE TOOL WHOSE NAME IS NOT ITS VERB'S. A verb is one word on the wire
+  // (`enginesignin`); a tool is read by an agent choosing among sixty, and
+  // `fleet_enginesignin` reads as one word nobody would search for. Still
+  // generated from the verb: its parameters and its refusals are the verb's
+  // own, and `verbOfTool` is how the server finds its way back.
+  enginesignin: {
+    name: 'fleet_engine_signin',
+    // `reply` is a key a phone makes to have the answer sealed to it. An
+    // agent has none, and what it could do with a sealed answer is nothing.
+    omit: ['reply'],
+    description:
+      'Sign Codex or OpenCode in for one member on the machine it runs on, with the engine’s own device code. ' +
+      '`start` answers with a page to open and a code that lasts 15 minutes: give both to the person, who enters the ' +
+      'code under their own account, then ask `status` until it says how it ended. A second `start` while one waits ' +
+      'answers with the one waiting. `cancel` stops an attempt and `signout` has the engine remove its sign-in there. ' +
+      'Name the machine with `host`: one whose engines (fleet_health) include this one, and that is approved for the member’s credentials. No token is sent or returned. ' +
+      'THE PAGE AND CODE ARE UNVERIFIED HERE: the machine signs them and a phone checks that signature before it shows a code, ' +
+      'and this server cannot, so it cannot tell the machine’s code from one the fleet’s coordinator put in its place. Say so when you pass them on. ' +
+      'Only who may start a session as the member may, and the grant this server acts under must carry this and name the member.',
+  },
 };
+
+/** The name a verb's own tool goes by. */
+const toolNameOf = (/** @type {string} */ verb) => OVERRIDE[verb]?.name ?? `fleet_${verb}`;
+
+/**
+ * The verb behind a tool's name, whether or not this server offers it:
+ * `fleet_stop` is `stop`, and `fleet_engine_signin` is `enginesignin`. For a
+ * name that is no verb's tool, what is left when `fleet_` is taken off.
+ *
+ * @param {unknown} name
+ */
+export function verbOfTool(name) {
+  const said = String(name ?? '');
+  return Object.keys(OVERRIDE).find((verb) => OVERRIDE[verb].name === said) ?? said.replace(/^fleet_/, '');
+}
 
 /**
  * JSON Schema for one protocol parameter.
@@ -591,7 +644,7 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       const description = [OVERRIDE[verb]?.description || def.summary || verb, notes[verb]].filter(Boolean).join(' ');
 
       return {
-        name: `fleet_${verb}`,
+        name: toolNameOf(verb),
         description,
         inputSchema: {
           type: 'object',
@@ -657,7 +710,7 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
     // `tool.verb` is null on a coordinator tool, and OVERRIDE is keyed by verb.
     if (!tool.verb) continue;
     for (const gone of OVERRIDE[tool.verb]?.omit || []) {
-      if (tool.name === `fleet_${tool.verb}`) delete tool.inputSchema.properties[gone];
+      if (tool.name === toolNameOf(tool.verb)) delete tool.inputSchema.properties[gone];
     }
   }
 

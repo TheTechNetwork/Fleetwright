@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { OrgMembers } from '../src/fleet/coordinator/org-members.js';
 import { budgetsRoute, SPEND_PREFIX, APPROVALS_PREFIX } from '../src/fleet/coordinator/org-budgets.js';
+import { tasksRoute } from '../src/fleet/coordinator/org-tasks.js';
 import { APPROVAL_USE_MS, APPROVAL_WAIT_MS, MAX_APPROVALS } from '../src/fleet/protocol/budgets.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
 import { Fleet } from '../worker/src/fleet-do.js';
@@ -42,6 +43,9 @@ function fleet() {
   const pushes = [];
   const core = new CoordinatorCore({ now, push: /** @type {any} */ ({ send: async (/** @type {any} */ devices, /** @type {any} */ m) => void pushes.push({ to: devices.map((/** @type {any} */ d) => String(d.actor).replace('fleet:', '')).sort(), title: m.title, body: m.body, data: m.data }) }) });
   core.org = org(now);
+  // Who may start as each agent, as the minter last signed it: everybody
+  // here, so what these tests refuse is refused for a budget or an approval.
+  core.memberCustody = new Map(['debbie', 'loose'].map((id) => [id, [admin.email, dana.email, sam.email]]));
   for (const who of [admin, dana, sam]) {
     core.devices.set(`dev-${who.email}`, { token: `t-${who.email}`, platform: 'ios', actor: `fleet:${who.email}`, clientId: `c-${who.email}` });
     core.clients.clients.set(`c-${who.email}`, /** @type {any} */ ({ id: `c-${who.email}`, admin: who.admin }));
@@ -111,6 +115,37 @@ test('a session that reports no cost is counted as unknown, and does not stop a 
   assert.deepEqual([f.spendOf('debbie').usd, f.spendOf('debbie').unknownSessions], [0, 1]);
   assert.match(f.spendOf('debbie').words, /^At least \$0\.00 of \$50\.00 this month.* One session reported no cost/);
   assert.equal((await f.start(dana, 'debbie')).ok, true);
+});
+
+test('a start as a member that its box never answers is spend the fleet cannot tell, and is counted once the box reports the session', async () => {
+  // Found by an outside review: the start timed out, the box had started
+  // the session, and its reports were ignored. The row read "$0.00 of
+  // $50.00" and a budget that refuses let the next start through.
+  const f = fleet();
+  f.set({ budgets: 'refuse' });
+  await f.reports();
+  f.answers(() => {
+    f.as.set('cc-late', 'debbie');
+    throw new Error('deb132 did not answer in time');
+  });
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'host_timeout');
+  assert.deepEqual([f.spendOf('debbie').usd, f.spendOf('debbie').unknownSessions], [0, 1]);
+  assert.equal(f.spendOf('debbie').words, 'At least $0.00 of $50.00 this month, at API prices as each session counted it. One start got no answer from its machine, so whether it ran, and what it cost, is not known.');
+  // The box reports the session it started, and what it cost is Debbie's.
+  await f.cost('cc-late', 62);
+  assert.deepEqual([f.spendOf('debbie').usd, f.spendOf('debbie').unknownSessions, f.spendOf('debbie').over], [62, 0, true]);
+  f.answers((spec) => ({ ok: true, text: 'Started.', sessions: [{ name: 'cc-next', status: 'running', member: spec.params.member }] }));
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
+  // UNKNOWN IS NOT A REFUSAL (docs/budgets.md): a budget is enforced on what
+  // was counted, so a start nobody answered, with nothing heard since, stops nothing.
+  const g = fleet();
+  g.set({ budgets: 'refuse' });
+  await g.reports();
+  g.answers(() => { throw new Error('deb132 did not answer in time'); });
+  await g.start(dana, 'debbie');
+  g.answers((spec) => ({ ok: true, text: 'Started.', sessions: [{ name: 'cc-2', status: 'running', member: spec.params.member }] }));
+  assert.equal((await g.start(dana, 'debbie')).ok, true);
+  assert.equal(g.spendOf('debbie').unknownSessions, 1);
 });
 
 test('with enforcing off, a member past its budget starts as before and nobody is asked', async () => {
@@ -215,7 +250,9 @@ test('an approval is for the task it was asked about, and a start that has gaine
   const other = /** @type {any} */ (f.core.createTask(dana, { title: 'Ship the other', brief: 'Deploy the site.', assignee: 'debbie', workType: 'deploy' }));
   const refused = await f.start(dana, 'debbie', task.start);
   assert.deepEqual([refused.error.code, refused.approval.task], ['needs_approval', 't1']);
-  assert.equal(refused.approval.reasons[0].text, 't1 is deploy work, which this fleet asks about first.');
+  // What the session is to be told is said after the last reason, where a phone draws it.
+  assert.equal(refused.approval.reasons[0].text, 't1 is deploy work, which this fleet asks about first. The session is told: “Ship it Deploy the API.”');
+  assert.deepEqual([refused.approval.digest, refused.approval.told], [undefined, undefined], 'and the digest it is bound by is the coordinator’s own');
   assert.equal(/** @type {any} */ (f.core.tasks.get('t1')).lock, null, 'and no lock was taken for a start that waits');
   await f.core.answerApproval(admin, 'a1', 'approve');
   // The approval for t1 does not start t2.
@@ -226,6 +263,74 @@ test('an approval is for the task it was asked about, and a start that has gaine
   // As asked, it goes through, on a1.
   assert.equal((await f.start(dana, 'debbie', task.start)).ok, true);
   assert.equal(/** @type {any} */ (f.core.tasks.get('t1')).lock.session, 'cc-1');
+});
+
+test('an approval is for what the session was to be told: a rewritten brief, or other words, needs a new one, and the refusal says so', async () => {
+  // Found by an outside review. An approval named a member, a task's id, the
+  // asker and the kinds of reason. Sam had "deploy the docs site" approved,
+  // rewrote the brief to "force-push main to production", and started it on
+  // the same approval.
+  const f = fleet();
+  f.set({ workTypes: ['deploy'], dangerous: true });
+  await f.reports();
+  const task = /** @type {any} */ (f.core.createTask(sam, { title: 'Deploy the docs site', brief: 'Run the docs deploy job.', assignee: 'debbie', workType: 'deploy' }));
+  assert.equal((await f.start(sam, 'debbie', task.start)).approval.id, 'a1');
+  f.pushes.length = 0;
+  const given = /** @type {any} */ (await f.core.answerApproval(dana, 'a1', 'approve'));
+  assert.match(given.text, /t1 is deploy work, which this fleet asks about first\. The session is told: “Deploy the docs site Run the docs deploy job\.”$/);
+  assert.equal(/** @type {any} */ (f.core.changeTask(sam, 't1', { title: 'Deploy to production', brief: 'Force-push main to production.' })).ok, true);
+  const again = await f.start(sam, 'debbie', /** @type {any} */ (f.core.taskFor(sam, 't1')).start);
+  assert.deepEqual([again.error.code, again.approval.id], ['needs_approval', 'a2']);
+  assert.equal(again.text, 't1 is deploy work, which this fleet asks about first. a1 was approved for what the session was to be told then, and t1 has been changed since: it does not cover this. dana@example.com or eli@example.com, or a fleet admin, must approve it first: a2. Start it again once it is approved; nothing was sent.');
+  assert.equal(f.sent.length, 0, 'nothing reached the box');
+  // Whoever is asked is told what the session would now be told, on their phone and in the list.
+  assert.equal(f.pushes.at(-1).body, 'sam@example.com asks, on t1. t1 is deploy work, which this fleet asks about first. The session is told: “Deploy to production Force-push main to production.”');
+  assert.match(/** @type {any} */ (f.core.approvalsFor(dana)).approvals[0].reasons.at(-1).text, /The session is told: “Deploy to production Force-push main to production\.”$/);
+  // Put back as it was approved, a1 is good again: it is the same start.
+  assert.equal(/** @type {any} */ (f.core.changeTask(sam, 't1', { title: 'Deploy the docs site', brief: 'Run the docs deploy job.' })).ok, true);
+  assert.equal((await f.start(sam, 'debbie', /** @type {any} */ (f.core.taskFor(sam, 't1')).start)).ok, true);
+  assert.equal(f.sent.at(-1).params.task, 'Deploy the docs site\n\nRun the docs deploy job.');
+
+  // WITH NO TASK, the words are all there is to approve.
+  const g = fleet();
+  g.set({ dangerous: true });
+  await g.reports();
+  assert.equal((await g.start(sam, 'debbie', { mode: 'dangerous', task: 'Tidy the README.' })).approval.reasons[0].text, 'This session would not ask before it runs commands, on Debbie’s sign-ins. The session is told: “Tidy the README.”');
+  await g.core.answerApproval(dana, 'a1', 'approve');
+  const other = await g.start(sam, 'debbie', { mode: 'dangerous', task: 'rm -rf the release bucket.' });
+  assert.deepEqual([other.error.code, other.approval.id], ['needs_approval', 'a2']);
+  assert.match(other.text, /a1 was approved for what the session was to be told then, and this start says something else: it does not cover this\./);
+  assert.equal((await g.start(sam, 'debbie', { mode: 'dangerous', task: 'Tidy the README.' })).ok, true);
+});
+
+test('the kind of work on a task the fleet asks about is changed only by somebody who could approve it, and the change is written down', async () => {
+  // `risky-work` needed no approval at all: take `deploy` off, start, put it back.
+  const f = fleet();
+  f.set({ workTypes: ['deploy'] });
+  await f.reports();
+  const task = /** @type {any} */ (f.core.createTask(sam, { title: 'Deploy prod', brief: 'Deploy it.', assignee: 'debbie', workType: 'deploy' }));
+  assert.equal((await f.start(sam, 'debbie', task.start)).error.code, 'needs_approval');
+  for (const workType of ['', 'docs']) {
+    const tried = /** @type {any} */ (f.core.changeTask(sam, 't1', { workType }));
+    assert.equal(tried.error?.code, 'not_manager');
+    assert.equal(tried.text, 't1 is deploy work, which this fleet asks about before a session starts on it. Changing what kind of work it is takes somebody who could give that approval: dana@example.com or eli@example.com, or a fleet admin.');
+  }
+  assert.equal((await tasksRoute(f.core, 'PUT', '/api/tasks/t1', null, sam, async () => ({ workType: '' })))?.status, 403);
+  // The rest of the task is still his to change, and so is saying the same kind again.
+  assert.equal(/** @type {any} */ (f.core.changeTask(sam, 't1', { workType: 'deploy', repo: 'acme/app' })).ok, true);
+  // Dana manages Debbie and could have approved the start: the kind is hers to change, and the history says she did.
+  assert.equal(/** @type {any} */ (f.core.changeTask(dana, 't1', { workType: 'docs' })).ok, true);
+  assert.deepEqual(f.core.tasks.get('t1')?.handoffs.filter((h) => h.kind === 'work-type').map((h) => [h.by, h.from, h.to]), [[dana.email, 'deploy', 'docs']]);
+  // IT WAS deploy work, and the history remembers: putting it back is anybody's, taking it further is not Sam's.
+  const after = /** @type {any} */ (f.core.changeTask(sam, 't1', { workType: '' }));
+  assert.match(after.text, /^t1 was deploy work, which this fleet asks about/);
+  // With no assignee there is nobody yet whose managers would be asked: an admin's.
+  assert.equal(/** @type {any} */ (f.core.createTask(sam, { title: 'Deploy later', brief: 'Deploy it.', workType: 'deploy' })).ok, true);
+  assert.match(/** @type {any} */ (f.core.changeTask(sam, 't2', { workType: '' })).text, /takes somebody who could give that approval: a fleet admin\.$/);
+  assert.equal(/** @type {any} */ (f.core.changeTask(admin, 't2', { workType: '' })).ok, true);
+  // A kind the fleet does not ask about is whoever's the task is to change.
+  assert.equal(/** @type {any} */ (f.core.createTask(sam, { title: 'Write the notes', brief: 'Write them.', assignee: 'debbie', workType: 'docs' })).ok, true);
+  assert.equal(/** @type {any} */ (f.core.changeTask(sam, 't3', { workType: 'deploy' })).ok, true, 'and making it one the fleet asks about takes nobody’s leave');
 });
 
 test('a start the box refuses gives its approval back; one that never reaches a box does not spend it', async () => {
@@ -346,13 +451,13 @@ test('a member’s managers are told once when it nears its budget and once when
   assert.deepEqual(g.pushes.map((p) => p.title), ['Debbie is over budget']);
 });
 
-test('a resumed session counts from the first figure heard, and a removed member takes its spend with it', async () => {
+test('a resumed session counts from the first figure heard, and removing a member does not start its month again', async () => {
   const f = fleet();
   await f.reports();
   await f.start(dana, 'debbie');
   await f.cost('cc-1', 4);
   // The coordinator forgets, as a rebuilt one with no row would; the session is resumed as Debbie.
-  f.core.budgets.forget('debbie');
+  f.core.budgets.spend.delete('debbie');
   await f.cost('cc-1', 9);
   assert.equal(f.spendOf('debbie').usd, 0, 'a session it has no record of starting is not counted');
   assert.equal(/** @type {any} */ (await f.core.dispatch({ verb: 'resume', params: { name: 'cc-1' }, actor: dana.email, requester: dana, preferHost: 'deb132' })).ok, true);
@@ -361,7 +466,8 @@ test('a resumed session counts from the first figure heard, and a removed member
   assert.equal(f.spendOf('debbie').usd, 2.5);
   // WHICH MEMBER A SESSION IS, ON A RESUME, IS ITS BOX'S WORD. Sam's session,
   // which his box calls Debbie's, is his to resume and not hers to pay for:
-  // he could not have started as her.
+  // he could not have started as her: the minter lists Dana and Eli.
+  f.core.memberCustody = new Map([['debbie', [admin.email, dana.email]]]);
   f.core.registry.connect('sam-box', () => {}, { actsFor: sam.email });
   const sams = (/** @type {number} */ usd) => f.core.onHostMessage('sam-box', {
     kind: 'health',
@@ -375,8 +481,25 @@ test('a resumed session counts from the first figure heard, and a removed member
   await sams(500);
   await sams(600);
   assert.equal(f.spendOf('debbie').usd, 2.5, 'a box naming a member does not spend that member’s budget');
-  assert.equal(f.core.removeMember(admin, 'debbie').ok, true);
-  assert.equal(f.core.budgets.spendOf('debbie'), null);
+  // REMOVED AND ADDED BACK, she has spent what she had. The row used to go
+  // with the member, and one at its budget was removed and added back by
+  // its manager with nothing spent and nobody asked.
+  f.set({ budgets: 'refuse' });
+  await f.cost('cc-1', 60);
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
+  const record = f.core.org.get('debbie');
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  assert.equal(f.spendOf('debbie'), undefined, 'a member that is not there has no row to show');
+  assert.equal(f.core.setMember(dana, 'debbie', record).ok, true);
+  assert.deepEqual([f.spendOf('debbie').usd, f.spendOf('debbie').over], [51, true]);
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
+  // Until the month turns: then a removed member's row is nobody's, and goes when the rows are next read.
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  const kept = f.core.budgets.serialise();
+  f.tick(8 * 86_400_000);
+  const next = new CoordinatorCore({ now: () => Date.UTC(2026, 11, 2) });
+  next.budgets.restore(kept);
+  assert.deepEqual([next.budgets.spend.has('debbie'), next.budgets.takeChanges().del], [false, ['spend:debbie']]);
 });
 
 test('who sees whose spend: an admin everybody, a manager their team, a person their own member', async () => {

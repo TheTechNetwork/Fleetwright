@@ -132,9 +132,34 @@ reboot, upgrade, restore          restart or unbin what somebody else is using
 purge                             destroy a conversation with no recovery
 writefile, copyfile, deletefile   the workspace's destructive half
 connect, link, unlink, renew      move somebody's credentials around
+enginesignin                      sign an engine in for a member: it ends with
+                                  a person entering a code under their own account
 answer                            ← the interesting one
 labels                            where everybody else's work lands
 ```
+
+**`enginesignin` is offered as `fleet_engine_signin` once allowed**
+(`FLEETWRIGHT_MCP_ALLOW=enginesignin`): the one tool whose name is not its
+verb's, because one word of twelve letters is not what an agent looks for.
+It hands back the provider's page and a code for the person to enter, and
+no token ([engines.md](./engines.md), "Signing in on the machine"). Allowing
+it here is half of it. This server acts on a delegation, and a box takes
+the verb only under one that carries `enginesignin` and names the member.
+The delegation the phones make for an MCP client is the verbs this server
+offers by default, so it does not carry a withheld one: until it does, a box
+refuses, and the refusal says to do it from the app, on the member's
+Credentials, and does not send anybody to allow a delegation that would not
+cover it.
+
+**The code it hands back is unverified, and it says so.** A machine signs
+the page and the code, and a phone checks that signature against the
+machines approved for the member's vault before it shows either. This
+server holds no vault answer to check against, so it cannot tell a code
+the machine made from one the coordinator put in its place. A phone also
+has the machine seal the answer to a key of its own (`reply`), which the
+tool does not offer, so what comes back here crossed the coordinator in
+the clear. The tool's description says the code is unverified, and so
+does every answer that carries one, in the words the agent reads.
 
 **`sandbox` is offered and `labels` is not,** which looks inconsistent from the
 outside and is the same rule applied twice. The variant decides what the next

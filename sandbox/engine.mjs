@@ -26,11 +26,24 @@
 // waits. Whether another engine takes over is the hub's, which holds the
 // member's list (src/core/sessions.js, handOn).
 //
-// THE CREDENTIAL IS ASKED FOR, never mounted or in the environment: the
-// socket this session can reach answers for this session's member and
-// nobody else (src/core/hook-socket.js), as it does for `fleet-cred`.
+// THE SIGN-IN IS THE MACHINE'S FIRST, and is asked for only when there is
+// none. A box mounts its member's engine home into the session
+// (FLEETWRIGHT_ENGINE_HOME), where an engine signed in on this machine keeps
+// its own sign-in and renews it. With one there, nothing is asked of
+// anybody. With none, the member's pasted item is asked for, never mounted
+// or in the environment: the socket this session can reach answers for this
+// session's member and nobody else (src/core/hook-socket.js), as it does
+// for `fleet-cred`.
+//
+// AND IT IS HOW AN ENGINE IS SIGNED IN THERE. `--signin <engine>` runs the
+// engine's own device-code sign-in in a container that has the engine home
+// and nothing else of a session, prints the page and the code as one line
+// of JSON, waits for the engine to say how it ended, and prints that as a
+// second. `--signout <engine>` has the engine remove its sign-in. See
+// "Signing in on the machine", below and in docs/engines.md.
 
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { request } from 'node:http';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -607,19 +620,80 @@ export function post(socketPath, pathname, body) {
 }
 
 /**
+ * Where an engine keeps its sign-in inside an engine home, and what its own
+ * process is started with so that it reads and renews it there
+ * (docs/engines.md, "Credentials").
+ *
+ * `codex/` is Codex's whole home (`CODEX_HOME`). OpenCode takes its data
+ * directory from `XDG_DATA_HOME`, so the engine home itself is that and
+ * OpenCode's files are `opencode/` in it. FOR THE ENGINE'S PROCESS ALONE:
+ * set for the session they would move every other tool's data in with a
+ * member's sign-ins.
+ *
+ * @param {string} engine @param {string} engineHome
+ * @returns {{ dir: string, file: string, env: Record<string, string> }|null}
+ */
+export function homePaths(engine, engineHome) {
+  if (engine === 'codex') {
+    const dir = path.join(engineHome, 'codex');
+    return { dir, file: path.join(dir, 'auth.json'), env: { CODEX_HOME: dir } };
+  }
+  if (engine === 'opencode') {
+    const dir = path.join(engineHome, 'opencode');
+    return { dir, file: path.join(dir, 'auth.json'), env: { XDG_DATA_HOME: engineHome } };
+  }
+  return null;
+}
+
+/**
+ * The sign-in an engine home holds for this engine, or null for none.
+ *
+ * WHAT COUNTS IS WHAT THE ENGINE WROTE THERE: for Codex a file with a
+ * refresh token in it, for OpenCode a `github-copilot` entry with a token.
+ * An empty file, one that does not parse, and an OpenCode file that holds
+ * only an API key are none, and the member's pasted item is asked for as
+ * before. Whether a sign-in found here still works is the engine's to say,
+ * in the check before a turn.
+ *
+ * @param {string} engine @param {string} engineHome
+ * @returns {{ file: string, text: string }|null}
+ */
+export function signedInAt(engine, engineHome) {
+  const at = homePaths(engine, engineHome);
+  if (!at) return null;
+  try {
+    const text = readFileSync(at.file, 'utf8');
+    const held = JSON.parse(text);
+    if (!held || typeof held !== 'object') return null;
+    const token = engine === 'codex' ? held.tokens?.refresh_token : (held['github-copilot']?.refresh || held['github-copilot']?.access);
+    return typeof token === 'string' && token ? { file: at.file, text } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Put the engine's credential where the engine reads it, from the member's
  * vault item as the socket handed it over. Returns what to watch for
  * changes: Codex renews its own tokens into the file, and the renewed file
  * is handed back to the box, which is the one machine that holds it.
  *
+ * INTO THE ENGINE HOME, when the box mounted one, so there is one place an
+ * engine reads its sign-in from, and the member's next session here finds
+ * it. OpenCode's file there may already hold another provider's entry (a
+ * key beside a Copilot sign-in, or the other way round), so an entry is
+ * added to what is there and never written over it.
+ *
  * @param {string} engine @param {string} value @param {string} home
  * @param {{ opencode: string, env: string|null }|null} [provider]  the API provider the model bills to, when it bills to one
+ * @param {string|null} [engineHome]  the member's engine home on this machine, when the box mounted one
  * @returns {{ ok: true, file: string|null, env?: Record<string, string> } | { ok: false, text: string }}
  */
-export function stage(engine, value, home, provider = null) {
+export function stage(engine, value, home, provider = null, engineHome = null) {
+  const at = engineHome ? homePaths(engine, engineHome) : null;
   try {
     if (engine === 'codex') {
-      const dir = process.env.CODEX_HOME || path.join(home, '.codex');
+      const dir = at?.dir ?? (process.env.CODEX_HOME || path.join(home, '.codex'));
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       const file = path.join(dir, 'auth.json');
       writeFileSync(file, value, { mode: 0o600 });
@@ -630,18 +704,26 @@ export function stage(engine, value, home, provider = null) {
       // one for GitHub Copilot. If a later OpenCode reads another shape, the
       // model check before a turn is what catches it: an agent that cannot
       // reach the model asked for does not report being on it.
-      const dir = path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'opencode');
+      const dir = at?.dir ?? path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'opencode');
       mkdirSync(dir, { recursive: true, mode: 0o700 });
+      /** What the file holds already, in an engine home. A file that does not read is replaced. @type {Record<string, unknown>} */
+      let there = {};
+      if (at) {
+        try {
+          const held = JSON.parse(readFileSync(at.file, 'utf8'));
+          if (held && typeof held === 'object' && !Array.isArray(held)) there = held;
+        } catch { /* none yet, or not a file of entries */ }
+      }
       // AN API KEY, filed under OpenCode's own name for the provider, in the
       // shape it keeps a key in. And, where OpenCode's documentation names a
       // variable for it, in that variable for the engine's process alone:
       // a newer OpenCode reads this file once, into a store of its own, and
       // not again where that store already has an entry for the provider.
       if (provider) {
-        writeFileSync(path.join(dir, 'auth.json'), `${JSON.stringify({ [provider.opencode]: { type: 'api', key: value.trim() } })}\n`, { mode: 0o600 });
+        writeFileSync(path.join(dir, 'auth.json'), `${JSON.stringify({ ...there, [provider.opencode]: { type: 'api', key: value.trim() } })}\n`, { mode: 0o600 });
         return { ok: true, file: null, ...(provider.env ? { env: { [provider.env]: value.trim() } } : {}) };
       }
-      writeFileSync(path.join(dir, 'auth.json'), `${JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: value.trim(), access: '', expires: 0 } })}\n`, { mode: 0o600 });
+      writeFileSync(path.join(dir, 'auth.json'), `${JSON.stringify({ ...there, 'github-copilot': { type: 'oauth', refresh: value.trim(), access: '', expires: 0 } })}\n`, { mode: 0o600 });
       return { ok: true, file: null };
     }
     return { ok: false, text: `no credential rule for ${engine}` };
@@ -703,6 +785,12 @@ export function askFirst(engine, mode, dir) {
   }
 }
 
+/**
+ * Where an engine that is not signed in is signed in again. In plain
+ * characters: `line` keeps nothing else.
+ */
+export const SIGN_IN_AGAIN = "To sign it in: this member's Credentials in the Fleetwright app, Sign in on a machine.";
+
 /** `--engine codex --model gpt --mode safe -- <prompt>`, as an object. The prompt is the last argument, whole. */
 export function parseArgs(argv) {
   const out = { engine: '', model: null, mode: 'safe', prompt: '' };
@@ -740,7 +828,14 @@ export async function run(args, io = {}) {
   // an agent that echoes its key is as much a leak as a provider that does.
   const out = (/** @type {string} */ text) => write(hide(text));
   const note = (/** @type {string} */ text) => out(`\n[fleetwright] ${text}\n`);
-  const report = (/** @type {any} */ turn) => post(socket, '/internal/session-event', { event: 'TurnEnded', detail: turn.reason, turn });
+  // AN ENGINE THAT IS NOT SIGNED IN SAYS WHERE IT IS SIGNED IN AGAIN, in the
+  // turn's detail, which is what a person reads on the session: the engine's
+  // own words first, cut to leave room for it. Not for an engine on a key:
+  // a key is kept or turned on, and nothing signs it in.
+  const report = (/** @type {any} */ turn) => {
+    const told = turn.reason === 'auth' && !providerOf(args.engine, args.model) ? { ...turn, detail: line(`${turn.detail ? `${String(turn.detail).slice(0, 108).replace(/[.\s]+$/, '')}. ` : ''}${SIGN_IN_AGAIN}`) } : turn;
+    return post(socket, '/internal/session-event', { event: 'TurnEnded', detail: told.reason, turn: told });
+  };
   const spec = RUNS[args.engine];
   if (!spec) {
     note(`${line(args.engine, 40) ?? 'No engine'} is not an engine this runner speaks to.`);
@@ -752,13 +847,34 @@ export async function run(args, io = {}) {
   // its model names (docs/api-engines.md).
   const provider = providerOf(args.engine, args.model);
   const item = provider ? provider.item : spec.credential;
+  // THE MEMBER'S ENGINE HOME ON THIS MACHINE, when the box mounted one
+  // (docs/engines.md, "Credentials"). The engine is started reading it.
+  const engineHome = typeof env.FLEETWRIGHT_ENGINE_HOME === 'string' && env.FLEETWRIGHT_ENGINE_HOME ? env.FLEETWRIGHT_ENGINE_HOME : null;
+  const homeEnv = engineHome ? homePaths(args.engine, engineHome)?.env ?? {} : {};
   const open = async () => {
-    const got = await post(socket, '/internal/engine-credential', { kind: item });
-    if (!got?.ok || typeof got.value !== 'string' || !got.value) {
-      return { failed: ended(args.engine, 'auth', { detail: got?.message ?? `this machine holds no ${provider ? 'key' : `${spec.credential} sign-in`} for this member` }) };
+    // A SIGN-IN MADE ON THIS MACHINE IS USED FIRST, AND NOTHING IS ASKED FOR.
+    // The engine renews it where it is, so there is nothing to stage and
+    // nothing to hand back. A key is not a sign-in and is asked for every
+    // time, as it was.
+    const here = engineHome && !provider ? signedInAt(args.engine, engineHome) : null;
+    /** @type {{ ok: true, file: string|null, env?: Record<string, string> } | { ok: false, text: string }} */
+    let staged;
+    /** @type {string|null} */
+    let was = null;
+    if (here) {
+      // As much this runner's to keep quiet as one it was handed.
+      withhold(here.text);
+      staged = { ok: true, file: here.file };
+      was = here.text;
+    } else {
+      const got = await post(socket, '/internal/engine-credential', { kind: item });
+      if (!got?.ok || typeof got.value !== 'string' || !got.value) {
+        return { failed: ended(args.engine, 'auth', { detail: got?.message ?? `this machine holds no ${provider ? 'key' : `${spec.credential} sign-in`} for this member` }) };
+      }
+      withhold(got.value);
+      staged = stage(args.engine, got.value, home, provider, engineHome);
+      if (staged.ok && staged.file) was = got.value;
     }
-    withhold(got.value);
-    const staged = stage(args.engine, got.value, home, provider);
     if (!staged.ok) return { failed: ended(args.engine, 'error', { detail: staged.text }) };
     const asks = askFirst(args.engine, args.mode, systemDir);
     if (!asks.ok) return { failed: ended(args.engine, 'error', { detail: asks.text }) };
@@ -766,7 +882,7 @@ export async function run(args, io = {}) {
     let child;
     try {
       // The key's variable, when there is one, for the engine's process and nothing else of this session's.
-      child = (io.spawnEngine ?? spawn)(command[0], spec.command.slice(1), { cwd, env: staged.env ? { ...env, ...staged.env } : env, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = (io.spawnEngine ?? spawn)(command[0], spec.command.slice(1), { cwd, env: staged.env || engineHome ? { ...env, ...homeEnv, ...(staged.env ?? {}) } : env, stdio: ['pipe', 'pipe', 'pipe'] });
       relayErrors(child.stderr, io.err ?? ((s) => process.stderr.write(s)));
     } catch (e) {
       return { failed: ended(args.engine, 'error', { detail: `could not start ${command[0]}: ${e?.message ?? e}` }) };
@@ -785,7 +901,9 @@ export async function run(args, io = {}) {
       child.kill?.();
       return { failed: spawnError ? ended(args.engine, 'error', { detail: spawnError }) : failed };
     }
-    return { adapter, child, peer, file: staged.file, was: staged.file ? got.value : null };
+    // `handBack` is whether a renewed file goes back to the box: only for the
+    // session that was handed the box's copy.
+    return { adapter, child, peer, file: staged.file, was, handBack: !here };
   };
 
   /**
@@ -798,6 +916,10 @@ export async function run(args, io = {}) {
    * session on this machine signed out. One at a time, so a look that finds
    * the file changed while the last is still being sent does not send the
    * same file twice.
+   *
+   * A SIGN-IN MADE ON THIS MACHINE IS NOT HANDED BACK: the box holds no copy
+   * of it to keep up. Its file is still looked at, because what the engine
+   * renews into it is to be kept as quiet as what it replaced.
    */
   let keeping = Promise.resolve();
   const keep = (/** @type {any} */ live) => {
@@ -808,6 +930,10 @@ export async function run(args, io = {}) {
         if (now && now !== live.was) {
           // What Codex wrote is as much this runner's to keep quiet as what it was handed.
           withhold(now);
+          if (!live.handBack) {
+            live.was = now;
+            return;
+          }
           const kept = await post(socket, '/internal/engine-credential', { kind: spec.credential, value: now });
           if (kept?.ok) live.was = now;
         }
@@ -898,11 +1024,302 @@ export async function run(args, io = {}) {
   return leave();
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  // The signals that stop a session are `run`'s to hear: it hands a renewed
-  // sign-in back before it ends.
-  run(parseArgs(process.argv.slice(2)), { signals: process }).then((code) => process.exit(code), (e) => {
-    process.stdout.write(`\n[fleetwright] the engine runner stopped: ${e?.message ?? e}\n`);
-    process.exit(1);
+// ── Signing in on the machine ───────────────────────────────────────────────
+//
+// `fleetwright-engine --signin <engine>` and `--signout <engine>`: what a box
+// runs, in a short container with one member's engine home mounted and no
+// session's socket, when a custodian asks it to sign an engine in
+// (docs/engines.md, "Signing in on the machine"). It asks the engine itself
+// for a device code, and the engine writes its own sign-in into the home.
+// This file never speaks to OpenAI or GitHub and holds no client id.
+//
+// WHAT IT PRINTS IS TWO LINES OF JSON, AND NOTHING ELSE. The first is the
+// page to open and the code to enter, as soon as the engine gives them:
+//
+//   {"signin":"code","engine":"codex","url":"https://…","code":"ABCD-EFGH","expiresInMinutes":15}
+//
+// The second is how it ended, and for Codex who is signed in, as Codex says:
+//
+//   {"signin":"done","engine":"codex","state":"signed_in","who":{"email":"…","plan":"plus"}}
+//
+// `state` is `signed_in`, `expired`, `failed`, `cancelled`, or for a sign
+// out `signed_out`. A failure carries the engine's own sentence as `detail`,
+// and `why: "device_code_off"` when Codex says device code is not enabled.
+//
+// NO TOKEN, EVER. The engine's sign-in file is read only to withhold what is
+// in it from these two lines. What the engine prints on its error output is
+// not passed on at all here, as it is in a session: before a sign-in exists
+// there is nothing of it to take out, and afterwards nothing is said but the
+// second line.
+
+/** How long a device code lasts, in minutes. Codex's own bound (codex-rs/login/src/device_code_auth.rs); GitHub's codes last the same. */
+export const SIGNIN_MINUTES = 15;
+
+/** OpenCode's name for the provider a subscription sign-in is to. */
+const OPENCODE_SIGNIN_PROVIDER = 'github-copilot';
+
+/**
+ * One request to OpenCode's own server on loopback, as JSON.
+ *
+ * @param {string} base  `http://127.0.0.1:<port>`
+ * @param {string} method @param {string} pathname @param {unknown} body
+ * @param {string} authorization  the Basic header for the password this run made
+ * @param {number} timeoutMs  0 waits for as long as it takes
+ * @returns {{ answer: Promise<{ status: number, body: any }>, abort: () => void }}
+ */
+export function askServer(base, method, pathname, body, authorization, timeoutMs) {
+  /** @type {import('node:http').ClientRequest|null} */
+  let req = null;
+  const answer = new Promise((resolve, reject) => {
+    const data = body === undefined ? '' : JSON.stringify(body);
+    const url = new URL(pathname, base);
+    req = request({
+      host: url.hostname, port: url.port, path: url.pathname, method,
+      headers: { authorization, accept: 'application/json', ...(data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } : {}) },
+      ...(timeoutMs ? { timeout: timeoutMs } : {}),
+    }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => {
+        if (text.length < 64 * 1024) text += c;
+      });
+      res.on('end', () => {
+        let parsed = null;
+        try {
+          parsed = JSON.parse(text);
+        } catch { /* not JSON: the status is the answer */ }
+        resolve({ status: res.statusCode ?? 0, body: parsed });
+      });
+    });
+    req.on('error', (e) => reject(e));
+    req.on('timeout', () => req?.destroy(new Error(`OpenCode did not answer ${pathname} in ${Math.round(timeoutMs / 1000)}s`)));
+    req.end(data);
   });
+  return { answer, abort: () => req?.destroy(new Error('given up')) };
+}
+
+/**
+ * Sign one engine in, or out, in this container's engine home.
+ *
+ * @param {{ engine: string, out?: boolean }} args  `out` is a sign out
+ * @param {{ env?: Record<string, string|undefined>, out?: (text: string) => void, spawnEngine?: Function, signals?: { once: (name: string, then: () => void) => any }, capMs?: number, startMs?: number }} [io]
+ *   `capMs` is how long a code is waited on; `startMs` how long the engine has to come up and answer
+ * @returns {Promise<number>} the exit code: 0 when it said how it ended
+ */
+export async function signin(args, io = {}) {
+  const env = io.env ?? process.env;
+  const write = io.out ?? ((text) => process.stdout.write(text));
+  const capMs = io.capMs ?? SIGNIN_MINUTES * 60_000;
+  const startMs = io.startMs ?? 30_000;
+  const engine = String(args.engine ?? '');
+  const spec = RUNS[engine];
+  const engineHome = typeof env.FLEETWRIGHT_ENGINE_HOME === 'string' && env.FLEETWRIGHT_ENGINE_HOME ? env.FLEETWRIGHT_ENGINE_HOME : null;
+  const at = engineHome && spec ? homePaths(engine, engineHome) : null;
+  /** Everything said passes here, with whatever the engine home holds taken out first. */
+  const say = (/** @type {Record<string, unknown>} */ what) => {
+    if (at) {
+      try {
+        withhold(readFileSync(at.file, 'utf8'));
+      } catch { /* no sign-in there: nothing of one to take out */ }
+    }
+    write(`${hide(JSON.stringify({ engine, ...what }))}\n`);
+  };
+  const done = (/** @type {string} */ state, /** @type {Record<string, unknown>} */ extra = {}) => {
+    say({ signin: 'done', state, ...extra });
+    return 0;
+  };
+  const failed = (/** @type {unknown} */ detail, /** @type {Record<string, unknown>} */ extra = {}) => done('failed', { detail: line(detail) ?? 'the engine gave no reason', ...extra });
+  if (!spec) return failed(`${line(engine, 40) ?? 'that'} is not an engine this runner signs in`);
+  if (!at) return failed('this container was given no engine home to keep a sign-in in');
+  try {
+    mkdirSync(at.dir, { recursive: true, mode: 0o700 });
+  } catch (e) {
+    return failed(`the engine home could not be written: ${e?.message ?? e}`);
+  }
+
+  /** @type {Promise<'stopped'>} */
+  const stopped = new Promise((resolve) => {
+    for (const name of ['SIGTERM', 'SIGINT', 'SIGHUP']) io.signals?.once(name, () => resolve('stopped'));
+  });
+  /** @type {any} */
+  let capTimer = null;
+  /** @type {Promise<'cap'>} */
+  const cap = new Promise((resolve) => {
+    capTimer = setTimeout(() => resolve('cap'), capMs);
+  });
+  const command = env[spec.bin] ? String(env[spec.bin]) : spec.command[0];
+  /** @type {any} */
+  let child = null;
+  /** @type {string|null} */
+  let spawnError = null;
+  const start = (/** @type {string[]} */ argv, /** @type {Record<string, string>} */ more) => {
+    child = (io.spawnEngine ?? spawn)(command, argv, { env: { ...env, ...at.env, ...more }, stdio: ['pipe', 'pipe', 'pipe'] });
+    child.on?.('error', (e) => {
+      spawnError = e?.code === 'ENOENT' ? `${command} is not installed in this machine's session image` : String(e?.message ?? e);
+    });
+    // NOT PASSED ON, and drained so the engine never blocks on a full pipe.
+    child.stderr?.resume?.();
+  };
+  const leave = () => {
+    clearTimeout(capTimer);
+    child?.kill?.();
+  };
+
+  try {
+    return engine === 'codex' ? await codex() : await opencode();
+  } catch (e) {
+    return failed(spawnError ?? e?.message ?? e);
+  } finally {
+    leave();
+  }
+
+  // Codex, through the app server a session's turns go through
+  // (codex-rs/app-server-protocol, v2, at rust-v0.171.0).
+  async function codex() {
+    start(['app-server'], {});
+    const peer = new Peer(child, { version: null });
+    /** @type {Promise<'closed'>} */
+    const closed = new Promise((resolve) => {
+      peer.onClose = () => resolve('closed');
+    });
+    await peer.request('initialize', { clientInfo: { name: 'fleetwright', title: 'Fleetwright', version: '1' }, capabilities: null }, startMs);
+    peer.notify('initialized');
+    if (args.out) {
+      // `account/logout` removes the file and answers an empty object.
+      await peer.request('account/logout', undefined, startMs);
+      return done('signed_out');
+    }
+    // HOW IT ENDED arrives as a notice, and can arrive before the answer that
+    // says which sign-in is this one, so every one is kept until that is known.
+    /** @type {string|null} */
+    let loginId = null;
+    /** @type {any[]} */
+    const heard = [];
+    /** @type {(params: any) => void} */
+    let settle = () => {};
+    /** @type {Promise<any>} */
+    const completed = new Promise((resolve) => {
+      settle = resolve;
+    });
+    const mine = (/** @type {any} */ params) => loginId !== null && (params?.loginId === loginId || params?.loginId === null || params?.loginId === undefined);
+    peer.onNotification = (method, params) => {
+      if (method !== 'account/login/completed') return;
+      if (loginId === null) heard.push(params);
+      else if (mine(params)) settle(params);
+    };
+    let begun;
+    try {
+      begun = await peer.request('account/login/start', { type: 'chatgptDeviceCode' }, startMs);
+    } catch (e) {
+      // Codex's own words for an account or workspace with device code turned
+      // off (login/src/device_code_auth.rs, a 404 from the issuer).
+      const off = /device code login is not enabled/i.test(String(e?.message ?? ''));
+      return failed(e?.message, off ? { why: 'device_code_off' } : {});
+    }
+    const url = line(begun?.verificationUrl, 300);
+    const code = line(begun?.userCode, 40);
+    if (begun?.type !== 'chatgptDeviceCode' || typeof begun?.loginId !== 'string' || !url || !/^https:\/\//.test(url) || !code) {
+      return failed('Codex answered the sign-in with no page and code to give');
+    }
+    loginId = begun.loginId;
+    for (const params of heard) if (mine(params)) settle(params);
+    say({ signin: 'code', url, code, expiresInMinutes: Math.round(capMs / 60_000) });
+    const how = await Promise.race([completed, closed, cap, stopped]);
+    if (how === 'stopped' || how === 'cap') {
+      // Told, so Codex stops asking OpenAI for a sign-in nobody is waiting on.
+      await peer.request('account/login/cancel', { loginId }, 3000).catch(() => {});
+      return done(how === 'cap' ? 'expired' : 'cancelled');
+    }
+    if (how === 'closed') return failed(spawnError ?? 'Codex stopped before it said how the sign-in ended');
+    if (how?.success !== true) {
+      // Codex gives up by itself after the same 15 minutes, in these words.
+      if (/timed out/i.test(String(how?.error ?? ''))) return done('expired');
+      return failed(how?.error ?? 'Codex said the sign-in did not complete');
+    }
+    // WHO, as Codex says: an address and a plan. Never anything from the file.
+    const read = await peer.request('account/read', { refreshToken: false }, startMs).catch(() => null);
+    const account = read?.account?.type === 'chatgpt' ? read.account : null;
+    return done('signed_in', { who: account ? { email: line(account.email, 120), plan: line(account.planType, 40) } : null });
+  }
+
+  // OpenCode, through its own server on loopback: `opencode acp` has no
+  // sign-in, and its command-line login needs a terminal. The two calls must
+  // reach one process, which holds what is pending in memory
+  // (packages/opencode/src/provider/auth.ts, at v1.19.6).
+  async function opencode() {
+    // A PASSWORD FOR THIS ONE RUN, so the server answers this runner and
+    // nothing else in the container (server/auth.ts; the user is `opencode`).
+    const password = randomBytes(24).toString('hex');
+    withhold(password);
+    const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
+    withhold(authorization.slice('Basic '.length));
+    start(['serve', '--hostname', '127.0.0.1', '--port', '0'], { OPENCODE_SERVER_PASSWORD: password });
+    // It says where it listens on its own output (cli/cmd/serve.ts).
+    /** @type {Promise<string|null>} */
+    const listening = new Promise((resolve) => {
+      eachLine(child.stdout, 4096, (text) => {
+        const m = /listening on (http:\/\/127\.0\.0\.1:\d{1,5})\b/.exec(text);
+        if (m) resolve(m[1]);
+      }, () => {}, () => resolve(null));
+    });
+    /** @type {Promise<'closed'>} */
+    const closed = new Promise((resolve) => {
+      child.on?.('exit', () => resolve('closed'));
+    });
+    /** @type {any} */
+    let startTimer = null;
+    const base = await Promise.race([listening, new Promise((resolve) => {
+      startTimer = setTimeout(() => resolve(null), startMs);
+    })]);
+    clearTimeout(startTimer);
+    if (!base) return failed(spawnError ?? 'OpenCode’s server did not start');
+    if (args.out) {
+      // OpenCode's own route for removing a provider's entry (auth.remove).
+      const gone = await askServer(base, 'DELETE', `/auth/${OPENCODE_SIGNIN_PROVIDER}`, undefined, authorization, startMs).answer;
+      return gone.status === 200 ? done('signed_out') : failed(`OpenCode would not remove its sign-in (HTTP ${gone.status})`);
+    }
+    const asked = await askServer(base, 'POST', `/provider/${OPENCODE_SIGNIN_PROVIDER}/oauth/authorize`, { method: 0, inputs: { deploymentType: 'github.com' } }, authorization, startMs).answer;
+    const url = line(asked.body?.url, 300);
+    // "Enter code: XXXX-XXXX" (plugin/github-copilot/copilot.ts).
+    const code = /code:\s*([A-Za-z0-9-]{4,40})\s*$/.exec(String(asked.body?.instructions ?? ''))?.[1] ?? null;
+    if (asked.status !== 200 || asked.body?.method !== 'auto' || !url || !/^https:\/\//.test(url) || !code) {
+      const name = line(asked.body?.name, 60);
+      return failed(asked.status === 200 ? 'OpenCode answered the sign-in with no page and code to give' : `OpenCode refused to start the sign-in (${name ?? `HTTP ${asked.status}`})`);
+    }
+    say({ signin: 'code', url, code, expiresInMinutes: Math.round(capMs / 60_000) });
+    // Held open while OpenCode asks GitHub, for as long as that takes.
+    const waiting = askServer(base, 'POST', `/provider/${OPENCODE_SIGNIN_PROVIDER}/oauth/callback`, { method: 0 }, authorization, 0);
+    const how = await Promise.race([waiting.answer.catch((e) => ({ status: 0, body: null, lost: String(e?.message ?? e) })), closed, cap, stopped]);
+    if (how === 'stopped' || how === 'cap') {
+      waiting.abort();
+      return done(how === 'cap' ? 'expired' : 'cancelled');
+    }
+    if (how === 'closed') return failed(spawnError ?? 'OpenCode stopped before it said how the sign-in ended');
+    if (how.status === 200 && how.body === true) return done('signed_in', { who: null });
+    // OpenCode says only that it failed: GitHub's reason, a code that ran out
+    // or a request somebody declined, does not reach its answer.
+    const name = line(how.body?.name, 60);
+    return failed(name
+      ? `OpenCode did not complete the sign-in (${name}). It does not pass on GitHub's reason: the code may have run out, or the request was declined`
+      : `OpenCode did not complete the sign-in (${/** @type {any} */ (how).lost ?? `HTTP ${how.status}`})`);
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const argv = process.argv.slice(2);
+  if (argv[0] === '--signin' || argv[0] === '--signout') {
+    // A sign-in, not a session: no socket, no pane, two lines of JSON. A
+    // signal is the box cancelling it, and is `signin`'s to hear.
+    signin({ engine: String(argv[1] ?? ''), out: argv[0] === '--signout' }, { signals: process }).then((code) => process.exit(code), (e) => {
+      process.stdout.write(`${JSON.stringify({ signin: 'done', state: 'failed', detail: line(e?.message ?? e) })}\n`);
+      process.exit(1);
+    });
+  } else {
+    // The signals that stop a session are `run`'s to hear: it hands a renewed
+    // sign-in back before it ends.
+    run(parseArgs(argv), { signals: process }).then((code) => process.exit(code), (e) => {
+      process.stdout.write(`\n[fleetwright] the engine runner stopped: ${e?.message ?? e}\n`);
+      process.exit(1);
+    });
+  }
 }

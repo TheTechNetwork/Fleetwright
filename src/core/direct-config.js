@@ -29,8 +29,8 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { log } from '../log.js';
+import { INSTALL_ROOT } from './resources.js';
 import { pickCredentialSource, credentialSourceForAccount, noAccountRefusal } from './podman.js';
 import { emailFromActor } from './accounts.js';
 import { onRunner, runnerAuthFor } from './runner-login.js';
@@ -297,7 +297,14 @@ function stageSettings(cfg, dir) {
 function hookOnly(dir) {
   const dest = path.join(dir, 'settings.json');
   if (existsSync(dest)) return;
-  const cli = fileURLToPath(new URL('../../bin/fleetwright', import.meta.url));
+  // FROM THE INSTALL'S ROOT, whichever shape this is running in. This was
+  // `../../bin/fleetwright` beside this file, which is right in a checkout
+  // (src/core/) and one directory too high in a release, where this file is
+  // part of lib/fleetwright.mjs. A box never noticed, because install.sh
+  // leaves a template and this is not reached; a machine made on a box
+  // (sandbox/machine) runs no installer, so every session in one was given
+  // a hook naming a file that is not there, and none could be resumed.
+  const cli = path.join(INSTALL_ROOT, 'bin', 'fleetwright');
   const settings = {
     hooks: { SessionStart: [{ hooks: [{ type: 'command', command: `${process.execPath} ${cli} hook` }] }] },
     ...SESSION_SETTINGS,

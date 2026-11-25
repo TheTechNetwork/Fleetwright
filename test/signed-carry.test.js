@@ -222,7 +222,7 @@ test('a refusal for want of a signature says what would have carried it, from wh
   // MCP client, which is neither where it came from nor a thing that covers
   // update (MCP_UNDELEGATED_VERBS). Each refusal now says its own way out,
   // from the box's refusal and from the coordinator's own alike.
-  const { ask } = await fleet();
+  const { ask, core } = await fleet();
   const steps = /open the Fleetwright app on your phone, go to You → Delegations/;
   // The result and the one action, with the custody detail (the key listed
   // with the minter) left to the code: docs/design-system.md, "Words".
@@ -242,6 +242,14 @@ test('a refusal for want of a signature says what would have carried it, from wh
   assert.equal(update.frames.length, 1, 'sent to the box, which decides');
   assert.match(update.r.text, notDelegated);
   assert.doesNotMatch(update.r.text, steps);
+  // AND FOR SIGNING AN ENGINE IN, which the delegation a phone makes for an
+  // MCP client does not carry: sent to allow that delegation, a person would
+  // allow it and be refused again.
+  assert.equal(core.setMember(null, 'debbie', { name: 'Debbie', kind: 'agent', role: 'software engineer' }).ok, true);
+  const signin = await ask('enginesignin', { member: 'debbie', engine: 'codex', action: 'start' }, 'box-signers', { unsigned: true });
+  assert.equal(signin.r.error?.code, 'signature_required');
+  assert.match(signin.r.text, /The delegation a phone makes for an MCP client does not carry signing an engine in\. Do it from the Fleetwright app, on the member’s Credentials, with Sign in on a machine\./);
+  assert.doesNotMatch(signin.r.text, steps);
   // THE COORDINATOR'S OWN REFUSAL, for a box that takes only signed requests,
   // by the same rule, with nothing sent.
   const own = await ask('start', { name: 'strict-phone' }, 'box-strict', { unsigned: true, fromApp: true });

@@ -11,6 +11,7 @@ import { sessionImage } from './sandbox-variant.js';
 import { usernsArgs } from './sandbox-userns.js';
 import { CONTAINER_SOCKET_DIR, CONTAINER_SOCKET_PATH, LEGACY_CONTAINER_SOCKET_PATH, SOCKET_FILE } from './hook-socket.js';
 import { egressArgs } from './egress.js';
+import { engineHomeArgs } from './engine-home.js';
 import { ownerTag } from './accounts.js';
 
 /** @typedef {import('./runner-login.js').RunnerAuth} RunnerAuth */
@@ -78,7 +79,7 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
   const skip = skipPermissions === null ? cfg.skipPermissions : skipPermissions;
   const runner = Boolean(engine && engine.engine !== 'claude-code');
 
-  const argv = cfg.sandbox ? sandboxArgv(cfg, name, hookSocket === null ? cfg.sandboxHookSocket : hookSocket, owner, egress) : [cfg.claudeBin];
+  const argv = cfg.sandbox ? sandboxArgv(cfg, name, hookSocket === null ? cfg.sandboxHookSocket : hookSocket, owner, egress, runner) : [cfg.claudeBin];
   if (runner && engine) {
     argv.push('fleetwright-engine', '--engine', engine.engine);
     if (engine.model) argv.push('--model', engine.model);
@@ -151,8 +152,9 @@ export function buildCommand(cfg, { name, resumeUuid = null, skipPermissions = n
  * @param {boolean} hookSocket
  * @param {string|null} [owner]  whose session this is, for the download cache
  * @param {import('./egress.js').EgressRoute|null} [egress]  the owner's route out, under an allowlist
+ * @param {boolean} [runner]  whether the pane is an engine behind the runner, which reads its sign-in from its owner's engine home
  */
-function sandboxArgv(cfg, name, hookSocket, owner = null, egress = null) {
+function sandboxArgv(cfg, name, hookSocket, owner = null, egress = null, runner = false) {
   const argv = [
     cfg.podmanBin, 'run', '-it',
     '--name', `agent-${name}`,
@@ -183,6 +185,18 @@ function sandboxArgv(cfg, name, hookSocket, owner = null, egress = null) {
   // that is no more than their own /work already allows.
   const cache = cfg.sandboxCache === true ? cacheVolumeFor(owner) : null;
   if (cache) argv.push('-v', `${cache}:/root/.cache`);
+
+  // THE MEMBER'S ENGINE HOME, for a pane that is Codex or OpenCode
+  // (docs/engines.md, "Credentials"): where an engine signed in on this
+  // machine keeps its sign-in and renews it, shared by that member's sessions
+  // here and by nobody else's. The runner is told where it is and starts the
+  // engine reading it; nothing else in the session is pointed there.
+  //
+  // NOT FOR A PANE THAT IS CLAUDE CODE. Its sign-in is its own volume's, and
+  // a session with no use for the member's other sign-ins is not handed
+  // them. A session that moves to another engine is launched again, and gets
+  // the mount then.
+  if (runner) argv.push(...engineHomeArgs(owner));
 
   // The per-session hook socket, bind-mounted into this container and no other,
   // so the session can report its conversation uuid without being able to name

@@ -14,7 +14,7 @@ import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { createInterface } from 'node:readline';
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -440,7 +440,8 @@ test('the runner starts no engine without a sign-in, says so in the pane, and re
   const out = [];
   await run({ engine: 'codex', model: null, mode: 'safe', prompt: 'go' }, { socket, home, env: {}, out: (s) => out.push(s), stdin: typed(), spawnEngine: () => void (spawned += 1) });
   assert.equal(spawned, 0);
-  assert.deepEqual(posts.at(-1)?.body.turn, { engine: 'codex', reason: 'auth', detail: 'this machine holds no codex sign-in for this member', model: null, usage: null, resetsAt: null });
+  // The machine's words, and then where a sign-in is made: on a machine, from the member's Credentials.
+  assert.deepEqual(posts.at(-1)?.body.turn, { engine: 'codex', reason: 'auth', detail: "this machine holds no codex sign-in for this member. To sign it in: this member's Credentials in the Fleetwright app, Sign in on a machine.", model: null, usage: null, resetsAt: null });
   assert.match(out.join(''), /\[fleetwright\] codex did not start a turn: auth \(this machine holds no codex sign-in for this member\)\./);
 });
 
@@ -711,6 +712,77 @@ test('the tokens inside a Codex sign-in are never said, in the pane or in a turn
   for (const token of ['idtok-aaaaaaaaaaaaaaaa', 'acctok-bbbbbbbbbbbbbbbb', 'reftok-cccccccccccccccc']) assert.ok(!pane.includes(token), token);
   assert.equal(posts.at(-1)?.body.turn.detail, 'token [withheld] was rejected');
   assert.ok(!JSON.stringify(posts.filter((p) => p.path === '/internal/session-event')).includes('tok-'), 'nothing reported names a token');
+});
+
+// ── A sign-in made on the machine ───────────────────────────────────────────
+
+test('a sign-in in the member’s engine home is used first: the box is asked for nothing, handed nothing back, and what the engine renews there is kept as quiet', async (t) => {
+  const { socket, home, posts } = await sessionSocket(t, () => assert.fail('the box was asked for a sign-in the machine already holds'));
+  const engineHome = path.join(home, 'engine-home');
+  const file = path.join(engineHome, 'codex', 'auth.json');
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ tokens: { access_token: 'at-home-0123456789', refresh_token: 'rt-home-0123456789' } }));
+  /** @type {any} */
+  let startedWith = null;
+  const server = codexServer({
+    turn: (send) => {
+      // Codex renews in place, and then says both tokens out loud.
+      writeFileSync(file, JSON.stringify({ tokens: { access_token: 'at-next-0123456789', refresh_token: 'rt-next-0123456789' } }));
+      setTimeout(() => {
+        send({ method: 'item/agentMessage/delta', params: { delta: 'was rt-home-0123456789, now rt-next-0123456789' } });
+        completed(send, { status: 'completed', error: null });
+      }, 80);
+    },
+  });
+  /** @type {string[]} */
+  const out = [];
+  await run({ engine: 'codex', model: 'gpt-5.1-codex', mode: 'safe', prompt: 'Go.' }, {
+    socket, home, cwd: '/work', env: { FLEETWRIGHT_ENGINE_HOME: engineHome }, out: (s) => out.push(s), stdin: typed(), watchMs: 10,
+    spawnEngine: (/** @type {string} */ _cmd, /** @type {string[]} */ _args, /** @type {any} */ opts) => {
+      startedWith = opts.env;
+      return server.child;
+    },
+  });
+  // The engine reads and renews the home, and nothing else of the session is pointed there.
+  assert.equal(startedWith.CODEX_HOME, path.join(engineHome, 'codex'));
+  assert.equal(startedWith.XDG_DATA_HOME, undefined);
+  assert.deepEqual(posts.filter((p) => p.path === '/internal/engine-credential'), [], 'nothing asked, nothing handed back');
+  assert.equal(posts.at(-1)?.body.turn.reason, 'done');
+  assert.match(out.join(''), /was \[withheld\], now \[withheld\]/);
+});
+
+test('with no sign-in in the engine home the pasted item is asked for and written there, so the member’s next session on the machine finds it', async (t) => {
+  const pasted = JSON.stringify({ tokens: { access_token: 'at-pasted-0123456789', refresh_token: 'rt-pasted-0123456789' } });
+  const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: pasted }));
+  const engineHome = path.join(home, 'engine-home');
+  const go = () => {
+    const server = codexServer({ turn: (send) => completed(send, { status: 'completed', error: null }) });
+    return run({ engine: 'codex', model: 'gpt-5.1-codex', mode: 'safe', prompt: 'Go.' }, { socket, home, cwd: '/work', env: { FLEETWRIGHT_ENGINE_HOME: engineHome }, out: () => {}, stdin: typed(), spawnEngine: () => server.child });
+  };
+  await go();
+  assert.equal(readFileSync(path.join(engineHome, 'codex', 'auth.json'), 'utf8'), pasted);
+  assert.equal(existsSync(path.join(home, '.codex')), false, 'one place, not two');
+  const asked = () => posts.filter((p) => p.path === '/internal/engine-credential' && p.body.value === undefined).length;
+  assert.equal(asked(), 1);
+  await go();
+  assert.equal(asked(), 1, 'the second session asked for nothing');
+});
+
+test('in an engine home OpenCode’s file gains an entry and loses none: a key beside a Copilot sign-in, and a pasted token beside a key', (t) => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'engine-stage-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const engineHome = path.join(home, 'engine-home');
+  const file = path.join(engineHome, 'opencode', 'auth.json');
+  const signedIn = { type: 'oauth', refresh: 'gho_made_on_the_machine', access: 'gho_made_on_the_machine', expires: 0 };
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ 'github-copilot': signedIn }));
+  assert.equal(stage('opencode', 'sk-or-key', home, { opencode: 'openrouter', env: 'OPENROUTER_API_KEY' }, engineHome).ok, true);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { 'github-copilot': signedIn, openrouter: { type: 'api', key: 'sk-or-key' } });
+  // The other way round: a key was there, and the member's pasted Copilot token is the fallback.
+  writeFileSync(file, JSON.stringify({ openrouter: { type: 'api', key: 'sk-or-key' } }));
+  assert.equal(stage('opencode', 'gho_pasted', home, null, engineHome).ok, true);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { openrouter: { type: 'api', key: 'sk-or-key' }, 'github-copilot': { type: 'oauth', refresh: 'gho_pasted', access: '', expires: 0 } });
+  assert.equal(existsSync(path.join(home, '.local')), false);
 });
 
 // ── What an engine sends is bounded ─────────────────────────────────────────

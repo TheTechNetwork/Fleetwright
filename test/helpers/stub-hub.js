@@ -23,6 +23,7 @@ import { createServer } from 'node:http';
  *   maxSessions?: number,
  *   host?: string,
  *   onCommand?: (line: string) => any,
+ *   onEngineSignin?: (ask: any) => any,
  * }} [opts]
  */
 export async function startStubHub({
@@ -33,6 +34,7 @@ export async function startStubHub({
   maxSessions = 5,
   host = 'unabandoned',
   onCommand,
+  onEngineSignin,
   facts = {},
   onTrial = false,
   renewResults = [],
@@ -59,6 +61,8 @@ export async function startStubHub({
   const renewals = [];
   /** Who the sidecar asked this hub to forget. @type {string[]} */
   const forgotten = [];
+  /** What the sidecar asked of an engine sign-in, whole. @type {any[]} */
+  const signins = [];
   // What the hub says about the box: labels, channel, sandbox, house rules.
   // Mutable so a test can change a label and see the next frame say so.
   let hostFacts = facts;
@@ -121,6 +125,13 @@ export async function startStubHub({
       return json(200, { ok: true, text: `Forgot ${body.email} on this box.` });
     }
 
+    // An engine signed in on this box for a member (src/core/engine-signin.js).
+    // 200 whatever the answer, as the hub's: a refusal has its own code.
+    if (p === '/api/engine-signin' && req.method === 'POST') {
+      signins.push(body);
+      return json(200, onEngineSignin ? await onEngineSignin(body) : { ok: true, state: 'waiting', member: body.member, engine: body.engine, url: 'https://auth.openai.com/codex/device', code: 'ABCD-EFGH', expiresInMinutes: 15, signedIn: null, text: 'Open the page and enter the code.' });
+    }
+
     if (p === '/api/command' && req.method === 'POST') {
       const line = String(body.command || '');
       commands.push(line);
@@ -169,6 +180,7 @@ export async function startStubHub({
     evidence,
     renewals,
     forgotten,
+    signins,
     sessions,
     panes,
     // Drop idle keep-alive sockets first. A test that made more than one

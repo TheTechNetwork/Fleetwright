@@ -135,11 +135,53 @@ so who may act for a member's vault is held and checked in the minter:
   manages nothing there, so a manager signs in on a phone or the signing page
   before any of this works for them.
 
+**Whose an address is.** An address belongs to the first GitHub account that
+lists a signing key under it, **for good**: another account is refused
+(`address_taken`) whether or not a key is still listed. It used to be free
+again once its keys were all removed, which is the moment a person who has
+lost their phone is least able to notice: a coordinator that lies about who
+is signing in could vouch a custodian's address for another GitHub account,
+which was then that custodian to every vault the tree gives them and to
+every box they had approved.
+
+An address changes hands in one way: **an org admin releases it**
+(`releaseaddress`, with the address). That is for a person who signs in to
+GitHub as a different account now, or an address handed on to somebody new.
+
+- The address is nobody's again: no account, no signing keys, and so nothing
+  a box takes a signature with. Whoever signs in under it next holds it,
+  with whatever the tree gives that address, so a release is the same
+  exposure as the first case under "What it does not stop" until they do.
+- Every machine the old account approved under that address stops being
+  approved, and is given nothing from its next ask. A box files what it is
+  handed by the address, so otherwise the next person under it would start
+  sessions on the last one's sign-ins. What the old account keeps stays in
+  its own vault.
+- It is written in the log of every vault the address may open, and of the
+  old account's own, as `release` with the address and the admin who did it.
+- An org admin's own address is not released while it is one (`is_admin`):
+  whoever signed in under it next would administer the organization. A
+  request the old account sealed before the release does not take the
+  address back (`stale`).
+
+Releasing is done from **the signing page**, on the admin's own vault, under
+*Release an address*, which asks once more with what goes. Neither phone has
+a screen for it yet. The phones show the log entry as the bare word
+`release` until they have words for it.
+
 **Custodians of an agent member.** The admin who files an agent member is its
 first custodian. A custodian adds or removes another (`custodian`), and the
 last one cannot be removed. Every manager of the member is a custodian too,
 for as long as the tree says so: move the member out of their team and their
 custody ends with that change, at the minter, at once.
+
+**Removing an agent empties its vault.** Everything it kept and every machine
+approved for it is forgotten in the same change, and the answer says how
+much. It used to stay "until a custodian forgets it", which could not
+happen: nobody is the custodian of a member that is not in the tree, so the
+sign-ins were kept, renewed, and handed to whoever filed the same id next. A
+new agent filed under an id something was left under starts empty too. A
+person's vault is their own and a removal does not touch it.
 
 **Custodians of a person member.** A person's vault holds their own
 sign-ins, and who else holds custody of it depends on who was there first.
@@ -162,11 +204,14 @@ sign-ins, and who else holds custody of it depends on who was there first.
   test (`test/vault.test.js`):
   - *Taking a record out and filing it again*, or filing one for somebody
     whose keys were all removed after a lost phone. The address was met, so
-    it gives nothing.
+    it gives nothing. Nor does it give back custody an org admin took away
+    from somebody nobody had met yet: the removal remembers whose address
+    the record was.
   - *Filing a record at an address somebody has not used yet.* When a
     GitHub account that already has a vault files its first key under that
     address, the vault had met them after all, and the custody is dropped at
-    that moment.
+    that moment. A Claude login kept for runners counts as a vault here: it
+    is filed by the GitHub account alone, before any key.
   - *Pointing an existing record at another address.* That names another
     person, so the old one's custodian does not follow it. Whoever made the
     change added the new one, on the same terms.
@@ -187,8 +232,12 @@ sign-ins, and who else holds custody of it depends on who was there first.
 
 Either way the person's own `list` names their custodians and managers, and
 every deposit, change or removal somebody else makes is written beside the
-vault (`clog:`, the last twenty) where the person reads it, and told to
-their phone. The log is the minter's; the push is the coordinator's and can
+vault (`clog:`, the last hundred) where the person reads it, and told to
+their phone. Each line names what was changed as the vault itself read it,
+never a name the request carried beside it: a sign-in is logged as its
+provider, a machine as its fingerprint. A machine a custodian approved says
+so for as long as it is approved (`by`, on that machine in `list`), since a
+log line can scroll away and the approval does not. The log is the minter's; the push is the coordinator's and can
 be dropped by a dishonest one, which is why the log exists.
 
 **What a custodian does** is what a person does for their own vault, with
@@ -226,7 +275,13 @@ unknown.
 **The coordinator refuses first**, in the person's words: the member does not
 exist, or the person is neither that person member nor anybody who manages or
 holds custody of it. It reads custody from the last key list the minter
-signed, which it relays to boxes and can read but not write.
+signed, which it relays to boxes and can read but not write. It keeps that
+list across a restart. A fleet whose minter has never been asked has none,
+and the coordinator then cannot tell: it refuses a start as a member by
+anybody but an admin, `custody_unknown`, in words that say when to try again,
+and passes an admin's on for the box to decide. What a member is seen to
+spend is counted from a start the coordinator let through
+([budgets.md](./budgets.md)), so it lets through nobody it cannot place.
 
 **The box decides.** The minter's signed key list (`/vault/keys`) now carries
 each member and who may start as it: for an agent, its custodians; for a
@@ -236,6 +291,32 @@ a member start only when it is **signed or delegated by somebody on that
 list**, whatever the box's signature mode: an unsigned actor here would be the
 coordinator naming a custodian. Otherwise it refuses, `not_custodian`, saying
 who the minter lists.
+
+**A delegation covers a member only by naming it.** A delegation is a standing
+permission the coordinator carries ([signed-intents.md](./signed-intents.md),
+"Delegations"), and one that named no member used to carry a start as any
+member its signer could act for: a grant made to hold one start, or an MCP
+client's for a week, let the coordinator alone start a session on an agent's
+sign-ins with a task of its own. So a delegation may carry `members`, a list
+of member ids signed with the rest of it, and a delegated start that names
+`member` is covered only when that list has the id. No list means no member.
+The coordinator does not carry a delegation that lacks the member, and a box
+handed one anyway refuses, `member_not_delegated`, saying which members the
+grant does name and that it is made again from the phone, under You →
+Delegations, with the member among them. The task and the session's name are
+held to the grant's `match` as before. A request the person signs on their own
+phone needs none of this: the member is in what they signed.
+
+**Signing an engine in for a member is held to the same rule.**
+`enginesignin` ([engines.md](./engines.md), "Signing in on the machine")
+puts a sign-in where that member's sessions run on it, so a box takes it
+from exactly who may start a session as the member: on the minter's list,
+and signed, or delegated in a grant that names the member, whatever the
+box's mode. A grant that lacks the member is refused in the same words.
+A `start` is also taken only by a box approved for that member's vault,
+and its answer is signed by that box's key and sealed to the phone that
+asked, which is how a phone knows the code it shows is that machine's and
+that nobody between read it.
 
 **Credentials come from the member's principal and nowhere else.** A box
 files everything a session runs on by the address of whose it is, and every
@@ -248,6 +329,13 @@ rule: no fallback to the asker's account or to anything on the box. A member
 with no sign-in on that box is a refusal that names the member. A box refuses
 any request that names an address at that domain as the one asking, so the
 only way onto a member's sign-ins is a member start the box has checked.
+
+**Nobody is filed at that domain.** A box runs a person member's session as
+their address, so a person record at `debbie@members.invalid` was a session
+on Debbie's sign-ins for whoever filed it, with no custody of Debbie at all.
+The minter refuses the domain for every address it takes (a person's, a
+manager's, a custodian's, an org admin's), and a box drops such a record
+from a list a minter older than that rule signs.
 
 **A member's session is not pushed to the starter's archive.** That push is
 made with the starter's own GitHub sign-in on the box, and a box holding the
@@ -301,6 +389,26 @@ tree as the minter's.
 
 ## What it does not stop
 
+- **An address nobody has signed in under is whoever's the coordinator says
+  first.** The tree names people by address, and it may name one before that
+  person has ever signed in: a manager above an agent, an extra manager an
+  admin wrote in, a person member somebody added. The vault binds an address
+  to a GitHub account when that account lists its first signing key, and
+  until then all it knows of who is signing in is the address the
+  coordinator vouches for. So a coordinator that lies about who is signing
+  in can claim an address nobody has signed in under yet, for a GitHub
+  account of its own, and hold whatever custody the tree gives that address:
+  an agent's vault it is above, a box approved for it, a session started as
+  it. The same holds for an address an org admin has released, until its new
+  person signs in. What it cannot do is claim an address somebody has
+  already signed in under: that one is its first account's for good, keys
+  listed or not. Nor can it make itself a custodian by name, since adding a
+  custodian or an org admin is refused until that address is bound. What
+  would close it is an org admin confirming a person's first sign-in while
+  being shown which GitHub account it is, which needs a screen on both
+  phones and is not built. Until then: have people sign in before the tree
+  gives their address anything, and read a member's custodians as addresses
+  that are only as good as their first sign-in.
 - **The first org admin is first use.** A coordinator compromised before any
   admin filed the tree could vouch for an account of its own. That account
   could then file agent members and hold their empty vaults. It reaches the
@@ -309,7 +417,14 @@ tree as the minter's.
   admin sees somebody else listed as the org's admin.
 - **A member's instructions are the coordinator's word.** A compromised
   coordinator can change what a member's session is told at its start. It
-  cannot start one, or change the task, without a custodian's signature.
+  cannot start one, or change the task, without a custodian's signature, or
+  a delegation of theirs that names that member.
+- **A delegation that names a member is a standing start as it.** While it
+  lasts, the coordinator can start that member as often as it likes, with
+  any task the grant's `match` leaves open. An MCP client's grant matches
+  nothing, so it leaves the task open: that is what lets an agent hand work
+  to a member, and it is why the grant lists members one by one and runs out
+  in a day or a week.
 - **A custodian can use what they keep.** Approving a box for a member's
   vault hands that box the member's tokens. Custody is that power; who added
   the member, the tree and the person's switch decide who has it.

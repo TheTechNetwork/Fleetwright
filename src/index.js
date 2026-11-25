@@ -29,6 +29,7 @@ import { HttpAdapter } from './adapters/http.js';
 import { archiveRunning, archiveSession, ArchivePacer, ARCHIVE_EVERY_MS } from './core/archive.js';
 import { onRunner } from './core/runner-login.js';
 import { DEFAULT_CEILING } from './core/capacity.js';
+import { availableMemoryBytes } from './core/cgroup-memory.js';
 
 /** The longest a runner's hub spends pushing sessions to their archives when
  * it is told to stop. GitHub gives a cancelled job's steps a few seconds and a
@@ -172,6 +173,13 @@ export async function main() {
         })
       : null;
   const sessions = new SessionManager(cfg, registry, hooks);
+  // WHAT THIS HUB MAY TAKE, WHERE THAT IS LESS THAN THE BOX HAS. Sessions are
+  // counted against available memory, and a hub in a container was reading
+  // the box's: the one inside a machine made on a box counted against 60 GB
+  // with 8 allowed, and a container that passes its limit is ended with every
+  // session in it (core/cgroup-memory.js). Set here, where the hub is put
+  // together, because what the manager measures is a field for this.
+  sessions.machine.freeMemBytes = () => availableMemoryBytes();
   const login = new LoginFlow(cfg);
 
   log.info(`fleetwright starting on ${cfg.hostname} · workdir ${cfg.workdir} · sessions by memory and load, at most ${cfg.maxSessions ?? DEFAULT_CEILING}`);
@@ -251,6 +259,9 @@ export async function main() {
   adapters.push(http);
   // The box's clock on machines it made before this start, if it made any.
   http.machines.watch();
+  // And an engine sign-in that was waiting when the last hub stopped without
+  // saying so: it is gone, and is written down as that (engine-signin.js).
+  http.engineSignins.recover();
 
   // TELEGRAM IS ARCHIVED — see docs/telegram.md. The adapter is at
   // archive/telegram/telegram.js, unwired, and nothing is started for it here.

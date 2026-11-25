@@ -71,6 +71,7 @@ const BASELINE = Object.freeze({
   xolook: { address: 13, reply: 13 },
   xoact: { address: 13, method: 13, args: 13 },
   vmlogin: { name: 1, key: 1 },
+  enginesignin: { member: 22, engine: 22, action: 22, reply: 22 },
 });
 
 /** @param {import('../src/fleet/protocol/intents.js').ParamSpec} ps */

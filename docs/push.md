@@ -35,6 +35,7 @@ and nowhere else, including here.
 | `session.rc-online` | ✅ | it is now drivable from the phone that just buzzed |
 | `session.ready` | ✅ for a job handed over (a session started from a profile), and for any session on a temporary machine; ❌ otherwise | back at its own prompt after working. For a profile it is the "done" both beta testers asked for; on a temporary machine it is a bill still running, and the text says so. A turn in a conversation somebody is driving by hand is recorded on the ring and not pushed, because a buzz per turn is how the one that matters gets switched off |
 | `session.started` | ❌ | you started it |
+| `engine.signin` | ✅ to the custodians of the member it is about, on their own phones; ❌ for a cancel | a box says an engine sign-in on it ended: approved, ran out, failed, lost to a restart, signed out, or found by a session to work no longer ([`engines.md`](engines.md), "Signing in on the machine"). The title is *Debbie’s Codex sign-in*, the body one sentence the coordinator writes, naming the member, the engine and the machine. `data` carries `event`, `hostId`, `member`, `engine` and `state`. Never the page or the code, which no event carries. Not written to the ring. A cancel buzzes nobody: whoever cancelled is looking at it |
 
 **Transitions, never states.** A session parked at a prompt for an hour is one
 notification, not 180. A phone that cries wolf gets its notifications turned

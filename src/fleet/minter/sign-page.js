@@ -394,6 +394,9 @@ var SIGNER = {};
     var op = e && e.op;
     if (op === 'grant') return by + ' approved a machine';
     if (op === 'revoke') return by + ' removed a machine';
+    // AN ADDRESS THAT MAY MANAGE THIS VAULT, released by an org admin: it
+    // is nobody's until somebody signs in under it, and then it is theirs.
+    if (op === 'release') return by + ' released the address ' + String((e && e.name) || '') + ' to whoever signs in under it next';
     var what = S.itemLabel(String((e && e.name) || '')) || 'something';
     if (op === 'put' || op === 'connect') return by + ' kept ' + what;
     if (op === 'forget') return by + ' removed ' + what;
@@ -706,6 +709,7 @@ const SIGN_MAIN = String.raw`
     if (custody && custody.member && (arr(custody.custodians).length || arr(custody.managers).length)) box.appendChild(managersRow(custody));
     if (view && view.kind === 'agent') box.appendChild(custodiansRow(orgMember(view.id)));
     if (view && view.kind !== 'agent' && addedBy(view.id).indexOf(device && device.email) >= 0) box.appendChild(addedRow());
+    if (!view && org && org.you && org.you.admin === true) box.appendChild(releaseRow());
     drawTeam();
     await drawMachines();
   }
@@ -1188,8 +1192,12 @@ const SIGN_MAIN = String.raw`
   }
 
   function machineRow(name, hash, key, grant) {
+    // WHO APPROVED IT is said when that was a custodian and not the vault's
+    // own person: the vault keeps it on the approval, so it is still said
+    // after the line in "What they changed" has scrolled away.
+    var approved = grant && typeof grant.by === 'string' && grant.by ? 'Approved by ' + (device && grant.by === device.email ? 'you' : grant.by) : 'Approved';
     var state = !grant ? 'Not approved. Fingerprint ' + S.fingerprint(hash) + '.'
-      : (grant.only && grant.only.length ? 'Approved for ' + grant.only.map(S.itemLabel).join(', ') + ' only.' : 'Approved to hold ' + owner() + ' credentials.') + ' Fingerprint ' + S.fingerprint(hash) + '.' + (key ? '' : ' Not enrolled in this fleet any more.');
+      : (grant.only && grant.only.length ? approved + ' for ' + grant.only.map(S.itemLabel).join(', ') + ' only.' : approved + ' to hold ' + owner() + ' credentials.') + ' Fingerprint ' + S.fingerprint(hash) + '.' + (key ? '' : ' Not enrolled in this fleet any more.');
     var r = row(name, state, Boolean(grant));
     if (grant) {
       button(r.actions, 'Remove', null, function () {
@@ -1526,6 +1534,50 @@ const SIGN_MAIN = String.raw`
       change(r, 'Adding ' + a + '.', function () { return vaultAsk('custodian', { member: id, address: a }).then(function (t) { return t.text; }); });
     });
     r.step.appendChild(form);
+    return r.el;
+  }
+
+  // AN ADDRESS, RELEASED FROM THE GITHUB ACCOUNT IT BELONGS TO. An address is
+  // the first account's that listed a key under it, for good, so somebody
+  // who signs in to GitHub as another account now is refused until an org
+  // admin says the address is free. Drawn only for an org admin, on their own
+  // vault (C-2): the vault refuses it from anybody else. Asked once more on
+  // the row, with what goes, because nothing here gives it back.
+  function releaseRow() {
+    var r = row('Release an address', 'An address belongs to the first GitHub account that signed in under it. Release one when its person signs in to GitHub as a different account now, or the address is somebody else’s.', false);
+    r.step.hidden = false;
+    var form = el('form', 'step');
+    form.noValidate = true;
+    var label = el('label', 'lede', 'The fleet address to release');
+    var address = field('The fleet address to release', 'email');
+    address.id = 'release-address';
+    address.placeholder = 'name@example.com';
+    label.htmlFor = address.id;
+    form.appendChild(label);
+    form.appendChild(address);
+    var go = el('button', null, 'Release address');
+    go.type = 'submit';
+    form.appendChild(go);
+    var sure = el('div', 'step');
+    sure.hidden = true;
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var a = address.value.trim().toLowerCase();
+      if (!a) { note(r, 'Type the address to release first.', true); return; }
+      note(r, '');
+      sure.textContent = '';
+      sure.hidden = false;
+      sure.appendChild(el('p', null, 'Release ' + a + '? Its signing keys go, and machines approved under it stop being given its credentials. Whoever signs in under it next holds it, with whatever the organization gives that address. This page cannot give it back.'));
+      var acts = el('div', 'actions');
+      button(acts, 'Release ' + a, 'primary', function () {
+        sure.hidden = true;
+        change(r, 'Releasing ' + a + '.', function () { return vaultAsk('releaseaddress', { address: a }).then(function (t) { return t.text; }); });
+      });
+      button(acts, 'Keep it as it is', null, function () { sure.hidden = true; });
+      sure.appendChild(acts);
+    });
+    r.step.appendChild(form);
+    r.step.appendChild(sure);
     return r.el;
   }
 

@@ -234,11 +234,24 @@ ticket it was started with and then takes sessions like any machine.
 Sessions inside it run as plain panes: the container is the sandbox, and
 there is not a second one inside the first.
 
+**The hub inside counts its sessions against the machine's own memory
+limit.** A hub takes sessions while there is memory for them, and what a
+container reads as available is the box's: allowed 8 GB on a box with 60
+free, it would have taken sixteen sessions into the eight, and the kernel
+ends a container that passes its limit, with every session in it. So what
+is available is the less of what the box has and what the hub's cgroup
+still allows it (`src/core/cgroup-memory.js`, cgroup version 2), and at the
+limit a session is refused for memory in words, as on any full box. This
+holds for any hub under a limit, a unit's `MemoryMax` included. The load
+it reads is still the box's, and what its sidecar reports as its memory
+is too.
+
 **Not on a box that keeps its sessions behind an egress allowlist.** A
 machine dials the fleet itself, and its sessions reach what it reaches, so a
 container made there would be one that is not behind the list. Such a box
-refuses to make one and says why. Putting a machine behind the list is not
-built.
+refuses to make one and says why, and it neither builds the machine image
+nor offers it: an image there would be a button for something every press of
+is refused. Putting a machine behind the list is not built.
 
 It is a temporary machine like any other, so the rules for one hold with no
 new code: **it holds its owner's sign-in only**, a member is never started
@@ -266,9 +279,13 @@ itself. A packaged box has `lib/` with everything bundled in and no `src/`
 but the web pages; a checkout has `src/` and `node_modules`, and an `apps/`
 and a `.git` that have no business in an image. The hub copies the parts
 that exist into a directory of its own and builds from that
-(`stageMachineContext`). The image's tag is made from the files a host runs
-from, so a release that changed is another image, and the one before it is
-removed once no machine uses it.
+(`stageMachineContext`). The image's tag is made from the bytes of the
+files a host runs from, so a release that changed is another image, and the
+one before it is removed once no machine uses it. It is the bytes and not
+each file's size and time, because a release has no times: the packager
+stamps every file 2020, and a fix that kept a file's length would have kept
+the tag, and the old host in every machine. The same bytes unpacked again
+are the same image, and nothing is rebuilt.
 
 ### The same image is the template a provider needs
 
@@ -317,9 +334,17 @@ behind the hub's token like every route there.
   join file a VM has, by a container that lives just long enough to read it
   from standard input. So it is in no command line, where every user of
   the box could read it, and in no environment, which Podman keeps a record
-  of. The machine then starts with only the coordinator's address.
-- **Extend** adds minutes to its end, as on a hypervisor, and never further
-  off than the longest a machine is made for. **End** stops it and removes
+  of. The machine then starts with only the coordinator's address. A hub
+  that stopped between those two steps leaves a volume with an unspent
+  ticket in it and no container, so each look at the machines also lists
+  the volumes and removes one that is a machine's by its name and that no
+  container has. It asks Podman without forcing, and Podman refuses a
+  volume a container has; the volume of a machine being made at that
+  moment is left alone.
+- **Extend** adds minutes to its end, as on a hypervisor, and never past
+  the longest a machine lives counted from when it was made, so asking
+  again and again does not keep one, and its place on the box, for ever. At
+  that limit more time is refused in words. **End** stops it and removes
   it with its volume. Both are its owner's alone: to anybody else the
   machine is not there.
 - **Its timer is the box's.** The hub looks once a minute while it has a
@@ -329,6 +354,19 @@ behind the hub's token like every route there.
   ends a machine by its labels, and a machine whose container stopped by
   itself (its sidecar ended, or the box restarted) is cleared away with
   its volume.
+- **Why one stopped is kept, for an hour.** A machine's log goes with its
+  container, and it is the one place the machine said why. So before the
+  hub removes one that stopped by itself it reads the last twenty lines of
+  that log, in the order they were printed, and writes them to its own
+  log. The last line that says something is kept for an hour and shown on
+  its owner's place for this box, where that place says why it has no
+  image, as *"This machine found vm-… stopped 12 minutes ago and removed
+  it with its disk. Its log ends: …"*. Nobody else is shown it. Anything
+  in those lines that looks like a ticket or a token is withheld before
+  they are logged or kept, and so is any long unbroken run of a token's
+  letters, which costs a long path or host name too. A log Podman could
+  not read, or an empty one, is said as that. A machine the box ended, on
+  its owner's word or when its time was up, is not said: its owner knows.
 - **Asked first, by name.** For more time, an end or a sign-in, this
   driver is asked before a hypervisor's: the hub is on the box and answers
   at once whether a machine is its own, where a pool that is down would
@@ -367,14 +405,29 @@ what Podman is asked and what the fleet then says, and nothing about what
 Podman does.
 
 So CI runs the real one (`machine-image.yml`, `scripts/machine-smoke.mjs`),
-through the hub's own code: it builds the image from the checkout, checks
+through the hub's own code, twice: it builds the image from a checkout, and
+from a packaged release unpacked as a box has one, which are the two shapes
+a host comes in. Each time it checks the host in the image is that shape and
 that a start with nothing to join is refused in words, makes a machine with
 a ticket and a fleet that does not exist (`https://fleet.invalid`), reads in
 its log that the hub inside started and the sidecar tried to enrol, then
-lists it, gives it more time and ends it, and checks nothing is left. That
-run has no memory, processor or process limit on the machine, because a CI
-job's user has no cgroup controllers of its own; that Podman honours the
-limits a box passes is not checked anywhere.
+lists it, gives it more time and ends it, and checks nothing is left. Then
+it makes another and stops its container under the hub, and checks the hub
+removes it, says how its log ended, and removes a volume no machine has.
+It runs when anything the image is built from changes, the host's own code
+included. It built from a checkout only, and ran only when the image's own
+directory changed, which is how a path that was wrong only in a release
+(the SessionStart hook's) was never seen here.
+
+That run has no memory, processor or process limit on the machine, because
+a CI job's user has no cgroup controllers of its own; that Podman honours
+the limits a box passes is not checked anywhere, and neither is the hub
+inside refusing a session at its container's limit, which the tests read
+from a stand-in for the cgroup's files (`test/cgroup-memory.test.js`).
+
+**The release leg, the stopped machine and the stray volume in that run
+were written without a Podman to run them on, and have not run until CI
+runs them.**
 
 **No machine has been made on a real box, and none has joined a fleet.**
 What is left unproven is the last step: a machine enrolling with a real
@@ -413,7 +466,9 @@ ticket sits in its boot data in the same way.
   your machines*, never called rented and never said to be readable by
   anybody else, with why it offers no image yet while it builds one, and
   with the line that a network, a lab, a restart, a resize and a console
-  need a hypervisor.
+  need a hypervisor. The same line says, for an hour, that a machine of
+  yours there stopped by itself and how its log ended; neither phone
+  changed for it.
 - **The signing page**: the same two items. A box of your own has no item:
   there is nothing to keep.
 - **The API**: `GET /api/hosts` marks a place, an image and a machine with
@@ -455,14 +510,17 @@ at the box's next look), the three new lines in `test/mcp.test.js` and
 For a machine on a box of your own: `test/machines.test.js` (the hub: the
 build from either shape of release, in the background and never waited
 for; the ticket into the volume from standard input, in no command line
-and no environment; the cap; the
-box's clock; more time and end; what is refused in words; the API with its
-token), `test/own-pools.test.js` (the driver over the real hub routes: off
-unless named, a place per approved person, the image offered once built,
-the sign-in sealed to the machine's key and to no other, a hub that cannot
-be asked, and its place behind the one seam), `test/machine-image.test.js`
+and no environment; the cap; the box's clock; more time and end; a volume
+a making left behind; a machine that stopped by itself and how its log
+ended, with no ticket or token in what is kept; what is refused in words;
+the API with its token), `test/own-pools.test.js` (the driver over the
+real hub routes: off unless named, a place per approved person, the image
+offered once built, the sign-in sealed to the machine's key and to no
+other, a stopped machine said on its owner's place and nobody else's, a
+hub that cannot be asked, and its place behind the one seam), `test/machine-image.test.js`
 (the entrypoint run for real against stand-ins for the hub and the
 sidecar), the fourth test in `test/sandbox-coordinator.test.js` (marked
 `own`, named for the box, why it has no image yet, retired at the box's
 next look and not when the box could not look), and the on-box case in
-`test/mcp.test.js`.
+`test/mcp.test.js`. And `test/cgroup-memory.test.js` for the memory a hub
+under a limit may still take.

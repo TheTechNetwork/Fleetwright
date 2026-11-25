@@ -13,7 +13,15 @@
 // change (more time is asked for), so that is in `machines.json` in the
 // hub's state. Either alone is enough to end a machine on time: a container
 // the file does not know ends when its labels say, and a name in the file
-// with no container is dropped.
+// with no container is dropped. A volume that is a machine's by its name
+// and has no container is one a making left behind, and is removed.
+//
+// And why a machine ended, when nobody ended it: one whose container had
+// stopped is removed with its volume, and its log would go with it, which is
+// the one place it said why. So the end of that log is read first, with
+// anything that looks like a credential taken out, written to this hub's own
+// log, and its last line kept for an hour in `machines-ended.json` for its
+// owner's list to say.
 //
 // THE TICKET NEVER TOUCHES A COMMAND LINE OR AN ENVIRONMENT. An argument is
 // readable by every user of the box for as long as the process lives, and a
@@ -34,7 +42,7 @@
 // starts one with a real one (scripts/machine-smoke.mjs).
 
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
 import { podmanAsync, podmanAvailable } from './podman.js';
@@ -42,17 +50,39 @@ import { usernsArgs } from './sandbox-userns.js';
 
 const TICKET_RE = /^fwt_([0-9a-f]{12})_[0-9a-f]{48}$/;
 const NAME_RE = /^vm-[0-9a-f]{12}$/;
+/** A machine's volume, by the name `machineNames` gives one. */
+const VOLUME_RE = /^fwm-(vm-[0-9a-f]{12})-state$/;
 /** The fewest and the most minutes a machine is made or extended for, as on a hypervisor. */
 export const MACHINE_MIN_MINUTES = 5;
 export const MACHINE_MAX_MINUTES = 350;
 const DEFAULT_MINUTES = 60;
 const BUILD_TIMEOUT_MS = 20 * 60_000;
+/** How long the reason a machine ended by itself is kept for its owner's list: as long as a machine lives unless said. */
+const ENDED_KEPT_MS = 60 * 60_000;
+/** How many such reasons are kept at once, the oldest dropped first. */
+const ENDED_KEPT = 20;
+/** How much of a stopped machine's log is read, and how much of one line of it goes to this hub's log. */
+const LOG_LINES = 20;
+const LOG_LINE_CHARS = 240;
+/** How much of its last line reaches a screen. The whole sentence has 200 characters there (own-pools.js, and the coordinator after it). */
+const LAST_LINE_CHARS = 95;
+/** What the entrypoint says as it ends (sandbox/machine/entrypoint), which is true of every machine that stopped and so is no reason. */
+const ENTRYPOINT_ENDING = /^fleetwright-machine: the sidecar ended with status \d+, so this machine is ending$/;
 /** What marks a container as a machine of this fleet's, and whose. */
 export const MACHINE_LABEL = 'fleetwright.machine';
 /** What marks an image as one this builds, so an old one can be found and removed. */
 const IMAGE_LABEL = 'fleetwright.machine-image';
 /** What the image's one image is called on a screen. */
 export const MACHINE_IMAGE_NAME = 'Linux, with the fleet';
+
+/**
+ * Why a box behind an egress allowlist makes no machines, said wherever one
+ * is asked after: the refusal, and the image's own state, so the image is
+ * neither built nor offered on a box where every request for one would be
+ * refused. It was built and offered there, and then refused, which is a
+ * button for something that does not exist.
+ */
+const BEHIND_ALLOWLIST = 'This machine keeps its sessions behind an egress allowlist, and a machine made on it would not be behind one. So none is made here.';
 /** What of a release a host runs from. Whichever of these a box has is copied in. */
 const RELEASE_PARTS = Object.freeze(['package.json', 'openapi.json', 'bin', 'lib', 'src', 'node_modules']);
 
@@ -84,16 +114,77 @@ function line(/** @type {unknown} */ v) {
 }
 
 /**
- * What identifies the release this box runs, as a short tag: every file a
- * host runs from, by its path, size and time. A checkout that pulled and a
- * release that was replaced both change it, and the image is built again;
- * `node_modules` is named and not walked, since a release that changed its
- * dependencies changed its `package.json` or its bundle.
+ * A machine's own words with anything that looks like a credential taken
+ * out, before they are kept, logged or shown. Its log is its hub's and its
+ * sidecar's, and neither prints one on purpose, but a log is whatever a
+ * program said on its way down. A ticket and the fleet's other tokens by
+ * their shape, and any long unbroken run of a token's alphabet, as a VM's
+ * report of its own boot withholds them (pve-pools.js). A long path or host
+ * name goes the same way, which is the price of not listing shapes.
+ *
+ * @param {string} text
+ */
+function withheld(text) {
+  return text
+    .replace(/\bfwt_[A-Za-z0-9_-]+/g, '[ticket]')
+    .replace(/\b(?:fw[a-z]_|sk-ant-)[A-Za-z0-9._~+/=-]+/g, '[removed]')
+    .replace(/[A-Za-z0-9_+/=.~-]{32,}/g, '[removed]');
+}
+
+/**
+ * What its owner's list says of a machine that ended by itself, as one
+ * sentence that fits whole where a place's problem is drawn. Only what this
+ * box knows: it found the container stopped and removed it, and how its log
+ * ended. Why it stopped is in that line or it is not known.
+ *
+ * @param {{ name: string, at: number, said: string|null }} e  `said` is null when the log could not be read, and empty when it was empty
+ * @param {number} now
+ */
+function endedText(e, now) {
+  const minutes = Math.max(0, Math.round((now - e.at) / 60_000));
+  const found = `This machine found ${e.name} stopped ${minutes < 1 ? 'just now' : minutes === 1 ? 'a minute ago' : `${minutes} minutes ago`} and removed it with its disk.`;
+  if (e.said === null) return `${found} Podman could not read its log.`;
+  return e.said ? `${found} Its log ends: ${e.said}` : `${found} Its log was empty.`;
+}
+
+/**
+ * How new a file may be and still have its tag kept. A file's times are
+ * written on the kernel's coarse clock, so one changed twice inside a tick
+ * shows the same times for both; a tag is kept only once every file is older
+ * than this, when a later change cannot hide in the same tick.
+ */
+const SETTLED_MS = 2000;
+/** The tag last worked out for a release, and what its files looked like then. @type {Map<string, { seen: string, tag: string }>} */
+const tags = new Map();
+
+/**
+ * What identifies the release this box runs, as a short tag: THE BYTES of
+ * every file a host runs from, by its path. A checkout that pulled and a
+ * release that was replaced both change it, and the image is built again.
+ *
+ * IT WAS EACH FILE'S PATH, SIZE AND TIME, and a release has no times: the
+ * packager stamps every file 2020 so that two builds of one commit are the
+ * same bytes (tools/build-host-package.mjs). So a fix that kept a file's
+ * length kept the tag, and machines went on being made from the image with
+ * the old host in it. The same bytes are now the same image whenever they
+ * were unpacked, and different bytes never are.
+ *
+ * WORKED OUT ONCE AND KEPT, because this is asked at every look at the
+ * machines and a checkout's `src/` is megabytes. What says a kept tag is
+ * stale is each file's size, both its times and its inode: the time a file
+ * was last changed in any way is the kernel's own and nothing unpacking a
+ * release can set, so a file rewritten at the same length with its old time
+ * put back still shows.
+ *
+ * `node_modules` is not walked. What npm installed there is listed in its
+ * own `.package-lock.json`, and that file's bytes stand for the directory; a
+ * release has no `node_modules`, since everything is in its bundle.
  *
  * @param {string} installDir
  */
 export function releaseTag(installDir) {
-  const h = createHash('sha256');
+  /** @type {Array<{ rel: string, at: string, st: import('node:fs').Stats }>} */
+  const files = [];
   /** @param {string} rel */
   const walk = (rel) => {
     const at = path.join(installDir, rel);
@@ -103,15 +194,39 @@ export function releaseTag(installDir) {
     } catch {
       return;
     }
-    if (st.isDirectory() && rel !== 'node_modules') {
+    if (rel === 'node_modules') {
+      const lock = path.join(at, '.package-lock.json');
+      try {
+        files.push({ rel: path.join(rel, '.package-lock.json'), at: lock, st: statSync(lock) });
+      } catch {
+        files.push({ rel, at: '', st });
+      }
+      return;
+    }
+    if (st.isDirectory()) {
       for (const n of readdirSync(at).sort()) walk(path.join(rel, n));
       return;
     }
-    h.update(`${rel}\0${st.size}\0${Math.floor(st.mtimeMs)}\n`);
+    files.push({ rel, at, st });
   };
   for (const part of RELEASE_PARTS) walk(part);
   walk(path.join('sandbox', 'machine'));
-  return h.digest('hex').slice(0, 12);
+  const seen = files.map((f) => `${f.rel}\0${f.st.size}\0${f.st.mtimeMs}\0${f.st.ctimeMs}\0${f.st.ino}`).join('\n');
+  const kept = tags.get(installDir);
+  if (kept?.seen === seen) return kept.tag;
+  const h = createHash('sha256');
+  for (const f of files) {
+    // A link is where it points, and anything else that is not a file is
+    // only its name: neither is read through.
+    const bytes = f.st.isSymbolicLink() ? Buffer.from(readlinkSync(f.at)) : f.st.isFile() ? readFileSync(f.at) : Buffer.alloc(0);
+    h.update(`${f.rel}\0${bytes.length}\0`);
+    h.update(bytes);
+  }
+  const tag = h.digest('hex').slice(0, 12);
+  const newest = Math.max(0, ...files.map((f) => Math.max(f.st.mtimeMs, f.st.ctimeMs)));
+  if (Date.now() - newest > SETTLED_MS) tags.set(installDir, { seen, tag });
+  else tags.delete(installDir);
+  return tag;
 }
 
 /**
@@ -174,6 +289,8 @@ export class Machines {
     this.timer = null;
     /** What is being made or changed, one at a time. @type {Promise<unknown>} */
     this.turn = Promise.resolve();
+    /** The machines being made this moment, whose volume has no container yet. @type {Set<string>} */
+    this.making = new Set();
   }
 
   /**
@@ -196,6 +313,98 @@ export class Machines {
    */
   get file() {
     return path.join(this.cfg.stateDir, 'machines.json');
+  }
+
+  /** Where the reasons machines ended by themselves are kept, for a while. */
+  get endedFile() {
+    return path.join(this.cfg.stateDir, 'machines-ended.json');
+  }
+
+  /**
+   * The machines that ended by themselves within the last hour, oldest first.
+   *
+   * @returns {Array<{ name: string, owner: string, at: number, said: string|null }>}
+   */
+  #ended() {
+    try {
+      const read = JSON.parse(readFileSync(this.endedFile, 'utf8'));
+      const now = this.now();
+      return (Array.isArray(read) ? read : [])
+        .filter((e) => NAME_RE.test(e?.name) && typeof e.owner === 'string' && Number.isFinite(e.at) && now - e.at < ENDED_KEPT_MS && (e.said === null || typeof e.said === 'string'))
+        .map((e) => ({ name: e.name, owner: e.owner, at: e.at, said: e.said }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** @param {Array<{ name: string, owner: string, at: number, said: string|null }>} ended */
+  #keepEnded(ended) {
+    mkdirSync(path.dirname(this.endedFile), { recursive: true });
+    writeFileSync(`${this.endedFile}.new`, `${JSON.stringify(ended.slice(-ENDED_KEPT))}\n`, { mode: 0o600 });
+    renameSync(`${this.endedFile}.new`, this.endedFile);
+  }
+
+  /**
+   * The end of a stopped machine's log, oldest line first, with anything
+   * that looks like a credential taken out. Null when Podman could not read it.
+   *
+   * WITH PODMAN'S OWN TIME ON EACH LINE, and put back in order by it. Podman
+   * hands back what a container printed and what it printed as errors
+   * apart, and the fleet's host prints its warnings as errors: read one after
+   * the other, the last line would be the last warning, however long before
+   * the end that was. The time is taken off again. A Podman that prints no
+   * time gives the lines as it gave them.
+   *
+   * @param {string} name
+   * @returns {Promise<string[]|null>}
+   */
+  async #lastWords(name) {
+    const r = await podmanAsync(this.cfg, ['logs', '--timestamps', '--tail', String(LOG_LINES), machineNames(name).container], { timeout: 30_000 });
+    if (r.status !== 0) return null;
+    /** @type {Array<{ at: string, text: string }>} */
+    const lines = [];
+    for (const stream of [r.stdout, r.stderr]) {
+      for (const l of String(stream || '').split('\n')) {
+        const m = /^(\d{4}-\d\d-\d\dT[\d:.,]+(?:Z|[+-]\d\d:?\d\d))\s(.*)$/.exec(l);
+        lines.push({ at: m ? m[1] : '', text: m ? m[2] : l });
+      }
+    }
+    return lines
+      .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+      .map((l) => withheld(l.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/[^\x20-\x7e’]/g, '')).trim().slice(0, LOG_LINE_CHARS))
+      .filter(Boolean)
+      .slice(-LOG_LINES);
+  }
+
+  /**
+   * Read how a stopped machine's log ended, before it is removed with it:
+   * into this hub's own log, and its last line kept for its owner's list.
+   *
+   * THE LAST LINE THAT SAYS SOMETHING. The entrypoint's own last line is
+   * that the sidecar ended, which is true of every machine that stopped; the
+   * line before it is the sidecar's, and is the reason where there is one.
+   * This hub's own time and level are taken off the front of a line, since a
+   * screen has 200 characters for the whole sentence.
+   *
+   * @param {{ name: string, owner: string }} c
+   */
+  async #noteEnded(c) {
+    const words = await this.#lastWords(c.name);
+    // TWO LOOKS CAN MEET THE SAME STOPPED CONTAINER (the minute's, and
+    // somebody asking). The first to read its log keeps what it read; the
+    // second may find the container already gone, and "could not read" must
+    // not be written over what was read.
+    const ended = this.#ended();
+    if (ended.some((e) => e.name === c.name)) return;
+    if (words === null) log.warn(`machines: ${c.name} had stopped, and Podman could not read its log before it was removed`);
+    else if (!words.length) log.warn(`machines: ${c.name} had stopped, with nothing in its log`);
+    else {
+      log.warn(`machines: ${c.name} had stopped. Its log ended:`);
+      for (const l of words) log.warn(`machines: ${c.name} | ${l}`);
+    }
+    const last = words === null ? null : ([...words].reverse().find((l) => !ENTRYPOINT_ENDING.test(l)) ?? words.at(-1) ?? '').replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s+(?:DEBUG|INFO|WARN|ERROR)\s+/, '');
+    const said = last !== null && last.length > LAST_LINE_CHARS ? `${last.slice(0, LAST_LINE_CHARS - 3)}...` : last;
+    this.#keepEnded([...ended, { name: c.name, owner: c.owner, at: this.now(), said }]);
   }
 
   /** How many may run at once: `FLEETWRIGHT_MACHINE_MAX`, two unless set. */
@@ -254,6 +463,7 @@ export class Machines {
    * @returns {Promise<{ ready: boolean, building: boolean, problem: string|null }>}
    */
   async imageState() {
+    if (this.cfg.sandboxEgress === 'allowlist') return { ready: false, building: false, problem: BEHIND_ALLOWLIST };
     const image = machineImage(this.cfg);
     if (this.ready !== image) this.ready = (await podmanAsync(this.cfg, ['image', 'inspect', image], { timeout: 30_000 })).status === 0 ? image : null;
     if (this.ready === image) return { ready: true, building: false, problem: null };
@@ -271,7 +481,7 @@ export class Machines {
    */
   async prepare() {
     const state = await this.imageState();
-    if (state.ready || state.building) return state;
+    if (state.ready || state.building || this.cfg.sandboxEgress === 'allowlist') return state;
     const image = machineImage(this.cfg);
     if (this.failed?.image === image && this.now() - this.failed.at < 30 * 60_000) return state;
     void this.ensureImage().catch(() => {});
@@ -354,11 +564,47 @@ export class Machines {
   }
 
   /**
+   * Remove the volumes that are a machine's by their name and that no
+   * container has.
+   *
+   * A MACHINE'S VOLUME IS MADE BEFORE ITS CONTAINER, with the ticket in it
+   * (`#make`). A hub that stopped between the two left a volume holding an
+   * unspent ticket, and nothing ever looked for one: every removal here
+   * starts from a container. So each look at the machines also lists the
+   * volumes.
+   *
+   * NOT FORCED, AND NOT ONE BEING MADE. Podman refuses to remove a volume a
+   * container has, which is the check that matters and is Podman's own: a
+   * machine started since the containers were listed keeps its volume. The
+   * moment between the two steps of a making is the one where a volume is
+   * rightly alone, and that making says so in `making`. A Podman that
+   * cannot list them is left for the next look.
+   *
+   * @param {Array<{ name: string }>} containers  every machine's container, in any state
+   */
+  async #clearStrays(containers) {
+    const listed = await podmanAsync(this.cfg, ['volume', 'ls', '--format', '{{.Name}}'], { timeout: 30_000 });
+    if (listed.status !== 0) return;
+    const has = new Set(containers.map((c) => c.name));
+    for (const volume of String(listed.stdout || '').split('\n').map((l) => l.trim())) {
+      const name = VOLUME_RE.exec(volume)?.[1];
+      if (!name || has.has(name) || this.making.has(name)) continue;
+      const gone = await podmanAsync(this.cfg, ['volume', 'rm', volume], { timeout: 60_000 });
+      if (gone.status === 0) log.warn(`machines: removed ${volume}, the volume of a machine that was never started`);
+    }
+  }
+
+  /**
    * What machines this box has, after ending any whose time is up. The
    * whole answer the sidecar reports from.
    *
    * @param {{ prepare?: boolean }} [opts]  also start building the image if there is none
-   * @returns {Promise<{ ok: true, max: number, image: { name: string, ready: boolean, building: boolean, problem: string|null }, machines: Array<{ name: string, owner: string, state: string, until: number|null, madeAt: number|null }> } | { ok: false, text: string }>}
+   * `ended` is the machines that stopped by themselves in the last hour and
+   * were removed, each with a sentence for its owner on how its log ended.
+   * One this box ended, on its owner's word or when its time was up, is not
+   * among them: its owner knows why.
+   *
+   * @returns {Promise<{ ok: true, max: number, image: { name: string, ready: boolean, building: boolean, problem: string|null }, machines: Array<{ name: string, owner: string, state: string, until: number|null, madeAt: number|null }>, ended: Array<{ name: string, owner: string, at: number, text: string }> } | { ok: false, text: string }>}
    */
   async list({ prepare = false } = {}) {
     if (!podmanAvailable(this.cfg)) return { ok: false, text: 'Podman is not installed on this machine, and a machine here is a Podman container.' };
@@ -370,8 +616,6 @@ export class Machines {
     }
     const ends = this.#ends();
     const now = this.now();
-    /** @type {Record<string, { until: number }>} */
-    const kept = {};
     const machines = [];
     for (const c of all) {
       // WHEN IT ENDS: what this box last wrote, or what it was made with.
@@ -380,16 +624,29 @@ export class Machines {
       // box restarted): either way it is over, and it goes with its volume.
       const over = (until !== null && until <= now) || c.state === 'over';
       if (over) {
+        // ITS LOG GOES WITH ITS CONTAINER, and is the one place it said why
+        // it stopped. Read first, for a machine nobody ended.
+        if (c.state === 'over') await this.#noteEnded(c);
         await this.#remove(c.name);
         log.info(`machines: ended ${c.name} (${until !== null && until <= now ? 'its time was up' : 'its container had stopped'})`);
         continue;
       }
-      if (until !== null) kept[c.name] = { until };
       machines.push({ name: c.name, owner: c.owner, state: c.state === 'running' ? 'Running' : c.state === 'paused' ? 'Paused' : 'Starting', until, madeAt: c.madeAt });
     }
-    if (JSON.stringify(kept) !== JSON.stringify(ends)) this.#keep(kept);
+    // WHAT IS WRITTEN BACK IS ONLY WHAT IS GONE, read again now. A removal
+    // above is awaited, and this runs beside the one-at-a-time turn (the
+    // minute's timer, and anybody asking for the list), so writing the end
+    // times as they were read at the top put back an end somebody had just
+    // extended: they were told two more hours, and the machine went in ten
+    // minutes with its disk.
+    await this.#clearStrays(all);
+    const live = new Set(machines.map((m) => m.name));
+    const fresh = this.#ends();
+    const still = Object.fromEntries(Object.entries(fresh).filter(([n]) => live.has(n)));
+    if (Object.keys(still).length !== Object.keys(fresh).length) this.#keep(still);
     const image = await (prepare ? this.prepare() : this.imageState());
-    return { ok: true, max: this.max, image: { name: MACHINE_IMAGE_NAME, ...image }, machines };
+    const ended = this.#ended().map((e) => ({ name: e.name, owner: e.owner, at: e.at, text: endedText(e, now) }));
+    return { ok: true, max: this.max, image: { name: MACHINE_IMAGE_NAME, ...image }, machines, ended };
   }
 
   /**
@@ -416,7 +673,7 @@ export class Machines {
     // A BOX THAT KEEPS ITS SESSIONS BEHIND AN ALLOWLIST would be making a
     // container that is not behind it: a machine dials the fleet itself, and
     // its sessions reach what it reaches. Refused, not quietly let out.
-    if (cfg.sandboxEgress === 'allowlist') return { ok: false, text: 'This machine keeps its sessions behind an egress allowlist, and a machine made on it would not be behind one. So none is made here.' };
+    if (cfg.sandboxEgress === 'allowlist') return { ok: false, text: BEHIND_ALLOWLIST };
     const name = `vm-${m[1]}`;
     const life = Math.max(MACHINE_MIN_MINUTES, Math.min(MACHINE_MAX_MINUTES, Number(minutes) || DEFAULT_MINUTES));
     const listed = await this.list();
@@ -431,6 +688,25 @@ export class Machines {
     // holding a request open. It is started, and they are told.
     const image = await this.prepare();
     if (!image.ready) return { ok: false, text: image.problem ?? 'This machine has no machine image yet. Ask again in a few minutes.' };
+    // FROM HERE ITS VOLUME EXISTS BEFORE ITS CONTAINER DOES, and a look at
+    // the machines must not take it for one left behind (`#clearStrays`).
+    this.making.add(name);
+    try {
+      return await this.#start({ name, who, ticket, coordinator, life });
+    } finally {
+      this.making.delete(name);
+    }
+  }
+
+  /**
+   * The two steps of a making: the ticket into the machine's volume, then
+   * the machine.
+   *
+   * @param {{ name: string, who: string, ticket: string, coordinator: string, life: number }} m
+   * @returns {Promise<{ ok: boolean, text: string, name?: string, minutes?: number, until?: number }>}
+   */
+  async #start({ name, who, ticket, coordinator, life }) {
+    const cfg = this.cfg;
     const now = this.now();
     const until = now + life * 60_000;
     const { container, volume } = machineNames(name);
@@ -516,9 +792,16 @@ export class Machines {
     }
     if (action === 'extend') {
       const more = Math.max(MACHINE_MIN_MINUTES, Math.min(MACHINE_MAX_MINUTES, Number(minutes) || DEFAULT_MINUTES));
-      // From when it would have ended, as on a hypervisor, and never further
-      // off than the longest a machine is made for.
-      const until = Math.min(this.now() + MACHINE_MAX_MINUTES * 60_000, Math.max(found.until ?? 0, this.now()) + more * 60_000);
+      // From when it would have ended, as on a hypervisor, and NEVER PAST
+      // THE LONGEST A MACHINE LIVES, COUNTED FROM WHEN IT WAS MADE. It was
+      // counted from now, so asking again every few hours kept a machine for
+      // ever, and with a box's few places taken that way the next person was
+      // refused one. The hypervisor's driver has always counted from the
+      // making (xo-pools.js), and this said "as on a hypervisor".
+      if (!found.madeAt) return { ok: false, text: `${name} does not say when it was made, so it cannot be given longer.` };
+      const was = found.until ?? 0;
+      const until = Math.min(found.madeAt + MACHINE_MAX_MINUTES * 60_000, Math.max(was, this.now()) + more * 60_000);
+      if (until <= was) return { ok: false, text: `${name} already runs to the longest a machine can, ${MACHINE_MAX_MINUTES} minutes from when it was made.` };
       this.#keep({ ...this.#ends(), [found.name]: { until } });
       return { ok: true, minutes: more, until, text: `${name} now ends ${Math.max(1, Math.round((until - this.now()) / 60_000))} minutes from now.` };
     }
