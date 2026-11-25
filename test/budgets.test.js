@@ -72,6 +72,23 @@ test('a session that reports no dollars, or says its dollars are not all of them
   for (const junk of [{ usd: -4 }, { usd: 'lots' }, { usd: Infinity }, 'x', 7]) assert.equal(countSpend(startCounting(newSpend(NOV), key, NOV), key, junk, NOV).usd, 0);
 });
 
+test('one report adds at most a hundred dollars for one session, and the row says the rest was not counted', () => {
+  // A box's word is all there is for what a session cost. One report of
+  // $99,999 was counted whole, and at a budget that refuses it locked the
+  // member's manager out.
+  let row = countSpend(startCounting(newSpend(NOV), key, NOV), key, said(99_999), NOV);
+  assert.deepEqual([row.usd, row.capped], [100, [key]]);
+  assert.equal(spendWords(row, 50), 'At least $100.00 of $50.00 this month, at API prices as each session counted it. One session reported more than $100.00 spent between two reports. The fleet counts at most that much from one report, so the rest was not counted.');
+  // What was left out is left out once: the next report counts from the figure the box gave.
+  row = countSpend(row, key, said(100_004), NOV);
+  assert.deepEqual([row.usd, row.capped], [105, [key]]);
+  // A hundred dollars exactly is counted whole, and nothing is said about it.
+  assert.deepEqual([countSpend(startCounting(newSpend(NOV), key, NOV), key, said(100), NOV).capped], [undefined]);
+  // It is the month's, and it reads back.
+  assert.deepEqual(readSpend(JSON.parse(JSON.stringify(row)))?.capped, [key]);
+  assert.equal(countSpend(row, key, said(100_005), DEC).capped, undefined);
+});
+
 test('a member’s row keeps the last figure of sixty sessions and reads back only what it wrote', () => {
   let row = newSpend(NOV);
   for (let i = 0; i < MAX_SESSIONS_SEEN + 5; i++) row = startCounting(row, `deb132\ncc-${i}`, NOV);

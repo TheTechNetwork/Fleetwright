@@ -29,6 +29,7 @@ import { MEMBERS_PREFIX, membersRoute } from '../../src/fleet/coordinator/org-me
 import { TASKS_PREFIX, tasksRoute } from '../../src/fleet/coordinator/org-tasks.js';
 import { routingRoute } from '../../src/fleet/coordinator/org-routing.js';
 import { SPEND_PREFIX, APPROVALS_PREFIX, budgetsRoute } from '../../src/fleet/coordinator/org-budgets.js';
+import { CUSTODY_PREFIX } from '../../src/fleet/coordinator/org-custody.js';
 import { callbackPage } from '../../src/fleet/coordinator/oauth.js';
 import { NOT_FRAMED } from './pages.js';
 import { identify } from '../../src/fleet/coordinator/identity.js';
@@ -234,6 +235,10 @@ export class Fleet {
         // What members have spent, the approvals a start waits on, and what a
         // budget does: only the rows that changed (org-budgets.js).
         this.#writeBudgets(),
+        // Who may start as each member, as the minter last signed it: one row
+        // a member under `custody:<id>`, and only when the list differs from
+        // the one held (org-custody.js).
+        this.#writeCustody(),
         // The fleet's routing record and the day's count of asks put to a
         // model, when either moved (org-routing.js).
         ...(this.core.routing.takeChange() ? [this.state.storage.put('routing', this.core.routing.serialise())] : []),
@@ -354,6 +359,13 @@ export class Fleet {
         spend: this.state.storage.list ? await this.state.storage.list({ prefix: SPEND_PREFIX }) : [],
         approvals: this.state.storage.list ? await this.state.storage.list({ prefix: APPROVALS_PREFIX }) : [],
         seq: await this.state.storage.get('approvalSeq'),
+      });
+      // One row a member's custodians, and when the list was last heard to
+      // change. With no time kept nothing was ever heard, which is not the
+      // same as a list that names nobody (org-custody.js).
+      this.core.custody.restore({
+        at: await this.state.storage.get('custodyAt'),
+        members: this.state.storage.list ? await this.state.storage.list({ prefix: CUSTODY_PREFIX }) : [],
       });
       this.core.restoreRunnerStarts(await this.state.storage.get('runnerStarts'));
       this.core.restoreStandby(await this.state.storage.get('vmStandby'));
@@ -1882,6 +1894,16 @@ export class Fleet {
       ...del.map((key) => this.state.storage.delete?.(key)),
       ...(settings === null ? [] : [this.state.storage.put('budgetSettings', settings)]),
       ...(seq === null ? [] : [this.state.storage.put('approvalSeq', seq)]),
+    ]);
+  }
+
+  /** The custody rows that changed, one key a member, and when the list did. As #writeMembers. */
+  async #writeCustody() {
+    const { put, del, at } = this.core.custody.takeChanges();
+    await Promise.all([
+      ...Object.entries(put).map(([key, may]) => this.state.storage.put(key, may)),
+      ...del.map((key) => this.state.storage.delete?.(key)),
+      ...(at === null ? [] : [this.state.storage.put('custodyAt', at)]),
     ]);
   }
 

@@ -37,6 +37,17 @@ export const APPROVAL_USE_MS = 60 * 60_000;
 export const MAX_APPROVAL_NOTE = 300;
 /** The share of a budget at which a member's managers are told it is nearly spent. */
 export const BUDGET_WARN_AT = 0.8;
+/**
+ * The most one report may add to a member's month for one session, in
+ * dollars. What a session has cost is its box's word and there is nothing to
+ * check it against, so a single report of $99,999 was counted whole and, at
+ * a budget that refuses, locked the member's own manager out. A box reports
+ * every half minute or so and a session does not spend this in that time. A
+ * box back from hours away can honestly report more: the rest is then left
+ * uncounted and the row says so, which is the same "at least" it says about
+ * a session that reported no cost.
+ */
+export const MAX_USD_PER_REPORT = 100;
 
 const WORK_TYPE_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
@@ -52,6 +63,7 @@ export const monthOf = (/** @type {number} */ t) => new Date(t).toISOString().sl
  * @property {string} month                  'YYYY-MM', UTC
  * @property {number} usd                    what was seen being spent this month
  * @property {string[]} unknown              sessions this month whose cost is unknown, by key
+ * @property {string[]} [capped]             sessions this month that reported more at once than is counted (MAX_USD_PER_REPORT), by key
  * @property {Record<string, number>} seen   the last figure seen for each session, by key, newest last
  * @property {{ warn?: boolean, over?: boolean }} told  which of the month's two notices went out
  * @typedef {{ kind: 'over-budget'|'dangerous'|'risky-work'|'paid-api', text: string }} Reason
@@ -180,9 +192,25 @@ export function countSpend(row, key, spent, now) {
   if (usd === null) return unknown === r.unknown && r === row ? row : { ...r, unknown };
   // RESUMED, AND FIRST HEARD OF WITH A FIGURE ALREADY ON IT: nobody saw that
   // being spent, or when. It is where this session's counting starts.
-  const grew = last === UNSEEN ? 0 : usd >= last ? usd - last : usd;
+  const rose = last === UNSEEN ? 0 : usd >= last ? usd - last : usd;
   if (last === usd && unknown === r.unknown && r === row) return row;
-  return { ...r, usd: Math.round((r.usd + grew) * 10_000) / 10_000, unknown, seen: remember(r.seen, key, usd) };
+  // NO MORE THAN A REPORT MAY ADD (MAX_USD_PER_REPORT). The figure is kept
+  // as the box gave it, so the next report counts from there and the part
+  // left out is left out once.
+  const grew = Math.min(rose, MAX_USD_PER_REPORT);
+  const capped = rose > MAX_USD_PER_REPORT && !(r.capped ?? []).includes(key) ? [...(r.capped ?? []), key].slice(-MAX_SESSIONS_SEEN) : r.capped;
+  return { ...r, usd: Math.round((r.usd + grew) * 10_000) / 10_000, unknown, ...(capped ? { capped } : {}), seen: remember(r.seen, key, usd) };
+}
+
+/**
+ * How many of a member's sessions this month have a cost that is not all
+ * counted: ones that reported none, and ones that reported more at once
+ * than is counted. A session that is both is one session.
+ *
+ * @param {{ unknown: string[], capped?: string[] }|null|undefined} row
+ */
+export function uncounted(row) {
+  return row ? new Set([...row.unknown, ...(row.capped ?? [])]).size : 0;
 }
 
 /** Dollars as a person reads them. */
@@ -192,15 +220,19 @@ export const dollars = (/** @type {number} */ usd) => `$${(Math.round(usd * 100)
  * What a member has spent against its budget, as one sentence, the same on
  * every surface.
  *
- * @param {{ usd: number, unknown: string[] }|null} row @param {number|null|undefined} budget
+ * @param {{ usd: number, unknown: string[], capped?: string[] }|null} row @param {number|null|undefined} budget
  */
 export function spendWords(row, budget) {
   const usd = row?.usd ?? 0;
   const unknown = row?.unknown.length ?? 0;
-  const least = unknown ? 'At least ' : '';
+  const capped = row?.capped?.length ?? 0;
+  const least = unknown || capped ? 'At least ' : '';
   const of_ = typeof budget === 'number' ? ` of ${dollars(budget)}` : '';
-  const more = unknown ? ` ${unknown === 1 ? 'One session' : `${unknown} sessions`} reported no cost, so the real figure is higher by an amount nobody counted.` : '';
-  return `${least}${dollars(usd)}${of_} this month, at API prices as each session counted it.${more}`;
+  /** @param {number} n */
+  const sessions = (n) => (n === 1 ? 'One session' : `${n} sessions`);
+  const more = unknown ? ` ${sessions(unknown)} reported no cost, so the real figure is higher by an amount nobody counted.` : '';
+  const over = capped ? ` ${sessions(capped)} reported more than ${dollars(MAX_USD_PER_REPORT)} spent between two reports. The fleet counts at most that much from one report, so the rest was not counted.` : '';
+  return `${least}${dollars(usd)}${of_} this month, at API prices as each session counted it.${more}${over}`;
 }
 
 /** Is this member at or past its budget on what was counted? A member with no budget never is. */
@@ -360,6 +392,9 @@ export function readSpend(row) {
       if (k.length <= 300 && typeof v === 'number' && Number.isFinite(v) && (v >= 0 || v === UNSEEN)) seen[k] = v;
     }
   }
-  const unknown = (Array.isArray(row.unknown) ? row.unknown : []).filter((/** @type {unknown} */ k) => typeof k === 'string' && k.length <= 300).slice(-MAX_SESSIONS_SEEN);
-  return { month: row.month, usd, unknown, seen, told: { ...(row.told?.warn === true ? { warn: true } : {}), ...(row.told?.over === true ? { over: true } : {}) } };
+  /** A list of session keys, read as if a stranger wrote it. @param {unknown} list */
+  const keys = (list) => (Array.isArray(list) ? list : []).filter((/** @type {unknown} */ k) => typeof k === 'string' && k.length <= 300).slice(-MAX_SESSIONS_SEEN);
+  const unknown = keys(row.unknown);
+  const capped = keys(row.capped);
+  return { month: row.month, usd, unknown, ...(capped.length ? { capped } : {}), seen, told: { ...(row.told?.warn === true ? { warn: true } : {}), ...(row.told?.over === true ? { over: true } : {}) } };
 }

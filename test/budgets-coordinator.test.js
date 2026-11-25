@@ -42,6 +42,9 @@ function fleet() {
   const pushes = [];
   const core = new CoordinatorCore({ now, push: /** @type {any} */ ({ send: async (/** @type {any} */ devices, /** @type {any} */ m) => void pushes.push({ to: devices.map((/** @type {any} */ d) => String(d.actor).replace('fleet:', '')).sort(), title: m.title, body: m.body, data: m.data }) }) });
   core.org = org(now);
+  // Who may start as each agent, as the minter last signed it: everybody
+  // here, so what these tests refuse is refused for a budget or an approval.
+  core.memberCustody = new Map(['debbie', 'loose'].map((id) => [id, [admin.email, dana.email, sam.email]]));
   for (const who of [admin, dana, sam]) {
     core.devices.set(`dev-${who.email}`, { token: `t-${who.email}`, platform: 'ios', actor: `fleet:${who.email}`, clientId: `c-${who.email}` });
     core.clients.clients.set(`c-${who.email}`, /** @type {any} */ ({ id: `c-${who.email}`, admin: who.admin }));
@@ -361,7 +364,8 @@ test('a resumed session counts from the first figure heard, and a removed member
   assert.equal(f.spendOf('debbie').usd, 2.5);
   // WHICH MEMBER A SESSION IS, ON A RESUME, IS ITS BOX'S WORD. Sam's session,
   // which his box calls Debbie's, is his to resume and not hers to pay for:
-  // he could not have started as her.
+  // he could not have started as her: the minter lists Dana and Eli.
+  f.core.memberCustody = new Map([['debbie', [admin.email, dana.email]]]);
   f.core.registry.connect('sam-box', () => {}, { actsFor: sam.email });
   const sams = (/** @type {number} */ usd) => f.core.onHostMessage('sam-box', {
     kind: 'health',

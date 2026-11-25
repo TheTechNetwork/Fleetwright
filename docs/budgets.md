@@ -40,6 +40,20 @@ month**:
   the same reason a resume counts only when the person resuming could have
   started as that member: a person's own box may call a session of theirs
   any member's, and their resuming it then spends nobody else's budget.
+- **Only for somebody the minter lists as able to start as that member.** A
+  start is where counting begins, on the word of the box it went to, and
+  that can be a box of the starter's own. So the coordinator keeps the
+  minter's last list of who may start as whom, across a restart, and
+  refuses anybody not on it ([members.md](./members.md), "Starting as a
+  member"). A fleet whose minter has never been asked has no list. It then
+  cannot tell, and refuses a start as a member by anybody but an admin, in
+  words that say when to try again.
+- **One report adds at most $100 for one session.** What a session cost is
+  its box's word, with nothing to check it against. A session does not
+  spend that between two reports, which come every half minute or so. A box
+  back from hours away can honestly report more: the rest is left
+  uncounted, and the member's spend says "at least" and that a session
+  reported more at once than the fleet counts.
 - A figure that goes down is a new conversation in the same session, and
   counts from nothing again.
 - The month is the calendar month in UTC. At its turn every member's total
@@ -56,7 +70,8 @@ about. Unknown is never read as nothing, and never blocks a start: a budget
 is enforced on what was counted.
 
 One row a member (`spend:<id>`): the month, the total, and the last figure
-seen for at most 60 of its sessions.
+seen for at most 60 of its sessions. One row a member for who may start as
+it (`custody:<id>`), as the minter last signed it.
 
 ## The setting
 
@@ -174,7 +189,9 @@ person member themselves.
   as a member without a signature from somebody the minter lists
   ([members.md](./members.md)). A budget is a cost control, not custody.
 - **A box says what its sessions cost.** A box a member enrolled could
-  under-report. It can do that only for sessions on itself.
+  under-report. It can do that only for sessions on itself. A box could
+  over-report too, for a session somebody the minter lists started on it,
+  at most $100 a report.
 - **An approval is as strong as the credential that gives it.** The
   coordinator checks who is answering, not what they are holding. A program
   with a manager's credential that calls the route directly has approved.
@@ -183,12 +200,9 @@ person member themselves.
   report no price are not counted at all.
 - **A session already running goes on past the budget**, as above, and so
   does one that is resumed.
-- **Anybody in the fleet can cause an approval to be asked for.** Until the
-  minter has signed its list of who may start as whom, the coordinator does
-  not know that somebody may not start as a member, and leaves that refusal
-  to the box. Such a person's start is still looked at here, so the member's
-  managers can be asked about a start that the box would have refused
-  anyway. The same ask twice is one approval, so it is one notice.
+- **Anybody who may start as a member can cause an approval to be asked
+  for**, and that is whoever the minter lists, who need not manage the
+  member. The same ask twice is one approval, so it is one notice.
 - **`dangerous` reads what the start asks for.** A box whose own default is
   to skip permission prompts starts such a session with nothing in the
   request saying so, and that start is not asked about.
@@ -200,6 +214,8 @@ goes down, the month's turn, unknown cost; what needs approval; an
 approval's life), `test/budgets-coordinator.test.js` (spend counted from
 health frames, a start refused and then let through, each reason, who may
 answer, one use, the same ask twice, refuse mode, the routes and who sees
-what, the pushes, the Durable Object's rows), `test/budgets-mcp.test.js`
+what, the pushes, the Durable Object's rows),
+`test/members-coordinator.test.js` (the custody list kept across a rebuilt
+Durable Object, and the refusal while there is none), `test/budgets-mcp.test.js`
 (`fleet_budgets`, `fleet_approvals`, and that no tool answers one), and
 `test/budgets-in-apps.test.js`.

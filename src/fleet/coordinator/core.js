@@ -42,7 +42,8 @@ import { MEMBER_ID_RE, composeFirstMessage } from '../protocol/members.js';
 import { OrgTasks } from './org-tasks.js';
 import { OrgRouting } from './org-routing.js';
 import { OrgBudgets } from './org-budgets.js';
-import { approvalNeeded, approvalWords, spendWords, overBudget, dollars, withoutFigures, refusedWithoutFigures } from '../protocol/budgets.js';
+import { OrgCustody } from './org-custody.js';
+import { approvalNeeded, approvalWords, spendWords, overBudget, uncounted, dollars, withoutFigures, refusedWithoutFigures } from '../protocol/budgets.js';
 import { manages } from '../protocol/members.js';
 import { modeFor, decide as decideRoute, candidatesFor, routeWords, routeQuestion, readRouteAnswer, MAX_MODEL_CHOICES } from '../protocol/routing.js';
 import { GATE_PATTERNS } from '../../core/mask-pane.js';
@@ -681,14 +682,17 @@ export class CoordinatorCore {
     this.routeAskedAt = new Map();
     /**
      * Who may start a session as each member, as the minter last signed it
-     * for a box (#onHostKeys): member id → fleet addresses. READ, NEVER
-     * WRITTEN HERE: it is what lets this coordinator refuse first in a
-     * person's words, and a box checks the same list itself, signed, so a
-     * wrong copy here costs a refusal and grants nothing. Null until a box
-     * has asked since this object started, and then nothing is refused on it.
-     * @type {Map<string, string[]>|null}
+     * for a box (#onHostKeys): member id → fleet addresses, read through
+     * `memberCustody` below. READ, NEVER WRITTEN HERE: it is what lets this
+     * coordinator refuse first in a person's words, and a box checks the same
+     * list itself, signed, so a wrong copy here costs a refusal and grants
+     * nothing. KEPT ACROSS A RESTART (org-custody.js), because what a member
+     * is seen to spend begins at a start this coordinator let through, and
+     * one that forgot the list let anybody through. Unknown until a list has
+     * been heard, ever, and then a start as a member by somebody who is not
+     * an admin is refused as cannot-tell (#startAs).
      */
-    this.memberCustody = null;
+    this.custody = new OrgCustody();
     /**
      * A session to start on a runner once it joins, keyed by the host id the
      * runner enrolled under. Set when a ticket carrying a start is spent,
@@ -784,6 +788,21 @@ export class CoordinatorCore {
      * @type {(() => void)|null}
      */
     this.onStateChanged = null;
+  }
+
+  /**
+   * The custody list as everything here reads it: member id → the addresses
+   * that may start as it, or null while no list has been heard.
+   *
+   * @returns {Map<string, string[]>|null}
+   */
+  get memberCustody() {
+    return this.custody.list;
+  }
+
+  /** Hold this list in place of the one held, as a box's key answer does (#onHostKeys); null puts it aside. */
+  set memberCustody(list) {
+    if (this.custody.replace(list, this.now())) this.onStateChanged?.();
   }
 
   // --- hosts ---------------------------------------------------------------
@@ -6073,10 +6092,10 @@ export class CoordinatorCore {
       start: { dangerous: params.mode === 'dangerous', workType: task?.workType ?? null, task: task?.id ?? null, paid: anyPaid(member.engines) },
     });
     // WHAT A MEMBER HAS SPENT IS FOR WHOEVER MAY SEE IT (budgetsFor): an
-    // admin, its managers, and the person it is. Until the minter's custody
-    // list is in hand the coordinator refuses nobody a start as a member, so
-    // anybody in the fleet reaches this gate, and its sentences are not
-    // where they learn a figure. They are told what is asked and of whom.
+    // admin, its managers, and the person it is. Whoever the minter lists
+    // as able to start as the member reaches this gate, and a custodian need
+    // not manage it, so its sentences are not where they learn a figure.
+    // They are told what is asked and of whom.
     const sees = this.#seesSpend(requester, member.id);
     const name = member.name || member.id;
     if ('refused' in need) return { ok: false, error: { code: 'over_budget' }, text: sees ? need.refused : refusedWithoutFigures(name) };
@@ -6149,7 +6168,7 @@ export class CoordinatorCore {
         budgetUsdMonth: m.budgetUsdMonth ?? null,
         month: new Date(this.now()).toISOString().slice(0, 7),
         usd: Math.round((current?.usd ?? 0) * 100) / 100,
-        unknownSessions: current?.unknown.length ?? 0,
+        unknownSessions: uncounted(current),
         over: overBudget(current, m.budgetUsdMonth),
         words: spendWords(current, m.budgetUsdMonth),
       };
@@ -6672,10 +6691,14 @@ export class CoordinatorCore {
    *
    *  - with the minter's last list in hand, the person must be on it for
    *    this member;
-   *  - with none yet (no box has asked since this object started), nothing
-   *    is refused for custody here. Guessing from this coordinator's own
-   *    tree would turn away a custodian the minter lists and the tree does
-   *    not show.
+   *  - with none yet (no box has ever asked this fleet's minter), it cannot
+   *    tell, and says so. An admin's start is passed on to the box, which
+   *    holds no list either and refuses it in its own words. Anybody else is
+   *    refused here: let through, their start was where the member's month
+   *    began to be counted, on the word of whichever box they sent it to, and
+   *    that could be a box of their own (docs/budgets.md). Guessing from this
+   *    coordinator's own tree is no answer either: it would turn away a
+   *    custodian the minter lists and the tree does not show.
    *
    * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
    * @param {unknown} id @param {unknown} task
@@ -6687,6 +6710,15 @@ export class CoordinatorCore {
     const email = String(requester?.email || '').toLowerCase();
     if (!email) {
       return { ok: false, error: { code: 'not_signed_in' }, text: `Starting as ${member.name} needs a signed-in identity: a member’s session is started by somebody its vault’s custodians can be checked against.` };
+    }
+    if (!this.memberCustody && !requester?.admin) {
+      return {
+        ok: false,
+        error: { code: 'custody_unknown' },
+        text: this.minter?.vault
+          ? `The fleet has not heard yet who may start a session as ${member.name}, so it cannot tell whether you may. The vault says when a machine asks it, and a connected machine asks every ten minutes: try again in a few minutes. Nothing was sent.`
+          : `This fleet has no vault to say who may start a session as ${member.name}, so it cannot tell whether you may, and no machine would run it. Nothing was sent.`,
+      };
     }
     const listed = this.memberCustody?.get(member.id);
     if (this.memberCustody && !(listed ?? []).includes(email)) {
@@ -7938,15 +7970,9 @@ export class CoordinatorCore {
     // WHO MAY START AS EACH MEMBER, read off the answer on its way to the box
     // (`memberCustody`, above). The box checks the signature; this does not,
     // because nothing here is granted by it.
-    if (r.ok && Array.isArray(r.payload?.members)) {
-      /** @type {Map<string, string[]>} */
-      const custody = new Map();
-      for (const m of r.payload.members.slice(0, 512)) {
-        if (!m || !MEMBER_ID_RE.test(String(m.id)) || !Array.isArray(m.may)) continue;
-        custody.set(String(m.id), m.may.slice(0, 64).map((/** @type {unknown} */ a) => String(a).toLowerCase()));
-      }
-      this.memberCustody = custody;
-    }
+    // Kept, and written only when it differs from the one held: a box asks
+    // every ten minutes and is nearly always told the same thing.
+    if (r.ok && this.custody.heard(r.payload?.members, this.now())) this.onStateChanged?.();
     answer(r.ok
       ? { ok: true, payload: r.payload, signature: r.signature, text: String(r.text || '') }
       : { ok: false, error: { code: String(r.error?.code || 'refused') }, text: String(r.text || 'The minting Worker refused it.') });

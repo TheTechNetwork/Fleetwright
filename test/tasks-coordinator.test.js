@@ -35,6 +35,8 @@ function fleet(/** @type {Array<[string, number]>} */ boxes = [['deb132', PROTOC
   const now = () => clock;
   const core = new CoordinatorCore({ now });
   core.org = org(now);
+  // Who may start as each agent, as the minter last signed it.
+  core.memberCustody = new Map([['debbie', [admin.email, dana.email]], ['loose', [admin.email]]]);
   const health = (/** @type {number} */ protocol, /** @type {string[]|null} */ sessions = []) => ({
     hub: { reachable: true }, protocol, maxSessions: 5, running: 0, free: 5, labels: [], sandboxed: true,
     sessions: sessions && sessions.map((name) => ({ name, status: 'running', createdBy: null })),
