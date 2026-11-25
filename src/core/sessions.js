@@ -31,7 +31,7 @@ import { Profiles } from './profiles.js';
 import { boxSecretsFor } from './secret-store.js';
 import { readSessionLogs } from './logs.js';
 import { phaseFor, advancePhases } from './activity.js';
-import { DEFAULT_ENGINE, HANDS_ON, API_PROVIDERS, enginesOn, providerOf, turnFromHook, turnWords } from '../fleet/protocol/engines.js';
+import { ENGINES, DEFAULT_ENGINE, HANDS_ON, API_PROVIDERS, enginesOn, providerOf, turnFromHook, turnWords } from '../fleet/protocol/engines.js';
 import { boxEngines, boxApiProviders, nextEngine, handoffNote, continuationMessage, HANDOFF_FILE, HANDOFF_TAIL } from './engine-box.js';
 import { writeFile, checkoutFacts, commitHandoff } from './files.js';
 import { SOCKET_FILE } from './hook-socket.js';
@@ -100,6 +100,12 @@ export class SessionManager {
     this.firstMessages = new Map();
     /** Sessions being handed from one engine to the next right now. @type {Set<string>} */
     this.handingOn = new Set();
+    // A turn's end that arrived while its session was being handed on, kept
+    // until that move is over and acted on then (handOn). The last one wins:
+    // a pane reports one ending at a time, and the newest is about the engine
+    // the pane is on now.
+    /** @type {Map<string, import('../fleet/protocol/engines.js').TurnEnded>} */
+    this.turnsWaiting = new Map();
     // How full an UNSANDBOXED session's window is, read off the transcript the
     // SessionStart hook named, when the file has changed since the last ask. A
     // sandboxed session's transcript is in a volume this process cannot read;
@@ -360,7 +366,7 @@ export class SessionManager {
 
   /**
    * Start a brand-new session.
-   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null, task?: string|null, archive?: string|null, boxSecrets?: boolean|null, engines?: Array<{ engine: string, model?: string }>|null }} opts
+   * @param {{ name?: string|null, cwd?: string|null, actor?: string|null, skipPermissions?: boolean|null, title?: string|null, brief?: string|null, profile?: string|null, secret?: string|null, task?: string|null, archive?: string|null, boxSecrets?: boolean|null, engines?: Array<{ engine: string, model?: string }>|null, onRecord?: Record<string, string|null>|null }} opts
    *   `task` is the session's first message in words (protocol v7); either it or `profile`
    *   skipPermissions overrides FLEETWRIGHT_SKIP_PERMISSIONS for this session
    *   only, and is remembered so every later resume runs the same way.
@@ -376,9 +382,16 @@ export class SessionManager {
    *   boxSecrets says whether THIS BOX's own named secrets may answer that
    *   request, or only the owner's vault: the coordinator's word, from who
    *   administers the box (protocol v14). See boxSecretsFor below.
+   *   onRecord is what the fleet says about this start, kept on the session's
+   *   record as it is first written: which member it runs as and who asked
+   *   (docs/members.md), which task and branch (docs/tasks.md). Names and ids,
+   *   never words. The command layer used to add these after this returned,
+   *   which is after the session's first engine can have reported: an engine
+   *   that stopped in its first seconds was handed on from a record that
+   *   named no task, so the note left the task out and was not committed.
    * @returns {Promise<Result>}
    */
-  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null, task = null, archive = null, boxSecrets = null, engines = null } = {}) {
+  async start({ name = null, cwd = null, actor = null, skipPermissions = null, title = null, brief = null, profile = null, secret = null, task = null, archive = null, boxSecrets = null, engines = null, onRecord = null } = {}) {
     this.reconcile();
     // THE MEMBER'S ENGINES, in order (docs/engines.md). Held to what this box
     // runs, here as well as at the coordinator: the coordinator cut the list
@@ -532,6 +545,7 @@ export class SessionManager {
       archive,
       boxSecrets: boxSecretsFor(actor, boxSecrets),
       engines,
+      onRecord,
     });
   }
 
@@ -612,12 +626,13 @@ export class SessionManager {
   }
 
   /**
-   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null, tasked?: boolean, archive?: string|null, boxSecrets?: boolean|null, engines?: Array<{ engine: string, model?: string }>|null, engineAt?: number, handedOn?: boolean }} opts
+   * @param {{ name: string, cwd: string, actor: string|null, resumeUuid: string|null, verb: string, choice?: 'summary'|'full'|null, skipPermissions?: boolean|null , title?: string|null, brief?: string|null, prompt?: string|null, profile?: string|null, secret?: string|null, tasked?: boolean, archive?: string|null, boxSecrets?: boolean|null, engines?: Array<{ engine: string, model?: string }>|null, engineAt?: number, handedOn?: boolean, onRecord?: Record<string, string|null>|null }} opts
    *   `engines` and `engineAt` are the member's engines and which one this pane runs (docs/engines.md);
-   *   `handedOn` is a launch that takes over from an engine that stopped
+   *   `handedOn` is a launch that takes over from an engine that stopped;
+   *   `onRecord` is what a fresh start's caller has for the record (see start)
    * @returns {Promise<Result>}
    */
-  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null, tasked = false, archive = null, boxSecrets = null, engines = null, engineAt = 0, handedOn = false }) {
+  async #launch({ name, cwd, actor, resumeUuid, verb, choice = null, skipPermissions = null, title = null, brief = null, prompt = null, profile = null, secret = null, tasked = false, archive = null, boxSecrets = null, engines = null, engineAt = 0, handedOn = false, onRecord = null }) {
     // WHICH ENGINE THIS PANE RUNS (docs/engines.md): the one the launch
     // names, or the one the record is on for a resume, or Claude Code for a
     // session that names none.
@@ -713,7 +728,9 @@ export class SessionManager {
     // NO REMOTE CONTROL WHERE IT CANNOT COME UP, AND NONE ON A RUNNER: not
     // merely not waited for, but not asked of the CLI at all, so a session
     // whose credential cannot open it is not launched with the flag.
-    const noLink = noRemoteControl(runnerAuth?.kind, onRunner(this.cfg));
+    // The question is Claude Code's alone: an engine behind the runner has no
+    // Remote Control to ask about (below, where the launch answers).
+    const noLink = runsClaude ? noRemoteControl(runnerAuth?.kind, onRunner(this.cfg)) : null;
     if (noLink) this.noRemoteControl.set(name, noLink);
     else this.noRemoteControl.delete(name);
     this.inFlight.add(name);
@@ -789,6 +806,12 @@ export class SessionManager {
         // The member's engines and which one this pane is on, when the start
         // named them. A resume keeps what the record has.
         ...(engines ? { engines, engineAt: at } : {}),
+        // A link is Claude Code's. A pane handed from Claude Code to another
+        // engine must not go on offering the one its last pane had.
+        ...(runsClaude ? {} : { rcUrl: null }),
+        // WITH THE FIRST WRITE, so no report from the pane can find a record
+        // that does not yet say whose session this is or which task it is on.
+        ...(onRecord ?? {}),
         detail: `${verb}`,
         stoppedAt: null,
         ...creator,
@@ -823,6 +846,20 @@ export class SessionManager {
       if (!this.cfg.remoteControl) {
         log.info(`${verb} ${name} in ${cwd}`);
         return { ok: true, message: `${cap(verb)} "${name}" in ${cwd}.`, session: rec };
+      }
+      // AN ENGINE BEHIND THE RUNNER IS NOT WAITED ON FOR REMOTE CONTROL. It
+      // has none and was never launched with the flag (claude.js,
+      // buildCommand), so the wait below could only run out: every such
+      // start answered twice the timeout late with "Remote Control did not
+      // come online", a box with FLEETWRIGHT_RC_REQUIRED=1 killed the
+      // session for it, and a handoff held its name for those seconds while
+      // the new engine's own report went unheard. Nothing failed to come up,
+      // so nothing is said about a link: the reply names the engine, which
+      // is what tells a reader this is not a Claude Code session.
+      if (!runsClaude) {
+        const on = ENGINES[/** @type {keyof typeof ENGINES} */ (engine.engine)]?.says ?? engine.engine;
+        log.info(`${verb} ${name} in ${cwd} on ${engine.engine}`);
+        return { ok: true, message: `${cap(verb)} "${name}" in ${cwd} on ${on}.`, session: rec };
       }
 
       const rc = await this.#settleRemoteControl(name, verb);
@@ -1095,6 +1132,7 @@ export class SessionManager {
     // The words a later engine would have been handed are for a session
     // that is running. A resume is Claude Code's own conversation again.
     this.firstMessages.delete(name);
+    this.turnsWaiting.delete(name);
     // ASKED FOR, so nothing of the container is kept: a stop has always
     // discarded the console output, and says so below.
     if (this.cfg.sandbox) stopSandboxContainer(this.cfg, name);
@@ -1454,9 +1492,15 @@ export class SessionManager {
    * same task: only the pane's process changes, and the record says which
    * engine it is on now and why the last one stopped.
    *
-   * ONCE PER ENDING. Two reports of the same turn, or a second engine
-   * failing its checks while the first handoff is still starting, must not
-   * start two panes: `handingOn` holds the name until the launch is over.
+   * ONE MOVE AT A TIME, AND NO ENDING LOST. Two reports of the same turn, or
+   * the next engine stopping while the move to it is still finishing, must
+   * not start two panes: `handingOn` holds the name until the launch is
+   * over. A report that arrives in that time is kept and looked at when the
+   * move is done. It used to be dropped, so a member whose second engine
+   * stopped in its first seconds (not signed in, or Claude Code at its limit
+   * while its Remote Control link was still awaited) stayed on that engine
+   * and the third was never tried. A kept report about an engine the pane
+   * has left moves nothing, as any late report does (nextEngine).
    *
    * @param {string} name
    * @param {import('../fleet/protocol/engines.js').TurnEnded} turn
@@ -1464,7 +1508,11 @@ export class SessionManager {
    */
   async handOn(name, turn) {
     const rec = this.registry.get(name);
-    if (!rec?.engines || rec.status !== 'running' || this.handingOn.has(name)) return null;
+    if (!rec?.engines || rec.status !== 'running') return null;
+    if (this.handingOn.has(name)) {
+      this.turnsWaiting.set(name, turn);
+      return null;
+    }
     const from = rec.engineAt ?? 0;
     const to = nextEngine(rec, turn, boxEngines(this.cfg), boxApiProviders(this.cfg));
     if (to < 0) {
@@ -1521,6 +1569,11 @@ export class SessionManager {
     } finally {
       this.handingOn.delete(name);
       this.inFlight.delete(name);
+      // What was reported while this move was in flight, now that the record
+      // says which engine the pane is on.
+      const waiting = this.turnsWaiting.get(name);
+      this.turnsWaiting.delete(name);
+      if (waiting) void this.handOn(name, waiting).catch((e) => log.warn(`engines: ${name} could not be handed on`, e));
     }
   }
 

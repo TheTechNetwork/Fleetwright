@@ -22,10 +22,11 @@ exactly as it did.
 **What has and has not been run.** The two adapters are tested against
 stand-in servers that speak each engine's published protocol, and the Codex
 adapter's opening was checked against the real `codex app-server`, signed
-out. No turn has been sent to a real Codex or OpenCode, and the move from one
-engine to the next has not been run on a box: the note, the commit, the
-choice of engine and the launch command each have tests, and the tmux and
-podman steps between them do not.
+out. No turn has been sent to a real Codex or OpenCode. The move from one
+engine to the next is run in a test through the real launch, a real tmux pane
+and the real runner, with a script standing in for podman and for each
+engine (`test/engines-launch.test.js`). It has not been run on a box, in a
+container, with a real engine.
 
 ## The engines
 
@@ -112,7 +113,10 @@ run outside a container, or without the socket, runs Claude Code alone and
 reports that, whatever its operator names.
 
 What these sessions do not have is said where it would be offered: no Remote
-Control link, and no dialog a phone can answer. A session that asks before it
+Control link, and no dialog a phone can answer. A start does not wait for a
+link on one, and its reply names the engine the session is on. A session that
+moves from Claude Code to another engine drops the link its last pane had.
+A session that asks before it
 runs commands (`safe`) declines what the engine asks to do and prints that it
 did; one that does not (`dangerous`) allows it, inside the box's container as
 Claude Code's are.
@@ -159,6 +163,18 @@ The session keeps its name, its workspace and its task's lock. Its record
 says which engine it is on and each change, and the box says so as it
 happens (`session.engine`), which the coordinator writes on the task as a
 handoff of kind `engine`.
+
+**One move at a time, and no ending lost.** While a session is being moved
+the box starts no second move for it. A turn's end that arrives in that time
+(the next engine is not signed in, or Claude Code is at its limit while its
+Remote Control link is still awaited) is kept and acted on when the move is
+over, so the member's third engine is tried.
+
+**The task is on the record from the start.** Which member a session runs as,
+who asked, and its task and branch are written with the record's first write,
+before the first engine can report, so a session whose first engine stops in
+its first seconds still gets a note that names the task and is committed on
+its branch.
 
 **The note is mechanical.** An engine at its limit cannot be asked to
 summarize, so the box writes what it can see and labels it as that. It is a
@@ -272,7 +288,9 @@ the engines this machine does not run.
 from Claude Code's hooks, the choice of the next engine, the handoff note,
 the commit on a real checkout and only on the task's branch, what the
 session manager records, and that the runner's copies of the shared words
-match), `test/engines-run.test.js` (each adapter and the runner against a
+match), `test/engines-launch.test.js` (a start from the fleet through the
+real launch, tmux and the runner: no wait for a link, the task on the first
+note, and three engines in turn), `test/engines-run.test.js` (each adapter and the runner against a
 stand-in server speaking the published protocol: sign-in, the model check,
 a turn, a limit, a refusal, a permission request, the sign-in staged and
 handed back), `test/engines-hub.test.js` (TurnEnded and the sign-in on a

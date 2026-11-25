@@ -113,7 +113,7 @@
  * @property {any} [check]                what a stored token can do, when asked
  */
 
-import { decodeEngines } from '../fleet/protocol/engines.js';
+import { DEFAULT_ENGINE, decodeEngines } from '../fleet/protocol/engines.js';
 import { roomOf } from '../core/capacity.js';
 import { describe } from '../core/login.js';
 import { seal, SEAL_KEY_RE, SETUP_TOKEN_AAD } from '../fleet/seal.js';
@@ -993,25 +993,27 @@ export const COMMANDS = {
         secret: values?.get('secret') ?? ctx.secret ?? null,
         archive,
         boxSecrets,
+        // ON THE RECORD FROM ITS FIRST WRITE, and so handed to the start
+        // rather than added once it has answered. A start answers after the
+        // pane is up, and for Claude Code after its Remote Control link has
+        // been waited for; a session whose first engine stopped inside that
+        // time was handed to its next engine from a record that named no
+        // task and no member.
+        onRecord: {
+          // AS A MEMBER (docs/members.md): `actor` is the member's account,
+          // so the session is the member's, on its sign-ins, by everything
+          // above. What the record adds is which member, and who asked for
+          // it, which is what lets that person and the member's managers
+          // see and stop it.
+          ...(typeof ctx.member === 'string'
+            ? { member: ctx.member, memberName: ctx.memberName ?? null, memberRole: ctx.memberRole ?? null, startedBy: ctx.startedBy ?? null }
+            : {}),
+          // ON A TASK (docs/tasks.md): the id and the branch, which is what
+          // lets the watcher say which task a session coming back to its
+          // prompt was work on, and read the result it wrote.
+          ...(typeof ctx.taskId === 'string' ? { taskId: ctx.taskId, taskBranch: ctx.taskBranch ?? null } : {}),
+        },
       });
-      // AS A MEMBER (docs/members.md): `actor` is the member's account, so
-      // the session is the member's, on its sign-ins, by everything above.
-      // What the record adds is which member, and who asked for it, which is
-      // what lets that person and the member's managers see and stop it.
-      if (r.ok && r.session?.name && typeof ctx.member === 'string') {
-        ctx.sessions.registry.upsert(r.session.name, {
-          member: ctx.member,
-          memberName: ctx.memberName ?? null,
-          memberRole: ctx.memberRole ?? null,
-          startedBy: ctx.startedBy ?? null,
-        });
-      }
-      // ON A TASK (docs/tasks.md): the id and the branch, which is what lets
-      // the watcher say which task a session coming back to its prompt was
-      // work on, and read the result it wrote.
-      if (r.ok && r.session?.name && typeof ctx.taskId === 'string') {
-        ctx.sessions.registry.upsert(r.session.name, { taskId: ctx.taskId, taskBranch: ctx.taskBranch ?? null });
-      }
       let text = r.message;
       if (r.ok && archive) text += `\nIt is pushed to ${archive}, on a branch of its own, before it stops and every ten minutes while it runs.`;
       // SAID EITHER WAY, the box default included. A start that took the
@@ -1035,12 +1037,18 @@ export const COMMANDS = {
       if (r.ok) {
         const profile = values?.get('profile') ?? ctx.profile ?? null;
         const task = typeof ctx.task === 'string' && ctx.task.trim();
+        // An engine behind the runner has no Remote Control to open
+        // (docs/engines.md), so an idle one is not sent to it.
+        const noLink = Boolean(engines && engines[0].engine !== DEFAULT_ENGINE);
         text += task
           ? '\nStarted on the task it was given — it has its first message already.'
           : profile
             ? `\nStarted on the "${profile}" profile — it has its first message already.`
-            : '\nIT STARTED IDLE. Nothing has been asked of it yet: open Remote Control, or start it with ' +
-              'a task, or --profile=<name> (see /profiles).';
+            : noLink
+              ? '\nIT STARTED IDLE. Nothing has been asked of it, and this engine has no Remote Control to ask it through. ' +
+                'Stop it and start it with a task, or --profile=<name> (see /profiles).'
+              : '\nIT STARTED IDLE. Nothing has been asked of it yet: open Remote Control, or start it with ' +
+                'a task, or --profile=<name> (see /profiles).';
       }
       return { ok: r.ok, text, sessions: r.session ? [r.session] : undefined };
     },
