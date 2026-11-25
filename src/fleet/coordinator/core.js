@@ -157,11 +157,18 @@ const TASK_PROTOCOL = 20;
  */
 const ENGINES_PROTOCOL = 21;
 /**
- * How long a task's lock is kept for a start whose box never answered. Past
- * it the start is taken not to have happened; a session that did start is
- * taken up again the moment its box speaks of it (org-tasks.js, onSession).
+ * How long a task's lock is kept for a start whose box never answered, PAST
+ * THE TIME THE START ITSELF IS WAITED FOR (`intentTimeoutMs`). After it the
+ * start is taken not to have happened; a session that did start is taken up
+ * again the moment the box it was sent to speaks of it (org-tasks.js,
+ * onSession).
+ *
+ * It was five minutes from the lock, and a start is waited for longer than
+ * that: the lock went while the box was still being waited on, so a box
+ * that answered "started" a few seconds later found a task that was open
+ * again, and a second session could be started on the same branch.
  */
-const TASK_START_MS = 5 * 60_000;
+const TASK_START_GRACE_MS = 5 * 60_000;
 /**
  * How long after a start a box's list of sessions may still be the one from
  * before it, so a lock is not ended by a list that could not hold its session.
@@ -5910,8 +5917,11 @@ export class CoordinatorCore {
    * @param {import('../protocol/tasks.js').Task} task
    */
   #shown(task) {
-    if (!task.lock) return task;
-    return { ...task, lock: { ...task.lock, connected: Boolean(this.registry.get(task.lock.hostId)?.connected) } };
+    // `sent` is this coordinator's own note of where an unanswered start
+    // went (protocol/tasks.js, expireLock), and not part of what a task is.
+    const { sent: _own, ...shown } = task;
+    if (!shown.lock) return shown;
+    return { ...shown, lock: { ...shown.lock, connected: Boolean(this.registry.get(shown.lock.hostId)?.connected) } };
   }
 
   /**
@@ -6622,8 +6632,8 @@ export class CoordinatorCore {
     let changed = false;
     for (const task of this.tasks.all()) {
       const lock = task.lock;
-      if (lock && !lock.session && now - lock.at > TASK_START_MS) {
-        this.tasks.unlock(task.id, lock.hostId);
+      if (lock && !lock.session && now - lock.at > this.intentTimeoutMs + TASK_START_GRACE_MS) {
+        this.tasks.expire(task.id, lock.hostId);
         changed = true;
       }
     }

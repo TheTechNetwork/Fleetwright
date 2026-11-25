@@ -25,11 +25,19 @@
 // NEVER THROWS. Every refusal is a code and a sentence.
 
 import {
-  checkTask, checkNote, newTask, changeTask, routeTask, lockTask, confirmLock, releaseLock, returnTask, actOn, startFor,
+  checkTask, checkNote, newTask, changeTask, routeTask, lockTask, confirmLock, expireLock, releaseLock, returnTask, actOn, startFor,
   TASK_ID_RE, TASK_STATES, MAX_TASKS,
 } from '../protocol/tasks.js';
 import { cleanTurn } from '../protocol/engines.js';
 import { cleanRoute } from '../protocol/routing.js';
+
+/**
+ * How long the box an unanswered start was sent to may still take the task
+ * up (onSession). A day: a session that did start may work for hours before
+ * it first comes back to its prompt, and past this the start is somebody's
+ * to make again.
+ */
+export const TASK_SENT_KEPT_MS = 24 * 60 * 60_000;
 
 /** The prefix a task's row is stored under. */
 export const TASKS_PREFIX = 'tasks:';
@@ -303,6 +311,19 @@ export class OrgTasks {
   }
 
   /**
+   * A start whose box never answered, past the time its lock is held for.
+   * Not `unlock`: that box was sent the task and may be running it, so which
+   * box it was is kept, and its word alone can take the task up again.
+   *
+   * @param {string} id @param {string} hostId
+   */
+  expire(id, hostId) {
+    const task = this.byId.get(id);
+    if (!task?.lock || task.lock.session || task.lock.hostId !== hostId) return;
+    this.#keep(expireLock(task, { at: this.now() }));
+  }
+
+  /**
    * A box said something about a session it holds for a task.
    *
    *  - Back at its prompt with a result: the task returns.
@@ -313,7 +334,10 @@ export class OrgTasks {
    *
    * A session the coordinator never heard start (its reply timed out) is
    * taken up here: the box holds it, and the box's word is what a lock
-   * follows.
+   * follows. ONLY THE BOX THE START WAS SENT TO. A task with no lock is
+   * taken up by nobody else, whatever they say they hold: that was any
+   * connected box, which could name a task it had never been sent and have
+   * its own words filed as the assignee's result.
    *
    * @param {string} hostId @param {string} session
    * @param {{ event: string, task: string, result?: { text: string, truncated?: boolean }|null, turn?: import('../protocol/engines.js').TurnEnded|null }} said
@@ -338,9 +362,15 @@ export class OrgTasks {
       return { task, returned: false, released: was === 'working' };
     }
     if (event !== 'session.ready') return null;
-    // Only an open task with no lock, or the lock's own session, gets here.
-    if (!lock && task.state !== 'open') return null;
-    if (!lock || !lock.session) task = confirmLock(task, { session, hostId, at });
+    if (!lock) {
+      // NO LOCK: the box an unanswered start went to, while the task is
+      // still open and still its member's, and nobody else.
+      const sent = task.sent;
+      if (task.state !== 'open' || !sent || sent.hostId !== hostId || sent.member !== task.assignee || at - sent.at > TASK_SENT_KEPT_MS) return null;
+      task = confirmLock(task, { session, hostId, member: sent.member, by: sent.by, at });
+    } else if (!lock.session) {
+      task = confirmLock(task, { session, hostId, at });
+    }
     if (task.state !== 'working') return null;
     if (result && typeof result.text === 'string' && result.text.trim()) {
       task = returnTask(task, { text: result.text, truncated: result.truncated === true, session, hostId, at });
@@ -493,6 +523,9 @@ function readTask(row) {
     // The last routing decision, read back as one or not at all (routing.js).
     ...(cleanRoute(row.route) ? { route: /** @type {import('../protocol/routing.js').Route} */ (cleanRoute(row.route)) } : {}),
     lock: row.state === 'done' || row.state === 'cancelled' ? null : lock,
+    ...(row.state === 'open' && !lock && row.sent && typeof row.sent === 'object' && typeof row.sent.hostId === 'string'
+      ? { sent: { hostId: row.sent.hostId, member: text(row.sent.member), by: text(row.sent.by), at: Number(row.sent.at) || 0 } }
+      : {}),
     result,
     handoffs: Array.isArray(row.handoffs) ? row.handoffs.filter((/** @type {any} */ h) => h && typeof h === 'object' && typeof h.kind === 'string').slice(-50) : made.handoffs,
     updatedAt: Number(row.updatedAt) || made.createdAt,

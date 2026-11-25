@@ -143,7 +143,7 @@ test('of two starts on one task the second is refused and never reaches a box', 
   assert.equal(sent.length, 1);
 });
 
-test('a start the box refuses leaves the task open and unmarked; one the box never answers keeps the lock until its session speaks or five minutes pass', async () => {
+test('a start the box refuses leaves the task open and unmarked; one the box never answers keeps the lock until its session speaks, or five minutes past the wait for its answer', async () => {
   const { sent, make, start, task, answers, says, reports, pass } = fleet();
   make(dana);
   answers(() => ({ ok: false, error: { code: 'not_custodian' }, text: 'dana@example.com may not start a session as Debbie.' }));
@@ -162,13 +162,63 @@ test('a start the box refuses leaves the task open and unmarked; one the box nev
   // The other ending: nothing ever speaks of it, and the lock is let go.
   make(dana, { title: 'Second' });
   assert.equal((await start(dana, 't2')).error?.code, 'host_timeout');
-  pass(4 * 60_000);
+  // A start is waited for 320 seconds, so the lock is held for those and
+  // five minutes more. It was five minutes from the lock: gone while the box
+  // was still being waited on, with Start offered again.
+  pass(6 * 60_000);
   await reports('deb132', []);
-  assert.notEqual(task('t2').lock, null, 'four minutes is still inside the wait');
-  pass(2 * 60_000);
+  assert.notEqual(task('t2').lock, null, 'six minutes is still inside the wait for the box and the hold after it');
+  pass(5 * 60_000);
   await reports('deb132', []);
   assert.deepEqual([task('t2').state, task('t2').lock, task('t2').handoffs.length], ['open', null, 1]);
   assert.equal(sent.length, 3, 'the start refused for the lock reached no box');
+});
+
+test('a task with no lock is taken up only by the box an unanswered start was sent to, and no other box can claim it or write its result', async () => {
+  const { core, make, start, task, answers, says, reports, pass } = fleet([['deb132', PROTOCOL_VERSION], ['sams-laptop', PROTOCOL_VERSION]]);
+  // NEVER STARTED. Another connected box says one of its own sessions came
+  // back with a result for it. Task ids count up, so it need not see the
+  // task to name it. That became the task's result, under the assignee's name.
+  make(dana);
+  await says('sams-laptop', { event: 'session.ready', name: 'anything', taskId: 't1', tasked: true, result: { text: 'DONE\nKey rotated, nothing to check.' } });
+  assert.deepEqual([task('t1').state, task('t1').lock, task('t1').result], ['open', null, null]);
+  // Nor does it hold the task by saying so with no result: the real start goes through.
+  await says('sams-laptop', { event: 'session.ready', name: 'squat', taskId: 't1', tasked: true });
+  assert.equal(task('t1').lock, null);
+  assert.equal((await start(dana, 't1')).ok, true);
+  assert.equal(task('t1').lock.hostId, 'deb132');
+  await says('deb132', { event: 'session.ready', name: task('t1').lock.session, taskId: 't1', tasked: true, result: { text: 'DONE\nThe real one.' } });
+  assert.equal(task('t1').result.hostId, 'deb132');
+  await reports('deb132', []);
+
+  // SENT, NEVER ANSWERED, AND THE HOLD RAN OUT. The task is open again, and
+  // the box it went to may have the session all the same.
+  make(dana, { title: 'Second' });
+  answers(() => { throw new Error('deb132 did not answer in time'); });
+  const unanswered = await start(dana, 't2');
+  assert.equal(unanswered.error?.code, 'host_timeout', unanswered.text);
+  pass(11 * 60_000);
+  await reports('deb132', []);
+  assert.deepEqual([task('t2').state, task('t2').lock], ['open', null]);
+  // Which box that was is the coordinator's own note, not part of a task a client reads.
+  assert.equal('sent' in /** @type {any} */ (core.taskFor(dana, 't2')).task, false);
+  // Still nobody else's to take up.
+  await says('sams-laptop', { event: 'session.ready', name: 'cc-forged', taskId: 't2', tasked: true, result: { text: 'DONE\nlies' } });
+  assert.deepEqual([task('t2').state, task('t2').result], ['open', null]);
+  // The box it was sent to speaks of it hours later, and the work is not lost.
+  pass(3 * 60 * 60_000);
+  await says('deb132', { event: 'session.ready', name: 'cc-late', taskId: 't2', tasked: true, result: { text: 'DONE\nIt took a while.' } });
+  assert.deepEqual([task('t2').state, task('t2').result.session, task('t2').result.hostId], ['returned', 'cc-late', 'deb132']);
+  assert.equal(task('t2').handoffs.at(-2).by, dana.email, 'the start that is taken up is still whose it was');
+
+  // PAST A DAY it is somebody's to start again, and an old box's word is not taken.
+  make(dana, { title: 'Third' });
+  await reports('deb132', []);
+  assert.equal((await start(dana, 't3')).error?.code, 'host_timeout');
+  pass(25 * 60 * 60_000);
+  await reports('deb132', []);
+  await says('deb132', { event: 'session.ready', name: 'cc-stale', taskId: 't3', tasked: true, result: { text: 'DONE\ntoo late' } });
+  assert.deepEqual([task('t3').state, task('t3').result], ['open', null]);
 });
 
 test('a start that breaks the task’s own terms is refused before a machine is chosen', async () => {
@@ -404,12 +454,18 @@ test('the widest task fits a Durable Object value several times over', () => {
   const made = /** @type {any} */ (tasks.create(who, { title: '字'.repeat(MAX_TASK_TITLE), brief: '字'.repeat(MAX_TASK_BRIEF / 3), repo: `${'a'.repeat(39)}/${'r'.repeat(100)}`, workType: 'w'.repeat(40) }, () => null));
   assert.equal(made.ok, true, made.text);
   // Every handoff slot filled with the longest note, then a full result.
-  for (let i = 0; i < MAX_HANDOFFS + 5; i++) {
+  // Each time as a start does it: the lock for its box first, since a box
+  // is heard about a task only when a start for it went there.
+  const worked = () => {
     tasks.byId.set('t1', { ...tasks.byId.get('t1'), assignee: 'x'.repeat(40) });
+    assert.equal(tasks.lock(who, 't1', { member: 'x'.repeat(40), branch: String(tasks.get('t1')?.branch), hostId: 'h'.repeat(128) }).ok, true);
     tasks.onSession('h'.repeat(128), 's'.repeat(40), { event: 'session.ready', task: 't1', result: { text: `DONE${'字'.repeat(2000)}` } });
+  };
+  for (let i = 0; i < MAX_HANDOFFS + 5; i++) {
+    worked();
     assert.equal(tasks.act(who, 't1', 'reopen', '字'.repeat(MAX_TASK_NOTE / 3)).ok, true);
   }
-  tasks.onSession('h'.repeat(128), 's'.repeat(40), { event: 'session.ready', task: 't1', result: { text: `DONE${'字'.repeat(2000)}` } });
+  worked();
   const widest = new TextEncoder().encode(JSON.stringify(tasks.get('t1'))).length;
   assert.ok(tasks.get('t1')?.handoffs.length === MAX_HANDOFFS && tasks.get('t1')?.result);
   assert.ok(widest * 3 < 128 * 1024, `${widest} bytes`);
