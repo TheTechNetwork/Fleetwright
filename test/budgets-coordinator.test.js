@@ -451,13 +451,13 @@ test('a member’s managers are told once when it nears its budget and once when
   assert.deepEqual(g.pushes.map((p) => p.title), ['Debbie is over budget']);
 });
 
-test('a resumed session counts from the first figure heard, and a removed member takes its spend with it', async () => {
+test('a resumed session counts from the first figure heard, and removing a member does not start its month again', async () => {
   const f = fleet();
   await f.reports();
   await f.start(dana, 'debbie');
   await f.cost('cc-1', 4);
   // The coordinator forgets, as a rebuilt one with no row would; the session is resumed as Debbie.
-  f.core.budgets.forget('debbie');
+  f.core.budgets.spend.delete('debbie');
   await f.cost('cc-1', 9);
   assert.equal(f.spendOf('debbie').usd, 0, 'a session it has no record of starting is not counted');
   assert.equal(/** @type {any} */ (await f.core.dispatch({ verb: 'resume', params: { name: 'cc-1' }, actor: dana.email, requester: dana, preferHost: 'deb132' })).ok, true);
@@ -481,8 +481,25 @@ test('a resumed session counts from the first figure heard, and a removed member
   await sams(500);
   await sams(600);
   assert.equal(f.spendOf('debbie').usd, 2.5, 'a box naming a member does not spend that member’s budget');
-  assert.equal(f.core.removeMember(admin, 'debbie').ok, true);
-  assert.equal(f.core.budgets.spendOf('debbie'), null);
+  // REMOVED AND ADDED BACK, she has spent what she had. The row used to go
+  // with the member, and one at its budget was removed and added back by
+  // its manager with nothing spent and nobody asked.
+  f.set({ budgets: 'refuse' });
+  await f.cost('cc-1', 60);
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
+  const record = f.core.org.get('debbie');
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  assert.equal(f.spendOf('debbie'), undefined, 'a member that is not there has no row to show');
+  assert.equal(f.core.setMember(dana, 'debbie', record).ok, true);
+  assert.deepEqual([f.spendOf('debbie').usd, f.spendOf('debbie').over], [51, true]);
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
+  // Until the month turns: then a removed member's row is nobody's, and goes when the rows are next read.
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  const kept = f.core.budgets.serialise();
+  f.tick(8 * 86_400_000);
+  const next = new CoordinatorCore({ now: () => Date.UTC(2026, 11, 2) });
+  next.budgets.restore(kept);
+  assert.deepEqual([next.budgets.spend.has('debbie'), next.budgets.takeChanges().del], [false, ['spend:debbie']]);
 });
 
 test('who sees whose spend: an admin everybody, a manager their team, a person their own member', async () => {

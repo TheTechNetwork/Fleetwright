@@ -137,18 +137,36 @@ export class OrgBudgets {
   }
 
   /**
-   * A member was removed: its row goes with it, and so does every approval
-   * still open for it. An approval is for a member, not for an id, and a
-   * member made later under the same id is not the one somebody approved a
-   * start as.
+   * A member was removed: every approval still open for it goes with it. An
+   * approval is for a member, not for an id, and a member made later under
+   * the same id is not the one somebody approved a start as.
+   *
+   * WHAT IT SPENT THIS MONTH STAYS, under its id, until the month turns.
+   * The row used to go too, and a member at its budget was removed and
+   * added back by whoever manages it, with nothing spent and nobody asked.
+   * A month's spend under an id is that id's for the month, whoever holds
+   * it. A row from an earlier month is nobody's, and is dropped here and
+   * when the rows are next read back (`restore`).
    *
    * @param {string} member
    */
   forget(member) {
-    if (this.spend.delete(member)) this.dirtySpend.add(member);
+    const row = this.spend.get(member);
+    if (row) {
+      if (row.month === monthOf(this.now())) this.#keepSpend(member, { ...row, gone: true });
+      else if (this.spend.delete(member)) this.dirtySpend.add(member);
+    }
     for (const a of this.approvals.values()) {
       if (a.member === member && (a.state === 'waiting' || a.state === 'approved')) this.#keepApproval({ ...a, state: 'expired' });
     }
+  }
+
+  /** A member was made under this id: a row kept from one removed this month is its own again. @param {string} member */
+  back(member) {
+    const row = this.spend.get(member);
+    if (!row?.gone) return;
+    const { gone: _was, ...rest } = row;
+    this.#keepSpend(member, rest);
   }
 
   /** @param {Approval} a */
@@ -298,7 +316,10 @@ export class OrgBudgets {
     for (const [key, row] of rows) {
       const member = String(key).startsWith(SPEND_PREFIX) ? String(key).slice(SPEND_PREFIX.length) : String(key);
       const read = readSpend(row);
-      if (read && member) this.spend.set(member, read);
+      if (!read || !member) continue;
+      // A removed member's row is kept for its month and no longer (`forget`).
+      if (read.gone && read.month !== monthOf(this.now())) this.dirtySpend.add(member);
+      else this.spend.set(member, read);
     }
     /** @type {Approval[]} */
     const read = [];

@@ -78,6 +78,7 @@ export const monthOf = (/** @type {number} */ t) => new Date(t).toISOString().sl
  * @property {Array<{ host: string, at: number }>} [unanswered]  starts as this member sent to a box that never answered: which box, and when
  * @property {Record<string, number>} seen   the last figure seen for each session, by key, newest last
  * @property {{ warn?: boolean, over?: boolean }} told  which of the month's two notices went out
+ * @property {boolean} [gone]                its member was removed this month; the row is kept so the month's spend is not reset by removing and adding back (org-budgets.js, forget)
  * @typedef {{ kind: 'over-budget'|'dangerous'|'risky-work'|'paid-api', text: string }} Reason
  * @typedef {object} Approval
  * @property {string} id
@@ -533,5 +534,5 @@ export function readSpend(row) {
     .filter((/** @type {any} */ u) => u && typeof u.host === 'string' && u.host.length <= 200 && Number(u.at) > 0)
     .map((/** @type {any} */ u) => ({ host: u.host, at: Number(u.at) }))
     .slice(-MAX_SESSIONS_SEEN);
-  return { month: row.month, usd, unknown, ...(capped.length ? { capped } : {}), ...(unanswered.length ? { unanswered } : {}), seen, told: { ...(row.told?.warn === true ? { warn: true } : {}), ...(row.told?.over === true ? { over: true } : {}) } };
+  return { month: row.month, usd, unknown, ...(capped.length ? { capped } : {}), ...(unanswered.length ? { unanswered } : {}), ...(row.gone === true ? { gone: true } : {}), seen, told: { ...(row.told?.warn === true ? { warn: true } : {}), ...(row.told?.over === true ? { over: true } : {}) } };
 }

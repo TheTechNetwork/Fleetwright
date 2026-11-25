@@ -233,13 +233,18 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     // holds and a person files from their own phone or the signing page with
     // their own sign-in inside. An MCP client holds no such thing, so nothing
     // here can reach a vault, and the description says so.
+    //
+    // NOR A BUDGET. `budgetUsdMonth` was a field here, and it is what a start
+    // past it waits on a person for (docs/budgets.md): the tools an agent
+    // holds do not include the one that says a person looked.
     name: 'fleet_member',
     verb: null,
     description:
       'Add a member to the organization, change one, or remove one. Give `id` and the fields to set; a field ' +
       'you leave out keeps its value. An admin may write any member, and a manager the members of their own ' +
       'team. This changes the record only: it holds no credential, and who may sign the member in or start a ' +
-      'session as it (custody) is filed by a person from the app or the signing page.',
+      'session as it (custody) is filed by a person from the app or the signing page. It does not set a ' +
+      'budget either: a person sets one in the app, and fleet_budgets shows it.',
     schema: {
       id: { type: 'string', description: 'The member’s id: lowercase letters, digits and hyphens, at most 40. Naming one that does not exist adds it.' },
       remove: { type: 'boolean', description: 'Remove this member. Refused while anybody reports to it.' },
@@ -268,7 +273,6 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
           'operator turned that provider on (fleet_health).',
       },
       tag: { type: 'string', description: 'The host tag its sessions go to when the person starting one names no machine.' },
-      budgetUsdMonth: { type: 'number', description: 'A monthly budget in dollars, at API prices as each session counts its own cost. fleet_budgets shows what has been spent against it, and what the fleet does when it is passed.' },
     },
     requires: ['id'],
     local: true,

@@ -5886,6 +5886,9 @@ export class CoordinatorCore {
   setMember(requester, id, input) {
     const saved = this.org.set(requester, id, input);
     if (!saved.ok) return saved;
+    // Added back under an id removed this month, it has spent what that id
+    // had: removing a member is not how its month starts again (budgets.forget).
+    if (saved.created) this.budgets.back(saved.member.id);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
     this.record({ event: 'member.saved', actor: by, text: `${by} ${saved.created ? 'added' : 'changed'} the member ${saved.member.id} (${oneLine(saved.member.role, 60)})` });
@@ -5899,8 +5902,9 @@ export class CoordinatorCore {
   removeMember(requester, id) {
     const gone = this.org.remove(requester, id);
     if (!gone.ok) return gone;
-    // What it had spent goes with it: a member made later under the same id
-    // is not that member.
+    // Its open approvals go with it: a member made later under the same id
+    // is not the one somebody approved a start as. What it spent this month
+    // stays under its id until the month turns.
     this.budgets.forget(gone.member.id);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
@@ -5920,6 +5924,7 @@ export class CoordinatorCore {
   importMember(requester, text) {
     const read = this.org.importFile(requester, text);
     if (!read.ok) return read;
+    if (read.created) this.budgets.back(read.member.id);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
     this.record({ event: 'member.saved', actor: by, text: `${by} ${read.created ? 'added' : 'changed'} the member ${read.member.id} from a file` });

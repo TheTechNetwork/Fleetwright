@@ -1022,6 +1022,7 @@ test('fleet_members prints the organization as a tree, and says whom the caller 
 test('fleet_member changes the fields it is given and keeps the rest, and passes on a refusal in the fleet’s own words', async () => {
   /** @type {Array<{ method: string, path: string, body: any }>} */
   const asked = [];
+  /** @type {Record<string, any>} */
   const prior = { id: 'debbie', name: 'Debbie', kind: 'agent', role: 'software engineer', reportsTo: 'eli', instructions: 'Write small pull requests.', workTypes: ['backend'], hosts: { tag: 'linux' }, engines: [{ engine: 'claude-code' }] };
   const fleet = (/** @type {(a: { method: string, path: string, body: any }) => { status: number, body: any }} */ answer) => serverWith(undefined, {
     fetch: async (/** @type {string} */ url, /** @type {any} */ init = {}) => {
@@ -1052,14 +1053,41 @@ test('fleet_member changes the fields it is given and keeps the rest, and passes
   ({ server, written } = fleet(() => ({ status: 200, body: { ok: true, text: 'Done.' } })));
   await server.handleLine(rpc(3, 'tools/call', { name: 'fleet_member', arguments: { id: 'debbie', remove: true } }));
   await server.handleLine(rpc(4, 'tools/call', { name: 'fleet_member', arguments: { id: 'debbie', markdown: '---\nid: debbie\n---\n' } }));
-  assert.deepEqual(asked.map((a) => `${a.method} ${a.path}`), ['DELETE /api/members/debbie', 'POST /api/members/import']);
-  assert.deepEqual(asked[1].body, { text: '---\nid: debbie\n---\n' });
+  assert.deepEqual(asked.map((a) => `${a.method} ${a.path}`), ['DELETE /api/members/debbie', 'GET /api/members', 'POST /api/members/import']);
+  assert.deepEqual(asked[2].body, { text: '---\nid: debbie\n---\n' });
+
+  // NEVER A BUDGET (docs/budgets.md). A start past one waits for a person,
+  // and this tool raised it: by a field, by a file, or by a file that left
+  // it out, which takes it away. Each is refused here and nothing is written.
+  prior.budgetUsdMonth = 50;
+  const file = (/** @type {string} */ budget) => `---\nid: debbie\nname: Debbie\nkind: agent\nrole: software engineer\n${budget}---\n`;
+  const notHere = 'A member’s budget is set by a person, from the app’s Org screen, and not from here: it is what a start past it waits on. Nothing was changed.';
+  for (const [args, text] of /** @type {Array<[any, string]>} */ ([
+    [{ budgetUsdMonth: 100000 }, notHere],
+    [{ markdown: file('budgetUsdMonth: 900\n') }, `${notHere} debbie has a budget of $50.00 a month, and this file would make it $900.00. Send the file with budgetUsdMonth: 50 to change the rest of it.`],
+    [{ markdown: file('') }, `${notHere} debbie has a budget of $50.00 a month, and this file would take it away. Send the file with budgetUsdMonth: 50 to change the rest of it.`],
+  ])) {
+    asked.length = 0;
+    ({ server, written } = fleet(() => ({ status: 200, body: { ok: true, text: 'Saved Debbie.' } })));
+    await server.handleLine(rpc(5, 'tools/call', { name: 'fleet_member', arguments: { id: 'debbie', ...args } }));
+    assert.equal(written[0].result.isError, true);
+    assert.equal(written[0].result.content[0].text, text);
+    assert.deepEqual(asked.filter((a) => a.method !== 'GET'), [], 'nothing was written');
+  }
+  // The budget it has is carried, by a change of another field and by a file that names the same one.
+  asked.length = 0;
+  ({ server, written } = fleet(() => ({ status: 200, body: { ok: true, text: 'Saved Debbie.' } })));
+  await server.handleLine(rpc(6, 'tools/call', { name: 'fleet_member', arguments: { id: 'debbie', role: 'staff engineer' } }));
+  await server.handleLine(rpc(7, 'tools/call', { name: 'fleet_member', arguments: { id: 'debbie', markdown: file('budgetUsdMonth: 50\n') } }));
+  assert.deepEqual([asked.find((a) => a.method === 'PUT')?.body.budgetUsdMonth, asked.filter((a) => a.method !== 'GET').map((a) => a.method)], [50, ['PUT', 'POST']]);
+  delete prior.budgetUsdMonth;
 
   // It is a write, and says so; and it needs an id.
   const tool = toolsFor().find((t) => t.name === 'fleet_member');
   assert.equal(tool?.mutating, true);
   assert.deepEqual(tool?.inputSchema.required, ['id']);
   assert.match(String(tool?.description), /holds no credential/);
+  assert.equal('budgetUsdMonth' in (tool?.inputSchema.properties ?? {}), false, 'and it offers no budget to set');
   // And `fleet_start` offers the member to start as.
   assert.ok('member' in (toolsFor().find((t) => t.name === 'fleet_start')?.inputSchema.properties ?? {}));
 });

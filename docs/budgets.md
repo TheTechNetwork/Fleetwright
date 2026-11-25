@@ -163,6 +163,11 @@ approval is given, the same start is sent again and goes through.
 - **An approval is for a member, not for an id.** Removing a member ends
   every approval still open for it, so a member made later under the same id
   is not started on an approval given for the one that was removed.
+- **What a member spent this month stays under its id until the month
+  turns**, whether or not the member is removed. Removed and added back in
+  the same month, it has spent what it had: removing a member is not how its
+  month starts again. A member made later that month under the same id
+  starts with that figure too, which is the price of the first.
 - **The figure is for whoever may see it.** What a member has spent is read
   by an admin, its managers and the person it is. Somebody else whose start
   is refused is told that the member is past its budget and who can approve,
@@ -196,10 +201,13 @@ says which, and it is what a screen draws.
 
 - **MCP**: `fleet_budgets` reads what each member has spent against its
   budget, and the setting. `fleet_approvals` lists approvals. **No MCP tool
-  answers one or changes the setting**: an approval exists so that a person
-  looks, and the tools an agent holds do not include the one that says a
-  person looked. A start refused for want of approval says so in words an
-  agent can relay.
+  answers one, changes the setting, or sets a member's budget**: an approval
+  exists so that a person looks, and the tools an agent holds do not include
+  the one that says a person looked. `fleet_member` writes the rest of a
+  member's record and carries its budget as it is. Sent a budget, or a
+  member's file that would set, change or leave out the one it has, it
+  refuses and says a budget is set by a person in the app. A start refused
+  for want of approval says so in words an agent can relay.
 - **Both phones**: a member's page shows this month's spend against its
   budget; **Approvals** under Organization lists the ones waiting on you,
   with Approve and Decline, and the setting for an admin; a start refused
@@ -222,6 +230,9 @@ says which, and it is what a screen draws.
   coordinator checks who is answering, not what they are holding. A program
   with a manager's credential that calls the route directly has approved.
   The MCP server offers no tool for it, which is a policy and not a lock.
+  The same is true of a budget: the route that writes a member's record
+  takes one from whoever manages the member, and it is the MCP server that
+  does not send it.
 - **Dollars at API prices are not a subscription's bill**, and engines that
   report no price are not counted at all.
 - **A session already running goes on past the budget**, as above, and so
