@@ -365,6 +365,8 @@ test('the page aims each request at the vault it is showing, and words a team an
       `${ELI} removed NPM_TOKEN`,
       `${ELI} removed a machine`,
     ]);
+    // An address that may manage the vault, released by an org admin, is said as what it means for whoever reads it.
+    assert.equal(S.custodyLine({ by: ELI, op: 'release', name: SAM }), `${ELI} released the address ${SAM} to whoever signs in under it next`);
   } finally {
     m.restore();
   }
@@ -976,6 +978,37 @@ test('in a browser: a custodian opens a member’s vault from My team and keeps 
     // Sam is off his team's list too, which is everybody whose vault he may open.
     await eli.signer.waitForSelector(teamRow('Sam'), { state: 'detached' });
     await sam.context.close();
+
+    // AN ADDRESS IS RELEASED BY AN ORG ADMIN, here, because no phone has a
+    // screen for it (docs/members.md, "Whose an address is"). Drawn for Eli,
+    // who administers the organization, and not for Dana, whom the vault
+    // would refuse (C-2). Asked once more with what goes, from the keyboard.
+    assert.equal(await dana.signer.$(rowOf('Release an address')), null, 'offered to somebody the vault would refuse');
+    const release = rowOf('Release an address');
+    await eli.signer.click(`${release} button:text-is("Release address")`);
+    await says(eli.signer, 'Release an address', /Type the address to release first\./);
+    await eli.signer.getByLabel('The fleet address to release').fill(SAM);
+    await eli.signer.keyboard.press('Enter');
+    await says(eli.signer, 'Release an address', /Release sam@example\.com\? Its signing keys go, and machines approved under it stop being given its credentials\. Whoever signs in under it next holds it/);
+    assert.equal(m.rows.get(`dk:${SAM}`)?.github, '44', 'the first press only asks');
+    const asked = await eli.signer.evaluate(() => ({
+      sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      short: [...document.querySelectorAll('#items .item button, #items .item input')].filter((e) => e instanceof HTMLElement && e.offsetParent !== null && !(e instanceof HTMLInputElement && e.type === 'checkbox'))
+        .filter((e) => e.getBoundingClientRect().height < 44).map((e) => e.textContent || e.getAttribute('aria-label')),
+    }));
+    assert.deepEqual(asked, { sideways: 0, short: [] });
+    await eli.signer.click(`${release} button:text-is("Keep it as it is")`);
+    assert.equal(await eli.signer.locator(`${release} button:text-is("Release sam@example.com")`).isVisible(), false);
+    assert.equal(m.rows.get(`dk:${SAM}`)?.github, '44');
+    await eli.signer.click(`${release} button:text-is("Release address")`);
+    await eli.signer.click(`${release} button:text-is("Release sam@example.com")`);
+    await says(eli.signer, 'Release an address', /Released sam@example\.com\. It was sam’s and is nobody’s now: its signing keys are gone/);
+    assert.equal(m.rows.get(`dk:${SAM}`)?.github, undefined);
+    // An address nobody holds is said as that, in the vault's words, on the row.
+    await eli.signer.getByLabel('The fleet address to release').fill('nobody@example.com');
+    await eli.signer.click(`${release} button:text-is("Release address")`);
+    await eli.signer.click(`${release} button:text-is("Release nobody@example.com")`);
+    await says(eli.signer, 'Release an address', /No GitHub account holds nobody@example\.com, so there is nothing to release\./);
 
     // WHAT /me CARRIED, which is all a coordinator saw: no secret, no token,
     // and not whose vault any request was for. Five things, one of them the

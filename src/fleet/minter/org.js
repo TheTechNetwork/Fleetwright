@@ -27,6 +27,9 @@
 // dishonest coordinator can vouch for anybody. An address counts here only
 // when its signing keys were filed by the GitHub account now asking
 // (`dk:<address>`), which is the binding a box already checks signatures by.
+// The address is that account's for good (vault.js, `devicekey`), and the one
+// way it becomes somebody else's is an org admin releasing it here
+// (`releaseaddress`), written in every vault the address could open.
 //
 // WHOEVER ADDS A PERSON MANAGES THEIR CREDENTIALS, and nobody else does until
 // the person says so. Asked for in so many words, after the first build made
@@ -88,7 +91,7 @@ const KEY_HASH_RE = /^[0-9a-f]{64}$/;
 const isAddress = (a) => ADDRESS_RE.test(String(a)) && !lower(a).endsWith(`@${MEMBER_ACCOUNT_DOMAIN}`) && !lower(a).endsWith(`.${MEMBER_ACCOUNT_DOMAIN}`);
 
 /** The ops this file answers, so vault.js sends them here under one lock. */
-export const ORG_OPS = Object.freeze(['org', 'orgadmin', 'orgmember', 'custodian']);
+export const ORG_OPS = Object.freeze(['org', 'orgadmin', 'orgmember', 'custodian', 'releaseaddress']);
 
 /**
  * @typedef {object} OrgNode
@@ -349,8 +352,10 @@ export async function membersForBoxes(store, listed) {
  *
  * @param {any} inside  the opened request
  * @param {{ store: Store, email: string, who: { userId: string, login: string }, at: number, fleetAdmin: boolean }} ctx
- * @returns {Promise<{ ok: true, answer?: any, text: string, empty?: string } | { ok: false, error: { code: string }, text: string }>}
- *   `empty` names an agent member whose vault the caller empties
+ * @returns {Promise<{ ok: true, answer?: any, text: string, empty?: string, released?: { address: string, account: string } } | { ok: false, error: { code: string }, text: string }>}
+ *   `empty` names an agent member whose vault the caller empties; `released`
+ *   an address and the account it was taken from, whose approvals under it
+ *   the caller takes back
  */
 export async function runOrgOp(inside, ctx) {
   const { store, email, who, at } = ctx;
@@ -551,6 +556,55 @@ export async function runOrgOp(inside, ctx) {
     }
     await store.put(`${ORG_MEMBER_PREFIX}${id}`, { ...node, custodians: [...own, address], at });
     return { ok: true, text: `${address} is now one of ${id}’s custodians: they can sign it in, test and renew what it keeps, approve its machines, and start sessions as it.` };
+  }
+
+  // AN ADDRESS, RELEASED FROM THE GITHUB ACCOUNT IT BELONGS TO. An address
+  // is the first account's that listed a key under it, for good (vault.js,
+  // `devicekey`), so a person who now signs in to GitHub as somebody else, or
+  // an address handed on to a new person, needs somebody to say so. An org
+  // admin does, and nobody else: this is the one way an address changes
+  // hands, and it is the step a coordinator that lies about who is signing
+  // in used to take by itself.
+  //
+  // WHAT IT LEAVES. The address is nobody's: no account, no keys, and the
+  // delegations it revoked gone with the keys that signed them. The tree is
+  // not changed, so whoever signs in under the address next holds what the
+  // tree gives it, exactly as for an address nobody has signed in under yet
+  // (docs/members.md, "What it does not stop"). That is why it is written in
+  // every vault the address may open, where its owner reads it, and why an
+  // org admin's own address is not released while it is one: the next
+  // account under it would administer the organization.
+  if (inside.op === 'releaseaddress') {
+    const address = lower(inside.address);
+    if (!isAddress(address)) return refuse('bad_params', 'An address to release is a fleet address.');
+    if (!isOrgAdmin) return refuse('not_admin', `Releasing an address is an org admin’s to do. ${admins.length ? `They are ${admins.join(', ')}.` : 'Nobody administers the organization in the vault yet.'}`);
+    if (admins.includes(address)) {
+      return refuse('is_admin', `${address} administers the organization, and whoever signed in under it next would too. Another org admin removes it as an admin first, then releases it.`);
+    }
+    const row = await store.get(`dk:${address}`);
+    if (row?.released && Number(row.released.at) >= at) return refuse('stale', `${address} has a newer release than this one. Nothing was changed.`);
+    if (!row || typeof row.github !== 'string') return refuse('not_taken', `No GitHub account holds ${address}, so there is nothing to release. Whoever signs in under it first holds it.`);
+    // EVERY VAULT IT MAY OPEN, worked out before the row is cleared, because
+    // a person's managers count only while the address is somebody's.
+    /** @type {string[]} */
+    const vaults = [];
+    for (const node of tree.values()) {
+      if (node.kind === 'person' && lower(node.email) === address) continue;
+      if (!(await mayActFor(store, tree, node.id)).includes(address)) continue;
+      const vaultId = node.kind === 'agent' ? `${MEMBER_PREFIX}${node.id}` : await accountOf(store, lower(node.email));
+      if (vaultId) vaults.push(vaultId);
+    }
+    await store.put(`dk:${address}`, { keys: [], released: { at, by: email } });
+    for (const vaultId of vaults) await logCustody(store, vaultId, { at, by: email, op: 'release', name: address });
+    const was = String(row.login || 'a GitHub account');
+    return {
+      ok: true,
+      released: { address, account: row.github },
+      answer: { address, vaults: vaults.length },
+      text: `Released ${address}. It was ${was}’s and is nobody’s now: its signing keys are gone, so machines stop taking them when they next ask. ` +
+        `Whoever signs in under it next holds it, with whatever the organization gives that address` +
+        `${vaults.length ? `, which is written in the ${vaults.length === 1 ? 'vault' : `${vaults.length} vaults`} it may manage` : ''}.`,
+    };
   }
 
   return refuse('bad_params', `The organization does not do “${String(inside.op).slice(0, 40)}”.`);

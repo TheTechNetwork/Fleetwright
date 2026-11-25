@@ -2735,6 +2735,63 @@ test('nobody is filed at an agent’s box account, as a person or as anything el
   assert.deepEqual([...(read.ok ? read.members ?? [] : [])].map(([id]) => id).sort(), ['dana', 'debbie']);
 });
 
+test('an address is its first GitHub account’s for good, and changes hands only when an org admin releases it', async (t) => {
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  // Dana keeps something of her own, approves her box for it, and is one of
+  // Debbie's custodians by the tree.
+  assert.equal((await as(DANA, { op: 'put', name: 'secret:MINE', value: 'danas-own' })).ok, true);
+  const danasBox = await generateKeyPair();
+  assert.equal((await as(DANA, { op: 'grant', hostKey: danasBox.publicJwk, label: 'danas-box' })).ok, true);
+  assert.equal((await as(ELI, { op: 'put', name: 'secret:PROD', value: 'prod-key', for: 'debbie' })).ok, true);
+  const hers = async () => JSON.stringify((await m.box(danasBox, { members: [ELI, DANA] })).answer.accounts);
+  assert.match(await hers(), /danas-own/);
+
+  // SHE LOSES HER PHONE and removes its key. The address used to be anybody's
+  // from here: a coordinator vouches it for another GitHub account (Eli's
+  // sign-in stands for that account), which files a key and is Dana.
+  const lost = m.rows.get(`dk:${DANA}`).keys[0].key;
+  assert.equal((await as(DANA, { op: 'devicekey', key: lost, remove: true })).ok, true);
+  const another = { github: await m.signIn() };
+  const taken = await as(DANA, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'x' }, another);
+  assert.equal(taken.error?.code, 'address_taken', taken.text);
+  assert.match(taken.text, /dana@example\.com belongs to another GitHub account than eli: the first that listed a signing key under it, whether or not it lists one now\..* an org admin releases it for you/);
+  assert.equal((await as(DANA, { op: 'list', for: 'debbie' }, another)).error?.code, 'not_bound');
+  // Her own account lists a new phone as it always could.
+  assert.equal((await as(DANA, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'a new phone' })).ok, true);
+  assert.equal(m.rows.get(`dk:${DANA}`).github, '43');
+
+  // RELEASED, by an org admin and nobody else, and never an admin's own.
+  assert.equal((await as(DANA, { op: 'releaseaddress', address: DANA })).error?.code, 'not_admin');
+  assert.equal((await as(ELI, { op: 'releaseaddress', address: ELI })).error?.code, 'is_admin');
+  assert.equal((await as(ELI, { op: 'releaseaddress', address: 'nobody@example.com' })).error?.code, 'not_taken');
+  const released = await as(ELI, { op: 'releaseaddress', address: DANA });
+  assert.equal(released.ok, true, released.text);
+  assert.match(released.text, /Released dana@example\.com\. It was dana’s and is nobody’s now: its signing keys are gone.*written in the vault it may manage\. 1 machine approved under it is no longer approved/);
+  assert.equal(released.changed, true, 'the boxes are told to ask again');
+  // Nobody's: no account, no keys for a box to take a signature with.
+  assert.equal(m.rows.get(`dk:${DANA}`).github, undefined);
+  assert.deepEqual((await m.keys(danasBox, { members: [ELI, DANA] })).payload.people.find((/** @type {any} */ p) => p.email === DANA)?.keys, []);
+  // Written where the people it touches read it: the vault the address may
+  // open, and the vault of the account it was taken from.
+  for (const vault of ['member:debbie', '43']) {
+    assert.deepEqual(m.rows.get(`clog:${vault}`).map((/** @type {any} */ e) => [e.by, e.op, e.name]).at(-1), [ELI, 'release', DANA], vault);
+  }
+  // What her account approved under the address is approved no longer, so
+  // whoever holds the address next starts no session on her sign-ins. What
+  // she keeps is still hers.
+  assert.doesNotMatch(await hers(), /danas-own/);
+  assert.ok(m.rows.get('v:43').items['secret:MINE'].sealed, 'what she keeps is not touched');
+
+  // A request her account sealed before the release, sent again, does not take it back.
+  const replayed = await as(DANA, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'replayed' }, { at: m.rows.get(`dk:${DANA}`).released.at - 1 });
+  assert.equal(replayed.error?.code, 'stale', replayed.text);
+  // And now another account may hold it, because somebody with a name said so.
+  assert.equal((await as(DANA, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'x' }, another)).ok, true);
+  assert.equal(m.rows.get(`dk:${DANA}`).github, '42');
+  assert.doesNotMatch(await hers(), /danas-own/);
+});
+
 test('removing an agent empties its vault, and whoever files the id again is handed nothing of it', async (t) => {
   const { m, as, tree } = await orgMinter(t);
   await tree();

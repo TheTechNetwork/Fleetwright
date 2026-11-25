@@ -195,7 +195,9 @@ that, and does not remove it:
   file a person's own credentials under the wrong name. A key under the wrong
   name is a forged actor, so `devicekey` binds the address to the GitHub
   account on first use and refuses another account's key for it afterwards
-  (`address_taken`), until the first one removes its own. A person who never
+  (`address_taken`), for good: removing every key does not free the address,
+  and only an org admin releases one ([members.md](./members.md), "Whose an
+  address is"). A person who never
   files a key can have their address claimed first, so their app shows every
   key filed under their address, and says so when one is not their own.
 - **It could still say an outsider is a member.** Anybody can sign in to the

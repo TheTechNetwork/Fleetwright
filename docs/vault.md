@@ -340,6 +340,13 @@ the people entitled to change it (`src/fleet/minter/org.js`):
 | an agent member's own custodians, and every manager above it | that agent's vault |
 | a person's managers, once that person turned it on from their own device | that person's vault |
 | the coordinator, or a fleet admin by being one | nothing |
+| the coordinator, by lying about who is signing in | whatever the tree gives an address nobody has signed in under yet, or one an org admin released: the first GitHub account to list a key under it holds it |
+
+That last row is not a right anybody was given, and it is here because a
+table of who may act that left it out would be claiming more than is true
+([members.md](./members.md), "What it does not stop"). An address somebody
+has signed in under is its first GitHub account's for good, whether or not a
+key is still listed, and only an org admin releases one.
 
 A custodian sends the request they would send for their own vault with
 `for: <member id>` inside the seal. A person reads who their managers are and

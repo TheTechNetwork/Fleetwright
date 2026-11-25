@@ -135,6 +135,40 @@ so who may act for a member's vault is held and checked in the minter:
   manages nothing there, so a manager signs in on a phone or the signing page
   before any of this works for them.
 
+**Whose an address is.** An address belongs to the first GitHub account that
+lists a signing key under it, **for good**: another account is refused
+(`address_taken`) whether or not a key is still listed. It used to be free
+again once its keys were all removed, which is the moment a person who has
+lost their phone is least able to notice: a coordinator that lies about who
+is signing in could vouch a custodian's address for another GitHub account,
+which was then that custodian to every vault the tree gives them and to
+every box they had approved.
+
+An address changes hands in one way: **an org admin releases it**
+(`releaseaddress`, with the address). That is for a person who signs in to
+GitHub as a different account now, or an address handed on to somebody new.
+
+- The address is nobody's again: no account, no signing keys, and so nothing
+  a box takes a signature with. Whoever signs in under it next holds it,
+  with whatever the tree gives that address, so a release is the same
+  exposure as the first case under "What it does not stop" until they do.
+- Every machine the old account approved under that address stops being
+  approved, and is given nothing from its next ask. A box files what it is
+  handed by the address, so otherwise the next person under it would start
+  sessions on the last one's sign-ins. What the old account keeps stays in
+  its own vault.
+- It is written in the log of every vault the address may open, and of the
+  old account's own, as `release` with the address and the admin who did it.
+- An org admin's own address is not released while it is one (`is_admin`):
+  whoever signed in under it next would administer the organization. A
+  request the old account sealed before the release does not take the
+  address back (`stale`).
+
+Releasing is done from **the signing page**, on the admin's own vault, under
+*Release an address*, which asks once more with what goes. Neither phone has
+a screen for it yet. The phones show the log entry as the bare word
+`release` until they have words for it.
+
 **Custodians of an agent member.** The admin who files an agent member is its
 first custodian. A custodian adds or removes another (`custodian`), and the
 last one cannot be removed. Every manager of the member is a custodian too,
@@ -334,6 +368,26 @@ tree as the minter's.
 
 ## What it does not stop
 
+- **An address nobody has signed in under is whoever's the coordinator says
+  first.** The tree names people by address, and it may name one before that
+  person has ever signed in: a manager above an agent, an extra manager an
+  admin wrote in, a person member somebody added. The vault binds an address
+  to a GitHub account when that account lists its first signing key, and
+  until then all it knows of who is signing in is the address the
+  coordinator vouches for. So a coordinator that lies about who is signing
+  in can claim an address nobody has signed in under yet, for a GitHub
+  account of its own, and hold whatever custody the tree gives that address:
+  an agent's vault it is above, a box approved for it, a session started as
+  it. The same holds for an address an org admin has released, until its new
+  person signs in. What it cannot do is claim an address somebody has
+  already signed in under: that one is its first account's for good, keys
+  listed or not. Nor can it make itself a custodian by name, since adding a
+  custodian or an org admin is refused until that address is bound. What
+  would close it is an org admin confirming a person's first sign-in while
+  being shown which GitHub account it is, which needs a screen on both
+  phones and is not built. Until then: have people sign in before the tree
+  gives their address anything, and read a member's custodians as addresses
+  that are only as good as their first sign-in.
 - **The first org admin is first use.** A coordinator compromised before any
   admin filed the tree could vouch for an account of its own. That account
   could then file agent members and hold their empty vaults. It reaches the

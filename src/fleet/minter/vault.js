@@ -478,6 +478,37 @@ async function emptyMemberVault(store, vaultId, at) {
   return { items, grants };
 }
 
+/**
+ * Take back every approval one account's vault made under an address that is
+ * no longer that account's (org.js, `releaseaddress`). Each is left as a
+ * removal, as the person's own would be, so an older approval sent again
+ * cannot bring it back. Nothing the vault keeps is touched: it is still that
+ * account's, and is approved again under whatever address they hold next.
+ * Called under the vault's own lock.
+ *
+ * @param {VaultStore} store @param {string} account @param {string} address @param {number} at
+ * @returns {Promise<number>} how many approvals went
+ */
+async function unfileAddress(store, account, address, at) {
+  const kept = await store.get(`v:${account}`);
+  if (!kept) return 0;
+  const row = emptyRow(kept);
+  let gone = 0;
+  for (const [hash, grant] of Object.entries(row.grants)) {
+    if (!grant || grant.revoked || !grant.jwk || normaliseEmail(grant.email) !== address) continue;
+    row.grants[hash] = { at: Math.max(at, Number(grant.at) || 0), revoked: true };
+    gone += 1;
+    await withLock(`box:${hash}`, async () => {
+      const index = (await store.get(`box:${hash}`)) || { accounts: {} };
+      const accounts = { ...(index.accounts || {}) };
+      delete accounts[account];
+      await store.put(`box:${hash}`, { accounts });
+    });
+  }
+  if (gone) await store.put(`v:${account}`, row);
+  return gone;
+}
+
 /** @param {any} row */
 function emptyRow(row) {
   return {
@@ -569,6 +600,18 @@ export async function answerVaultDevice(ask, config) {
         text += ` A member removed before left a vault under this id. It was emptied first, so nothing of it is ${done.empty}’s.`;
         await logCustody(store, memberVault, { at, by: email, op: 'forget', name: 'what an earlier member left' });
       }
+    }
+    // AN ADDRESS RELEASED (org.js, `releaseaddress`): the machines its old
+    // account approved under it stop being given that account's sign-ins.
+    // A box files what it is handed by the address, so without this whoever
+    // signs in under the address next would start sessions on them.
+    if (done.released) {
+      const { address, account } = done.released;
+      const machines = await withLock(`row:${account}`, () => unfileAddress(store, account, address, at));
+      if (machines) {
+        text += ` ${machines} machine${machines === 1 ? '' : 's'} approved under it ${machines === 1 ? 'is' : 'are'} no longer approved, and ${machines === 1 ? 'stops' : 'stop'} being given anything when ${machines === 1 ? 'it next asks' : 'they next ask'}. What that account keeps is still its own.`;
+      }
+      await logCustody(store, account, { at, by: email, op: 'release', name: address });
     }
     return { ok: true, sealed: await seal({ to: reply, aad: VAULT_REPLY_AAD, payload: done.answer ?? {} }), text, ...(inside.op === 'org' ? {} : { changed: true }) };
   }
@@ -685,8 +728,16 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
   // A DEVICE'S SIGNING KEY, filed under the fleet address the request names
   // (docs/signed-intents.md). A box takes a person's signature only with a key
   // this lists for them, so a key under the wrong address is a forged actor:
-  // the address belongs to the first GitHub account that files a key under it,
-  // and another account's key for it is refused while that one keeps any.
+  // the address belongs to the first GitHub account that files a key under it.
+  //
+  // FOR GOOD, whether or not that account still lists a key. It used to be
+  // "while that one keeps any", and the gap was the moment a person is least
+  // able to notice: Dana loses her phone and removes its key, and a
+  // coordinator that lies about who is signing in vouches her address for
+  // another GitHub account, which is then Dana to every box she approved and
+  // to every vault the tree gives her. An address changes hands only when an
+  // org admin releases it (org.js, `releaseaddress`), which is somebody with
+  // a name deciding it, written where the people it touches read it.
   if (inside.op === 'devicekey') {
     const jwk = boxKey(inside.key);
     if (!jwk) return refuse('bad_key', 'That is not a device’s signing key.');
@@ -695,9 +746,13 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
     const remove = inside.remove === true;
     return withLock(`${DEVICE_KEYS_PREFIX}${email}`, async () => {
       const kept = await store.get(`${DEVICE_KEYS_PREFIX}${email}`);
-      if (kept && kept.github !== who.userId && liveKeys(kept).length) {
-        return refuse('address_taken', `Signing keys for ${email} are filed by another GitHub account than ${who.login}. Nothing was changed. If that is not you, tell whoever runs the fleet.`);
+      if (kept && typeof kept.github === 'string' && kept.github !== who.userId) {
+        return refuse('address_taken', `${email} belongs to another GitHub account than ${who.login}: the first that listed a signing key under it, whether or not it lists one now. Nothing was changed. If the address is yours and you sign in to GitHub as somebody else now, an org admin releases it for you. If it is not yours, tell whoever runs the fleet.`);
       }
+      // AN ADDRESS AN ORG ADMIN RELEASED takes no change made before the
+      // release: a request the account it was taken from sealed a minute
+      // earlier, sent again, would otherwise take it straight back.
+      if (kept?.released && Number(kept.released.at) >= at) return refuse('stale', `${email} was released after this was asked, so this could be a replay. Nothing was changed.`);
       /** @type {Array<{ kid: string, key: any, label: string, at: number, removed?: boolean }>} */
       const keys = kept?.github === who.userId && Array.isArray(kept.keys) ? kept.keys : [];
       const prior = keys.find((k) => k.kid === kid);
@@ -712,6 +767,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       await store.put(`${DEVICE_KEYS_PREFIX}${email}`, {
         github: who.userId, login: who.login, keys: next.filter((k) => !dropped.has(k.kid)),
         ...(kept?.github === who.userId && Array.isArray(kept.revoked) ? { revoked: kept.revoked } : {}),
+        ...(kept?.released ? { released: kept.released } : {}),
       });
       // THIS ACCOUNT'S FIRST KEY UNDER THIS ADDRESS, and it has a vault
       // already: whoever added a person member at this address did not add
