@@ -2713,6 +2713,92 @@ test('a delegation carries a start as a member only when it names that member, s
   assert.equal(started(), 2);
 });
 
+test('a box signs an engine in for a member only for who may start a session as that member, signed or delegated by name, and asks its hub with the member’s own account', async (t) => {
+  // docs/engines.md, "Signing in on the machine", at the box: the minter's
+  // list, a phone's signature over the member, the engine and the action,
+  // and what the hub is then asked. On a box that takes unsigned work, so
+  // every refusal below is the member rule's own.
+  const { m, core, box, stub, iphone, kid, delegate } = await signingFleet(t);
+  const pixel = await generateKeyPair();
+  assert.equal((await m.phone({ op: 'devicekey', key: pixel.publicJwk, label: 'Dana’s Pixel' }, { person: DANA })).ok, true);
+  const danaKid = await boxKeyHash({ kty: 'EC', crv: 'P-256', x: pixel.publicJwk.x, y: pixel.publicJwk.y });
+  let clock = Date.now() - 30_000;
+  const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
+  await filed({ op: 'orgadmin', address: ELI });
+  await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
+  await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
+
+  let n = 0;
+  /** One request as it reaches the box, signed by a phone unless told otherwise. @param {{ who?: string, key?: any, keyId?: string, params?: any, unsigned?: boolean, delegation?: any }} [o] */
+  const ask = async (o = {}) => {
+    const who = o.who ?? ELI;
+    const id = `engine-signin-${String(++n).padStart(4, '0')}`;
+    const issuedAt = Date.now();
+    const params = { member: 'debbie', engine: 'codex', action: 'start', ...(o.params ?? {}) };
+    const sig = await sign((o.key ?? iphone).privateJwk, intentSigningInput({ actor: who, id, issuedAt, params, verb: 'enginesignin' }, 'ops-box'));
+    return /** @type {any} */ (await box.sidecar.handle({ v: PROTOCOL_VERSION, kind: 'intent', id, verb: 'enginesignin', params, actor: who, issuedAt, ...(o.delegation ? { delegation: o.delegation } : o.unsigned ? {} : { sig, kid: o.keyId ?? kid }) }));
+  };
+
+  // NO LIST YET: this box signs no member's engine in.
+  const early = await ask();
+  assert.equal(early.error?.code, 'member_unchecked');
+  assert.match(String(early.text), /^ops-box holds no list from the vault of who may start a session as a member.*, so it signs no member’s engine in\. Nothing was done\.$/);
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  assert.deepEqual(stub.signins, []);
+
+  // SIGNED BY A CUSTODIAN: the hub is asked, with the account the member's
+  // sessions run as here and who asked, neither of which a caller can say.
+  const ok = await ask();
+  assert.equal(ok.ok, true, ok.text);
+  assert.deepEqual(stub.signins.at(-1), { member: 'debbie', account: 'debbie@members.invalid', engine: 'codex', action: 'start', by: ELI, box: 'ops-box' });
+  // The page and the code come back to whoever asked, as the hub gave them.
+  assert.deepEqual([ok.state, ok.url, ok.code], ['waiting', 'https://auth.openai.com/codex/device', 'ABCD-EFGH']);
+  // A PERSON'S OWN ENGINES, by their own record: their own address.
+  assert.equal((await ask({ params: { member: 'eli', engine: 'opencode' } })).ok, true);
+  assert.deepEqual([stub.signins.at(-1).member, stub.signins.at(-1).account, stub.signins.at(-1).engine], ['eli', ELI, 'opencode']);
+  const reached = stub.signins.length;
+
+  // NOT ON THE MINTER'S LIST, with her own listed key. And status is no exception: its answer carries the code.
+  for (const action of ['start', 'status', 'cancel', 'signout']) {
+    const stranger = await ask({ who: DANA, key: pixel, keyId: danaKid, params: { action } });
+    assert.equal(stranger.error?.code, 'not_custodian', action);
+    assert.equal(stranger.text, 'dana@example.com may not sign an engine in for debbie. That is for whoever may start a session as debbie, and the vault lists eli@example.com. Nothing was done.');
+  }
+  // UNSIGNED, naming a custodian: this box takes unsigned work, and not this.
+  for (const action of ['start', 'status']) {
+    const unsigned = await ask({ unsigned: true, params: { action } });
+    assert.equal(unsigned.error?.code, 'signature_required', action);
+    assert.match(String(unsigned.text), /^An engine signed in for debbie is what debbie’s sessions run on, so ops-box does it only when eli@example\.com signed for it, or delegated it in a grant that names debbie, and this was neither\. Nothing was done\.$/);
+  }
+  // A member the vault was never told about, and nobody asks as a member's own account.
+  assert.equal((await ask({ params: { member: 'ghost' } })).error?.code, 'no_member');
+  assert.equal((await ask({ who: 'debbie@members.invalid', unsigned: true })).error?.code, 'not_a_person');
+
+  // A DELEGATION carries it for a member only by naming that member, as it does a start.
+  const grant = { verbs: ['enginesignin'], hosts: ['ops-box'], match: {} };
+  const none = await ask({ delegation: await delegate(grant) });
+  assert.equal(none.error?.code, 'member_not_delegated');
+  assert.equal(none.text, 'What eli@example.com granted this connection does not cover signing an engine in for debbie: it names no member. Grant it again from the Fleetwright app on a phone, under You → Delegations, with debbie among its members. Nothing was done.');
+  assert.equal((await ask({ delegation: await delegate({ ...grant, members: ['jason'] }) })).error?.code, 'member_not_delegated');
+  // One made for starting sessions does not carry it either, whoever it names.
+  assert.equal((await ask({ delegation: await delegate({ verbs: ['start'], hosts: ['ops-box'], match: {}, members: ['debbie'] }) })).error?.code, 'signature_required');
+  assert.equal(stub.signins.length, reached, 'a refused request reached the hub');
+  const named = await ask({ delegation: await delegate({ ...grant, members: ['debbie'] }), params: { action: 'status' } });
+  assert.equal(named.ok, true, named.text);
+  assert.deepEqual([stub.signins.at(-1).action, stub.signins.at(-1).by], ['status', ELI]);
+
+  // THROUGH THE COORDINATOR, from a phone: what the box answered is what comes back.
+  const id = 'engine-signin-via-fleet';
+  const issuedAt = Date.now();
+  const params = { member: 'debbie', engine: 'codex', action: 'start' };
+  core.setMember(null, 'debbie', { name: 'Debbie', kind: 'agent', role: 'software engineer' });
+  const through = await core.dispatch({
+    verb: 'enginesignin', params, id, actor: ELI, requester: { email: ELI, admin: true }, preferHost: 'ops-box', issuedAt,
+    sig: await sign(iphone.privateJwk, intentSigningInput({ actor: ELI, id, issuedAt, params, verb: 'enginesignin' }, 'ops-box')), kid,
+  });
+  assert.deepEqual([through.ok, through.state, through.url, through.code, through.hostId], [true, 'waiting', 'https://auth.openai.com/codex/device', 'ABCD-EFGH', 'ops-box']);
+});
+
 test('a session on a task is the assignee’s, opens on the task’s own branch and words, and says where the result goes', async (t) => {
   // docs/tasks.md, "Starting on a task", through a real box: the task in the
   // coordinator, the custodian's signature over the task's id, branch and

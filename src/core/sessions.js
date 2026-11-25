@@ -107,6 +107,11 @@ export class SessionManager {
     // the pane is on now.
     /** @type {Map<string, import('../fleet/protocol/engines.js').TurnEnded>} */
     this.turnsWaiting = new Map();
+    // The sign-ins made on this box, so that one a session finds ended stops
+    // being reported as signed in (engine-signin.js, ended). Set by whoever
+    // wires the hub; null is a box that keeps none.
+    /** @type {{ ended: (member: unknown, engine: unknown) => boolean }|null} */
+    this.engineSignins = null;
     // How full an UNSANDBOXED session's window is, read off the transcript the
     // SessionStart hook named, when the file has changed since the last ask. A
     // sandboxed session's transcript is in a volume this process cannot read;
@@ -1443,6 +1448,13 @@ export class SessionManager {
       const on = rec?.engines?.[rec.engineAt ?? 0]?.engine ?? DEFAULT_ENGINE;
       if (rec && ended.engine === on) {
         this.registry.upsert(name, { turn: { ...ended, at } });
+        // NOT SIGNED IN, SAID BY THE ENGINE ITSELF: a sign-in this box was told
+        // of for this member has ended, and is written down as that, so the
+        // box stops saying it is signed in (docs/engines.md, "What a machine
+        // reports"). Not for an engine on a key, which has no sign-in.
+        if (ended.reason === 'auth' && rec.member && providerOf(rec.engines?.[rec.engineAt ?? 0] ?? { engine: on }) === null) {
+          this.engineSignins?.ended(rec.member, ended.engine);
+        }
         if (HANDS_ON.includes(ended.reason)) void this.handOn(name, ended).catch((e) => log.warn(`engines: ${name} could not be handed on`, e));
       }
     }

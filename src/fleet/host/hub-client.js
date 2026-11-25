@@ -354,6 +354,26 @@ export class HubClient {
     return { ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '', ...(r.forgot ? { forgot: r.forgot } : {}) };
   }
 
+  /**
+   * Ask fleetwright about an engine sign-in on this box, for a member the
+   * sidecar has already checked the asker against
+   * (src/core/engine-signin.js). The answer is passed on as it is: its
+   * state, and for whoever asked the page and the code. A hub from before
+   * the route says so in words.
+   *
+   * Ninety seconds: a start waits up to 45 for the engine's code, and a sign
+   * out for a container that asks the engine.
+   *
+   * @param {{ member: string, account: string, engine: string, action: string, by: string, box: string }} ask
+   * @returns {Promise<Record<string, any>>}
+   */
+  async engineSignin(ask) {
+    const r = await this.#json('POST', '/api/engine-signin', ask, 90_000, { allowStatus: [400, 404] });
+    if (r.__status === 404) return { ok: false, error: { code: 'hub_outdated' }, text: 'fleetwright here is older than signing an engine in; update it' };
+    const { __status: _status, ...answer } = r;
+    return { ...answer, ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '' };
+  }
+
   /** Liveness only. @returns {Promise<boolean>} */
   async alive() {
     try {

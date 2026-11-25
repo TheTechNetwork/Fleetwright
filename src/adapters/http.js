@@ -47,6 +47,7 @@ import { runnerAuthKind, saveRunnerLogin } from '../core/runner-login.js';
 import { applyVault, vaultClaudePeople, vaultBox } from '../core/vault-store.js';
 import { refreshVaultSessions } from '../core/vault-sessions.js';
 import { forgetPerson } from '../core/forget-person.js';
+import { EngineSignins } from '../core/engine-signin.js';
 import { autoLabels } from '../fleet/host/auto-labels.js';
 import { readMarker } from '../core/restart-watch.js';
 import { answerSessionPort, isSessionPortUpgrade } from '../core/session-port.js';
@@ -108,6 +109,11 @@ export class HttpAdapter {
     this.cfg = cfg;
     this.sessions = sessions;
     this.login = login;
+    // The engines signed in on this box (src/core/engine-signin.js). It does
+    // nothing until the sidecar asks, and it is told when a session finds a
+    // sign-in ended.
+    this.engineSignins = new EngineSignins(cfg);
+    this.sessions.engineSignins = this.engineSignins;
     // The machines this box makes out of its own containers. It does nothing
     // until it is asked, and the sidecar asks only where its operator turned
     // that on (src/core/machines.js).
@@ -181,6 +187,8 @@ export class HttpAdapter {
   }
 
   async stop() {
+    // A sign-in that is waiting does not outlive the hub that is waiting on it.
+    await this.engineSignins.close();
     await new Promise((r) => (this.server ? this.server.close(() => r(null)) : r(null)));
   }
 
@@ -312,6 +320,11 @@ export class HttpAdapter {
         engines: boxEngines(this.cfg),
         // And the metered API providers one of them may bill to (docs/api-engines.md).
         apiProviders: boxApiProviders(this.cfg),
+        // The engine sign-ins made on this box: how the last attempt for each
+        // member and engine ended, and since when it is signed in. Ids, states
+        // and times, and nothing an engine said (engine-signin.js, report).
+        // Null when the record cannot be read: cannot tell, never nobody.
+        engineSignins: this.engineSignins.report(),
         maxSessions: room.limit,
         free: room.free,
         capacity: { ceiling: room.ceiling, bound: room.bound, why: room.why },
@@ -538,6 +551,19 @@ export class HttpAdapter {
     if (p === '/api/forget-person' && method === 'POST') {
       const r = forgetPerson(this.cfg, this.sessions, (await readJson(req)).email, this.login);
       return json(res, r.ok ? 200 : 400, r);
+    }
+
+    // AN ENGINE SIGNED IN ON THIS BOX, for one member (docs/engines.md,
+    // "Signing in on the machine"). From the sidecar, once it has checked the
+    // asker against the list the minter signed, which this process does not
+    // hold. A route of its own rather than a command, for the reason above:
+    // a command is something every surface that types one can reach, and
+    // who may sign a member's engine in is not decided here.
+    //
+    // 200 whatever the answer: a refusal is an answer, with its own code, and
+    // the sidecar passes it on as it is.
+    if (p === '/api/engine-signin' && method === 'POST') {
+      return json(res, 200, await this.engineSignins.ask(await readJson(req)));
     }
 
     // One command endpoint rather than a REST verb per action: the web UI and

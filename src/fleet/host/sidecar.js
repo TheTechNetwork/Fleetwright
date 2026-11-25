@@ -72,8 +72,8 @@ import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
 import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
 import { actorEmail, needsSignature } from '../protocol/intent-signature.js';
-import { accountOfMember, memberOfAccount, composeFirstMessage } from '../protocol/members.js';
-import { ENGINE_IDS, DEFAULT_ENGINE } from '../protocol/engines.js';
+import { accountOfMember, memberOfAccount, composeFirstMessage, MEMBER_ID_RE } from '../protocol/members.js';
+import { ENGINE_IDS, DEFAULT_ENGINE, SIGNIN_ENGINES } from '../protocol/engines.js';
 import { composeTaskMessage, TASK_BRANCH_RE } from '../protocol/tasks.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 import { CLAUDE_REFRESH_AHEAD_MS } from '../minter/claude-login.js';
@@ -127,6 +127,29 @@ function reasonsAfter(list) {
   if (list === undefined || list === null) return [];
   if (!Array.isArray(list) || list.length > REASONS_MAX) return ['unreadable'];
   return list.map((c) => (typeof c === 'string' && REASON_RE.test(c) ? c : 'unreadable'));
+}
+
+/** How many sign-ins one frame carries. A fleet has at most 200 members, and each has two such engines. */
+const SIGNINS_MAX = 400;
+
+/**
+ * Which members are signed in to which engine on this box, out of what its
+ * hub says of every sign-in it knows: only the ones signed in now, each as
+ * a member's id, an engine and since when, shape-checked.
+ *
+ * An entry that does not read is left out, which here is the safe side: a
+ * sign-in the frame does not carry is one nobody is told of, never one
+ * somebody is wrongly told of (C-5).
+ *
+ * @param {unknown[]} list
+ * @returns {Array<{ member: string, engine: string, since: number }>}
+ */
+function signedInOn(list) {
+  return list
+    .filter((/** @type {any} */ e) => e && typeof e === 'object' && typeof e.member === 'string' && MEMBER_ID_RE.test(e.member)
+      && SIGNIN_ENGINES.includes(e.engine) && Number.isFinite(e.since) && e.since > 0)
+    .slice(0, SIGNINS_MAX)
+    .map((/** @type {any} */ e) => ({ member: e.member, engine: e.engine, since: Math.round(e.since) }));
 }
 
 /**
@@ -971,15 +994,21 @@ export class Sidecar {
     // delegation used to carry a start as any member its signer could act
     // for, which let the coordinator alone start a session on a member's
     // sign-ins with words of its own (intent-signature.js, `members`).
+    //
+    // AND ON AN ENGINE SIGN-IN FOR ONE (`enginesignin`), by the same list and
+    // in the same code: it puts a sign-in where that member's sessions run.
     if (verdict === 'not-covered' && grantNames) {
       const id = String(intent.params?.member ?? '');
       const name = typeof intent.params?.memberName === 'string' && intent.params.memberName ? intent.params.memberName : id;
       const names = grantNames.length ? grantNames.join(', ') : 'no member';
-      this.log.warn(`sidecar: refused start ${intent.id} as ${id} from ${intent.actor ?? 'nobody'}: the delegation it carries names ${names}`);
+      this.log.warn(`sidecar: refused ${intent.verb} ${intent.id} as ${id} from ${intent.actor ?? 'nobody'}: the delegation it carries names ${names}`);
       return {
         v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'member_not_delegated' },
-        text: `What ${intent.actor} granted this connection does not cover starting a session as ${name}: it names ${names}. ` +
-          `Grant it again from the Fleetwright app on a phone, under You \u2192 Delegations, with ${name} among the members it may start as. Nothing was started.`,
+        text: intent.verb === 'enginesignin'
+          ? `What ${intent.actor} granted this connection does not cover signing an engine in for ${name}: it names ${names}. ` +
+            `Grant it again from the Fleetwright app on a phone, under You \u2192 Delegations, with ${name} among its members. Nothing was done.`
+          : `What ${intent.actor} granted this connection does not cover starting a session as ${name}: it names ${names}. ` +
+            `Grant it again from the Fleetwright app on a phone, under You \u2192 Delegations, with ${name} among the members it may start as. Nothing was started.`,
       };
     }
     if (this.#enforces(intent) && verdict !== 'signed' && verdict !== 'delegated' && needsSignature(intent.verb)) {
@@ -1008,6 +1037,18 @@ export class Sidecar {
       const as = this.#startAs(intent, verdict);
       if (!as.ok) {
         this.log.warn(`sidecar: refused start ${intent.id} as ${String(intent.params.member)} from ${intent.actor ?? 'nobody'}: ${as.text}`);
+        return { v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: as.code }, text: as.text };
+      }
+      intent = as.intent;
+    }
+
+    // AN ENGINE SIGNED IN FOR A MEMBER (docs/engines.md, "Signing in on the
+    // machine"), held to the rule a start as that member is, here and for
+    // every one of its actions: `status` answers with the code.
+    if (intent.verb === 'enginesignin') {
+      const as = this.#signInAs(intent, verdict);
+      if (!as.ok) {
+        this.log.warn(`sidecar: refused enginesignin ${intent.id} for ${String(intent.params.member)} from ${intent.actor ?? 'nobody'}: ${as.text}`);
         return { v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: as.code }, text: as.text };
       }
       intent = as.intent;
@@ -1141,25 +1182,17 @@ export class Sidecar {
    * @returns {{ ok: true, intent: any } | { ok: false, code: string, text: string }}
    */
   #startAs(intent, verdict) {
-    const id = String(intent.params.member);
-    const name = typeof intent.params.memberName === 'string' && intent.params.memberName ? intent.params.memberName : id;
     /** @param {string} code @param {string} text */
     const refuse = (code, text) => /** @type {const} */ ({ ok: false, code, text: `${text} Nothing was started.` });
-    const members = this.intentKeys?.currentMembers ?? null;
-    if (!members) {
-      const why = this.intentKeys?.problem ? ` (${this.intentKeys.problem})` : '';
-      return refuse('member_unchecked', `${this.hostId} holds no list from the vault of who may start a session as a member${why}, so it starts nobody as one.`);
-    }
-    const member = members.get(id);
-    if (!member) return refuse('no_member', `The vault lists no member called ${id}. Whoever manages ${name} files it from the Org screen first.`);
-    const asker = String(intent.actor || '').trim().toLowerCase();
-    if (!asker || !member.may.includes(asker)) {
-      const who = member.may.length ? member.may.join(', ') : 'nobody in the fleet now';
-      return refuse('not_custodian', `${asker || 'Nobody named'} may not start a session as ${name}. The vault lists ${who}.`);
-    }
-    if (verdict !== 'signed' && verdict !== 'delegated') {
+    const as = this.#actingAs(intent, verdict);
+    const { id, name, asker } = as;
+    if (!as.ok) {
+      if (as.why === 'unchecked') return refuse('member_unchecked', `${this.hostId} holds no list from the vault of who may start a session as a member${as.problem}, so it starts nobody as one.`);
+      if (as.why === 'unknown') return refuse('no_member', `The vault lists no member called ${id}. Whoever manages ${name} files it from the Org screen first.`);
+      if (as.why === 'unlisted') return refuse('not_custodian', `${asker || 'Nobody named'} may not start a session as ${name}. The vault lists ${as.listed}.`);
       return refuse('signature_required', `A session as ${name} runs on ${name}’s sign-ins, so ${this.hostId} starts one only when ${asker} signed for it, or delegated it in a grant that names ${name}, and this was neither.`);
     }
+    const member = as.member;
     const instructions = typeof intent.params.memberBrief === 'string' ? intent.params.memberBrief : '';
     const words = typeof intent.params.task === 'string' ? intent.params.task : '';
     // ON A TASK (docs/tasks.md, "Starting on a task"): which task and branch
@@ -1179,7 +1212,75 @@ export class Sidecar {
     delete params.memberBrief;
     if (first.text) params.task = first.text;
     else delete params.task;
-    return { ok: true, intent: { ...intent, actor: member.kind === 'agent' ? accountOfMember(id) : member.email, startedBy: asker, params } };
+    return { ok: true, intent: { ...intent, actor: as.account, startedBy: asker, params } };
+  }
+
+  /**
+   * May whoever sent this act as the member it names? THE ONE RULE a start
+   * as a member and an engine sign-in for one are both held to, so the two
+   * cannot come to disagree about who a member's sign-ins are open to.
+   *
+   * What this box believes is the minter's signed list of who may start as
+   * each member, and a signature or delegation, by a key the same list names
+   * for that person, over this request with this member in it.
+   *
+   *  - NO LIST IS A REFUSAL (`unchecked`), as it is for signatures.
+   *  - A member the list does not have (`unknown`), and an asker it does not
+   *    name for that member (`unlisted`).
+   *  - SIGNED OR DELEGATED, WHATEVER THE MODE (`unsigned`): a box set to take
+   *    unsigned work would otherwise take the coordinator's word for who
+   *    asked, and here that word would name a custodian.
+   *
+   * It words nothing: each caller says what was being asked for. `account`
+   * is what the member's sessions run as on this box, the member's own
+   * address for a person and `<id>@members.invalid` for an agent.
+   *
+   * @param {any} intent @param {string|null} verdict
+   * @returns {{ ok: true, id: string, name: string, asker: string, member: any, account: string }
+   *   | { ok: false, why: 'unchecked'|'unknown'|'unlisted'|'unsigned', id: string, name: string, asker: string, problem: string, listed: string }}
+   */
+  #actingAs(intent, verdict) {
+    const id = String(intent.params.member);
+    const name = typeof intent.params.memberName === 'string' && intent.params.memberName ? intent.params.memberName : id;
+    const asker = String(intent.actor || '').trim().toLowerCase();
+    /** @param {'unchecked'|'unknown'|'unlisted'|'unsigned'} why @param {{ problem?: string, listed?: string }} [said] */
+    const no = (why, said = {}) => /** @type {const} */ ({ ok: false, why, id, name, asker, problem: said.problem ?? '', listed: said.listed ?? '' });
+    const members = this.intentKeys?.currentMembers ?? null;
+    if (!members) return no('unchecked', { problem: this.intentKeys?.problem ? ` (${this.intentKeys.problem})` : '' });
+    const member = members.get(id);
+    if (!member) return no('unknown');
+    if (!asker || !member.may.includes(asker)) return no('unlisted', { listed: member.may.length ? member.may.join(', ') : 'nobody in the fleet now' });
+    if (verdict !== 'signed' && verdict !== 'delegated') return no('unsigned');
+    return { ok: true, id, name, asker, member, account: member.kind === 'agent' ? accountOfMember(id) : String(member.email ?? '') };
+  }
+
+  /**
+   * May this engine sign-in be made for the member it names?
+   *
+   * EXACTLY WHO MAY START A SESSION AS THAT MEMBER (#actingAs), because what
+   * it does is put a sign-in where that member's sessions run on it. For all
+   * four actions: `status` answers with the code a person types, and a sign
+   * out ends what those sessions run on.
+   *
+   * What comes back carries the member's account on this box beside the
+   * intent, for the hub to name the engine home by, and who asked. Neither
+   * is a parameter: a caller cannot say whose home is opened.
+   *
+   * @param {any} intent @param {string|null} verdict
+   * @returns {{ ok: true, intent: any } | { ok: false, code: string, text: string }}
+   */
+  #signInAs(intent, verdict) {
+    /** @param {string} code @param {string} text */
+    const refuse = (code, text) => /** @type {const} */ ({ ok: false, code, text: `${text} Nothing was done.` });
+    const as = this.#actingAs(intent, verdict);
+    const { id, name, asker } = as;
+    if (!as.ok) {
+      if (as.why === 'unchecked') return refuse('member_unchecked', `${this.hostId} holds no list from the vault of who may start a session as a member${as.problem}, so it signs no member’s engine in.`);
+      if (as.why === 'unknown') return refuse('no_member', `The vault lists no member called ${id}. Whoever manages ${name} files it from the Org screen first.`);
+      if (as.why === 'unlisted') return refuse('not_custodian', `${asker || 'Nobody named'} may not sign an engine in for ${name}. That is for whoever may start a session as ${name}, and the vault lists ${as.listed}.`);
+      return refuse('signature_required', `An engine signed in for ${name} is what ${name}’s sessions run on, so ${this.hostId} does it only when ${asker} signed for it, or delegated it in a grant that names ${name}, and this was neither.`);
+    }
+    return { ok: true, intent: { ...intent, signInAs: { account: as.account, by: asker } } };
   }
 
   /**
@@ -1287,6 +1388,24 @@ export class Sidecar {
         return reply({ ok: true, text, xoprobe });
       }
       if (intent.verb === 'xosetup') return reply(await this.#xosetup(intent));
+
+      // AN ENGINE SIGN-IN NEVER BECOMES A COMMAND LINE EITHER: a command is
+      // something every surface that types one can reach, and who may is
+      // decided in this process, against the minter's list (#signInAs). The
+      // hub is asked on a route of its own, with the account handle() worked
+      // out and no parameter can name. Its answer is passed on whole: where
+      // the sign-in stands, and for whoever asked the page and the code.
+      // Nothing of it is logged here.
+      if (intent.verb === 'enginesignin') {
+        const as = /** @type {any} */ (intent).signInAs;
+        if (!as || typeof as.account !== 'string') {
+          return reply({ ok: false, error: { code: 'member_unchecked' }, text: `${this.hostId} did not check who may sign this member’s engine in. Nothing was done.` });
+        }
+        return reply(await this.hub.engineSignin({
+          member: String(intent.params.member), account: as.account, engine: String(intent.params.engine), action: String(intent.params.action),
+          by: String(as.by ?? ''), box: this.hostId,
+        }));
+      }
 
       // A MACHINE FROM A HYPERVISOR IS THIS PROCESS'S TOO: the pool's token
       // is in its memory and nowhere else (xo-pools.js), and the ticket the
@@ -2590,6 +2709,12 @@ export class Sidecar {
         // from before engines says nothing, and the coordinator reads that
         // as Claude Code alone.
         ...(Array.isArray(state.engines) ? { engines: state.engines.filter((/** @type {unknown} */ e) => typeof e === 'string').slice(0, 8) } : {}),
+        // WHICH MEMBERS ARE SIGNED IN TO WHICH ENGINE HERE, as the hub was told
+        // (docs/engines.md, "What a machine reports"): a member's id, an
+        // engine and since when. Only the ones signed in now, and no account.
+        // A hub from before sign-ins says nothing, and the frame then has no
+        // list, which is cannot tell and never nobody.
+        ...(Array.isArray(state.engineSignins) ? { engineSignins: signedInOn(state.engineSignins) } : {}),
         // The metered API providers an engine here may bill to, when its
         // operator named any (docs/api-engines.md). Kept, because it is also
         // what decides whether this box asks a vault for keys (#askVault).

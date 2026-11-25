@@ -192,6 +192,8 @@ test('a reader that fails leaves a null, not a default', async (t) => {
   const s = await r.json();
   assert.equal(s.labels, null);
   assert.equal(s.houseRules, null);
+  // Nor "nobody is signed in to an engine here", about a record it could not read.
+  assert.equal(s.engineSignins, null);
   // readChannel's own contract is that an unreadable file means stable — it
   // catches its read inside — so this one is the reader's answer, not the
   // route's. Pinned so a change to either shows up here.

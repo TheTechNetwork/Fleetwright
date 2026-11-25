@@ -259,6 +259,9 @@ export async function main() {
   adapters.push(http);
   // The box's clock on machines it made before this start, if it made any.
   http.machines.watch();
+  // And an engine sign-in that was waiting when the last hub stopped without
+  // saying so: it is gone, and is written down as that (engine-signin.js).
+  http.engineSignins.recover();
 
   // TELEGRAM IS ARCHIVED — see docs/telegram.md. The adapter is at
   // archive/telegram/telegram.js, unwired, and nothing is started for it here.

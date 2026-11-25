@@ -39,6 +39,18 @@ export const ENGINE_IDS = /** @type {readonly string[]} */ (Object.freeze(Object
 export const MAX_ENGINES = 3;
 /** The engine every machine runs, and the one a member has when it names none. */
 export const DEFAULT_ENGINE = 'claude-code';
+/**
+ * The engines a machine signs in on itself, with the engine's own device
+ * code (docs/engines.md, "Signing in on the machine"). Claude Code is not
+ * one: its sign-in is the vault's.
+ */
+export const SIGNIN_ENGINES = Object.freeze(['codex', 'opencode']);
+/**
+ * How an attempt to sign one in, or a sign-in, last ended on a machine: what
+ * a box keeps, reports and says in `engine.signin`. `waiting` and `none` are
+ * answered to whoever asks and are never one of these.
+ */
+export const SIGNIN_OUTCOMES = Object.freeze(['signed_in', 'expired', 'failed', 'cancelled', 'lost', 'signed_out', 'ended']);
 
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/;
 /**
