@@ -276,9 +276,14 @@ export function changeTask(task, fields, { by, at, note = '' }) {
   const next = { ...task, updatedAt: at };
   if (fields.title !== undefined) next.title = fields.title;
   if (fields.brief !== undefined) next.brief = fields.brief;
-  if (fields.workType !== undefined) {
+  if (fields.workType !== undefined && (fields.workType || '') !== (task.workType ?? '')) {
     if (fields.workType) next.workType = fields.workType;
     else delete next.workType;
+    // WRITTEN DOWN, though nobody's hands changed: the kind of work is what
+    // routing and approval read (docs/routing.md, docs/budgets.md), and one
+    // taken off before a start and put back after left no trace. Here `from`
+    // and `to` are kinds of work.
+    next.handoffs = handed(next, { at, by, kind: 'work-type', from: task.workType ?? null, to: fields.workType || null });
   }
   if (fields.repo !== undefined) {
     if (fields.repo) next.repo = fields.repo;
@@ -291,7 +296,7 @@ export function changeTask(task, fields, { by, at, note = '' }) {
   if (fields.assignee !== undefined && fields.assignee !== task.assignee) {
     if (task.lock) return refuse('task_locked', `${task.id} cannot change hands while it is being worked on: ${lockWords(task)}. Release it, or wait for it to come back.`);
     next.assignee = fields.assignee;
-    next.handoffs = handed(task, { at, by, kind: 'assigned', from: task.assignee, to: fields.assignee, ...(note ? { note } : {}) });
+    next.handoffs = handed(next, { at, by, kind: 'assigned', from: task.assignee, to: fields.assignee, ...(note ? { note } : {}) });
     // A QUESTION SOMEBODY ANSWERED BY HAND IS NOT STILL BEING ASKED. A task
     // waiting on a person's pick that is then assigned the ordinary way has
     // its answer, and its page must stop asking. It is written as what it

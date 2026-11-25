@@ -9,6 +9,7 @@ import { OrgMembers, MEMBERS_PREFIX, membersRoute } from '../src/fleet/coordinat
 import { MAX_MEMBERS, MAX_INSTRUCTIONS, checkMember } from '../src/fleet/protocol/members.js';
 import { PROTOCOL_VERSION, checkParams } from '../src/fleet/protocol/intents.js';
 import { intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
+import { CUSTODY_PREFIX } from '../src/fleet/coordinator/org-custody.js';
 import { Fleet } from '../worker/src/fleet-do.js';
 
 const admin = { email: 'eli@example.com', admin: true };
@@ -201,10 +202,47 @@ test('members survive the Durable Object being rebuilt, one row each, and a remo
   assert.deepEqual(third.core.org.all().map((m) => m.id), ['eli', 'debbie']);
 });
 
+test('who may start as a member survives the Durable Object being rebuilt, so a rebuilt one refuses whom the last one refused', async () => {
+  // The list was memory, null from every start of the object until a box next
+  // asked for keys, and while it was null nobody was refused: anybody could
+  // start as Debbie on a box of their own, which then said what she had spent.
+  const state = fakeState();
+  const settle = () => new Promise((r) => setImmediate(r));
+  const go = (/** @type {any} */ fleet, /** @type {any} */ who) => fleet.core.dispatch({ verb: 'start', params: { member: 'debbie', task: 't' }, actor: who.email, requester: who });
+  const first = new Fleet(/** @type {any} */ (state), {});
+  await settle();
+  assert.equal(first.core.setMember(admin, 'debbie', debbie({ reportsTo: undefined })).ok, true);
+  // Nothing heard yet: cannot tell.
+  assert.equal((await go(first, sam)).error?.code, 'custody_unknown');
+  // The minter's list, as a box's key answer brings it (#onHostKeys).
+  assert.equal(first.core.custody.heard([{ id: 'debbie', may: [dana.email] }, { id: 'jason', may: [] }], 5000), true);
+  first.core.onStateChanged?.();
+  await settle();
+  assert.deepEqual([state.rows.get(`${CUSTODY_PREFIX}debbie`), state.rows.get(`${CUSTODY_PREFIX}jason`), state.rows.get('custodyAt')], [[dana.email], [], 5000]);
+  // The same list again is nothing to write.
+  assert.equal(first.core.custody.heard([{ id: 'debbie', may: [dana.email] }, { id: 'jason', may: [] }], 9000), false);
+
+  const revived = new Fleet(/** @type {any} */ (state), {});
+  await settle();
+  assert.equal((await go(revived, sam)).error?.code, 'not_custodian');
+  // Dana is on it, and is refused only for there being no machine.
+  assert.equal((await go(revived, dana)).error?.code, 'no_hosts');
+  // A member the next list leaves out has its row deleted, and one with nobody listed is an answer.
+  assert.equal(revived.core.custody.heard([{ id: 'jason', may: [] }, { id: 'Not An Id', may: [sam.email] }, { id: 'loose' }], 12_000), true);
+  revived.core.onStateChanged?.();
+  await settle();
+  assert.deepEqual([...state.rows.keys()].filter((k) => k.startsWith(CUSTODY_PREFIX)), [`${CUSTODY_PREFIX}jason`]);
+  const third = new Fleet(/** @type {any} */ (state), {});
+  await settle();
+  assert.match(String((await go(third, dana)).text), /Debbie’s custody has not been filed yet/);
+});
+
 /** A fleet with boxes at given protocols, and what was sent to each. */
 function fleet(/** @type {Array<[string, number, any?]>} */ boxes) {
   const core = new CoordinatorCore({});
   core.org = org();
+  // Who may start as Debbie, as the minter last signed it.
+  core.memberCustody = new Map([['debbie', [dana.email]]]);
   for (const [hostId, protocol, extra = {}] of boxes) {
     core.registry.connect(hostId, () => {}, extra.connect ?? {});
     core.registry.recordHealth(hostId, { hub: { reachable: true }, protocol, maxSessions: 5, running: 0, free: 5, labels: extra.labels ?? [], sandboxed: true });
@@ -277,9 +315,19 @@ test('the coordinator refuses first, on the minter’s last list, and passes on 
   assert.equal((await go(dana, 'ghost')).error?.code, 'no_member');
   assert.equal((await core.dispatch({ verb: 'start', params: { member: 'debbie', task: 't' }, preferHost: 'box-19' })).error?.code, 'not_signed_in');
 
-  // No list yet: nothing is refused for custody here. The box decides.
-  assert.equal(core.memberCustody, null);
-  assert.equal((await go(sam, 'debbie')).ok, true);
+  // NO LIST HEARD, EVER: it cannot tell, and says so with when to try
+  // again. Let through, Sam's start on a box of his own was where Debbie's
+  // month began to be counted. An admin's is passed on: the box decides.
+  core.memberCustody = null;
+  const early = await go(sam, 'debbie');
+  assert.equal(early.error?.code, 'custody_unknown');
+  assert.equal(early.text, 'This fleet has no vault to say who may start a session as Debbie, so it cannot tell whether you may, and no machine would run it. Nothing was sent.');
+  assert.equal((await go(dana, 'debbie')).error?.code, 'custody_unknown', 'her manager too: the tree is not the list');
+  assert.deepEqual(sent, []);
+  assert.equal((await go(admin, 'debbie')).ok, true);
+  // With a vault, the list is on its way: a machine asks every ten minutes.
+  core.minter = /** @type {any} */ ({ vault: async () => ({ ok: false }) });
+  assert.equal((await go(sam, 'debbie')).text, 'The fleet has not heard yet who may start a session as Debbie, so it cannot tell whether you may. The vault says when a machine asks it, and a connected machine asks every ten minutes: try again in a few minutes. Nothing was sent.');
 
   // The list arrives on a box's key answer, relayed and read on the way.
   core.memberCustody = new Map([['debbie', [dana.email]], ['dana', [dana.email]]]);

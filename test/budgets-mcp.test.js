@@ -91,7 +91,7 @@ test('a start that needs approval comes back refused in words an agent can relay
   assert.deepEqual(f.started, []);
   const waiting = await f.call('fleet_approvals');
   assert.equal(waiting.text, [
-    'a1 is waiting: eli@example.com to start a session as Debbie. This session would not ask before it runs commands, on Debbie’s sign-ins. You manage this member, so it is yours to answer, in the app.',
+    'a1 is waiting: eli@example.com to start a session as Debbie. This session would not ask before it runs commands, on Debbie’s sign-ins. The session is told: “Do the thing.” You manage this member, so it is yours to answer, in the app.',
     '',
     'An approval is answered by a person in the app, not from here.',
   ].join('\n'));

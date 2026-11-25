@@ -44,7 +44,7 @@ test('a start on a member with an engine that bills an API key waits for approva
   const f = fleet([['paid', ['claude-code', 'opencode'], ['openrouter']]], both);
   const refused = await f.start('paid');
   assert.equal(refused.error.code, 'needs_approval');
-  assert.deepEqual(refused.approval.reasons, [{ kind: 'paid-api', text: 'Debbie has an engine that bills an API key by the token, which no budget here counts.' }]);
+  assert.deepEqual(refused.approval.reasons, [{ kind: 'paid-api', text: 'Debbie has an engine that bills an API key by the token, which no budget here counts. The session is told: “Fix it.”' }]);
   assert.deepEqual(f.sent, [], 'nothing reached a box');
   // Approved, it carries the engine to the machine that bills that provider.
   const r = await f.approved('paid');

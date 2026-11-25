@@ -6,8 +6,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  checkBudgetSettings, newSpend, startCounting, resumeCounting, countSpend, readSpend, spendWords, overBudget, dollars, monthOf,
-  approvalNeeded, newApproval, aged, covers, answerApproval, approvalWords, readApproval,
+  checkBudgetSettings, newSpend, startCounting, startUnanswered, resumeCounting, countSpend, readSpend, spendWords, overBudget, uncounted, dollars, monthOf,
+  approvalNeeded, newApproval, aged, covers, sameAsk, startDigest, toldWords, answerApproval, approvalWords, readApproval,
   MAX_SESSIONS_SEEN, MAX_RISKY_WORK_TYPES, APPROVAL_WAIT_MS, APPROVAL_USE_MS, MAX_APPROVAL_NOTE,
 } from '../src/fleet/protocol/budgets.js';
 
@@ -70,6 +70,49 @@ test('a session that reports no dollars, or says its dollars are not all of them
   assert.equal(spendWords(row, 50), 'At least $3.00 of $50.00 this month, at API prices as each session counted it. 2 sessions reported no cost, so the real figure is higher by an amount nobody counted.');
   // Nonsense is no dollars.
   for (const junk of [{ usd: -4 }, { usd: 'lots' }, { usd: Infinity }, 'x', 7]) assert.equal(countSpend(startCounting(newSpend(NOV), key, NOV), key, junk, NOV).usd, 0);
+});
+
+test('one report adds at most a hundred dollars for one session, and the row says the rest was not counted', () => {
+  // A box's word is all there is for what a session cost. One report of
+  // $99,999 was counted whole, and at a budget that refuses it locked the
+  // member's manager out.
+  let row = countSpend(startCounting(newSpend(NOV), key, NOV), key, said(99_999), NOV);
+  assert.deepEqual([row.usd, row.capped], [100, [key]]);
+  assert.equal(spendWords(row, 50), 'At least $100.00 of $50.00 this month, at API prices as each session counted it. One session reported more than $100.00 spent between two reports. The fleet counts at most that much from one report, so the rest was not counted.');
+  // What was left out is left out once: the next report counts from the figure the box gave.
+  row = countSpend(row, key, said(100_004), NOV);
+  assert.deepEqual([row.usd, row.capped], [105, [key]]);
+  // A hundred dollars exactly is counted whole, and nothing is said about it.
+  assert.deepEqual([countSpend(startCounting(newSpend(NOV), key, NOV), key, said(100), NOV).capped], [undefined]);
+  // It is the month's, and it reads back.
+  assert.deepEqual(readSpend(JSON.parse(JSON.stringify(row)))?.capped, [key]);
+  assert.equal(countSpend(row, key, said(100_005), DEC).capped, undefined);
+});
+
+test('a start no box answered is spend nobody can tell, until the box it went to reports the session it began', () => {
+  // The start timed out and the session ran: nothing was counting it, and
+  // the row said $0.00 of $50.00 while the box reported $180.
+  const sent = NOV - 60_000;
+  let row = startUnanswered(newSpend(NOV), 'deb132', sent, NOV);
+  assert.deepEqual([row.usd, uncounted(row)], [0, 1]);
+  assert.equal(spendWords(row, 50), 'At least $0.00 of $50.00 this month, at API prices as each session counted it. One start got no answer from its machine, so whether it ran, and what it cost, is not known.');
+  // Not another box's session, and not one that began before the start was sent.
+  assert.equal(countSpend(row, 'sam-box\ncc-9', said(40), NOV), row);
+  assert.equal(countSpend(row, 'deb132\nold', said(40), NOV, { startedAt: sent - 3_600_000 }), row);
+  // The one that began after it is that start's: counted from nothing, and the start is known.
+  row = countSpend(row, key, said(12), NOV, { startedAt: sent + 4_000 });
+  assert.deepEqual([row.usd, uncounted(row), row.unanswered], [12, 0, undefined]);
+  assert.equal(spendWords(row, 50), '$12.00 of $50.00 this month, at API prices as each session counted it.');
+  // One session a start: a second the box names is not counted on it.
+  assert.equal(countSpend(row, 'deb132\ncc-2', said(900), NOV, { startedAt: sent + 5_000 }), row);
+  // A box that gives no time for a session says nothing against it.
+  assert.equal(countSpend(startUnanswered(newSpend(NOV), 'deb132', sent, NOV), key, said(3), NOV).usd, 3);
+  // Two are said as two, read back, and waited for across the turn of the month for a day.
+  const late = DEC - 600_000; // the last minutes of November
+  const two = startUnanswered(startUnanswered(newSpend(NOV), 'deb132', sent, NOV), 'deb132', late, late);
+  assert.match(spendWords(two, null), /^At least \$0\.00 this month.* 2 starts got no answer from their machines, so whether they ran, and what they cost, is not known\.$/);
+  assert.deepEqual(readSpend(JSON.parse(JSON.stringify({ ...two, unanswered: [...(two.unanswered ?? []), { host: 7 }, null] })))?.unanswered, two.unanswered);
+  assert.deepEqual(countSpend(two, 'sam-box\nother', said(1), DEC).unanswered, [{ host: 'deb132', at: late }]);
 });
 
 test('a member’s row keeps the last figure of sixty sessions and reads back only what it wrote', () => {
@@ -135,12 +178,31 @@ test('the setting holds a mode, a flag and a short list, and says what is wrong 
   assert.match(refused({ workTypes: Array.from({ length: MAX_RISKY_WORK_TYPES + 1 }, (_, i) => `k${i}`) }), new RegExp(`at most ${MAX_RISKY_WORK_TYPES}`));
 });
 
-const asked = () => newApproval({ id: 'a7', member: 'debbie', task: 't4', reasons: [{ kind: 'over-budget', text: 'Debbie has spent $52.10 of a budget of $50.00 this month.' }], by: 'dana@example.com', at: NOV });
+/** What two different starts' sessions would be told, as digests. */
+const DOCS = 'd'.repeat(64);
+const PROD = 'e'.repeat(64);
+const asked = () => newApproval({ id: 'a7', member: 'debbie', task: 't4', reasons: [{ kind: 'over-budget', text: 'Debbie has spent $52.10 of a budget of $50.00 this month.' }], digest: DOCS, by: 'dana@example.com', at: NOV });
 
-test('an approval covers the same person, member and task, and every reason the start has now', () => {
+test('an approval covers the same person, member, task and words, and every reason the start has now', async () => {
   const a = asked();
-  const start = { member: 'debbie', task: 't4', kinds: ['over-budget'], by: 'dana@example.com' };
+  const start = { member: 'debbie', task: 't4', kinds: ['over-budget'], by: 'dana@example.com', digest: DOCS };
   assert.equal(covers(a, start), true);
+  // THE SAME START IS ONE WHOSE SESSION IS TOLD THE SAME THING. Other words
+  // under the same task id, or on a start with no task, are another start.
+  assert.equal(covers(a, { ...start, digest: PROD }), false, 'what the session is told has changed');
+  assert.equal(sameAsk(a, { ...start, digest: PROD }), true, 'and it is still the same ask, which is how the refusal can say so');
+  const { digest: _none, ...old } = a;
+  assert.equal(covers(old, start), false, 'an approval kept from before digests names none and covers nothing');
+  // The digest is of the words or of the profile named, and of all of them.
+  const digests = await Promise.all([{ task: 'Tidy the README.' }, { task: 'Tidy the README. ' }, { profile: 'Tidy the README.' }, {}, { task: 'Tidy the README.', extra: 1 }].map((x) => startDigest(x)));
+  assert.equal(new Set(digests).size, 4);
+  assert.equal(digests[0], digests[4]);
+  assert.match(digests[0], /^[0-9a-f]{64}$/);
+  // And what the person asked to approve is shown of it.
+  assert.equal(toldWords({ task: 'Tidy the\nREADME.' }), 'The session is told: “Tidy the README.”');
+  assert.equal(toldWords({ task: 'x'.repeat(400) }), `The session is told: “${'x'.repeat(159)}…”`);
+  assert.equal(toldWords({ profile: 'nightly' }), 'The session is given the profile nightly, as its machine holds it.');
+  assert.equal(toldWords({}), 'The session is told nothing, and starts idle.');
   assert.equal(covers(a, { ...start, by: 'sam@example.com' }), false, 'somebody else’s start');
   assert.equal(covers(a, { ...start, member: 'ines' }), false);
   assert.equal(covers(a, { ...start, task: 't5' }), false);

@@ -214,6 +214,7 @@ export class Coordinator {
     this.core.tasks.restore(state.orgTasks?.tasks, state.orgTasks?.seq);
     this.core.routing.restore(state.routing);
     this.core.budgets.restore(state.budgets ?? {});
+    this.core.custody.restore(state.custody);
     this.core.restoreRunnerStarts(state.runnerStarts);
     this.core.restoreStandby(state.vmStandby);
     this.core.restoreHolderJoins(state.holderJoins);
@@ -324,6 +325,8 @@ export class Coordinator {
         orgTasks: this.core.tasks.serialise(),
         routing: this.core.routing.serialise(),
         budgets: this.core.budgets.serialise(),
+        // Who may start as each member, as the minter last signed it (org-custody.js).
+        custody: this.core.custody.serialise(),
         runnerStarts: this.core.serialiseRunnerStarts(),
         vmStandby: this.core.serialiseStandby(),
         holderJoins: this.core.serialiseHolderJoins(),

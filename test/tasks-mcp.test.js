@@ -116,13 +116,33 @@ test('a wait that runs out is not a failure, and `task` picks the wait back up',
 });
 
 test('a delegation that produces no result says what is left behind, as an error', async () => {
-  // THE START IS REFUSED: the task exists, open, and the reply names it.
+  // THE START IS REFUSED: the task made for it is cancelled again. Each one
+  // used to be left open, and five hundred unfinished tasks refuse everybody
+  // a new one: an agent retrying a start that could not work filled the table.
   let f = fleet();
   f.box.answer = () => ({ ok: false, error: { code: 'not_custodian' }, text: 'eli@example.com may not start a session as Debbie. Nothing was started.' });
   await f.server.handleLine(rpc(1, 'fleet_delegate', { to: 'debbie', title: 'Fix it', brief: 'Do the thing.' }));
   assert.equal(isError(f), true);
-  assert.match(text(f), /^eli@example\.com may not start a session as Debbie\. Nothing was started\.\n\nt1 was made and is open, with nothing working on it\. Start it with fleet_start and `taskId` once that is put right, or cancel it with fleet_task\.$/);
-  assert.deepEqual([f.core.tasks.get('t1')?.state, f.core.tasks.get('t1')?.lock], ['open', null]);
+  assert.equal(text(f), 'eli@example.com may not start a session as Debbie. Nothing was started.\n\nt1 was made for this and has been cancelled, since nothing was started on it. Call fleet_delegate again once that is put right.');
+  assert.deepEqual([f.core.tasks.get('t1')?.state, f.core.tasks.get('t1')?.lock, f.core.tasks.get('t1')?.handoffs.at(-1)?.note], ['cancelled', null, 'its start was refused']);
+
+  // WAITING ON A PERSON is not refused for good: the approval names the task, so it stays.
+  f = fleet();
+  assert.equal(/** @type {any} */ (f.core.setBudgetSettings(eli, { workTypes: ['deploy'] })).ok, true);
+  await f.server.handleLine(rpc(1, 'fleet_delegate', { to: 'debbie', title: 'Ship it', brief: 'Deploy the API.', workType: 'deploy' }));
+  assert.equal(isError(f), true);
+  assert.match(text(f), /which you may give yourself: a1\. Start it again once it is approved; nothing was sent\.\n\nt1 was made and is open, waiting on that approval\. Once it is given, start it with fleet_start and `taskId: "t1"`\. The approval is for the task as it is now, so changing its title or brief asks for a new one\.$/);
+  assert.equal(f.core.tasks.get('t1')?.state, 'open');
+
+  // NO ANSWER IN TIME is not "nothing working on it": the box may have started the session, and nobody here knows.
+  f = fleet();
+  f.box.answer = () => {
+    throw new Error('deb132 did not answer in time');
+  };
+  await f.server.handleLine(rpc(1, 'fleet_delegate', { to: 'debbie', title: 'Fix it', brief: 'Do the thing.' }));
+  assert.equal(isError(f), true);
+  assert.equal(text(f), 'deb132 did not answer in time\n\nt1 was made, and whether a session started on it is not known: no answer came back in time, and one may have started all the same. fleet_tasks with `id: "t1"` shows whether a session holds it. If none does in a few minutes, start it with fleet_start and `taskId`, or cancel it with fleet_task.');
+  assert.deepEqual([f.core.tasks.get('t1')?.state, f.core.tasks.get('t1')?.lock?.hostId], ['open', 'deb132'], 'and the task is kept, with the lock its start took');
 
   // THE SESSION STOPS AND WROTE NOTHING: no result is made up from it.
   f = fleet({ onSleep: (self) => self.says({ event: 'session.ready', name: 'cc-1', tasked: true, taskId: 't1' }) });

@@ -40,6 +40,20 @@ month**:
   the same reason a resume counts only when the person resuming could have
   started as that member: a person's own box may call a session of theirs
   any member's, and their resuming it then spends nobody else's budget.
+- **Only for somebody the minter lists as able to start as that member.** A
+  start is where counting begins, on the word of the box it went to, and
+  that can be a box of the starter's own. So the coordinator keeps the
+  minter's last list of who may start as whom, across a restart, and
+  refuses anybody not on it ([members.md](./members.md), "Starting as a
+  member"). A fleet whose minter has never been asked has no list. It then
+  cannot tell, and refuses a start as a member by anybody but an admin, in
+  words that say when to try again.
+- **One report adds at most $100 for one session.** What a session cost is
+  its box's word, with nothing to check it against. A session does not
+  spend that between two reports, which come every half minute or so. A box
+  back from hours away can honestly report more: the rest is left
+  uncounted, and the member's spend says "at least" and that a session
+  reported more at once than the fleet counts.
 - A figure that goes down is a new conversation in the same session, and
   counts from nothing again.
 - The month is the calendar month in UTC. At its turn every member's total
@@ -55,8 +69,23 @@ spend is then shown as "at least" its total, with how many sessions that is
 about. Unknown is never read as nothing, and never blocks a start: a budget
 is enforced on what was counted.
 
-One row a member (`spend:<id>`): the month, the total, and the last figure
-seen for at most 60 of its sessions.
+**A start no box answered is unknown too.** A start as a member is sent to a
+box and waited for. A box too busy to answer in time may have started the
+session all the same, and nothing was then counting it: the member's month
+read "$0.00 of $50.00" while its box reported the cost. So a start that
+times out is kept as one whose spend is not known, and the member's spend
+says so: "At least", and that a start got no answer from its machine. When
+that box next reports a session as that member which the fleet is not
+already counting, and which did not begin before the start was sent, it is
+that start's: counted from nothing, like any session the fleet started, and
+no longer unknown. One session a start. Like every unknown it blocks
+nothing, in `ask` and in `refuse`: what stops the next start is the figure
+once the box reports it. A start nobody ever answers stays unknown for the
+month.
+
+One row a member (`spend:<id>`): the month, the total, the last figure
+seen for at most 60 of its sessions, and the starts nobody answered. One row a member for who may start as
+it (`custody:<id>`), as the minter last signed it.
 
 ## The setting
 
@@ -86,7 +115,7 @@ approval names each one that is:
 |---|---|
 | `over-budget` | `budgets` is `ask`, the member has a budget, and its counted spend this month is at or past it |
 | `dangerous` | `dangerous` is on and the start asks for a session that does not ask before it runs commands |
-| `risky-work` | the start is on a task whose `workType` is in `workTypes` |
+| `risky-work` | the start is on a task whose `workType` is in `workTypes`. Changing the kind of work on such a task, or on one that was such a task, takes the standing that could approve the start ([tasks.md](./tasks.md), "Who sees and changes one") |
 | `paid-api` | `paidApi` is on and any engine in the member's list bills an API key, whichever machine the start goes to |
 
 A start as yourself, with no member, is not looked at: it runs on your own
@@ -104,7 +133,7 @@ approval is given, the same start is sent again and goes through.
 |---|---|
 | `id` | `a` and a number |
 | `member`, `task` | who the start is as, and the task when there is one |
-| `reasons` | `over-budget`, `dangerous`, `risky-work`, `paid-api`, each with its sentence |
+| `reasons` | `over-budget`, `dangerous`, `risky-work`, `paid-api`, each with its sentence. As a client is sent it, the last sentence ends with what the session is to be told: the start of its words on one line, at most 160 characters |
 | `askedBy`, `askedAt` | who tried to start it |
 | `state` | `waiting`, `approved`, `declined`, `used` or `expired` |
 | `decidedBy`, `decidedAt`, `note` | who answered, when, and what they said, at most 300 bytes |
@@ -119,12 +148,26 @@ approval is given, the same start is sent again and goes through.
   was one, and the reasons it names, for the person who asked, once, within
   an hour of being given. A start that has since gained a reason (the member
   went over budget while a risky-work approval waited) needs a new one.
+- **And for what its session is to be told.** The coordinator keeps a
+  SHA-256 digest of the words the start carried when the approval was asked
+  for (or of the profile it named), and the approval covers only a start
+  with the same digest. A task whose title or brief was rewritten since, or
+  other words on a start with no task, is another start: it is refused, in
+  words that say the approval was for something else, and asks for a new
+  one. The words themselves are not kept. Whoever is asked reads the start
+  of them, after the last reason, in the list, on their phone and in the
+  push. The digest is the coordinator's own check and is sent to nobody.
 - **A second ask for the same thing is the same approval**, so trying again
   does not fill a manager's phone.
 - A waiting approval nobody answers expires after a day.
 - **An approval is for a member, not for an id.** Removing a member ends
   every approval still open for it, so a member made later under the same id
   is not started on an approval given for the one that was removed.
+- **What a member spent this month stays under its id until the month
+  turns**, whether or not the member is removed. Removed and added back in
+  the same month, it has spent what it had: removing a member is not how its
+  month starts again. A member made later that month under the same id
+  starts with that figure too, which is the price of the first.
 - **The figure is for whoever may see it.** What a member has spent is read
   by an admin, its managers and the person it is. Somebody else whose start
   is refused is told that the member is past its budget and who can approve,
@@ -144,21 +187,27 @@ budget bites.
 ## Where it shows
 
 ```
-GET  /api/budgets                 { settings, members: [{ member, budgetUsdMonth, month, usd, unknownSessions, over }], you }
+GET  /api/budgets                 { settings, members: [{ member, name, budgetUsdMonth, month, usd, unknownSessions, over, words }], you }
 PUT  /api/budgets/settings        { budgets?, dangerous?, paidApi?, workTypes? }   an admin
 GET  /api/approvals               { approvals }      the ones you asked for, and the ones you may answer
 POST /api/approvals/{id}          { answer: approve | decline, note? }
 ```
 
 `GET /api/budgets` shows an admin every member, a manager their team, and a
-person member themselves.
+person member themselves. `unknownSessions` counts every session whose cost
+is not all counted: one that reported none, one that reported more at once
+than is counted, and a start no box answered. `words` is the sentence that
+says which, and it is what a screen draws.
 
 - **MCP**: `fleet_budgets` reads what each member has spent against its
   budget, and the setting. `fleet_approvals` lists approvals. **No MCP tool
-  answers one or changes the setting**: an approval exists so that a person
-  looks, and the tools an agent holds do not include the one that says a
-  person looked. A start refused for want of approval says so in words an
-  agent can relay.
+  answers one, changes the setting, or sets a member's budget**: an approval
+  exists so that a person looks, and the tools an agent holds do not include
+  the one that says a person looked. `fleet_member` writes the rest of a
+  member's record and carries its budget as it is. Sent a budget, or a
+  member's file that would set, change or leave out the one it has, it
+  refuses and says a budget is set by a person in the app. A start refused
+  for want of approval says so in words an agent can relay.
 - **Both phones**: a member's page shows this month's spend against its
   budget; **Approvals** under Organization lists the ones waiting on you,
   with Approve and Decline, and the setting for an admin; a start refused
@@ -174,21 +223,23 @@ person member themselves.
   as a member without a signature from somebody the minter lists
   ([members.md](./members.md)). A budget is a cost control, not custody.
 - **A box says what its sessions cost.** A box a member enrolled could
-  under-report. It can do that only for sessions on itself.
+  under-report. It can do that only for sessions on itself. A box could
+  over-report too, for a session somebody the minter lists started on it,
+  at most $100 a report.
 - **An approval is as strong as the credential that gives it.** The
   coordinator checks who is answering, not what they are holding. A program
   with a manager's credential that calls the route directly has approved.
   The MCP server offers no tool for it, which is a policy and not a lock.
+  The same is true of a budget: the route that writes a member's record
+  takes one from whoever manages the member, and it is the MCP server that
+  does not send it.
 - **Dollars at API prices are not a subscription's bill**, and engines that
   report no price are not counted at all.
 - **A session already running goes on past the budget**, as above, and so
   does one that is resumed.
-- **Anybody in the fleet can cause an approval to be asked for.** Until the
-  minter has signed its list of who may start as whom, the coordinator does
-  not know that somebody may not start as a member, and leaves that refusal
-  to the box. Such a person's start is still looked at here, so the member's
-  managers can be asked about a start that the box would have refused
-  anyway. The same ask twice is one approval, so it is one notice.
+- **Anybody who may start as a member can cause an approval to be asked
+  for**, and that is whoever the minter lists, who need not manage the
+  member. The same ask twice is one approval, so it is one notice.
 - **`dangerous` reads what the start asks for.** A box whose own default is
   to skip permission prompts starts such a session with nothing in the
   request saying so, and that start is not asked about.
@@ -196,10 +247,14 @@ person member themselves.
 ## Tests
 
 `test/budgets.test.js` (the ledger: growth, a first sighting, a figure that
-goes down, the month's turn, unknown cost; what needs approval; an
-approval's life), `test/budgets-coordinator.test.js` (spend counted from
-health frames, a start refused and then let through, each reason, who may
-answer, one use, the same ask twice, refuse mode, the routes and who sees
-what, the pushes, the Durable Object's rows), `test/budgets-mcp.test.js`
+goes down, the month's turn, unknown cost, the most one report adds, a start
+nobody answered; what needs approval; an approval's life and what it is
+bound to), `test/budgets-coordinator.test.js` (spend counted from health
+frames, a start that timed out, a start refused and then let through, each
+reason, an approval for other words, the kind of work, who may answer, one
+use, the same ask twice, refuse mode, the routes and who sees what, the
+pushes, the Durable Object's rows),
+`test/members-coordinator.test.js` (the custody list kept across a rebuilt
+Durable Object, and the refusal while there is none), `test/budgets-mcp.test.js`
 (`fleet_budgets`, `fleet_approvals`, and that no tool answers one), and
 `test/budgets-in-apps.test.js`.

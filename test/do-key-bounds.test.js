@@ -111,6 +111,10 @@ const BOUNDED = {
   // a member's month is one key under `spend:` holding MAX_SESSIONS_SEEN
   // sessions' last figures.
   approvalSeq: 'src/fleet/protocol/budgets.js',
+  // When the minter's custody list was last heard to change. One number; the
+  // rows it stands for are one key each under `custody:`, MAX_CUSTODY_MEMBERS
+  // of them, each MAX_CUSTODIANS addresses of a bounded length.
+  custodyAt: 'src/fleet/coordinator/org-custody.js',
 };
 
 /** Every `storage.put('name', …)` in the Durable Object. */

@@ -14,8 +14,8 @@
 // NEVER THROWS. Every refusal is a code and a sentence.
 
 import {
-  checkBudgetSettings, NO_BUDGET_SETTINGS, monthOf, newSpend, startCounting, resumeCounting, countSpend, readSpend, overBudget,
-  newApproval, aged, covers, answerApproval, readApproval, APPROVAL_ID_RE, MAX_APPROVALS, BUDGET_WARN_AT,
+  checkBudgetSettings, NO_BUDGET_SETTINGS, monthOf, newSpend, startCounting, startUnanswered, resumeCounting, countSpend, readSpend, overBudget,
+  newApproval, aged, covers, sameAsk, answerApproval, readApproval, APPROVAL_ID_RE, MAX_APPROVALS, BUDGET_WARN_AT,
 } from '../protocol/budgets.js';
 
 export const SPEND_PREFIX = 'spend:';
@@ -93,6 +93,16 @@ export class OrgBudgets {
     this.#keepSpend(member, startCounting(this.spend.get(member) ?? newSpend(this.now()), key, this.now()));
   }
 
+  /**
+   * The fleet sent a start as this member to a box that never answered: its
+   * spend is not known until that box speaks of the session (`count`).
+   *
+   * @param {string} member @param {string} hostId @param {number} at when it was sent
+   */
+  unanswered(member, hostId, at) {
+    this.#keepSpend(member, startUnanswered(this.spend.get(member) ?? newSpend(this.now()), hostId, at, this.now()));
+  }
+
   /** The fleet resumed a session as this member: it counts from the first figure heard. @param {string} member @param {string} key */
   resumed(member, key) {
     this.#keepSpend(member, resumeCounting(this.spend.get(member) ?? newSpend(this.now()), key, this.now()));
@@ -104,12 +114,13 @@ export class OrgBudgets {
    * budget nearly spent, or spent. Each goes out once a month.
    *
    * @param {string} member @param {string} key @param {unknown} spent @param {number|null|undefined} budget
+   * @param {{ startedAt?: unknown }} [session]  when the box says the session began, if it says
    * @returns {'warn'|'over'|null}
    */
-  count(member, key, spent, budget) {
+  count(member, key, spent, budget, session = {}) {
     const was = this.spend.get(member);
     if (!was) return null;
-    let next = countSpend(was, key, spent, this.now());
+    let next = countSpend(was, key, spent, this.now(), session);
     /** @type {'warn'|'over'|null} */
     let crossed = null;
     if (typeof budget === 'number' && budget > 0) {
@@ -126,18 +137,36 @@ export class OrgBudgets {
   }
 
   /**
-   * A member was removed: its row goes with it, and so does every approval
-   * still open for it. An approval is for a member, not for an id, and a
-   * member made later under the same id is not the one somebody approved a
-   * start as.
+   * A member was removed: every approval still open for it goes with it. An
+   * approval is for a member, not for an id, and a member made later under
+   * the same id is not the one somebody approved a start as.
+   *
+   * WHAT IT SPENT THIS MONTH STAYS, under its id, until the month turns.
+   * The row used to go too, and a member at its budget was removed and
+   * added back by whoever manages it, with nothing spent and nobody asked.
+   * A month's spend under an id is that id's for the month, whoever holds
+   * it. A row from an earlier month is nobody's, and is dropped here and
+   * when the rows are next read back (`restore`).
    *
    * @param {string} member
    */
   forget(member) {
-    if (this.spend.delete(member)) this.dirtySpend.add(member);
+    const row = this.spend.get(member);
+    if (row) {
+      if (row.month === monthOf(this.now())) this.#keepSpend(member, { ...row, gone: true });
+      else if (this.spend.delete(member)) this.dirtySpend.add(member);
+    }
     for (const a of this.approvals.values()) {
       if (a.member === member && (a.state === 'waiting' || a.state === 'approved')) this.#keepApproval({ ...a, state: 'expired' });
     }
+  }
+
+  /** A member was made under this id: a row kept from one removed this month is its own again. @param {string} member */
+  back(member) {
+    const row = this.spend.get(member);
+    if (!row?.gone) return;
+    const { gone: _was, ...rest } = row;
+    this.#keepSpend(member, rest);
   }
 
   /** @param {Approval} a */
@@ -166,11 +195,23 @@ export class OrgBudgets {
    * sent (`take`): a start refused on the way for some other reason, a
    * machine that is full, has not spent it.
    *
-   * @param {{ member: string, task?: string|null, kinds: string[], by: string }} start
+   * @param {{ member: string, task?: string|null, kinds: string[], by: string, digest: string }} start
    * @returns {Approval|null}
    */
   given(start) {
     return this.all().find((a) => a.state === 'approved' && covers(a, start)) ?? null;
+  }
+
+  /**
+   * An approval given for a start like this one whose session was to be
+   * told something else, or null: so the refusal can say why the approval
+   * the person is holding does not let this through.
+   *
+   * @param {{ member: string, task?: string|null, kinds: string[], by: string, digest: string }} start
+   * @returns {Approval|null}
+   */
+  givenForOtherWords(start) {
+    return this.all().find((a) => a.state === 'approved' && sameAsk(a, start) && !covers(a, start)) ?? null;
   }
 
   /**
@@ -195,12 +236,12 @@ export class OrgBudgets {
   /**
    * Ask for an approval, or find the one already waiting for the same thing.
    *
-   * @param {{ member: string, task?: string|null, reasons: import('../protocol/budgets.js').Reason[], by: string }} q
+   * @param {{ member: string, task?: string|null, reasons: import('../protocol/budgets.js').Reason[], digest: string, told?: string, by: string }} q
    * @returns {{ approval: Approval, fresh: boolean }}
    */
-  ask({ member, task = null, reasons, by }) {
+  ask({ member, task = null, reasons, digest, told, by }) {
     const kinds = reasons.map((r) => r.kind);
-    const waiting = this.all().find((a) => a.state === 'waiting' && covers(a, { member, task, kinds, by }));
+    const waiting = this.all().find((a) => a.state === 'waiting' && covers(a, { member, task, kinds, by, digest }));
     if (waiting) return { approval: waiting, fresh: false };
     if (this.approvals.size >= MAX_APPROVALS) {
       // The oldest that is finished goes; with none finished, the oldest of all.
@@ -211,7 +252,7 @@ export class OrgBudgets {
     }
     this.seq += 1;
     this.seqDirty = true;
-    const approval = newApproval({ id: `a${this.seq}`, member, task, reasons, by, at: this.now() });
+    const approval = newApproval({ id: `a${this.seq}`, member, task, reasons, digest, told, by, at: this.now() });
     this.#keepApproval(approval);
     return { approval, fresh: true };
   }
@@ -275,7 +316,10 @@ export class OrgBudgets {
     for (const [key, row] of rows) {
       const member = String(key).startsWith(SPEND_PREFIX) ? String(key).slice(SPEND_PREFIX.length) : String(key);
       const read = readSpend(row);
-      if (read && member) this.spend.set(member, read);
+      if (!read || !member) continue;
+      // A removed member's row is kept for its month and no longer (`forget`).
+      if (read.gone && read.month !== monthOf(this.now())) this.dirtySpend.add(member);
+      else this.spend.set(member, read);
     }
     /** @type {Approval[]} */
     const read = [];

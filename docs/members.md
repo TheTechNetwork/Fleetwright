@@ -275,7 +275,13 @@ unknown.
 **The coordinator refuses first**, in the person's words: the member does not
 exist, or the person is neither that person member nor anybody who manages or
 holds custody of it. It reads custody from the last key list the minter
-signed, which it relays to boxes and can read but not write.
+signed, which it relays to boxes and can read but not write. It keeps that
+list across a restart. A fleet whose minter has never been asked has none,
+and the coordinator then cannot tell: it refuses a start as a member by
+anybody but an admin, `custody_unknown`, in words that say when to try again,
+and passes an admin's on for the box to decide. What a member is seen to
+spend is counted from a start the coordinator let through
+([budgets.md](./budgets.md)), so it lets through nobody it cannot place.
 
 **The box decides.** The minter's signed key list (`/vault/keys`) now carries
 each member and who may start as it: for an agent, its custodians; for a

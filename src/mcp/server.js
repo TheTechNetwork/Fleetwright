@@ -26,6 +26,7 @@ import { oneLine, LABEL_RE } from '../core/text.js';
 import { hostReported, rcLink } from '../fleet/coordinator/core.js';
 import { packetWords, RESULT_FILE } from '../fleet/protocol/tasks.js';
 import { routeWords } from '../fleet/protocol/routing.js';
+import { fromMarkdown } from '../fleet/protocol/members.js';
 import { ENGINES, API_PROVIDERS, checkEngines, decodeEngines, enginesWords } from '../fleet/protocol/engines.js';
 
 /**
@@ -162,6 +163,10 @@ function describeRouting(r) {
     ...(r.routing.updatedBy ? [`Last changed by ${r.routing.updatedBy}.`] : []),
   ].join('\n');
 }
+
+/** What a call that would set a member's budget is told (docs/budgets.md, "Where it shows"). */
+const BUDGET_NOT_HERE =
+  'A member’s budget is set by a person, from the app’s Org screen, and not from here: it is what a start past it waits on. Nothing was changed.';
 
 /** When, to the minute, in UTC: a task's times are read by agents and people in different places. */
 const taskTime = (/** @type {unknown} */ at) => (Number(at) > 0 ? `${new Date(Number(at)).toISOString().replace('T', ' ').slice(0, 16)} UTC` : 'an unknown time');
@@ -1044,6 +1049,10 @@ export class McpServer {
     // A beta tester spent their only documentation lookup working that out.
     // The schema already holds the answer; nothing was reading it.
     const declared = tool.inputSchema?.properties ?? {};
+    // A BUDGET WAS A PARAMETER OF fleet_member, and is not one now
+    // (#member). A caller that still sends it is told where a budget is
+    // set, which "takes no parameter" would not tell them.
+    if (tool.name === 'fleet_member' && 'budgetUsdMonth' in params) return this.#text(BUDGET_NOT_HERE, true);
     const unknown = Object.keys(params).filter((k) => !(k in declared));
     if (unknown.length) {
       const near = (/** @type {string} */ bad) => {
@@ -1564,12 +1573,34 @@ export class McpServer {
       if (!made.body.start) return this.#text(`${made.body.text}\n\n${unstarted}`, true);
       /** @type {any} */
       let reply;
+      // NO ANSWER IS NOT "NOTHING STARTED" (C-5). A machine that did not
+      // answer in time may have started the session all the same, and this
+      // used to say the task was open with nothing working on it, which
+      // nobody here knew.
+      const unanswered =
+        `${id} was made, and whether a session started on it is not known: no answer came back in time, and one may have started all the same. ` +
+        `fleet_tasks with \`id: "${id}"\` shows whether a session holds it. If none does in a few minutes, start it with fleet_start and \`taskId\`, or cancel it with fleet_task.`;
       try {
         reply = await this.#intent('start', made.body.start, null, null);
       } catch (e) {
-        return this.#text(`${describeFailure(e)}\n\n${unstarted}`, true);
+        return this.#text(`${describeFailure(e)}\n\n${unanswered}`, true);
       }
-      if (reply?.ok === false) return this.#text(`${String(reply.text ?? 'The fleet refused the start.')}\n\n${unstarted}`, true);
+      if (reply?.ok === false) {
+        const said = String(reply.text ?? 'The fleet refused the start.');
+        const code = String(reply.error?.code ?? '');
+        if (code === 'host_timeout') return this.#text(`${said}\n\n${unanswered}`, true);
+        // WAITING ON A PERSON, and the approval names this task: it stays.
+        if (code === 'needs_approval') {
+          return this.#text(`${said}\n\n${id} was made and is open, waiting on that approval. Once it is given, start it with fleet_start and \`taskId: "${id}"\`. The approval is for the task as it is now, so changing its title or brief asks for a new one.`, true);
+        }
+        // REFUSED: THE TASK MADE FOR IT GOES TOO. Each refused start used to
+        // leave an open task behind, and a fleet keeps five hundred: an
+        // agent retrying a start that could not work filled the table, and
+        // then nobody could make a task (docs/tasks.md).
+        const cancelled = await this.#org('POST', `/api/tasks/${encodeURIComponent(id)}/act`, { action: 'cancel', note: 'its start was refused' }, NO_TASKS);
+        if ('failed' in cancelled || cancelled.body?.ok !== true) return this.#text(`${said}\n\n${unstarted}`, true);
+        return this.#text(`${said}\n\n${id} was made for this and has been cancelled, since nothing was started on it. Call fleet_delegate again once that is put right.`, true);
+      }
       const session = sessionFrom(reply);
       const named = String(session?.name || '');
       if (named) {
@@ -1750,6 +1781,14 @@ export class McpServer {
    * value: the route takes a whole record, so what is there is read first and
    * the caller's fields laid over it.
    *
+   * NEVER ITS BUDGET (docs/budgets.md). A start past a budget waits for a
+   * person, or is refused until "the budget is raised", and this tool raised
+   * it: an agent over its manager's budget, holding that manager's
+   * credential, wrote itself a larger one and started. The budget is carried
+   * as the record has it. It is no parameter here (a caller that sends one
+   * is told so before this runs), and a file that would set, change or
+   * clear one is refused in words that say where it is set.
+   *
    * @param {Record<string, unknown>} params
    */
   async #member(params) {
@@ -1761,16 +1800,35 @@ export class McpServer {
       const gone = await this.#org('DELETE', at);
       return 'failed' in gone ? gone.failed : said(gone);
     }
+    const now = await this.#org('GET', '/api/members');
+    if ('failed' in now) return now.failed;
+    const members = Array.isArray(now.body?.members) ? now.body.members : [];
     if (typeof params.markdown === 'string') {
+      // A FILE IS THE WHOLE RECORD, so one that names another budget sets
+      // it and one that leaves the budget out takes it away. A file this
+      // cannot read is the fleet's to refuse, by name.
+      const file = fromMarkdown(params.markdown);
+      if (file.ok) {
+        /** A budget as a record holds one: dollars, or null for none. @param {unknown} v */
+        const budget = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
+        const named = String(file.member.id ?? id);
+        const held = budget(members.find((/** @type {any} */ m) => m.id === named)?.budgetUsdMonth);
+        const asked = budget(file.member.budgetUsdMonth);
+        if (asked !== held) {
+          return this.#text(
+            `${BUDGET_NOT_HERE} ${named} ${held === null ? 'has no budget' : `has a budget of $${held.toFixed(2)} a month`}, and this file would ${asked === null ? 'take it away' : `make it $${asked.toFixed(2)}`}. ` +
+              `Send the file with ${held === null ? 'no budgetUsdMonth' : `budgetUsdMonth: ${held}`} to change the rest of it.`,
+            true,
+          );
+        }
+      }
       const read = await this.#org('POST', '/api/members/import', { text: params.markdown });
       return 'failed' in read ? read.failed : said(read);
     }
-    const now = await this.#org('GET', '/api/members');
-    if ('failed' in now) return now.failed;
-    const prior = (Array.isArray(now.body?.members) ? now.body.members : []).find((/** @type {any} */ m) => m.id === id) ?? {};
+    const prior = members.find((/** @type {any} */ m) => m.id === id) ?? {};
     /** @type {Record<string, unknown>} */
     const next = { ...prior };
-    for (const field of ['name', 'kind', 'email', 'role', 'title', 'description', 'workTypes', 'instructions', 'budgetUsdMonth']) {
+    for (const field of ['name', 'kind', 'email', 'role', 'title', 'description', 'workTypes', 'instructions']) {
       if (params[field] !== undefined) next[field] = params[field];
     }
     if (params.reportsTo !== undefined) next.reportsTo = params.reportsTo === '' ? null : params.reportsTo;

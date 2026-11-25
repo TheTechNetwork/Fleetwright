@@ -2589,17 +2589,19 @@ test('a box starts a session as a member only for somebody the minter lists, who
   assert.equal(core.setMember(null, 'debbie', { name: 'Debbie', kind: 'agent', role: 'software engineer', instructions: 'Write small pull requests.' }).ok, true);
 
   let n = 0;
-  /** A start from a phone. @param {{ who?: string, key?: any, keyId?: string, params: any, unsigned?: boolean }} o */
+  /** A start from a phone. @param {{ who?: string, key?: any, keyId?: string, params: any, unsigned?: boolean, admin?: boolean }} o */
   const start = async (o) => {
     const who = o.who ?? ELI;
     const id = `member-intent-${String(++n).padStart(4, '0')}`;
     const issuedAt = Date.now();
     const sig = await sign((o.key ?? iphone).privateJwk, intentSigningInput({ actor: who, id, issuedAt, params: o.params, verb: 'start' }, 'ops-box'));
-    return core.dispatch({ verb: 'start', params: o.params, id, actor: who, requester: { email: who, admin: false }, preferHost: 'ops-box', ...(o.unsigned ? {} : { sig, kid: o.keyId ?? kid, issuedAt }) });
+    return core.dispatch({ verb: 'start', params: o.params, id, actor: who, requester: { email: who, admin: Boolean(o.admin) }, preferHost: 'ops-box', ...(o.unsigned ? {} : { sig, kid: o.keyId ?? kid, issuedAt }) });
   };
 
-  // NO LIST YET, so the coordinator passes it on, and the box, which holds none, starts nobody as a member.
-  const early = await start({ params: { name: 'too-early', member: 'debbie', task: 'Fix the login bug.' } });
+  // NO LIST YET. The coordinator cannot tell, and passes on only an admin's
+  // start; the box, which holds none, starts nobody as a member.
+  assert.equal((await start({ params: { name: 'too-early', member: 'debbie', task: 'Fix the login bug.' } })).error?.code, 'custody_unknown');
+  const early = await start({ admin: true, params: { name: 'too-early', member: 'debbie', task: 'Fix the login bug.' } });
   assert.equal(early.error?.code, 'member_unchecked');
   assert.match(String(early.text), /holds no list from the vault of who may start a session as a member/);
   assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
@@ -2618,7 +2620,8 @@ test('a box starts a session as a member only for somebody the minter lists, who
   assert.doesNotMatch(String(sent.command), /--archive|members\.invalid/);
 
   // NOT ON THE MINTER'S LIST: Dana signs with her own listed key, and is refused by the box, with who is.
-  core.memberCustody = null; // the coordinator's copy aside, so this is the box's answer
+  // The coordinator's copy says yes to all of it from here, so each answer below is the box's own.
+  core.memberCustody = new Map([['debbie', [ELI, DANA]], ['ghost', [ELI]]]);
   const stranger = await start({ who: DANA, key: pixel, keyId: danaKid, params: { name: 'danas-try', member: 'debbie', task: 'x' } });
   assert.equal(stranger.error?.code, 'not_custodian');
   assert.match(String(stranger.text), /dana@example\.com may not start a session as Debbie\. The vault lists eli@example\.com\. Nothing was started\./);

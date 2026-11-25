@@ -3650,6 +3650,9 @@ const OPENAPI = JSON.stringify({
           "200": {
             "description": "`tasks`"
           },
+          "400": {
+            "description": "`state` is not one a task has, `bad_state`: a state nobody has is not a request for every task"
+          },
           "401": {
             "description": "no credential"
           }
@@ -3746,7 +3749,7 @@ const OPENAPI = JSON.stringify({
           "identity"
         ],
         "summary": "One task, and what to sign to start it",
-        "description": "`start` is the `start` verb\u2019s own parameters for a session on this task: `member`, `taskId`, `taskBranch`, `taskRepo` and the words as `task`. A device shows the words and signs exactly them. Null when nobody can start it now. A task you may not see answers as one that does not exist.",
+        "description": "`start` is the `start` verb\u2019s own parameters for a session on this task: `member`, `taskId`, `taskBranch`, `taskRepo` and the words as `task`. A device shows the words and signs exactly them, and a start on the task that carries any other words is refused, `task_words`. Null when nobody can start it now. A task you may not see answers as one that does not exist.",
         "parameters": [
           {
             "name": "id",
@@ -3776,7 +3779,7 @@ const OPENAPI = JSON.stringify({
           "identity"
         ],
         "summary": "Change a task, or hand it to another member",
-        "description": "Only the fields sent change. A new `assignee` is a handoff, written down with who did it and `note`, and is refused while a session holds the task.",
+        "description": "Only the fields sent change. A new `assignee` is a handoff, written down with who did it and `note`, and is refused while a session holds the task. A new `workType` is written down too. On a task whose kind of work the fleet asks about before a start, or was, changing it takes somebody who manages the assignee or a fleet admin, and anybody else is answered 403 `not_manager`.",
         "parameters": [
           {
             "name": "id",
@@ -3853,7 +3856,7 @@ const OPENAPI = JSON.stringify({
             "description": "no credential"
           },
           "403": {
-            "description": "no standing over the new assignee"
+            "description": "no standing over the new assignee, or over a kind of work the fleet asks about"
           },
           "404": {
             "description": "no task by that id that you can see"
@@ -3967,9 +3970,6 @@ const OPENAPI = JSON.stringify({
           "200": {
             "description": "the task, as it is now, and what to sign to start it"
           },
-          "400": {
-            "description": "not a member\u2019s id"
-          },
           "401": {
             "description": "no credential"
           },
@@ -3977,7 +3977,7 @@ const OPENAPI = JSON.stringify({
             "description": "the member named is not one you may hand work to"
           },
           "404": {
-            "description": "no task by that id that you can see, or no member by that id"
+            "description": "no task by that id that you can see, or no member by the id given, whether or not it reads as one"
           },
           "409": {
             "description": "the task already has a member, is not open, is being worked on, or routing is off for it"
@@ -4074,7 +4074,7 @@ const OPENAPI = JSON.stringify({
           "identity"
         ],
         "summary": "What each member has spent this month, and what a budget does",
-        "description": "For each member the caller may see (an admin: everybody; a manager: their team; a person: their own member), what the coordinator saw its sessions spend this UTC month, in dollars at API prices as each session counted its own cost, against its `budgetUsdMonth`. `unknownSessions` is how many of its sessions reported no cost: the figure is then a floor, never read as nothing. `settings` is what the fleet does at a budget and what else needs approval (docs/budgets.md).",
+        "description": "For each member the caller may see (an admin: everybody; a manager: their team; a person: their own member), what the coordinator saw its sessions spend this UTC month, in dollars at API prices as each session counted its own cost, against its `budgetUsdMonth`. `unknownSessions` is how many of its sessions have a cost that is not all counted: one that reported none, one that reported more in one report than the fleet counts, and a start as the member that its machine never answered. The figure is then a floor, never read as nothing, and `words` is the sentence that says which. `settings` is what the fleet does at a budget and what else needs approval (docs/budgets.md).",
         "responses": {
           "200": {
             "description": "`{ settings: { budgets, dangerous, paidApi, workTypes }, members: [{ member, name, budgetUsdMonth, month, usd, unknownSessions, over, words }], you: { admin } }`"
@@ -4153,7 +4153,7 @@ const OPENAPI = JSON.stringify({
         "description": "A start as a member that is past its budget, skips permission prompts, or is on a kind of work the owner named is refused with an approval. Each one here says who asked, as which member, on which task, why, where it stands, and `mayAnswer`: whether it is the caller\u2019s to answer.",
         "responses": {
           "200": {
-            "description": "`{ approvals: [{ id, member, memberName, task, reasons, askedBy, askedAt, state, decidedBy?, decidedAt?, note?, mayAnswer, words }] }`, newest first"
+            "description": "`{ approvals: [{ id, member, memberName, task, reasons, askedBy, askedAt, state, decidedBy?, decidedAt?, note?, mayAnswer, words }] }`, newest first. The last reason\u2019s `text` ends with what the session is to be told: the start of its words on one line."
           },
           "401": {
             "description": "no credential"
@@ -4167,7 +4167,7 @@ const OPENAPI = JSON.stringify({
           "identity"
         ],
         "summary": "Approve or decline a start",
-        "description": "Somebody who manages the member, or a fleet admin. An approval given is for one start by the person who asked, as that member, on that task, within the hour: the same start, sent again, goes through. Nothing is held or queued.",
+        "description": "Somebody who manages the member, or a fleet admin. An approval given is for one start by the person who asked, as that member, on that task, within the hour, whose session is told what it was to be told when the approval was asked for: the same start, sent again, goes through. Other words, or a task whose brief was changed since, need a new approval. Nothing is held or queued.",
         "parameters": [
           {
             "name": "id",
