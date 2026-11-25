@@ -37,6 +37,8 @@ test('the tool is the verb under a name of two words, with the verb’s own para
   assert.deepEqual(tool?.inputSchema.properties.action.enum, ['start', 'status', 'cancel', 'signout']);
   assert.equal(typeof tool?.inputSchema.properties.host?.description, 'string');
   assert.equal(tool?.mutating, true);
+  // Whoever picks the tool is told, before calling it, that what it hands back is not checked here.
+  assert.match(String(tool?.description), /THE PAGE AND CODE ARE UNVERIFIED HERE: the machine signs them and a phone checks that signature before it shows a code, and this server cannot/);
   // The way back from a tool's name to its verb, which is not always what is left after `fleet_`.
   assert.deepEqual([verbOfTool('fleet_engine_signin'), verbOfTool('fleet_stop'), verbOfTool('fleet_read_log')], ['enginesignin', 'stop', 'read_log']);
   // Every other verb's tool is still named as it was.
@@ -60,6 +62,18 @@ test('allowed, a call is one enginesignin intent beside the machine it names, an
   assert.deepEqual([sent[0].url, sent[0].body.verb, sent[0].body.params, sent[0].body.host], ['https://fleet.example/api/intent', 'enginesignin', { member: 'debbie', engine: 'codex', action: 'start' }, 'ops-box']);
   assert.equal(written[0].result.isError, undefined);
   assert.match(written[0].result.content[0].text, /Open https:\/\/auth\.openai\.com\/codex\/device and enter ABCD-EFGH /);
+  // AND THAT THE CODE IS UNVERIFIED, in the words the agent reads, whether or
+  // not the answer came signed: this server has no list of approved machines
+  // to hold a signature to.
+  const unverified = /\n\nUNVERIFIED\. This server cannot check that the page and code above came from the machine and not from the fleet’s coordinator, which carries them\. A phone checks the machine’s signature against the machines approved for the member’s credentials before it shows a code\. Tell the person the code is unverified, or have them sign in from the Fleetwright app, on the member’s Credentials\.$/;
+  assert.match(written[0].result.content[0].text, unverified);
+  const signedToo = serverWith({ ...waiting, signedAt: 1764000001000, hostKey: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' }, signature: 'sig' }, { allow: ['enginesignin'] });
+  await signedToo.server.handleLine(call(7, { member: 'debbie', engine: 'codex', action: 'status', host: 'ops-box' }));
+  assert.match(signedToo.written[0].result.content[0].text, unverified);
+  // An answer with no code has nothing to be unverified about.
+  const over = serverWith({ ok: true, state: 'signed_in', text: 'Codex is signed in for debbie on ops-box.' }, { allow: ['enginesignin'] });
+  await over.server.handleLine(call(8, { member: 'debbie', engine: 'codex', action: 'status', host: 'ops-box' }));
+  assert.equal(over.written[0].result.content[0].text, 'Codex is signed in for debbie on ops-box.');
   // What the verb needs is asked for before anything is sent.
   await server.handleLine(call(2, { member: 'debbie', action: 'start', host: 'ops-box' }));
   assert.equal(written[1].result.isError, true);

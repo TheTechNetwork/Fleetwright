@@ -365,3 +365,30 @@ export function actorEmail(actor) {
   const s = String(actor ?? '').trim().toLowerCase();
   return s.includes('@') ? s : null;
 }
+
+/**
+ * The exact bytes a box signs when it answers an engine sign-in with the
+ * page and the code (docs/engines.md, "The machine signs the page and the
+ * code"), and so the bytes a phone checks before it shows either.
+ *
+ * WHY IT IS SIGNED AT ALL. The answer reaches the phone through the
+ * coordinator, which could put a code of its own in it: one from a sign-in
+ * it began on a machine of its own, which the person would then approve
+ * under their account. The box's key is the one a custodian approved for the
+ * member's vault, and its hash reaches the phone in the vault's own sealed
+ * answer, so a signature by it is something the coordinator cannot make.
+ *
+ *   id      the id of the request being answered, which the phone chose and
+ *           signed. An older genuine answer is over another id, so it does
+ *           not pass for this one.
+ *   host    the whole SHA-256 of the box's key, hex (keyId, above): what the
+ *           vault names a grant by (minter/vault.js, boxKeyHash).
+ *   member, engine   the request's own.
+ *   url, code        the engine's.
+ *   at      when the box signed, epoch ms: `signedAt` in the answer.
+ *
+ * @param {{ id: string, host: string, member: string, engine: string, url: string, code: string, at: number }} answer
+ */
+export function signinAnswerInput({ id, host, member, engine, url, code, at }) {
+  return signingInput('engine-signin-answer', { v: 1, id, host, member, engine, url, code, at });
+}

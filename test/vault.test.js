@@ -31,10 +31,11 @@ import { runnerAuthFor } from '../src/core/runner-login.js';
 import { pickCredentialSource } from '../src/core/podman.js';
 import { buildCommand } from '../src/core/claude.js';
 import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
-import { delegationSigningInput, intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
+import { delegationSigningInput, intentSigningInput, signinAnswerInput } from '../src/fleet/protocol/intent-signature.js';
 import { keyListFrom } from '../src/fleet/host/intent-keys.js';
 import { RESULT_FOOTER } from '../src/fleet/protocol/tasks.js';
 import { startStubHub } from './helpers/stub-hub.js';
+import { signinBox, TOKEN } from './helpers/stub-signin-podman.js';
 import { standInClaude, revokeClaude, forbidClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns, claudeUsageAsks } from './helpers/stand-in-claude.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
@@ -1057,7 +1058,7 @@ test('a phone lists its signing key under its own address, and a box is given th
  *
  * @param {import('node:test').TestContext} t @param {{ requireSigned?: boolean|'off'|'signers'|'all' }} [opts]
  */
-async function signingFleet(t, { requireSigned = false } = {}) {
+async function signingFleet(t, { requireSigned = false, hub = null } = {}) {
   const m = await minter();
   t.after(m.restore);
   const real = globalThis.fetch;
@@ -1081,7 +1082,8 @@ async function signingFleet(t, { requireSigned = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'fw-intent-keys-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const sidecarOn = () => new Sidecar({
-    hub: new HubClient({ baseUrl: stub.baseUrl, token: null }),
+    // The stand-in hub, or a real one a test brought (`hub`).
+    hub: new HubClient(hub ?? { baseUrl: stub.baseUrl, token: null }),
     // NOT ITS HEALTH: the coordinator is not told whether this box enforces, so
     // what the box does with an unsigned intent is the box's own to decide. A
     // box pushes health after a verb that changes it, and under load that push
@@ -2729,10 +2731,10 @@ test('a box signs an engine in for a member only for who may start a session as 
   await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
 
   let n = 0;
-  /** One request as it reaches the box, signed by a phone unless told otherwise. @param {{ who?: string, key?: any, keyId?: string, params?: any, unsigned?: boolean, delegation?: any }} [o] */
+  /** One request as it reaches the box, signed by a phone unless told otherwise. @param {{ who?: string, key?: any, keyId?: string, params?: any, unsigned?: boolean, delegation?: any, id?: string }} [o] */
   const ask = async (o = {}) => {
     const who = o.who ?? ELI;
-    const id = `engine-signin-${String(++n).padStart(4, '0')}`;
+    const id = o.id ?? `engine-signin-${String(++n).padStart(4, '0')}`;
     const issuedAt = Date.now();
     const params = { member: 'debbie', engine: 'codex', action: 'start', ...(o.params ?? {}) };
     const sig = await sign((o.key ?? iphone).privateJwk, intentSigningInput({ actor: who, id, issuedAt, params, verb: 'enginesignin' }, 'ops-box'));
@@ -2744,7 +2746,30 @@ test('a box signs an engine in for a member only for who may start a session as 
   assert.equal(early.error?.code, 'member_unchecked');
   assert.match(String(early.text), /^ops-box holds no list from the vault of who may start a session as a member.*, so it signs no member’s engine in\. Nothing was done\.$/);
   assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+
+  // ONLY ON A MACHINE APPROVED FOR THAT MEMBER'S VAULT. Before the vault has
+  // answered this box at all it cannot tell, and says that, never "not
+  // approved".
+  const unknown = await ask();
+  assert.equal(unknown.error?.code, 'approval_unknown');
+  assert.equal(unknown.text, 'ops-box has not heard from the vault whose credentials it is approved to hold, so it cannot tell whether it is approved for debbie’s. It asks every 10 minutes: try again in a few minutes. Nothing was done.');
+  // ANSWERED, AND APPROVED FOR NOBODY: refused, in words that say what to do.
+  await box.sidecar.syncVault();
+  const notApproved = await ask();
+  assert.equal(notApproved.error?.code, 'not_approved');
+  assert.equal(notApproved.text, 'ops-box is not approved to hold debbie’s credentials, and an engine signed in here would be one of them. Approve this machine from debbie’s Credentials in the Fleetwright app first, then sign in. If it was approved a moment ago, ask again shortly. Nothing was done.');
+  // Before the hub is asked, so before any container is run.
   assert.deepEqual(stub.signins, []);
+  // APPROVED FOR DEBBIE'S VAULT is not approved for Eli's own, which is another vault.
+  const boxKey = { kty: 'EC', crv: 'P-256', x: String(box.sidecar.vaultKey?.publicJwk.x), y: String(box.sidecar.vaultKey?.publicJwk.y) };
+  await filed({ op: 'grant', hostKey: boxKey, label: 'ops-box', for: 'debbie' });
+  await box.sidecar.syncVault();
+  const own = await ask({ params: { member: 'eli', engine: 'opencode' } });
+  assert.equal(own.error?.code, 'not_approved');
+  assert.match(String(own.text), /^ops-box is not approved to hold eli’s credentials, /);
+  assert.deepEqual(stub.signins, []);
+  await filed({ op: 'grant', hostKey: boxKey, label: 'ops-box' });
+  await box.sidecar.syncVault();
 
   // SIGNED BY A CUSTODIAN: the hub is asked, with the account the member's
   // sessions run as here and who asked, neither of which a caller can say.
@@ -2753,6 +2778,40 @@ test('a box signs an engine in for a member only for who may start a session as 
   assert.deepEqual(stub.signins.at(-1), { member: 'debbie', account: 'debbie@members.invalid', engine: 'codex', action: 'start', by: ELI, box: 'ops-box' });
   // The page and the code come back to whoever asked, as the hub gave them.
   assert.deepEqual([ok.state, ok.url, ok.code], ['waiting', 'https://auth.openai.com/codex/device', 'ABCD-EFGH']);
+
+  // AND SIGNED BY THIS BOX, with the key the vault lists as approved for
+  // Debbie, over the id of the request: what a phone checks before it shows
+  // the code. The list is the minter's own answer to the phone.
+  const host = await boxKeyHash(ok.hostKey);
+  assert.deepEqual(ok.hostKey, boxKey);
+  assert.deepEqual((await m.phone({ op: 'list', for: 'debbie' })).answer.grants.map((/** @type {any} */ g) => [g.key, g.label]), [[host, 'ops-box']]);
+  const signed = { id: ok.id, host, member: 'debbie', engine: 'codex', url: ok.url, code: ok.code, at: ok.signedAt };
+  assert.equal(await verify(ok.hostKey, ok.signature, signinAnswerInput(signed)), true);
+  for (const [field, value] of [['code', 'ABCD-EFGX'], ['url', 'https://auth.example.com/device'], ['member', 'jason'], ['engine', 'opencode'], ['id', 'engine-signin-9999']]) {
+    assert.equal(await verify(ok.hostKey, ok.signature, signinAnswerInput({ ...signed, [field]: value })), false, `a changed ${field} still passes`);
+  }
+  // A STATUS UNDER A NEW ID is signed over that id, so neither answer passes for the other request.
+  const status = await ask({ params: { action: 'status' } });
+  assert.notEqual(status.id, ok.id);
+  assert.equal(await verify(status.hostKey, status.signature, signinAnswerInput({ ...signed, id: status.id, at: status.signedAt })), true);
+  assert.equal(await verify(status.hostKey, status.signature, signinAnswerInput({ ...signed, at: status.signedAt })), false);
+  // THE SAME REQUEST AGAIN is not a second start: the box kept no code to
+  // replay, so it asks its hub where the sign-in stands and signs that.
+  const again = await ask({ id: ok.id });
+  assert.deepEqual([again.replayed, again.code, stub.signins.at(-1).action], [true, 'ABCD-EFGH', 'status']);
+  assert.equal(await verify(again.hostKey, again.signature, signinAnswerInput({ ...signed, at: again.signedAt })), true);
+  // NOTHING OF A CODE IN WHAT THE SIDECAR REMEMBERS of the requests it answered.
+  const remembered = JSON.stringify(await Promise.all([...box.sidecar.replay.values()].map((hit) => hit.reply)));
+  assert.ok(box.sidecar.replay.has(ok.id) && box.sidecar.replay.has(status.id));
+  for (const kept of ['ABCD-EFGH', 'auth.openai.com', ok.signature, status.signature]) assert.ok(!remembered.includes(kept), `the sidecar’s cache of replies holds ${kept}`);
+  // A BOX THAT CANNOT SIGN PASSES NO CODE ON: an unsigned one is a code no phone that checks would show.
+  const key = /** @type {NonNullable<typeof box.sidecar.vaultKey>} */ (box.sidecar.vaultKey);
+  const signs = key.sign;
+  key.sign = async () => { throw new Error('the key store is locked'); };
+  const cannotSign = await ask({ params: { action: 'status' } });
+  key.sign = signs;
+  assert.deepEqual([cannotSign.ok, cannotSign.error?.code, cannotSign.url, cannotSign.code, cannotSign.signature], [false, 'answer_unsigned', undefined, undefined, undefined]);
+  assert.equal(cannotSign.text, 'ops-box could not sign its answer, so the page and the code are not passed on: a code this machine has not signed is one nobody can tell is its own. The sign-in is still waiting there. Ask where it stands again, or cancel it.');
   // A PERSON'S OWN ENGINES, by their own record: their own address.
   assert.equal((await ask({ params: { member: 'eli', engine: 'opencode' } })).ok, true);
   assert.deepEqual([stub.signins.at(-1).member, stub.signins.at(-1).account, stub.signins.at(-1).engine], ['eli', ELI, 'opencode']);
@@ -2797,6 +2856,81 @@ test('a box signs an engine in for a member only for who may start a session as 
     sig: await sign(iphone.privateJwk, intentSigningInput({ actor: ELI, id, issuedAt, params, verb: 'enginesignin' }, 'ops-box')), kid,
   });
   assert.deepEqual([through.ok, through.state, through.url, through.code, through.hostId], [true, 'waiting', 'https://auth.openai.com/codex/device', 'ABCD-EFGH', 'ops-box']);
+  // The coordinator carries the box's key and signature as it carries the rest: untouched, so they still hold.
+  assert.deepEqual(through.hostKey, boxKey);
+  assert.equal(await verify(through.hostKey, through.signature, signinAnswerInput({ ...signed, id, at: through.signedAt })), true);
+});
+
+test('a real sign-in’s code is signed by the box and is in nothing the sidecar keeps, and no token is in anything it answers or remembers', async (t) => {
+  // The whole way on one machine: a phone's signed request, the real
+  // sidecar, the real hub and its sign-in store, a stand-in Podman running
+  // the real runner, and a stand-in Codex that writes a recognisable token
+  // into the engine home (test/helpers/stub-signin-podman.js). Nothing real
+  // is reached.
+  const b = signinBox(t);
+  const cfg = b.cfg({ bind: '127.0.0.1', port: 0, token: '', workdir: join(b.dir, 'work'), maxSessions: 5, loginEnabled: true, sandboxCredentialsFile: '', sandboxImagePinned: false, releaseChannel: '', rulesFile: join(b.dir, 'CLAUDE.md') });
+  const token = ensureApiToken(/** @type {any} */ (cfg));
+  const adapter = new HttpAdapter(/** @type {any} */ (cfg), {
+    sessions: /** @type {any} */ ({ list: () => [], running: () => [], binned: () => [] }),
+    login: /** @type {any} */ ({ status: () => ({ loggedIn: true }), isPending: () => false, pending: null }), token,
+  });
+  await adapter.start();
+  t.after(() => adapter.stop());
+  const { m, box, iphone, kid } = await signingFleet(t, { hub: { baseUrl: `http://127.0.0.1:${/** @type {any} */ (adapter.server).address().port}`, token } });
+  let clock = Date.now() - 30_000;
+  const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
+  await filed({ op: 'orgadmin', address: ELI });
+  await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
+  await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
+  const boxKey = { kty: 'EC', crv: 'P-256', x: String(box.sidecar.vaultKey?.publicJwk.x), y: String(box.sidecar.vaultKey?.publicJwk.y) };
+  await filed({ op: 'grant', hostKey: boxKey, label: 'ops-box', for: 'debbie' });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  await box.sidecar.syncVault();
+
+  /** @type {any[]} */
+  const answers = [];
+  let n = 0;
+  const ask = async (/** @type {string} */ action, /** @type {string} */ id = `real-signin-${String(++n).padStart(4, '0')}`) => {
+    const issuedAt = Date.now();
+    const params = { member: 'debbie', engine: 'codex', action };
+    const sig = await sign(iphone.privateJwk, intentSigningInput({ actor: ELI, id, issuedAt, params, verb: 'enginesignin' }, 'ops-box'));
+    const r = /** @type {any} */ (await box.sidecar.handle({ v: PROTOCOL_VERSION, kind: 'intent', id, verb: 'enginesignin', params, actor: ELI, issuedAt, sig, kid }));
+    answers.push(r);
+    return r;
+  };
+  const holds = async (/** @type {any} */ r, /** @type {string} */ id) => verify(r.hostKey, r.signature, signinAnswerInput({ id, host: await boxKeyHash(boxKey), member: 'debbie', engine: 'codex', url: r.url, code: r.code, at: r.signedAt }));
+
+  const waiting = await ask('start');
+  assert.deepEqual([waiting.ok, waiting.state, waiting.url, waiting.code], [true, 'waiting', 'https://auth.openai.com/codex/device', 'ABCD-EFGH'], waiting.text);
+  assert.deepEqual(waiting.hostKey, boxKey);
+  assert.equal(await holds(waiting, waiting.id), true);
+  // The same request again is the attempt in flight, signed over the same id, and no second container.
+  const again = await ask('start', waiting.id);
+  assert.deepEqual([again.replayed, again.state, again.code, await holds(again, waiting.id)], [true, 'waiting', 'ABCD-EFGH', true]);
+  assert.equal(b.runs().length, 1);
+
+  b.provider('approved');
+  /** @type {any} */
+  let now = null;
+  for (const by = Date.now() + 15_000; Date.now() < by && now?.state !== 'signed_in';) {
+    await new Promise((r) => setTimeout(r, 25));
+    now = await ask('status');
+  }
+  assert.equal(now?.state, 'signed_in', now?.text);
+  // An answer with no code carries nothing signed: there is nothing in it to check.
+  assert.deepEqual([now.url, now.code, now.hostKey, now.signature], [undefined, undefined, undefined, undefined]);
+  // A request first answered with the code, asked again once it is over, is told how it ended and starts nothing.
+  const late = await ask('start', waiting.id);
+  assert.deepEqual([late.replayed, late.state, late.code], [true, 'signed_in', undefined]);
+  assert.equal(b.runs().length, 1);
+
+  // THE TOKEN IS IN THE ENGINE HOME AND NOWHERE ELSE: no answer, and nothing the sidecar remembers.
+  assert.ok(readFileSync(b.volume('fw-engine-debbie', 'codex', 'auth.json'), 'utf8').includes(TOKEN));
+  const remembered = JSON.stringify(await Promise.all([...box.sidecar.replay.values()].map((hit) => hit.reply)));
+  assert.ok(box.sidecar.replay.has(waiting.id));
+  for (const [where, text] of [['an answer', JSON.stringify(answers)], ['the sidecar’s cache of replies', remembered]]) assert.ok(!text.includes('LEAKCANARY'), `a token is in ${where}`);
+  // AND THE CODE, ITS PAGE AND THE SIGNATURE OVER THEM are in the answers and not in the cache.
+  for (const kept of ['ABCD-EFGH', 'auth.openai.com', waiting.signature]) assert.ok(!remembered.includes(kept), `the sidecar’s cache of replies holds ${kept}`);
 });
 
 test('a session on a task is the assignee’s, opens on the task’s own branch and words, and says where the result goes', async (t) => {

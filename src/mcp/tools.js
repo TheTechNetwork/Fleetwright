@@ -506,7 +506,9 @@ const OVERRIDE = {
       '`start` answers with a page to open and a code that lasts 15 minutes: give both to the person, who enters the ' +
       'code under their own account, then ask `status` until it says how it ended. A second `start` while one waits ' +
       'answers with the one waiting. `cancel` stops an attempt and `signout` has the engine remove its sign-in there. ' +
-      'Name the machine with `host`: one whose engines (fleet_health) include this one. No token is sent or returned. ' +
+      'Name the machine with `host`: one whose engines (fleet_health) include this one, and that is approved for the member’s credentials. No token is sent or returned. ' +
+      'THE PAGE AND CODE ARE UNVERIFIED HERE: the machine signs them and a phone checks that signature before it shows a code, ' +
+      'and this server cannot, so it cannot tell the machine’s code from one the fleet’s coordinator put in its place. Say so when you pass them on. ' +
       'Only who may start a session as the member may, and the grant this server acts under must carry this and name the member.',
   },
 };

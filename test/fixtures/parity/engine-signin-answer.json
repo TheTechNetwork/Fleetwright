@@ -1,0 +1,54 @@
+{
+ "why": "One signed answer to an engine sign-in, made the way a box makes it (src/fleet/host/sidecar.js, signed with src/fleet/crypto.js): the page and the code, signed by the box’s key over the id of the request. Both phones check a code against this before they show one, so both hold their check to this vector. test/engine-signin-answer.test.js checks it with crypto.js itself, and that every field under `changed` breaks it.",
+ "context": "engine-signin-answer",
+ "hostKey": {
+  "kty": "EC",
+  "crv": "P-256",
+  "x": "4dgCUNFAPOgyDfpM2N_JW1mCUzU8IrWF-8U5HAilUHc",
+  "y": "DtlBhwb0Y1mzmJ_5h4tHck7T1e5y0YOJxNK_XENE7BU"
+ },
+ "keyHashInput": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"4dgCUNFAPOgyDfpM2N_JW1mCUzU8IrWF-8U5HAilUHc\",\"y\":\"DtlBhwb0Y1mzmJ_5h4tHck7T1e5y0YOJxNK_XENE7BU\"}",
+ "host": "9294fc277421186455bab5488089abf3d6b4f10244e4335536be24bc31593866",
+ "payload": {
+  "v": 1,
+  "id": "3f2b6c1e-8d4a-4b7f-9c2e-5a1d7e9b0c44",
+  "host": "9294fc277421186455bab5488089abf3d6b4f10244e4335536be24bc31593866",
+  "member": "debbie",
+  "engine": "codex",
+  "url": "https://auth.openai.com/codex/device",
+  "code": "ABCD-EFGH",
+  "at": 1764000001000
+ },
+ "signingInput": "agent-fleet/v1/engine-signin-answer\n{\"at\":1764000001000,\"code\":\"ABCD-EFGH\",\"engine\":\"codex\",\"host\":\"9294fc277421186455bab5488089abf3d6b4f10244e4335536be24bc31593866\",\"id\":\"3f2b6c1e-8d4a-4b7f-9c2e-5a1d7e9b0c44\",\"member\":\"debbie\",\"url\":\"https://auth.openai.com/codex/device\",\"v\":1}",
+ "signature": "O5DY3cGPm9FSMYLK8Izkfhz3J65-hUK4Pjr_qj3Efnpd6fFW4cWsX3IonCD-8tmqu880OQVQM3V-fCtmiftePw",
+ "changed": [
+  {
+   "field": "code",
+   "value": "ABCD-EFGX"
+  },
+  {
+   "field": "url",
+   "value": "https://auth.openai.com/codex/devicf"
+  },
+  {
+   "field": "member",
+   "value": "jason"
+  },
+  {
+   "field": "engine",
+   "value": "opencode"
+  },
+  {
+   "field": "id",
+   "value": "3f2b6c1e-8d4a-4b7f-9c2e-5a1d7e9b0c45"
+  },
+  {
+   "field": "at",
+   "value": 1764000001001
+  },
+  {
+   "field": "host",
+   "value": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+ ]
+}

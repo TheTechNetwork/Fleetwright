@@ -2199,6 +2199,44 @@
                           "type": "integer",
                           "description": "For `enginesignin` in state `waiting`: the minutes left, rounded up, by the machine\u2019s clock. 15 at the start."
                         },
+                        "signedAt": {
+                          "type": "integer",
+                          "description": "For `enginesignin` in state `waiting`: when the machine signed this answer, epoch ms. It is `at` in what `signature` covers."
+                        },
+                        "hostKey": {
+                          "type": "object",
+                          "description": "For `enginesignin` in state `waiting`: the public key of the machine that answered, the P-256 key it signs its vault requests with. The SHA-256 of `{\"crv\":\u2026,\"kty\":\u2026,\"x\":\u2026,\"y\":\u2026}` in that order, in hex, is the `key` of that machine\u2019s grant in the member\u2019s vault. The coordinator passes it on and does not check it.",
+                          "required": [
+                            "kty",
+                            "crv",
+                            "x",
+                            "y"
+                          ],
+                          "properties": {
+                            "kty": {
+                              "type": "string",
+                              "enum": [
+                                "EC"
+                              ]
+                            },
+                            "crv": {
+                              "type": "string",
+                              "enum": [
+                                "P-256"
+                              ]
+                            },
+                            "x": {
+                              "type": "string"
+                            },
+                            "y": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "signature": {
+                          "type": "string",
+                          "description": "For `enginesignin` in state `waiting`: `hostKey`\u2019s ECDSA P-256 SHA-256 signature, the 64 raw bytes r||s in base64url without padding, over the UTF-8 of `agent-fleet/v1/engine-signin-answer\\n` followed by the JSON of `{at, code, engine, host, id, member, url, v}` with keys in that order and no spaces: `at` is `signedAt`, `host` the hash of `hostKey`, `id` the id of the request, `v` 1. A caller that shows the code checks this first, and that `host` is a machine approved for the member\u2019s vault. The coordinator passes it on and does not check it."
+                        },
                         "already": {
                           "type": "boolean",
                           "description": "For `enginesignin` `start`: true when an attempt was already waiting for this member and engine there, and this answer is that one. Nothing new was started."

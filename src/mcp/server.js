@@ -542,6 +542,12 @@ function askingFrom(session) {
   return typeof q === 'string' ? oneLine(q, 300) : '';
 }
 
+/** What every answer that carries an engine sign-in's code says after it (callTool). */
+const SIGNIN_CODE_UNVERIFIED =
+  'UNVERIFIED. This server cannot check that the page and code above came from the machine and not from the fleet’s coordinator, which carries them. ' +
+  'A phone checks the machine’s signature against the machines approved for the member’s credentials before it shows a code. ' +
+  'Tell the person the code is unverified, or have them sign in from the Fleetwright app, on the member’s Credentials.';
+
 export class McpServer {
   /** @param {Options} opts */
   constructor({ coordinator, credential, allow = null, budgetMinutes = 15, fetch: doFetch = fetch, write, log = () => {},
@@ -1259,6 +1265,17 @@ export class McpServer {
     // are whose and the snapshot does; started above, beside the fan-out.
     if (vmImages && reply?.ok !== false) {
       reply = { ...reply, text: `${reply?.text ?? ''}\n\n${describeVmImages(await vmImages)}` };
+    }
+
+    // A SIGN-IN CODE THIS SERVER CANNOT CHECK, SAID AS THAT. The machine
+    // signs the page and the code, and a phone holds that signature to the
+    // machines approved for the member's vault before it shows either
+    // (docs/engines.md, "The machine signs the page and the code"). The list
+    // of those machines reaches a phone sealed by the minter; this server
+    // has none, so the signature proves nothing to it, and a code that reads
+    // as checked here would be a claim with no answer behind it.
+    if (tool.verb === 'enginesignin' && reply?.ok !== false && typeof reply?.code === 'string') {
+      reply = { ...reply, text: `${reply?.text ?? ''}\n\n${SIGNIN_CODE_UNVERIFIED}` };
     }
 
     const failed = reply?.ok === false;
