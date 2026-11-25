@@ -7,6 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { OrgMembers } from '../src/fleet/coordinator/org-members.js';
 import { tasksRoute } from '../src/fleet/coordinator/org-tasks.js';
@@ -302,6 +303,11 @@ test('the routes: everybody reads the setting, an admin writes it, and a task is
   const call = async (/** @type {string} */ path, /** @type {any} */ who, /** @type {any} */ body) => /** @type {any} */ (await tasksRoute(core, 'POST', path, null, who, async () => body));
   assert.equal((await call('/api/tasks', admin, { title: 'T', brief: 'B', workType: 'backend' })).body.task.route.how, 'waiting');
   assert.equal((await call('/api/tasks/t1/route', dana, {})).status, 404);
+  // A member nobody is, by an id or by words that are not one, is 404, and
+  // the contract says the same: it listed a 400 this route never gave.
+  for (const member of ['ghost', 'Not An Id']) assert.deepEqual([(await call('/api/tasks/t1/route', admin, { member })).status, (await call('/api/tasks/t1/route', admin, { member })).body.error.code], [404, 'no_member']);
+  const spec = JSON.parse(readFileSync(new URL('../openapi.json', import.meta.url), 'utf8')).paths['/api/tasks/{id}/route'].post.responses;
+  assert.deepEqual(Object.keys(spec).sort(), ['200', '401', '403', '404', '409']);
   const answered = await call('/api/tasks/t1/route', admin, { member: 'debbie' });
   assert.deepEqual([answered.status, answered.body.task.assignee], [200, 'debbie']);
   assert.equal((await call('/api/tasks/t1/route', admin, {})).status, 409, 'it has its member now');

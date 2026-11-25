@@ -3650,6 +3650,9 @@ const OPENAPI = JSON.stringify({
           "200": {
             "description": "`tasks`"
           },
+          "400": {
+            "description": "`state` is not one a task has, `bad_state`: a state nobody has is not a request for every task"
+          },
           "401": {
             "description": "no credential"
           }
@@ -3967,9 +3970,6 @@ const OPENAPI = JSON.stringify({
           "200": {
             "description": "the task, as it is now, and what to sign to start it"
           },
-          "400": {
-            "description": "not a member\u2019s id"
-          },
           "401": {
             "description": "no credential"
           },
@@ -3977,7 +3977,7 @@ const OPENAPI = JSON.stringify({
             "description": "the member named is not one you may hand work to"
           },
           "404": {
-            "description": "no task by that id that you can see, or no member by that id"
+            "description": "no task by that id that you can see, or no member by the id given, whether or not it reads as one"
           },
           "409": {
             "description": "the task already has a member, is not open, is being worked on, or routing is off for it"

@@ -4,6 +4,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { OrgMembers } from '../src/fleet/coordinator/org-members.js';
 import { OrgTasks, TASKS_PREFIX, tasksRoute } from '../src/fleet/coordinator/org-tasks.js';
@@ -387,6 +388,8 @@ test('the routes answer the same way on both coordinators: one function, and its
   // A state nobody has is refused: answered with everything, a screen drew every task under one heading.
   const nonsense = await call('GET', '/api/tasks?state=nonsense', dana);
   assert.deepEqual([nonsense.status, nonsense.body.error.code, nonsense.body.tasks], [400, 'bad_state', undefined]);
+  // And the contract lists it: a client written from openapi.json had no 400 to expect here.
+  assert.ok('400' in JSON.parse(readFileSync(new URL('../openapi.json', import.meta.url), 'utf8')).paths['/api/tasks'].get.responses);
   assert.equal((await call('PUT', '/api/tasks/t1', admin, { assignee: 'loose' })).status, 409, 'held');
   assert.equal((await call('POST', '/api/tasks/t1/act', dana, { action: 'accept' })).status, 409);
   assert.equal((await call('POST', '/api/tasks/t1/act', dana, { action: 'reopen' })).status, 409);

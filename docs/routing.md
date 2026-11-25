@@ -93,7 +93,8 @@ assignee, and one unassigned by hand stays unassigned until somebody asks.
 
 ## What is written on the task
 
-Every decision, including the ones that assigned nobody.
+Every decision, including the ones that assigned nobody, is the task's
+`route`. Every one but `pinned` is also a line in its history.
 
 `task.route` is the last one:
 
@@ -108,9 +109,12 @@ Every decision, including the ones that assigned nobody.
 | `asked` | the address that was asked, while `how` is `waiting` |
 | `at`, `by` | when, and who asked for the routing or answered it |
 
-And each one is a line in the task's `handoffs`, kind `routed`, so the
-history shows a task that was asked about twice, or that a model's pick was
-later changed by hand.
+And each one that chose somebody, asked a person or found nobody is a line
+in the task's `handoffs`, kind `routed`, so the history shows a task that
+was asked about twice, or that a model's pick was later changed by hand.
+**A `pinned` decision writes no line.** It moved nothing: the task was
+somebody's already, and the line that says whose is the one that gave it to
+them. It is on the task as `route`, with why nothing moved.
 
 ## The model's pick
 
