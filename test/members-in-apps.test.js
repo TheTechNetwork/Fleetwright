@@ -95,10 +95,17 @@ test('both phones read the list, write one member, and move members as files', (
   }
 });
 
-test('a member is signed in, not signed in, or not checked, and a vault that did not answer is never "Not signed in" (C-5)', () => {
-  for (const words of ['Signed in to Claude', 'Not signed in', 'Not checked']) {
+test('a member’s row says what the vault keeps, never that it is signed in, and a vault that did not answer is "Not checked" (C-5)', () => {
+  for (const words of ['Keeps a Claude sign-in', 'No Claude sign-in kept', 'Not checked']) {
     assert.ok(IOS.includes(words), `iOS lost: ${words}`);
     assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+  // THE VAULT'S LIST IS NAMES, TIMES AND KINDS (src/fleet/minter/vault.js,
+  // `list`). An item named claude is a sign-in somebody kept: nobody tried
+  // it, and one that ran out is kept all the same. So no row may say the
+  // member is signed in, which is a state nobody checked.
+  for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
+    assert.doesNotMatch(src, /(?:return|->) "Signed in to Claude"/, `${name} says a member is signed in on the strength of a kept item`);
   }
   // The answer decides between the first two; no answer is the third.
   assert.match(IOS, /if let contents = try\? await vault\.list\(fleet, for: member\.id\) \{[\s\S]{0,160}\} else \{\s*signIns\[member\.id\] = \.notChecked/);
@@ -141,6 +148,26 @@ test('giving up custody of a person is offered to whoever holds it or an org adm
   assert.match(ANDROID, /title = \{ Text\("Stop managing their credentials\?"\) \},[\s\S]{0,260}act \{ vault\.setCustodian\(Fleet\(settings\), filed\.id, address, remove = true\) \}\s*\}\) \{ Text\("Stop managing"\) \}/);
 });
 
+test('removing an agent’s custodian asks first, and is not offered for the last one, which the vault keeps (C-2)', () => {
+  for (const words of ['Remove this custodian?', 'Remove custodian', ' stops being a custodian of ', '. Anybody still listed can add them again.']) {
+    assert.ok(IOS.includes(words), `iOS lost: ${words}`);
+    assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+  // The row's button only opens the question, and is drawn while more than
+  // one custodian is left: the vault refuses to remove the last
+  // (`last_custodian`, src/fleet/minter/org.js).
+  assert.match(IOS, /\.custodians\.count > 1 \{\s*Button\("Remove", role: \.destructive\) \{ (\w+) = address \}/);
+  assert.match(ANDROID, /\.custodians\.size > 1\) \{\s*TextButton\(\s*enabled = !busy,\s*onClick = \{ (\w+) = address \},[\s\S]{0,200}?Text\("Remove", /);
+  // Only the question's own button asks the vault.
+  assert.match(IOS, /\.confirmationDialog\("Remove this custodian\?"[\s\S]{0,260}?Button\("Remove custodian", role: \.destructive\) \{\s*if let address = \w+ \{\s*act \{ try await vault\.setCustodian\(fleet, member: shown\.id, address: address, remove: true\) \}/);
+  assert.match(ANDROID, /title = \{ Text\("Remove this custodian\?"\) \},[\s\S]{0,300}?act \{ vault\.setCustodian\(Fleet\(settings\), filed\.id, address, remove = true\) \}\s*\}\) \{ Text\("Remove custodian"\) \}/);
+  // And nothing takes a custodian away at a press: every removal sits in a
+  // question's own button.
+  for (const [name, src, call] of [['iOS', IOS, /setCustodian\([^\n]*remove: true\)/g], ['Android', ANDROID, /setCustodian\([^\n]*remove = true\)/g]]) {
+    assert.equal(src.match(call)?.length, 2, `${name} removes a custodian somewhere other than its two questions`);
+  }
+});
+
 test('a person is told who added them and manages what they keep, with nothing drawn to end it, before the switch for the rest (C-2)', () => {
   // Drawn when either is true, so somebody whose only manager added them
   // still reads it, and the switch only when there is somebody it lets in.
@@ -150,18 +177,142 @@ test('a person is told who added them and manages what they keep, with nothing d
   assert.match(ANDROID, /if \(held\.managers\.isNotEmpty\(\)\) \{\s*Row\(/);
 });
 
-test('Remove asks first, and says what it costs', () => {
-  const cost = ' from the organization. Its vault is not deleted; a custodian forgets what it keeps.';
-  assert.ok(IOS.includes(cost), 'iOS does not say what removing a member costs');
-  assert.ok(ANDROID.includes(cost), 'Android does not say what removing a member costs');
+test('Remove asks first, says what it costs by kind, and tells the vault before the fleet', () => {
+  // The cost is the vault's to exact, so it differs by what the member is:
+  // an agent's vault goes with it, and a person's stays theirs.
+  for (const words of [
+    ' from the organization. The vault forgets what it kept and the machines approved for it, and that cannot be undone.',
+    ' from the organization. What they keep in the vault is their own and stays theirs.',
+    // A phone that cannot ask the vault removes nothing, and says why.
+    'Sign in to GitHub under Runners first. Removing a member also tells the vault, which keeps who may use its credentials.',
+  ]) {
+    assert.ok(IOS.includes(words), `iOS lost: ${words}`);
+    assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
   // The button opens the question; only the question's own button removes.
   assert.match(IOS, /Button\("Remove member", role: \.destructive\) \{ removing = true \}/);
   assert.match(IOS, /\.confirmationDialog\("Remove \\\(shown\.name\)\?"/);
   assert.match(ANDROID, /onClick = \{ removing = true \},[\s\S]{0,120}Text\("Remove member"/);
   assert.match(ANDROID, /title = \{ Text\("Remove \$\{member\.name\}\?"\) \}/);
+  // THE VAULT FIRST. It keeps its own tree and decides custody from it, so
+  // a member removed from the fleet alone kept its place there: a removed
+  // person went on holding an agent's credentials. Each phone asks the
+  // fleet to remove a member in one place, and in that function the vault
+  // was asked before it. The one refusal it goes on after is the vault
+  // never having held the member.
+  for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
+    const vault = src.search(/fileOrgMember\([^)]*remove(?:: | = )true\)/);
+    const fleet = src.indexOf('.removeMember(');
+    assert.ok(vault > 0, `${name} never tells the vault a member is removed`);
+    assert.ok(fleet > vault, `${name} asks the fleet to remove a member before the vault`);
+    assert.equal(src.lastIndexOf('.removeMember('), fleet, `${name} removes a member somewhere that does not tell the vault`);
+    const between = src.slice(vault, fleet);
+    assert.doesNotMatch(between, /\n\s*(?:\w+ )*(?:func|fun) \w/, `${name} tells the vault and the fleet in different functions`);
+    assert.ok(between.includes('"no_member"'), `${name} does not go on when the vault never held the member`);
+  }
+});
+
+test('File it is drawn only for somebody the vault would take it from, and anybody else reads who files it (C-2)', () => {
+  // The vault takes a place from an org admin, or from a manager its own
+  // tree already puts above it, and files nobody under a member it does not
+  // hold. The button used to be drawn for anybody the fleet lets edit: a
+  // team lead's press was refused until an admin had filed every member
+  // above theirs, and nothing said so.
+  for (const words of [
+    "This is an org admin's to file: ",
+    'The vault files a member after whoever it reports to, and ',
+    ' is not filed yet. An org admin files both: ',
+    ' is not filed yet. Go back to Organization to file them all, in order.',
+  ]) {
+    assert.ok(IOS.includes(words), `iOS lost: ${words}`);
+    assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+  // One or the other, never both: the button is what is drawn when there
+  // is nobody else to name.
+  assert.match(IOS, /if let \w+ = whoFilesInstead\([^\n]*\) \{\s*Text\(\w+\)[\s\S]{0,300}?\} else \{\s*Button\("File it"\)/);
+  assert.match(ANDROID, /= whoFilesInstead\([^\n]*\)\s*if \(\w+ != null\) \{\s*[^\n]*\n\s*\} else \{\s*OutlinedButton\([\s\S]{0,400}?Text\("File it"\)/);
+  // Every "File it" on a member's page is that one.
+  for (const [name, src, button] of [['iOS', IOS, 'Button("File it")'], ['Android', ANDROID, 'Text("File it")']]) {
+    assert.equal(src.split(button).length - 1, 1, `${name} draws File it somewhere the vault's answer does not decide`);
+  }
+});
+
+test('an org admin files every member the vault does not hold in one press, whoever it reports to first, and reads what happened', () => {
+  for (const words of [
+    'Custody is not filed for 1 member yet.',
+    'Custody is not filed for ',
+    ' members yet.',
+    'File all ',
+    'Filing…',
+    // What it did, by name, and each refusal with the vault's own sentence.
+    ' with the vault: ',
+    'Could not file ',
+  ]) {
+    assert.ok(IOS.includes(words), `iOS lost: ${words}`);
+    assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+  // THE ORDER IS THE TREE'S OWN, the one Everyone is drawn in, so a manager
+  // is filed before its reports. The vault refuses the other order with
+  // "dana is not a member, so nobody can report to it".
+  assert.match(IOS, /func membersToFile\([^\n]*\) -> \[Fleet\.Member\] \{\s*orgRows\(members\)/);
+  assert.match(ANDROID, /fun membersToFile\([^\n]*\): List<Fleet\.Member> =\s*orgRows\(members\)/);
+  // And what is filed is what the vault holds NOW: it is asked again in the
+  // same function, before the first member is sent.
+  for (const [name, src, open] of [['iOS', IOS, 'func fileAll()'], ['Android', ANDROID, 'fun fileAll()']]) {
+    const body = src.slice(src.indexOf(open)).split(/\n {4}\}\n/)[0];
+    const asks = body.search(/\.org\(fleet\)/);
+    const files = body.search(/\.fileOrgMember\(/);
+    assert.ok(asks > 0 && files > asks, `${name} files everybody from an answer it did not just ask for`);
+  }
+  // The button is the vault's org admin's, and nobody else's (C-2).
+  assert.match(IOS, /\w+\?\.youAdmin == true && !\w+\.isEmpty\n[\s\S]{0,1400}?fileAllLabel\(/);
+  assert.match(ANDROID, /\w+\?\.youAdmin == true && \w+\.isNotEmpty\(\)\n[\s\S]{0,1400}?fileAllLabel\(/);
 });
 
 test('the Organization row is drawn only once the fleet answered with its members (C-2)', () => {
   assert.match(IOS, /if let orgCount \{\s*NavigationLink \{\s*OrgView/);
   assert.match(ANDROID, /orgCount\?\.let \{ count ->\s*OpenRow\("Organization"/);
+});
+
+test('an organization that could not be loaded says so under You, with the reason and Try again, and is not drawn as a fleet with none (C-5)', () => {
+  // A request that failed and a fleet from before members both drew no row,
+  // so a person on a bad connection was shown a fleet with no organization.
+  // In the row's place, and only when there is no answer to draw instead:
+  const ios = /if let orgCount \{\s*NavigationLink \{\s*OrgView[\s\S]{0,400}?\} else if let (\w+) \{[\s\S]{0,200}?\w+\("Could not load the organization\.", why: \1\)/.exec(IOS)?.[1];
+  assert.ok(ios, 'iOS draws nothing where the organization could not be loaded');
+  const android = /if \(orgCount == null && (\w+) != null\) \{\s*\w+\("Could not load the organization\.", \1\) \{/.exec(ANDROID)?.[1];
+  assert.ok(android, 'Android draws nothing where the organization could not be loaded');
+  // The reason is the request's own failure, or the fleet's sentence. An
+  // answer with neither a list nor a sentence is a fleet from before
+  // members: no reason, so no row, as before.
+  assert.match(IOS, new RegExp(`\\} catch \\{\\s*if !Task\\.isCancelled \\{ ${ios} = error\\.localizedDescription \\}`), 'iOS drops why the organization could not be loaded');
+  assert.match(IOS, new RegExp(`${ios} = \\(\\w+\\.text \\?\\? ""\\)\\.isBlank \\? nil : \\w+\\.text`), 'iOS takes an answer with no sentence for a failure');
+  const whyAndroid = /val (\w+) = (\w+)\s*if \(orgCount == null && \1 != null\)/.exec(ANDROID)?.[2];
+  assert.ok(whyAndroid, 'Android has no reason to show');
+  assert.match(ANDROID, new RegExp(`\\.onFailure \\{ if \\(it !is [\\w.]+CancellationException\\) ${whyAndroid} = it\\.message \\?: "no answer" \\}`), 'Android drops why the organization could not be loaded');
+  assert.match(ANDROID, new RegExp(`\\} else \\{\\s*${whyAndroid} = \\w+\\.text\\s*\\}`), 'Android takes an answer with no sentence for a failure');
+  // And the row that says so has the reason under it and a way to ask again.
+  assert.match(IOS, /Text\(what\)[\s\S]{0,200}?Text\(why\)[\s\S]{0,260}?Button\("Try again"\) \{ Task \{ await \w+\(\) \} \}/);
+  assert.match(ANDROID, /Hint\(what, color = Design\.Palette\.bad\.now\)\s*SelectionContainer \{ Hint\(why\) \}\s*OutlinedButton\(onClick = again[^\n]*\{ Text\("Try again"\) \}/);
+});
+
+test('a start from a member’s page is answered on that page on both phones, and a timeout there says where to look', () => {
+  // docs/app-parity.md says the two pages are the same. iOS drew the answer
+  // under the button; Android moved the person to Sessions, off the member
+  // they were looking at, and told a timeout to "Pull to refresh" on a page
+  // with nothing to pull.
+  assert.match(IOS, /Button\("Start a session as \\\(shown\.name\)"\)[\s\S]{0,700}?RefusedStartView\(settings: settings, refused: \w+\)[\s\S]{0,160}?\} else if !(\w+)\.isBlank \{\s*Text\(\1\)/, 'iOS no longer draws a start’s answer on the member’s page');
+  assert.match(ANDROID, /Text\("Start a session as \$\{member\.name\}"\)\s*\}[\s\S]{0,700}?RefusedStartCard\(settings, (\w+)\) \{ onStart\(\1\.request\) \}\s*\} else if \((\w+) != null && \2\.text\.isNotBlank\(\)\) \{\s*SelectionContainer \{ Hint\(\2\.text\) \}/, 'Android does not draw a start’s answer on the member’s page');
+  // And the person stays there: what sends a start from under You does not
+  // change the tab.
+  const you = ANDROID.slice(ANDROID.indexOf('"you" -> YouScreen('));
+  const sends = /onStart = \{ request ->([\s\S]{0,240}?)\n {16}\},/.exec(you)?.[1] ?? '';
+  assert.match(sends, /startInBackground\(request\)/, 'this no longer reads what sends a start from under You on Android');
+  assert.doesNotMatch(sends, /tab = /, 'Android moves a person off the page whose start they pressed');
+  // The timeout's sentence, from a page: the session, if there is one, is
+  // under Sessions. On Sessions itself both phones still say to pull.
+  for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
+    assert.ok(src.includes('Not sure it started. Look under Sessions.'), `${name} lost: Not sure it started. Look under Sessions.`);
+    assert.ok(src.includes('Not sure it started. Pull to refresh.'), `${name} lost: Not sure it started. Pull to refresh.`);
+  }
 });

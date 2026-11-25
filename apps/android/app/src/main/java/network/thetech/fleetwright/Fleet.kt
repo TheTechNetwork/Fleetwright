@@ -549,6 +549,9 @@ class Fleet(
         val hosts: List<String>,
     )
 
+    /** One entry of a machine's [FleetHost.engineSignins]: a member, an engine, and since when. */
+    data class EngineSignedInThere(val member: String, val engine: String, val since: Long?)
+
     data class FleetHost(
         val hostId: String,
         val state: String?,
@@ -827,6 +830,23 @@ class Fleet(
          * drawn as before.
          */
         val admins: PinnedAdmins? = null,
+        /**
+         * The protocol this machine speaks. 22 or more is a machine that can
+         * sign an engine in (`enginesignin`, docs/engines.md); null is one
+         * that did not say, which is not offered the verb.
+         */
+        val protocol: Int? = null,
+        /**
+         * Who is signed in to which engine on this machine, of the members
+         * this person may see (docs/engines.md, "What a machine reports").
+         *
+         * NULL IS CANNOT TELL, NEVER SIGNED OUT (C-5): a machine older than
+         * that report, or one that could not read its record. An empty list
+         * is an answer: nobody this person may see is signed in there. It
+         * carries no account; who is signed in comes from the machine's own
+         * checked answer ([EngineSignin.verified]).
+         */
+        val engineSignins: List<EngineSignedInThere>? = null,
     ) {
         /**
          * The row's word for why it is not healthy ([ReasonWords.host]), or
@@ -1165,6 +1185,19 @@ class Fleet(
          * (`over_budget`), and from a fleet older than approvals.
          */
         val approval: Approval? = null,
+        /**
+         * Where an engine's sign-in stands on the machine that answered
+         * (`enginesignin`, docs/engines.md): `waiting`, `signed_in`,
+         * `expired` and the rest. In the clear and unsigned, so it decides
+         * which sentence is drawn and nothing a person relies on: the code,
+         * its page and who is signed in come out of [sealed], checked
+         * ([EngineSignin.verified]). Null on every other reply.
+         */
+        val state: String? = null,
+        /** The engine's own sentence for a sign-in that failed. Null otherwise. */
+        val detail: String? = null,
+        /** How many minutes a code that is out still lasts. Null otherwise. */
+        val expiresInMinutes: Int? = null,
     ) {
         /**
          * The title over a refusal: its code's word ([ReasonWords.refusal]),
@@ -3712,6 +3745,32 @@ class Fleet(
         )
 
     /**
+     * Ask one machine about an engine's sign-in for a member
+     * (`enginesignin`, docs/engines.md, "Signing in on the machine"):
+     * [action] is `start`, `status`, `cancel` or `signout`, and [engine] is
+     * `codex` or `opencode`, which is the GitHub Copilot sign-in.
+     *
+     * [reply] IS ALWAYS SENT: the public half of a key made for this one
+     * request ([Seal.newKey]), so the machine seals the page, the code and
+     * who is signed in to it and the fleet between carries what it cannot
+     * read. It is a parameter, so it is in what this phone signs, and the
+     * fleet cannot put a key of its own in its place. [id] is the caller's,
+     * because the machine signs its answer over it and the caller checks
+     * that ([EngineSignin.verified]).
+     *
+     * NEVER HELD, as a setup-token's code is not: an id is given, which
+     * keeps a send that could not reach the fleet out of the outbox, and a
+     * sign-in asked for an hour ago is not one anybody is waiting on.
+     */
+    suspend fun engineSignIn(member: String, engine: String, action: String, host: String, reply: String, id: String): Reply =
+        intent(
+            "enginesignin",
+            mapOf("member" to member, "engine" to engine, "action" to action, "reply" to reply),
+            host = host,
+            idempotencyKey = id,
+        )
+
+    /**
      * A pool's page, read by one of your machines that holds its token, for
      * this phone away from the pool's network: sealed to [reply], a key made
      * for this one look (PoolWatch). Never held: an old page is no page.
@@ -3951,7 +4010,15 @@ class Fleet(
     }
 
     /** What this person signed for the fleet to send in their name later (docs/signed-intents.md, "Delegations"). */
-    data class Delegation(val id: String, val verbs: List<String>, val hosts: List<String>, val issuedAt: Long, val expires: Long)
+    data class Delegation(
+        val id: String,
+        val verbs: List<String>,
+        val hosts: List<String>,
+        val issuedAt: Long,
+        val expires: Long,
+        /** The members a start under it may name, by id. Empty when the grant names none, and from a fleet older than the field. */
+        val members: List<String> = emptyList(),
+    )
 
     suspend fun delegations(): Result<List<Delegation>> = withContext(Dispatchers.IO) {
         runCatching {
@@ -3959,14 +4026,18 @@ class Fleet(
             (0 until arr.length()).mapNotNull { i ->
                 val o = arr.optJSONObject(i) ?: return@mapNotNull null
                 val strings = { key: String -> o.optJSONArray(key)?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList() }
-                Delegation(o.optString("id"), strings("verbs"), strings("hosts"), o.optLong("issuedAt"), o.optLong("expires"))
+                Delegation(o.optString("id"), strings("verbs"), strings("hosts"), o.optLong("issuedAt"), o.optLong("expires"), strings("members"))
             }
         }
     }
 
-    /** Let an MCP client act as you, on any box, for [days]. */
-    suspend fun allowMcp(days: Int): Reply = withContext(Dispatchers.IO) {
-        val d = DeviceSigning(settings).delegation(MCP_DELEGATED_VERBS, listOf("*"), emptyMap(), days * 24L * 3600 * 1000)
+    /**
+     * Let an MCP client act as you, on any box, for [days]. [members] are the
+     * members it may start sessions as, by id: none unless the person chose
+     * them, and then they are in what this phone signs.
+     */
+    suspend fun allowMcp(days: Int, members: List<String> = emptyList()): Reply = withContext(Dispatchers.IO) {
+        val d = DeviceSigning(settings).delegation(MCP_DELEGATED_VERBS, listOf("*"), emptyMap(), days * 24L * 3600 * 1000, members)
             ?: return@withContext Reply(false, "This phone signs once its key is listed, which happens after you sign in to GitHub under Runners.", emptyList())
         runCatching {
             val json = post("/api/delegations", JSONObject().put("delegation", d))
@@ -4163,10 +4234,18 @@ class Fleet(
                 // until the machine a provision makes has joined gets its own,
                 // for an hour, over the fields the coordinator keeps of it
                 // (docs/signed-intents.md).
+                //
+                // A START AS A MEMBER NAMES THAT MEMBER IN ITS GRANT, beside
+                // the parameter it must match: a box takes a delegated start
+                // as a member only from a grant that names it. Any other
+                // request names none, and signs what it always did.
                 val signing = DeviceSigning(settings)
                 val delegations = JSONArray()
-                signing.delegation(listOf(verb), listOf("*"), buildMap<String, Any> { putAll(params); putAll(numeric) }, 600_000L)
-                    ?.let { delegations.put(it) }
+                val startsAs = if (verb == "start") params["member"].orEmpty() else ""
+                signing.delegation(
+                    listOf(verb), listOf("*"), buildMap<String, Any> { putAll(params); putAll(numeric) }, 600_000L,
+                    if (startsAs.isEmpty()) emptyList() else listOf(startsAs),
+                )?.let { delegations.put(it) }
                 val start = extra["start"] as? JSONObject
                 if (verb == "provision" && start != null) {
                     val kept = listOf("title", "brief", "mode", "task")
@@ -4291,6 +4370,10 @@ class Fleet(
                     url = json.optString("url").takeIf { it.isNotBlank() && it != "null" },
                     sealed = json.optJSONObject("sealed"),
                     hostId = json.optString("hostId").takeIf { it.isNotBlank() && it != "null" },
+                    state = json.optString("state").takeIf { it.isNotBlank() && it != "null" },
+                    detail = json.optString("detail").takeIf { it.isNotBlank() && it != "null" },
+                    // `has` first: a missing number is not zero minutes.
+                    expiresInMinutes = json.takeIf { it.has("expiresInMinutes") && !it.isNull("expiresInMinutes") }?.optInt("expiresInMinutes"),
                     probes = json.optJSONArray("probes")?.let { a ->
                         (0 until a.length()).mapNotNull { i ->
                             a.optJSONObject(i)?.let { p ->
@@ -4550,6 +4633,20 @@ class Fleet(
                             problem = a.optString("problem").takeIf { it.isNotBlank() && it != "null" },
                             stranded = a.optString("stranded").takeIf { it.isNotBlank() && it != "null" },
                         )
+                    },
+                    // `has` first: optInt reads a missing number as 0, and a
+                    // machine that did not say is not one that said zero.
+                    protocol = health?.takeIf { it.has("protocol") && !it.isNull("protocol") }?.optInt("protocol"),
+                    // ABSENT STAYS NULL: cannot tell, never "signed out".
+                    engineSignins = health?.optJSONArray("engineSignins")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { i ->
+                            arr.optJSONObject(i)?.let { e ->
+                                val member = if (e.isNull("member")) "" else e.optString("member")
+                                val engine = if (e.isNull("engine")) "" else e.optString("engine")
+                                if (member.isBlank() || engine.isBlank()) null
+                                else EngineSignedInThere(member, engine, e.optLong("since", 0L).takeIf { it > 0L })
+                            }
+                        }
                     },
                 )
             }

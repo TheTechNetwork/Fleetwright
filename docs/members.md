@@ -377,15 +377,64 @@ POST   /api/members/import     { text }
   person's own sign-in.
 - **Both phones**: an **Org** screen, the tree by `reportsTo`; a member's page,
   with Edit for whoever manages it; **My team** for a manager, each member
-  with its sign-in's state; a member's **Credentials**, which is the
+  with whether its vault keeps a Claude sign-in (kept is all the vault's list
+  says, so the row never says *signed in*); a member's **Credentials**, which is the
   Credentials screen pointed at that vault; and **Start as** on New session,
-  listing only members the person may start as.
+  listing only members the person may start as. On a member's Credentials, a
+  custodian signs Codex, or OpenCode on GitHub Copilot, in on a machine: tap
+  *Sign in on a machine*, pick the machine when more than one runs that
+  engine and is approved for the member's credentials, open the sign-in
+  page, enter the code the phone shows, and approve it there. The phone
+  shows the code only when the answer came from a machine approved for that
+  member, and says so in one sentence when it did not. Then it reads *Signed
+  in on* that machine, with the account when the engine names one, and
+  offers *Sign out*. A machine that runs the engine and is not approved yet
+  is approved first, from the same page. Pasting a sign-in is still there,
+  behind *Paste a sign-in instead*, for an account that cannot sign in that
+  way ([engines.md](./engines.md), "Signing in on the machine").
 - **The signing page**: the same member Credentials and My team.
 
 Where the minter's tree and the coordinator's differ for a member (a record
 written from an MCP client, say), the Org screen says custody has not been
 filed for that change and offers to file it. It never shows the coordinator's
 tree as the minter's.
+
+**Who is offered the filing, on a phone.** The minter files a member only
+after whoever it reports to, and takes a place from an org admin, or from a
+manager whose own tree there already reaches it. So a phone reads the
+minter's `org` answer and offers what a press would do:
+
+- **An org admin's Org screen** has one button that files every member the
+  minter does not hold as the coordinator lists it, top of the tree first:
+  *Custody is not filed for 3 members yet.* and *File all 3*. It asks the
+  minter again before it sends anything, goes on past a refusal, and then
+  says who was filed and who was not, each refusal in the minter's own
+  sentence: *Filed 2 members with the vault: Dana, Debbie.* and *Could not
+  file Eli.* with the reason. Nothing is drawn when nothing waits. Before
+  there is an org admin, somebody who administers the fleet has *Become its
+  first admin* there, as on a member's page.
+- **A member's page** has *File it* for an org admin, and for a manager when
+  the minter's own tree puts the member's place under them: the place is
+  under their own member or one they manage there, a member the minter
+  already holds is on their team there, and neither the extra managers nor
+  the address is being changed. Anybody else reads who files it: *This is an
+  org admin's to file:* and their addresses. Where the member it reports to
+  is not filed, nobody's press would be taken, and the page says so and
+  names it, to an org admin with *Go back to Organization to file them all,
+  in order.*
+
+**Remove member on a phone tells the minter first, then the coordinator.**
+`DELETE /api/members/{id}` alone left the member in the minter's tree, where
+custody is decided, so the phone sends `orgmember` with `remove` before it.
+The dialog says the cost first, by what the member is: the vault forgets
+what an agent kept and the machines approved for it, and a person's vault
+stays theirs. A minter that refuses stops the removal, and its sentence is
+shown. The one refusal the phone goes on after is `no_member`, a member the
+minter never held. If the coordinator then refuses, the member stays, the
+page says custody is not filed, and *File it* puts its place back. A phone
+with no GitHub sign-in cannot ask the minter: on a fleet that has one it
+removes nothing and says to sign in under Runners, and on a fleet with no
+minter the coordinator is asked alone.
 
 ## What it does not stop
 

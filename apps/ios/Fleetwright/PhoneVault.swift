@@ -136,6 +136,44 @@ struct PhoneVault {
         let may: [String]
     }
 
+    /// A request the fleet or the vault refused: the sentence a screen shows,
+    /// as it always was, and the `error.code` that came beside it.
+    ///
+    /// THE CODE IS FOR A CALLER THAT GOES ON AFTER ONE PARTICULAR REFUSAL,
+    /// and for nothing drawn. Removing a member asks the vault first, and a
+    /// vault that never held the member (`no_member`) has nothing to take
+    /// out, so the fleet is asked anyway (OrgView, `remove`). Deciding that
+    /// from the sentence would be deciding from this week's wording.
+    /// PhoneVault.kt has the same thing under the same name.
+    struct Refused: LocalizedError {
+        /// Nil from a reply that carried none.
+        let code: String?
+        let text: String
+        var errorDescription: String? { text }
+    }
+
+    /// Whether a refusal's code says this fleet keeps no vault at all: the
+    /// coordinator's with no minting Worker (`no_minter`), and the minting
+    /// Worker's with no deposit key (`no_deposit_key`, "so it keeps no
+    /// vault", src/fleet/minter/vault.js).
+    static func saysNoVault(_ code: String?) -> Bool {
+        code == "no_minter" || code == "no_deposit_key"
+    }
+
+    /// Whether this fleet keeps a vault at all, for a phone that cannot ask
+    /// the vault itself because it holds no GitHub sign-in. Asked of the
+    /// route that gives the minter's key, which needs only the fleet
+    /// sign-in and refuses with one of the two codes above when there is no
+    /// vault.
+    ///
+    /// NO ANSWER IS NOT "NO VAULT" (C-5). Only the fleet saying so in a code
+    /// is; a request that failed, or any other refusal, counts as a vault
+    /// that is there, because the caller skips the vault on a false.
+    func isKept(_ fleet: Fleet) async -> Bool {
+        guard let said = try? await fleet.claudeLoginKey() else { return true }
+        return !Self.saysNoVault(said.error?.code)
+    }
+
     /// `extra` with the member whose vault this request opens, when it is
     /// not the asker's own: the vault's `for` (src/fleet/minter/vault.js).
     private static func aimed(_ extra: [String: Any], at member: String?) -> [String: Any] {
@@ -163,7 +201,8 @@ struct PhoneVault {
         payload["reply"] = reply.publicKey
         let r = try await fleet.vault(sealed: try Seal.seal(to: pin, aad: Seal.vaultRequestAAD, payload: payload))
         guard r["ok"] as? Bool == true, let box = r["sealed"] as? [String: Any] else {
-            throw FleetError.message(r["text"] as? String ?? "Your fleet refused that.")
+            throw Refused(code: (r["error"] as? [String: Any])?["code"] as? String,
+                          text: r["text"] as? String ?? "Your fleet refused that.")
         }
         let answer = try Seal.open(reply, aad: Seal.vaultReplyAAD, sealed: box)
         return (r["text"] as? String ?? "", answer)

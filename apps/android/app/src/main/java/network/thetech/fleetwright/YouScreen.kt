@@ -103,6 +103,14 @@ fun YouScreen(
     // said; null until then and from a fleet older than tasks, and the row
     // is not drawn.
     var tasksBack by remember { mutableStateOf<Int?>(null) }
+    // Why the organization could not be loaded, when it could not: the
+    // request failed, or the fleet refused in a sentence. Null otherwise,
+    // and for a fleet from before members, which has none to load.
+    var orgFailed by remember { mutableStateOf<String?>(null) }
+    // The same for tasks.
+    var tasksFailed by remember { mutableStateOf<String?>(null) }
+    // Bumped by Try again on the Organization row, which asks again.
+    var orgAsked by remember { mutableIntStateOf(0) }
     // Bumped when the Tasks screen closes, so the count beside its row is
     // asked again: an accepted task would otherwise go on being counted.
     var tasksAsked by remember { mutableIntStateOf(0) }
@@ -112,7 +120,7 @@ fun YouScreen(
     val inDemo = signedIn && Demo.isActive(settings.coordinatorUrl)
 
     LaunchedEffect(Unit) { pushDoubt = settings.pushKeyEvidence?.doubt }
-    LaunchedEffect(signedIn) {
+    LaunchedEffect(signedIn, orgAsked) {
         if (!signedIn) return@LaunchedEffect
         Fleet(settings).runnerRepoSetting().onSuccess { got ->
             if (got.ok != false) {
@@ -126,20 +134,38 @@ fun YouScreen(
         }
         // Only from an answer that carries the list: a fleet older than
         // members answers without one, and "no members yet" would be a claim.
-        Fleet(settings).members().onSuccess { got ->
-            val list = got.members
-            if (got.ok != false && list != null) orgCount = list.size
-        }
+        // A REQUEST THAT FAILED, OR A REFUSAL IN A SENTENCE, IS NEITHER: the
+        // row then says it could not be loaded, and why. An answer with no
+        // list and no sentence is what a fleet from before members sends,
+        // and that fleet has no row.
+        Fleet(settings).members()
+            .onSuccess { got ->
+                val list = got.members
+                if (got.ok != false && list != null) {
+                    orgCount = list.size
+                    orgFailed = null
+                } else {
+                    orgFailed = got.text
+                }
+            }
+            .onFailure { if (it !is java.util.concurrent.CancellationException) orgFailed = it.message ?: "no answer" }
     }
     // The same rule for tasks: only an answer that carries the list. The
     // ones that came back are asked for alone, since they are the count this
     // row shows and a fleet keeps hundreds of the others.
     LaunchedEffect(signedIn, tasksAsked) {
         if (!signedIn) return@LaunchedEffect
-        Fleet(settings).tasks("returned").onSuccess { got ->
-            val list = got.tasks
-            if (got.ok != false && list != null) tasksBack = list.size
-        }
+        Fleet(settings).tasks("returned")
+            .onSuccess { got ->
+                val list = got.tasks
+                if (got.ok != false && list != null) {
+                    tasksBack = list.size
+                    tasksFailed = null
+                } else {
+                    tasksFailed = got.text
+                }
+            }
+            .onFailure { if (it !is java.util.concurrent.CancellationException) tasksFailed = it.message ?: "no answer" }
     }
     // A tapped notification about this person's vault lands on Credentials.
     LaunchedEffect(opening) {
@@ -319,12 +345,22 @@ fun YouScreen(
                 orgCount?.let { count ->
                     OpenRow("Organization", value = describeOrganization(count)) { open = "org" }
                 }
+                // COULD NOT BE LOADED IS NOT "THIS FLEET HAS NONE" (C-5).
+                // Both used to draw no row at all.
+                val orgWhy = orgFailed
+                if (orgCount == null && orgWhy != null) {
+                    CouldNotLoadRow("Could not load the organization.", orgWhy) { orgAsked++ }
+                }
                 // THE WORK HANDED TO THE ORGANIZATION, beside it: tasks, the
                 // ones that came back first (docs/tasks.md). Drawn only once
                 // the fleet answered with a list, and the row says how many
                 // are waiting on somebody, or nothing.
                 tasksBack?.let { back ->
                     OpenRow("Tasks", value = describeTasks(back)) { open = "tasks" }
+                }
+                val tasksWhy = tasksFailed
+                if (tasksBack == null && tasksWhy != null) {
+                    CouldNotLoadRow("Could not load the tasks.", tasksWhy) { tasksAsked++ }
                 }
             }
         }
@@ -798,6 +834,19 @@ private fun DevicesSheet(settings: Settings, admin: Boolean?, onDismiss: () -> U
 }
 
 /**
+ * A ROW THAT COULD NOT BE LOADED, said as that: what failed, the reason under
+ * it, there to be copied, and a way to ask again. Drawn in the row's place,
+ * so a request that failed is not mistaken for a fleet that has no
+ * organization or no tasks.
+ */
+@Composable
+private fun CouldNotLoadRow(what: String, why: String, again: () -> Unit) {
+    Hint(what, color = Design.Palette.bad.now)
+    SelectionContainer { Hint(why) }
+    OutlinedButton(onClick = again, modifier = Modifier.heightIn(min = 48.dp)) { Text("Try again") }
+}
+
+/**
  * What this person has let the fleet send in their name while they are away
  * (docs/signed-intents.md, "Delegations"), and the one they grant by hand: an
  * MCP client acting for them. DelegationsView.swift is the same screen on iOS.
@@ -807,6 +856,17 @@ private fun DevicesSheet(settings: Settings, admin: Boolean?, onDismiss: () -> U
  * request the fleet places. They are listed because a standing permission
  * nobody can see is one nobody can take back. Taking one back goes to the
  * minter first: only the minter's list, which boxes check, makes a box refuse it.
+ *
+ * WHOM AN MCP CLIENT MAY START SESSIONS AS IS CHOSEN HERE, AND SIGNED. A
+ * session as a member runs on that member's sign-ins, and a box refuses a
+ * delegated start as a member the grant does not name. So the members this
+ * person may start as (`you.startAs`, the fleet's answer) are each a switch,
+ * all off until one is turned on, and the ones that are on go into the grant
+ * this phone signs. Nothing is drawn for somebody the fleet lists none for.
+ * A delegation that names members says which on its row. A MACHINE FROM
+ * BEFORE THE FIELD checks a signature over a grant without it, so it refuses
+ * one that names members as badly signed: the switches say so, and what to
+ * do, before anybody meets that refusal.
  */
 @Composable
 private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
@@ -816,12 +876,27 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf("") }
     var confirmRevoke by remember { mutableStateOf<Fleet.Delegation?>(null) }
+    // The members this person may start a session as, as the fleet lists
+    // them. Empty until it answers, and from a fleet older than members.
+    var startable by remember { mutableStateOf<List<Fleet.Member>>(emptyList()) }
+    // The members the next grant to an MCP client names. None, until chosen.
+    var chosen by remember { mutableStateOf(setOf<String>()) }
 
     suspend fun load() {
         Fleet(settings).delegations()
             .onSuccess { delegations = it }
             .onFailure { if (delegations.isEmpty()) result = it.message ?: "could not reach your fleet" }
         loaded = true
+        // WHO THIS PERSON MAY START AS, for the switches under An MCP client.
+        // Only from an answer that carries the list. Anything else leaves
+        // what was there, and with nothing there no switch is drawn.
+        val got = Fleet(settings).members().getOrNull()
+        val list = got?.members
+        if (got != null && got.ok != false && list != null) {
+            val ids = got.you?.startAs.orEmpty()
+            startable = list.filter { it.id in ids }
+            chosen = chosen.filter { it in ids }.toSet()
+        }
     }
     LaunchedEffect(Unit) { load() }
 
@@ -857,7 +932,7 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(describeDelegation(d), style = Design.Style.body, color = Design.Palette.ink.now)
-                    Hint(delegationScope(d))
+                    Hint(delegationScope(d) + delegationStartsAs(d, startable))
                 }
                 TextButton(onClick = { confirmRevoke = d }) { Text("Revoke") }
             }
@@ -869,6 +944,23 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
             "Lets an MCP client signed in as you start, read, stop and resume sessions and make machines, on any machine, until it runs out. " +
                 "It cannot reboot or upgrade a machine, or move your credentials.",
         )
+        startable.forEach { member ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Start sessions as ${member.name}", style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = member.id in chosen,
+                    enabled = !busy,
+                    onCheckedChange = { on -> chosen = if (on) chosen + member.id else chosen - member.id },
+                )
+            }
+        }
+        if (startable.isNotEmpty()) {
+            Hint(MCP_MEMBERS_SENTENCE)
+            Hint(MCP_MEMBERS_OLDER_MACHINE)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((label, days) in listOf("Allow for a day" to 1, "Allow for a week" to 7)) {
                 OutlinedButton(
@@ -877,7 +969,7 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
                     onClick = {
                         scope.launch {
                             busy = true
-                            result = Fleet(settings).allowMcp(days).text
+                            result = Fleet(settings).allowMcp(days, chosen.toList()).text
                             load()
                             busy = false
                         }
@@ -895,6 +987,29 @@ internal fun describeDelegation(d: Fleet.Delegation): String = when {
     d.verbs == listOf("provision") && d.expires - d.issuedAt > 24L * 3600 * 1000 -> "Making machines kept ready"
     d.verbs.size > 8 -> "An MCP client"
     else -> "Sent in your name: ${d.verbs.joinToString(", ")}"
+}
+
+/**
+ * What turning on a member under An MCP client does, in one sentence. The
+ * same sentence as iOS.
+ */
+const val MCP_MEMBERS_SENTENCE = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member."
+
+/**
+ * What to do when a machine refuses a start as a member under such a grant.
+ * The same sentence as iOS.
+ */
+const val MCP_MEMBERS_OLDER_MACHINE = "If a machine refuses a start as a member, update that machine: an older one does not take a grant that names members."
+
+/**
+ * Whom a delegation may start sessions as, for the end of its row: by name
+ * where this page has the name, by id where it does not. Empty for a
+ * delegation that names nobody.
+ */
+internal fun delegationStartsAs(d: Fleet.Delegation, names: List<Fleet.Member>): String {
+    if (d.members.isEmpty()) return ""
+    val said = d.members.map { id -> names.firstOrNull { it.id == id }?.name ?: id }
+    return " · starts sessions as ${said.joinToString(", ")}"
 }
 
 /** Where, and until when. */

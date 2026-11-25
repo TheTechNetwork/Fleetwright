@@ -65,6 +65,16 @@ internal object Seal {
     const val SETUP_TOKEN_AAD = "fleetwright-setup-token/v1"
 
     /**
+     * What a machine says of an engine's sign-in (the page, the code, who is
+     * signed in, its own key and its signature), on its way back to the key
+     * this phone made for that one request (ENGINE_SIGNIN_AAD in
+     * src/fleet/seal.js; [EngineSignin.verified]). A name of its own, so a
+     * vault's answer is never opened as a machine's, nor a machine's as a
+     * vault's.
+     */
+    const val ENGINE_SIGNIN_AAD = "fleetwright-engine-signin/v1"
+
+    /**
      * A pool's page read by one of your machines for this phone away from it,
      * on its way back to the key made here for that one look: bound to the
      * address, so one pool's page cannot be shown as another's (xolookAad in

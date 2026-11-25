@@ -379,6 +379,29 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
+ * WHAT A START SENT FROM A MEMBER'S PAGE OR A TASK'S SAID, for that page to
+ * draw: the start that was sent, the fleet's sentence, and the refusal that
+ * can be acted on when it was one of those (RefusedStart).
+ *
+ * THE ANSWER IS DRAWN WHERE THE START WAS PRESSED, as iOS draws it
+ * (OrgView.swift, TasksView.swift). Android used to move the person to
+ * Sessions instead, off the member or the task they were looking at. The
+ * request is still sent from FleetScreen, which outlives the page, so the
+ * answer is kept here, where a page that is open can read it, and not
+ * handed down through every screen between them.
+ */
+internal data class PageStart(val request: StartRequest, val text: String, val refused: RefusedStart?)
+
+/**
+ * The one such start whose page is open. A page sets it by sending a start
+ * and clears it when it is left, so an answer is never drawn on a page
+ * opened afterwards; the notification says it then, as it always did.
+ */
+internal object PageStarts {
+    var last by mutableStateOf<PageStart?>(null)
+}
+
+/**
  * The app, as three places rather than one screen with a panel on top.
  *
  * It was a session list with everything else behind a Settings button that
@@ -544,6 +567,9 @@ fun FleetScreen(
      * dismissed composable is one that may not finish.
      */
     fun startInBackground(request: StartRequest) {
+        // Whether a member's page or a task's sent this, and is still open
+        // to draw the answer (PageStarts).
+        fun fromPage() = PageStarts.last?.request == request
         // ON A MACHINE THAT DOES NOT EXIST YET. The coordinator holds the
         // session with the dispatch and starts it when the runner joins.
         request.platform?.let { platform ->
@@ -584,6 +610,7 @@ fun FleetScreen(
             "Starting a session. You will get a notification when it is ready."
         }
         refusedStart = null
+        if (fromPage()) PageStarts.last = PageStart(request, status, null)
         scope.launch {
             val text = try {
                 // ON A TASK: the fleet's own start parameters, signed and
@@ -623,8 +650,11 @@ fun FleetScreen(
                 // key, so the session may well exist.
                 val message = e.message.orEmpty()
                 val timedOut = e is java.net.SocketTimeoutException || message.contains("timeout", true)
+                // From a member's page or a task's there is nothing to pull:
+                // the session, if there is one, is under Sessions. The same
+                // two sentences as iOS, each where iOS says it.
                 val out = if (timedOut) {
-                    "Not sure it started. Pull to refresh."
+                    if (fromPage()) "Not sure it started. Look under Sessions." else "Not sure it started. Pull to refresh."
                 } else {
                     message.ifBlank { "could not start" }
                 }
@@ -632,6 +662,7 @@ fun FleetScreen(
                 out
             }
             status = text
+            if (fromPage()) PageStarts.last = PageStart(request, text, refusedStart)
             reload(keepStatus = true)
         }
     }
@@ -951,10 +982,10 @@ fun FleetScreen(
                 opening = openYou,
                 onOpened = { openYou = null },
                 // A START FROM A MEMBER'S PAGE OR A TASK'S is sent like any
-                // other, and its answer is on Sessions, where a start's
-                // answer always is.
+                // other, and its answer is drawn on that page, where the
+                // person is (PageStarts). They are not moved to Sessions.
                 onStart = { request ->
-                    tab = "sessions"
+                    PageStarts.last = PageStart(request, "", null)
                     startInBackground(request)
                 },
             )

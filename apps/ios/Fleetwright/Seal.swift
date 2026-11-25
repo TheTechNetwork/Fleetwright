@@ -35,6 +35,13 @@ enum Seal {
     /// A Claude token one of your machines made with `claude setup-token`, on
     /// its way back to the key this phone made for it.
     static let setupTokenAAD = "fleetwright-setup-token/v1"
+    /// What a machine says of an engine's sign-in (the page, the code, who
+    /// is signed in, its own key and its signature), on its way back to the
+    /// key this phone made for that one request (ENGINE_SIGNIN_AAD in
+    /// src/fleet/seal.js; EngineSignin.verified). A name of its own, so a
+    /// vault's answer is never opened as a machine's, nor a machine's as a
+    /// vault's.
+    static let engineSigninAAD = "fleetwright-engine-signin/v1"
     /// A Xen Orchestra admin sign-in on its way to the machine running setup
     /// for it (docs/hypervisors.md). Bound to the job and the address, so a
     /// sealed sign-in cannot be replayed into another job or at another pool:

@@ -723,6 +723,37 @@ test('the member form says what a budget is and that Approvals decides, and neit
   }
 });
 
+test('a budget is sent only as a finite number of dollars the fleet would take, with a comma read where the locale writes one, and the rest refused in words', () => {
+  // WHAT A NUMBER PARSER TAKES IS NOT WHAT THE FLEET TAKES. "inf" and "NaN"
+  // parse on both phones, and the JSON encoder on each raises on them, so a
+  // pasted word took the form down; "12,5" on a phone whose keyboard has no
+  // full stop was refused as not a number.
+  for (const [name, src] of BOTH) only(src, 'The monthly budget is a number of dollars, at most a million, or empty.', name);
+  const ios = named(IOS, /guard let amount = (\w+)\(budgetText\) else \{\s*result = \w+\s*return\s*\}\s*fields\["budgetUsdMonth"\] = amount/, 'iOS puts a budget in the request that it did not check');
+  const android = named(ANDROID, /val amount = (\w+)\(budgetText\)/, 'Android puts a budget in the request that it did not check');
+  assert.match(ANDROID, /budgetText\.isNotEmpty\(\) && amount == null -> result = \w+/, 'Android sends on, or says nothing, when the budget is not a number it takes');
+  // Nothing else turns the typed text into the number that is sent.
+  assert.doesNotMatch(IOS, /Double\(budgetText\)/, 'iOS still sends whatever Double() takes');
+  assert.doesNotMatch(ANDROID, /budgetText\.toDoubleOrNull\(\)/, 'Android still sends whatever toDoubleOrNull() takes');
+  // The check: digits and a decimal mark only, the locale's comma read as
+  // one, then finite, not negative, and at most the fleet's own bound.
+  const iosBody = IOS.slice(IOS.indexOf(`func ${ios}(`)).split(/\n\}\n/)[0];
+  const androidBody = ANDROID.slice(ANDROID.indexOf(`fun ${android}(`)).split(/\n\}\n/)[0];
+  assert.match(iosBody, /Locale\.current\.decimalSeparator/, 'iOS does not ask the locale what its decimal mark is');
+  assert.match(iosBody, /== "," \{ \w+ = \w+\.replacingOccurrences\(of: ",", with: "\."\) \}/, 'iOS does not read a comma as the decimal mark');
+  assert.match(iosBody, /allSatisfy\(\{ \(\$0\.isASCII && \$0\.isNumber\) \|\| \$0 == "\." \}\)/, 'iOS lets something other than digits and a decimal mark reach the parser');
+  assert.match(iosBody, /\.isFinite, \w+ >= 0, \w+ <= (\w+) else \{ return nil \}/, 'iOS takes a number that is not finite, is negative, or is past the bound');
+  assert.match(androidBody, /DecimalFormatSymbols\.getInstance\(\)\.decimalSeparator/, 'Android does not ask the locale what its decimal mark is');
+  assert.match(androidBody, /== ','\) \w+\.replace\(',', '\.'\) else/, 'Android does not read a comma as the decimal mark');
+  assert.match(androidBody, /\.all \{ it in '0'\.\.'9' \|\| it == '\.' \}/, 'Android lets something other than digits and a decimal mark reach the parser');
+  assert.match(androidBody, /\.isFinite\(\) && \w+ >= 0 && \w+ <= \w+\) \w+ else null/, 'Android takes a number that is not finite, is negative, or is past the bound');
+  // The bound is the fleet's (MAX_BUDGET, src/fleet/protocol/members.js),
+  // which refuses a member over it without saying which field.
+  assert.match(IOS, /let \w+ = 1_000_000\.0/);
+  assert.match(ANDROID, /const val \w+ = 1_000_000\.0/);
+  assert.match(readFileSync(new URL('../src/fleet/protocol/members.js', import.meta.url), 'utf8'), /const MAX_BUDGET = 1_000_000;/, 'the fleet’s bound moved, and the phones’ must move with it');
+});
+
 test('every budgets and approvals route has a caller on both phones, and a screen that calls it', () => {
   for (const [name, src, id] of /** @type {const} */ ([['iOS', IOS, '\\\\\\(id\\)'], ['Android', ANDROID, '\\$id']])) {
     const routes = /** @type {const} */ ([

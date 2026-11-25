@@ -20,6 +20,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -54,16 +55,29 @@ import org.json.JSONObject
  * answer (C-2).
  *
  * TWO LISTS, IN THE ORDER A MANAGER NEEDS THEM. My team first, each member
- * with whether its vault holds a Claude sign-in, because "can it run" is the
+ * with whether its vault keeps a Claude sign-in, because "can it run" is the
  * question a manager opens this for. Then Everyone, as the tree, a report
  * indented under whoever it reports to. An admin manages everybody, so their
  * team is Everyone and is not drawn twice.
  *
- * A SIGN-IN'S STATE IS THE VAULT'S ANSWER AND NOTHING ELSE. "Not signed in"
- * is said only when the member's vault answered without a Claude item. A
- * vault that could not be asked is "Not checked", which is a different fact
- * (C-5), and it is what a person member's row says until they let their
+ * A SIGN-IN'S STATE IS THE VAULT'S ANSWER AND NOTHING ELSE, and the answer
+ * is a list of what is kept: a name, a time and a kind. So the row says
+ * "Keeps a Claude sign-in" and never "Signed in to Claude": nobody tried the
+ * sign-in, and one that has run out is kept all the same. "No Claude sign-in
+ * kept" is said only when the member's vault answered without a Claude item.
+ * A vault that could not be asked is "Not checked", which is a different
+ * fact (C-5), and it is what a person member's row says until they let their
  * managers in.
+ *
+ * CUSTODY, FOR EVERYBODY AT ONCE, IS AN ORG ADMIN'S. The vault keeps its own
+ * copy of the tree and files a member only after whoever it reports to, so
+ * one page at a time an admin had to know the order, and a manager's File it
+ * was refused until every member above theirs had been filed. Here the vault
+ * is asked once for the organization as it holds it, and an org admin there
+ * is offered one button that files every member it does not hold as the
+ * fleet lists it, top of the tree first, and then says who was filed and who
+ * was not, each refusal in the vault's own sentence. Drawn for nobody else,
+ * and not at all when nothing waits (C-2).
  *
  * The same words as iOS (OrgView.swift), held equal by
  * test/members-in-apps.test.js.
@@ -86,7 +100,7 @@ internal fun OrgScreen(
     var asked by remember { mutableIntStateOf(0) }
     var members by remember { mutableStateOf(listOf<Fleet.Member>()) }
     var you by remember { mutableStateOf<Fleet.Standing?>(null) }
-    // What each team member's vault said about a Claude sign-in, by id.
+    // Whether each team member's vault keeps a Claude sign-in, by id.
     // Absent while it is being asked.
     val signIns = remember { mutableStateMapOf<String, MemberSignIn>() }
     // The member whose page is open, by id, so the page draws the record as
@@ -107,6 +121,15 @@ internal fun OrgScreen(
     var fileBusy by remember { mutableStateOf(false) }
     var fileResult by remember { mutableStateOf("") }
     var fileFailed by remember { mutableStateOf(false) }
+    // The organization as the vault holds it. Null while it is being asked,
+    // on a phone with no GitHub sign-in, which cannot ask, and after a
+    // failure, which `vaultFailed` then says.
+    var vaultOrg by remember { mutableStateOf<PhoneVault.Org?>(null) }
+    var vaultFailed by remember { mutableStateOf<String?>(null) }
+    var filingAll by remember { mutableStateOf(false) }
+    // What filing everybody did, in words, and whether the vault refused any.
+    var filedReport by remember { mutableStateOf("") }
+    var filedRefused by remember { mutableStateOf(false) }
 
     val isAdmin = you?.admin == true
     val manages = you?.manages.orEmpty()
@@ -116,6 +139,56 @@ internal fun OrgScreen(
     // Whether this person has anywhere to add a member: anywhere, for an
     // admin; under their own member or a member they manage, for a manager.
     val canAdd = isAdmin || you?.member != null || manages.isNotEmpty()
+
+    /**
+     * The first org admin is a fleet admin filing themselves, as it is on a
+     * member's page. What the vault says is the line under the button.
+     */
+    fun becomeFirstAdmin() {
+        scope.launch {
+            filingAll = true
+            val said = PhoneVault(settings).fileOrgAdmin(Fleet(settings), settings.signedInAs.trim().lowercase())
+            filedRefused = said.isFailure
+            filedReport = said.getOrElse { it.message ?: "That did not work." }
+            asked++
+            filingAll = false
+        }
+    }
+
+    /**
+     * FILE EVERY MEMBER THE VAULT DOES NOT HOLD AS THE FLEET LISTS IT, top
+     * of the tree first, because the vault refuses a member whose manager it
+     * has not been told about. The vault is asked again before anything is
+     * sent, so what is filed is what differs now and not when the page was
+     * drawn. One member at a time, each a request of its own that the vault
+     * answers under one lock, and a refusal does not stop the rest: what
+     * follows may still be taken, and each refusal is reported in the
+     * vault's own sentence beside the name.
+     */
+    fun fileAll() {
+        scope.launch {
+            filingAll = true
+            val vault = PhoneVault(settings)
+            val fleet = Fleet(settings)
+            val held = vault.org(fleet).getOrElse {
+                filedReport = it.message ?: "That did not work."
+                filedRefused = true
+                filingAll = false
+                return@launch
+            }
+            val filed = mutableListOf<String>()
+            val refused = mutableListOf<String>()
+            for (member in membersToFile(members, held)) {
+                vault.fileOrgMember(fleet, member.id, member.kind, member.email, member.reportsTo, member.managers)
+                    .onSuccess { filed.add(member.name) }
+                    .onFailure { refused.add(couldNotFileLine(member.name, it.message ?: "That did not work.")) }
+            }
+            filedReport = fileAllReport(filed, refused)
+            filedRefused = refused.isNotEmpty()
+            asked++
+            filingAll = false
+        }
+    }
 
     LaunchedEffect(asked) {
         failed = null
@@ -133,15 +206,33 @@ internal fun OrgScreen(
         members = list
         you = got.you
         answered = true
+        // THE ORGANIZATION AS THE VAULT HOLDS IT, for Custody below. Not
+        // asked from a phone with no GitHub sign-in, which is the same test
+        // the team's sign-ins make. A fleet that keeps no vault has no
+        // custody to file, and that is not a failure to say.
+        if (PhoneGitHub(settings).signedIn) {
+            PhoneVault(settings).org(Fleet(settings))
+                .onSuccess {
+                    vaultOrg = it
+                    vaultFailed = null
+                }
+                .onFailure {
+                    vaultOrg = null
+                    vaultFailed = if (PhoneVault.saysNoVault((it as? PhoneVault.Refused)?.code)) null else it.message ?: "no answer"
+                }
+        } else {
+            vaultOrg = null
+            vaultFailed = null
+        }
         // HOW MANY APPROVALS WAIT ON THIS PERSON, for the row. Only from an
         // answer that carries the list: anything else leaves it unknown.
         approvalsWaiting = Fleet(settings).approvals().getOrNull()
             ?.takeIf { it.ok != false }?.approvals?.count { approvalWaitsOnYou(it) }
-        // ASK EACH TEAM MEMBER'S VAULT whether it holds a Claude sign-in. One
+        // ASK EACH TEAM MEMBER'S VAULT whether it keeps a Claude sign-in. One
         // at a time, because each is a request this phone seals and the vault
         // answers under one lock. A vault that refuses, or cannot be asked
-        // without this phone's GitHub sign-in, is Not checked and never Not
-        // signed in (C-5).
+        // without this phone's GitHub sign-in, is Not checked and never No
+        // Claude sign-in kept (C-5).
         val managed = got.you?.manages.orEmpty()
         val mine = if (got.you?.admin == true) emptyList<Fleet.Member>() else list.filter { it.id in managed }
         if (mine.isEmpty()) return@LaunchedEffect
@@ -155,8 +246,8 @@ internal fun OrgScreen(
             val contents = runCatching { vault.list(fleet, member.id) }.getOrNull()
             signIns[member.id] = when {
                 contents == null -> MemberSignIn.NotChecked
-                contents.items.any { it.name == "claude" } -> MemberSignIn.SignedIn
-                else -> MemberSignIn.NotSignedIn
+                contents.items.any { it.name == "claude" } -> MemberSignIn.Kept
+                else -> MemberSignIn.NotKept
             }
         }
     }
@@ -222,7 +313,7 @@ internal fun OrgScreen(
                         MemberRow(
                             member = member,
                             trailing = memberSignInWord(signIns[member.id]),
-                            strong = signIns[member.id] == MemberSignIn.SignedIn,
+                            strong = signIns[member.id] == MemberSignIn.Kept,
                         ) { opened = member.id }
                     }
                 }
@@ -248,6 +339,46 @@ internal fun OrgScreen(
                 // The row is for everybody, and its page draws a control
                 // only for an admin.
                 OpenRow("Routing") { routing = true }
+
+                // CUSTODY AS THE VAULT HOLDS IT, for the whole organization
+                // (the header). Each row is drawn only for somebody the
+                // vault would answer: the first admin's button for somebody
+                // who administers the fleet, File all for an org admin of
+                // the vault with something to file. A vault that could not
+                // be asked is said as that to a fleet admin, and is never
+                // drawn as nothing left to file (C-5).
+                val held = vaultOrg
+                val waiting = held?.let { membersToFile(members, it) }.orEmpty()
+                val first = isAdmin && held?.admins?.isEmpty() == true
+                val mine = held?.youAdmin == true && waiting.isNotEmpty()
+                val cannotTell = isAdmin && held == null && vaultFailed != null
+                if (first || mine || cannotTell || filedReport.isNotBlank()) {
+                    SectionHead("Custody")
+                    if (first) {
+                        Text(
+                            "Nobody administers the organization in your vault yet.",
+                            style = Design.Style.bodySmall,
+                            color = Design.Palette.ink.now,
+                        )
+                        OutlinedButton(enabled = !filingAll, onClick = { becomeFirstAdmin() }) {
+                            Text("Become its first admin")
+                        }
+                    } else if (mine) {
+                        Text(custodyWaitingLine(waiting.size), style = Design.Style.bodySmall, color = Design.Palette.ink.now)
+                        OutlinedButton(enabled = !filingAll, onClick = { fileAll() }) {
+                            Text(if (filingAll) "Filing…" else fileAllLabel(waiting.size))
+                        }
+                    } else if (cannotTell) {
+                        Text("The vault could not be asked.", style = Design.Style.bodySmall, color = Design.Palette.ink.now)
+                        SelectionContainer { Hint(vaultFailed.orEmpty()) }
+                        OutlinedButton(onClick = { asked++ }) { Text("Try again") }
+                    }
+                    if (filedReport.isNotBlank()) {
+                        SelectionContainer {
+                            Hint(filedReport, color = if (filedRefused) Design.Palette.bad.now else Design.Palette.ink.now)
+                        }
+                    }
+                }
 
                 // EVERY MEMBER AS A MARKDOWN FILE, for an admin: read them
                 // out, or paste one back in. A file is the record and the
@@ -429,6 +560,8 @@ private fun MemberPage(
     var removing by remember { mutableStateOf(false) }
     // Whose custody of this person is being given up, while the question is open.
     var stopping by remember { mutableStateOf<String?>(null) }
+    // Which of an agent's own custodians is being removed, while the question is open.
+    var removingCustodian by remember { mutableStateOf<String?>(null) }
     var removeResult by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf(false) }
     var credentials by remember { mutableStateOf(false) }
@@ -473,7 +606,65 @@ private fun MemberPage(
         }
     }
 
+    /**
+     * REMOVING TELLS THE VAULT FIRST, THEN THE FLEET. The vault keeps its own
+     * copy of the tree and decides custody from it (docs/members.md, "A
+     * member's vault"). Told the fleet alone, a removed person went on
+     * holding an agent's credentials, and a removed agent's vault could never
+     * be reached from a phone again.
+     *
+     * IN THIS ORDER, because of what is left when the second half fails. A
+     * member the vault forgot and the fleet still lists is one this page
+     * already has words for: Custody says it is not filed, and File it puts
+     * it back. The other order leaves the fault this is here to end.
+     *
+     * The vault's refusal stops everything, in the vault's own sentence, and
+     * nothing is removed. The one refusal that does not is `no_member`, a
+     * member the vault never held, which leaves nothing there to take out. A
+     * fleet that keeps no vault at all is asked alone, as before.
+     *
+     * A PHONE WITH NO GITHUB SIGN-IN CANNOT ASK THE VAULT, which is the same
+     * test the list behind this page makes before it asks one. On a fleet
+     * that keeps a vault it removes nothing and says where to sign in;
+     * quietly asking the fleet alone is the fault again. OrgView.swift does
+     * the same, in the same order.
+     */
+    suspend fun remove() {
+        val fleet = Fleet(settings)
+        removeResult = ""
+        var toldVault = false
+        if (PhoneGitHub(settings).signedIn) {
+            val told = vault.fileOrgMember(fleet, member.id, member.kind, member.email, member.reportsTo, remove = true)
+            val code = (told.exceptionOrNull() as? PhoneVault.Refused)?.code
+            if (told.isFailure && code != "no_member" && !PhoneVault.saysNoVault(code)) {
+                removeResult = told.exceptionOrNull()?.message ?: "That did not work."
+                return
+            }
+            toldVault = told.isSuccess
+        } else if (vault.isKept(fleet)) {
+            removeResult = REMOVAL_NEEDS_GITHUB
+            return
+        }
+        val reply = fleet.removeMember(member.id)
+        if (reply.getOrNull()?.ok == true) {
+            onChanged()
+            onDismiss()
+            return
+        }
+        removeResult = reply.fold({ it.text ?: "Your fleet refused that." }, { it.message ?: "that did not work" })
+        // THE FLEET KEPT A MEMBER THE VAULT HAS FORGOTTEN. Custody is asked
+        // again so the page says so and offers File it.
+        if (toldVault) askVault()
+    }
+
     LaunchedEffect(member.id, asked) { askVault() }
+    // LEAVING THE PAGE DROPS ITS START'S ANSWER, so it is not drawn on this
+    // member's page the next time it is opened, long after it was news.
+    DisposableEffect(member.id) {
+        onDispose {
+            if (PageStarts.last?.request?.member == member.id && PageStarts.last?.request?.onTask == null) PageStarts.last = null
+        }
+    }
 
     if (editing) {
         MemberForm(
@@ -500,27 +691,19 @@ private fun MemberPage(
     if (starting) {
         StartSheet(settings = settings, asMember = member, onDismiss = { starting = false }, onStart = onStart)
     }
-    // REMOVE ASKS FIRST, and says what it costs before it is done.
+    // REMOVE ASKS FIRST, and says what it costs before it is done: an
+    // agent's vault goes with it, a person's stays theirs (removalCost).
     if (removing) {
         AlertDialog(
             onDismissRequest = { removing = false },
             title = { Text("Remove ${member.name}?") },
-            text = { Text("Removes ${member.name} from the organization. Its vault is not deleted; a custodian forgets what it keeps.") },
+            text = { Text(removalCost(member.name, member.kind)) },
             confirmButton = {
                 TextButton(onClick = {
                     removing = false
                     scope.launch {
                         busy = true
-                        Fleet(settings).removeMember(member.id)
-                            .onSuccess { r ->
-                                if (r.ok == true) {
-                                    onChanged()
-                                    onDismiss()
-                                } else {
-                                    removeResult = r.text ?: "Your fleet refused that."
-                                }
-                            }
-                            .onFailure { removeResult = it.message ?: "that did not work" }
+                        remove()
                         busy = false
                     }
                 }) { Text("Remove member") }
@@ -572,6 +755,18 @@ private fun MemberPage(
             OutlinedButton(onClick = { starting = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text("Start a session as ${member.name}")
             }
+            // THE START'S ANSWER, ON THIS PAGE, as iOS draws it: the
+            // fleet's sentence, or for a start that waits for approval or
+            // stopped at a budget what can be done about it from here
+            // (RefusedStartCard). Only a start sent as this member, from a
+            // page that is still open (PageStarts).
+            val started = PageStarts.last?.takeIf { it.request.member == member.id && it.request.onTask == null }
+            val refused = started?.refused
+            if (refused != null) {
+                RefusedStartCard(settings, refused) { onStart(refused.request) }
+            } else if (started != null && started.text.isNotBlank()) {
+                SelectionContainer { Hint(started.text) }
+            }
         }
 
         SectionHead("Custody")
@@ -611,7 +806,17 @@ private fun MemberPage(
                         style = Design.Style.bodySmall,
                         color = Design.Palette.ink.now,
                     )
-                    if (mayEdit) {
+                    // FILE IT IS DRAWN ONLY WHERE THE VAULT WOULD TAKE IT
+                    // from this person (C-2): an org admin of the vault, or
+                    // a manager the vault's own tree already puts above this
+                    // member's place. It was drawn for anybody the fleet
+                    // lets edit, and a team lead's press was refused until
+                    // an admin had filed every member above theirs. Anybody
+                    // else reads who files it instead.
+                    val who = whoFilesInstead(held, me, member, reportsToName)
+                    if (who != null) {
+                        SelectionContainer { Hint(who) }
+                    } else {
                         OutlinedButton(
                             enabled = !busy,
                             onClick = {
@@ -629,8 +834,9 @@ private fun MemberPage(
                     // custodians only, since a manager's custody ends with
                     // the tree and not with a button, and adding or removing
                     // is offered only to somebody already on the list (C-2).
-                    // The last custodian stays, and the vault's sentence
-                    // says so.
+                    // The last custodian stays: the vault refuses to remove
+                    // it, so with one left no Remove is drawn. Remove asks
+                    // first.
                     Text("Custodians", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
                     if (filed.may.isEmpty()) Hint("None yet.")
                     filed.may.forEach { address ->
@@ -642,14 +848,31 @@ private fun MemberPage(
                             Text(address, style = Design.Style.bodySmall, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
                             if (address !in filed.custodians) {
                                 Text("Manager", style = Design.Style.label, color = Design.Palette.inkDim.now)
-                            } else if (me in filed.may) {
+                            } else if (me in filed.may && filed.custodians.size > 1) {
                                 TextButton(
                                     enabled = !busy,
-                                    onClick = { act { vault.setCustodian(Fleet(settings), filed.id, address, remove = true) } },
+                                    onClick = { removingCustodian = address },
                                     modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Remove $address" },
                                 ) { Text("Remove", color = Design.Palette.bad.now) }
                             }
                         }
+                    }
+                    // ASKED FIRST. It was done at the press: one tap on a
+                    // row took somebody's custody away, where the same act
+                    // on a person's page always asked.
+                    removingCustodian?.let { address ->
+                        AlertDialog(
+                            onDismissRequest = { removingCustodian = null },
+                            title = { Text("Remove this custodian?") },
+                            text = { Text(removeCustodianSentence(address, member.name)) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    removingCustodian = null
+                                    act { vault.setCustodian(Fleet(settings), filed.id, address, remove = true) }
+                                }) { Text("Remove custodian") }
+                            },
+                            dismissButton = { TextButton(onClick = { removingCustodian = null }) { Text("Cancel") } },
+                        )
                     }
                     if (me in filed.may) {
                         OutlinedTextField(
@@ -897,7 +1120,8 @@ private fun MemberForm(
             label = { Text("Monthly budget (USD)") },
             placeholder = { Text("Optional") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            // Decimal, so cents can be typed with the locale's own mark.
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth(),
         )
         Hint("Dollars a month, at API prices. Approvals decides what happens when it is passed.")
@@ -929,7 +1153,10 @@ private fun MemberForm(
                     result = ""
                     val id = existing?.id ?: memberSlug(name)
                     val budgetText = budget.trim()
-                    val amount = budgetText.toDoubleOrNull()
+                    // ONLY A NUMBER THE FLEET WOULD TAKE IS PUT IN THE
+                    // REQUEST (memberBudgetAmount). Anything else is
+                    // refused here in words.
+                    val amount = memberBudgetAmount(budgetText)
                     // THE LIST, IN ITS ORDER, and never an empty one or an
                     // OpenCode with no model, whatever pressed Save. The
                     // rest of the rules are your fleet's, and its refusal
@@ -942,8 +1169,7 @@ private fun MemberForm(
                         // member, since saving one is how it is changed.
                         // Refused here, by name.
                         creating && roster.any { it.id == id } -> result = "$id is already a member. Choose another name."
-                        budgetText.isNotEmpty() && (amount == null || amount < 0) ->
-                            result = "The monthly budget is a number of dollars, or empty."
+                        budgetText.isNotEmpty() && amount == null -> result = MEMBER_BUDGET_REFUSAL
                         engineList == null -> result = sending.problem ?: "A member has at least one engine."
                         else -> {
                             val fields = JSONObject()
@@ -988,13 +1214,17 @@ private fun MemberForm(
     }
 }
 
-/** What a team member's vault said about a Claude sign-in. */
+/**
+ * What a team member's vault said about a Claude sign-in: whether it keeps
+ * one. Kept is all the vault's list says. Whether the sign-in still works is
+ * a test nobody ran here, and the row does not claim it.
+ */
 enum class MemberSignIn {
-    /** The vault answered, and it holds a Claude item. */
-    SignedIn,
+    /** The vault answered, and it keeps a Claude item. */
+    Kept,
 
-    /** The vault answered, and it holds none. */
-    NotSignedIn,
+    /** The vault answered, and it keeps none. */
+    NotKept,
 
     /** The vault could not be asked, or refused: cannot tell (C-5). */
     NotChecked,
@@ -1005,8 +1235,8 @@ enum class MemberSignIn {
  * words on both phones (test/members-in-apps.test.js).
  */
 fun memberSignInWord(state: MemberSignIn?): String = when (state) {
-    MemberSignIn.SignedIn -> "Signed in to Claude"
-    MemberSignIn.NotSignedIn -> "Not signed in"
+    MemberSignIn.Kept -> "Keeps a Claude sign-in"
+    MemberSignIn.NotKept -> "No Claude sign-in kept"
     MemberSignIn.NotChecked -> "Not checked"
     null -> "Checking…"
 }
@@ -1015,10 +1245,38 @@ fun memberSignInWord(state: MemberSignIn?): String = when (state) {
 fun memberKindWord(kind: String): String = if (kind == "agent") "Agent" else "Person"
 
 /**
+ * What removing a member costs, asked before it is done, by what the member
+ * is. The vault empties an agent member's vault when it is told the agent is
+ * gone, and that is not given back, so it is said here first. A person's
+ * vault is their own and removing them takes nothing from it. The same two
+ * sentences as iOS (test/members-in-apps.test.js).
+ */
+fun removalCost(name: String, kind: String): String =
+    if (kind == "agent") {
+        "Removes $name from the organization. The vault forgets what it kept and the machines approved for it, and that cannot be undone."
+    } else {
+        "Removes $name from the organization. What they keep in the vault is their own and stays theirs."
+    }
+
+/**
+ * Why Remove member did nothing on a phone with no GitHub sign-in, where the
+ * fleet keeps a vault: what to do, then why it is asked. The same sentence
+ * as iOS.
+ */
+const val REMOVAL_NEEDS_GITHUB = "Sign in to GitHub under Runners first. Removing a member also tells the vault, which keeps who may use its credentials."
+
+/**
  * What giving up custody of a person costs, asked before it is done. The
  * same sentence as iOS and the signing page.
  */
 const val STOP_MANAGING_SENTENCE = "This is not given back. After it, managing their credentials is theirs to allow, as it is for their other managers."
+
+/**
+ * What removing one of an agent's custodians does, asked before it is done.
+ * The same sentence as iOS.
+ */
+fun removeCustodianSentence(address: String, name: String): String =
+    "$address stops being a custodian of $name. Anybody still listed can add them again."
 
 /**
  * Whether a person lets their managers manage their credentials, as the
@@ -1075,6 +1333,104 @@ internal fun custodyDiffers(filed: PhoneVault.OrgMember, member: Fleet.Member): 
         filed.email.orEmpty().lowercase() != member.email.orEmpty().lowercase()
 
 /**
+ * The members the vault does not hold as the fleet lists them, in the order
+ * to file them: the tree's own, so whoever a member reports to comes before
+ * it. The vault refuses a member whose manager it has not been told about.
+ */
+internal fun membersToFile(members: List<Fleet.Member>, org: PhoneVault.Org): List<Fleet.Member> =
+    orgRows(members).map { it.member }.filter { member ->
+        val filed = org.member(member.id)
+        filed == null || custodyDiffers(filed, member)
+    }
+
+/**
+ * How many members wait to be filed, as the Organization page says it. The
+ * same sentence as iOS.
+ */
+fun custodyWaitingLine(count: Int): String =
+    if (count == 1) "Custody is not filed for 1 member yet." else "Custody is not filed for $count members yet."
+
+/** The button that files them: the member page's own words for one, and how many for more. */
+fun fileAllLabel(count: Int): String = if (count == 1) "File it" else "File all $count"
+
+/** One member the vault would not take, and its own sentence for why. */
+fun couldNotFileLine(name: String, why: String): String = "Could not file $name. $why"
+
+/**
+ * What filing everybody did, in words: who was filed, by name, then a line
+ * for each member that was not. Empty when there was nothing to file. The
+ * same words as iOS.
+ */
+fun fileAllReport(filed: List<String>, refused: List<String>): String {
+    val lines = mutableListOf<String>()
+    if (filed.isNotEmpty()) {
+        val count = if (filed.size == 1) "1 member" else "${filed.size} members"
+        lines.add("Filed $count with the vault: ${filed.joinToString(", ")}.")
+    }
+    lines.addAll(refused)
+    return lines.joinToString("\n")
+}
+
+/**
+ * Whether this address manages this member by the tree the vault holds: the
+ * vault's own rule, read off its answer (`manages`,
+ * src/fleet/protocol/members.js). Their person member is above it, or an
+ * admin named their address on it or on anything above it, and nobody
+ * manages their own member.
+ */
+internal fun vaultManages(org: PhoneVault.Org, address: String, id: String): Boolean {
+    val member = org.member(id) ?: return false
+    if (member.kind == "person" && member.email.orEmpty().lowercase() == address) return false
+    val line = mutableListOf(member)
+    val seen = mutableSetOf(id)
+    var at = member.reportsTo.orEmpty()
+    while (at.isNotEmpty() && at !in seen) {
+        val node = org.member(at) ?: break
+        if (node.kind == "person" && node.email.orEmpty().lowercase() == address) return true
+        line.add(node)
+        seen.add(at)
+        at = node.reportsTo.orEmpty()
+    }
+    return line.any { node -> node.managers.any { it.lowercase() == address } }
+}
+
+/**
+ * Who files this member's place when it is not this person's to file, as a
+ * sentence, or null when the vault would take it from them and File it is
+ * theirs.
+ *
+ * THE VAULT'S RULES, READ OFF ITS OWN ANSWER (`orgmember`,
+ * src/fleet/minter/org.js), so the button is drawn where a press works. It
+ * files nobody under a member it does not hold, an org admin included, and
+ * then the sentence names who is missing. An org admin files anything else.
+ * A manager files a place under their own member or under one they manage
+ * in the vault's tree; a member the vault already holds must be on their
+ * team there too, and the managers named beside the tree and whose address
+ * a person is are an org admin's to change.
+ */
+internal fun whoFilesInstead(org: PhoneVault.Org, me: String, member: Fleet.Member, reportsToName: String): String? {
+    val parent = member.reportsTo.orEmpty()
+    val admins = org.admins.joinToString(", ")
+    if (parent.isNotEmpty() && org.member(parent) == null) {
+        return if (org.youAdmin) {
+            "The vault files a member after whoever it reports to, and $reportsToName is not filed yet. Go back to Organization to file them all, in order."
+        } else {
+            "The vault files a member after whoever it reports to, and $reportsToName is not filed yet. An org admin files both: $admins."
+        }
+    }
+    if (org.youAdmin) return null
+    val own = org.members.firstOrNull { it.kind == "person" && it.email.orEmpty().lowercase() == me }
+    val under = parent.isNotEmpty() && (parent == own?.id || vaultManages(org, me, parent))
+    if (org.youBound && under) {
+        val filed = org.member(member.id) ?: return null
+        val sameManagers = filed.managers.map { it.lowercase() }.toSet() == member.managers.map { it.lowercase() }.toSet()
+        val sameAddress = filed.email.orEmpty().lowercase() == member.email.orEmpty().lowercase()
+        if (vaultManages(org, me, member.id) && sameManagers && sameAddress) return null
+    }
+    return "This is an org admin's to file: $admins."
+}
+
+/**
  * A member's id from its name: lowercase letters, digits and single
  * hyphens, at most 40, as the fleet takes one.
  */
@@ -1093,6 +1449,39 @@ fun memberSlug(name: String): String {
 /** A comma-separated field as a list: trimmed, lowercased, empties dropped. */
 fun memberList(text: String): List<String> =
     text.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+
+/**
+ * The most a member's monthly budget may be, in dollars: the fleet's own
+ * bound (`MAX_BUDGET`, src/fleet/protocol/members.js).
+ */
+const val MEMBER_BUDGET_MOST = 1_000_000.0
+
+/** What the form says of a budget it will not send. The same sentence as iOS. */
+const val MEMBER_BUDGET_REFUSAL = "The monthly budget is a number of dollars, at most a million, or empty."
+
+/**
+ * A typed monthly budget as dollars, or null for anything that is not one.
+ *
+ * DIGITS AND ONE DECIMAL MARK, THEN A FINITE NUMBER. "NaN" and "Infinity"
+ * are numbers to `toDoubleOrNull`, NaN is not less than zero, and
+ * `JSONObject.put` throws on either, so a pasted word took the whole form
+ * down. The text is held to digits first, and the number to finite, not
+ * negative and no more than the fleet takes.
+ *
+ * A COMMA IS THE DECIMAL MARK WHERE THE LOCALE WRITES ONE, and "12,5" was
+ * refused there as not a number. Anywhere else a comma groups thousands, and
+ * it is refused rather than guessed at: a guess would save the wrong amount.
+ */
+fun memberBudgetAmount(
+    text: String,
+    decimalMark: Char = java.text.DecimalFormatSymbols.getInstance().decimalSeparator,
+): Double? {
+    val typed = text.trim()
+    val plain = if (decimalMark == ',') typed.replace(',', '.') else typed
+    if (plain.isEmpty() || !plain.all { it in '0'..'9' || it == '.' }) return null
+    val amount = plain.toDoubleOrNull() ?: return null
+    return if (amount.isFinite() && amount >= 0 && amount <= MEMBER_BUDGET_MOST) amount else null
+}
 
 /** A budget as the field shows it: whole dollars without a decimal point. */
 fun memberBudgetText(amount: Double): String =
