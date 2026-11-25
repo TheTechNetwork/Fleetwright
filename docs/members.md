@@ -307,6 +307,13 @@ Delegations, with the member among them. The task and the session's name are
 held to the grant's `match` as before. A request the person signs on their own
 phone needs none of this: the member is in what they signed.
 
+**Signing an engine in for a member is held to the same rule.**
+`enginesignin` ([engines.md](./engines.md), "Signing in on the machine")
+puts a sign-in where that member's sessions run on it, so a box takes it
+from exactly who may start a session as the member: on the minter's list,
+and signed, or delegated in a grant that names the member, whatever the
+box's mode. A grant that lacks the member is refused in the same words.
+
 **Credentials come from the member's principal and nowhere else.** A box
 files everything a session runs on by the address of whose it is, and every
 reader there, the credential broker included, finds a session's sign-ins by

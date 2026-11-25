@@ -146,6 +146,7 @@ and "dead host" is the one it retries.
 | `xosetup` | `phase` (`begin`\|`run`\|`status`\|`cancel`\|`policy`), `job?`, `address?`, `pin?` (certificate SHA-256), `sealed?` (secret), `trust?` (`accepted`: the person accepted a certificate that does not check out), `plain?` (`accepted`, with no `pin`: the person accepted setting it up over plain HTTP), `relay?` (v12, for `begin`: every connection of the job goes through the asking phone, as TLS the machine opens; never with `plain`); phase `deploy` takes `address` and `pin` (the hex SHA-256 of the pool master's SSH host key), and refuses `relay` | ✅ | sidecar-local — onboards a Xen Orchestra pool: a signed key for the job, the admin sign-in sealed to it, steps reported as `xosetup.progress`. A job whose sealed sign-in says `purpose: policy` changes what the fleet may use instead: the pool's inventory sealed to the phone in `status`, the person's choice sealed back in `policy`, no progress events. A job begun with `deploy`, for a pool with no Xen Orchestra, installs it first with the installer's `xo-remote-deploy.sh` (the root password and the new admin password sealed in `run`), then onboards it, reporting as `purpose: deploy`. Pinned to one machine; admin only. See `hypervisors.md` |
 | `xolook` | `address` (v13), `reply` (a P-256 public key, v13) | | sidecar-local — a pool's page for a phone away from it: the methods the person's token may call and the pool's hosts, VMs, storage and disks, cut to what the page draws and sealed to `reply` under `fleetwright-xolook/v1:<address>`. Sent only to a permanent machine that reported holding the asker's token for that address, the one that last reached it first. Owner only. See `manage.md`, "From away" |
 | `xoact` | `address` (v13), `method` (one of `XO_ACTIONS`, v13), `args` (JSON, v13) | ✅ | sidecar-local — one of the page's actions, under the person's token, `args` held to the shape that method takes by the coordinator and again by the machine. Routed as `xolook`. Owner only |
+| `enginesignin` | `member` (a member's id, v22), `engine` (`codex`\|`opencode`, v22), `action` (`start`\|`status`\|`cancel`\|`signout`, v22) | ✅ | sidecar-local — `POST /api/engine-signin` on the hub's loopback, once the box has checked that the asker may start a session as that member: on the list the minter signed, and signed or delegated in a grant that names the member, whatever the box's mode. `start` runs the engine's own device-code sign-in in a short container with the member's engine home mounted, and answers with the page to open and the code; `status` says where it stands; `cancel` stops it; `signout` has the engine sign out. Sent to one named machine, a permanent one that acts for the asker. See [engines.md](./engines.md), "Signing in on the machine" |
 
 `provision` is the other odd one, and in the opposite direction: every verb
 above acts on a host that has already enrolled, and this one asks for a host to
@@ -226,6 +227,35 @@ noted making, by the VM's id Xen Orchestra gave it, still under that name and
 running, and only once, sealed to `key`, so the reply the coordinator relays is
 ciphertext. `dispatch` refuses it from any caller with `coordinator_only`, and
 the MCP server does not offer it (`COORDINATOR_ONLY`).
+
+`enginesignin` writes a credential, so the bound at the top of this page is
+derived again for it, as that paragraph asks. **What a compromised
+coordinator gains is nothing it can do alone, and one thing it can do to a
+person.** A box takes the verb only with a custodian's signature over it,
+or a delegation that names the member, so the coordinator cannot start a
+sign-in, read one's code or sign a member out by itself; the sign-in the
+engine makes never leaves the box, and no answer carries a token. What it
+carries is the box's answer to `start`: the page and the code, unsealed.
+A coordinator that lies can replace them with a code from a sign-in it
+began on a machine of its own, and a custodian who enters that has signed
+the coordinator's engine in to their account. That is the page half of
+"The exclusion that got answered" below, still true, and
+[engines.md](./engines.md) says so under "What it does not stop".
+
+It is one verb with an `action`, which "The workspace" below argues
+against for `files`. The argument there is that a scheduler and an MCP
+server could not tell a read from a delete. Here all four actions are one
+custodian's act on one sign-in, held to one rule by the box, routed to one
+named machine, and none is offered to an agent unless an operator says so;
+`status` answers with the code, so it is checked as `start` is and gains
+nothing from being a read. The one place the difference matters is the
+audit ring, and the coordinator leaves `status` out of it there. A new
+verb needs no version, and this one carries 22 for the reason `xolook`
+carries 13: the number is how the coordinator knows a box has the verb
+before it asks, so an older box is refused by name, as a machine to
+update, and is never sent it. The health field and the event that come
+with it (`engineSignins`, `engine.signin`) are read only from a box that
+speaks 22.
 
 `renew` is the odd one and is worth a sentence. Every other verb here is
 somebody asking a host to do something; this one is the coordinator **handing a
