@@ -154,10 +154,22 @@ test('an attempt nobody approves expires on this box’s own clock, one the engi
   // NOBODY APPROVES IT. The runner's own 15 minutes are not waited for here: the box's clock runs out first.
   const again = await b.ask('start');
   assert.deepEqual([again.state, again.signedIn], ['waiting', first], 'the sign-in already there is said beside the new attempt');
+  // FOR AN ANSWER THE SIDECAR WILL SEAL (`sealed`), the same facts come back
+  // for it to seal, and the sentence spells none of the page, the code or
+  // the account: that sentence goes on in the clear.
+  const quiet = await b.ask('status', { sealed: true });
+  assert.deepEqual([quiet.state, quiet.url, quiet.code, quiet.signedIn], ['waiting', again.url, again.code, first]);
+  assert.equal(quiet.text, 'A code is out to sign Codex in for debbie on ops-box, and lasts about 1 more minute. It and its page are sealed to whoever asked. Until it is approved, Codex stays signed in there.');
+  assert.equal(quiet.quietText, undefined);
   await until(async () => (await b.ask('status')).state === 'expired', 'the code running out');
   const expired = await b.ask('status');
   assert.deepEqual(expired.signedIn, first);
   assert.match(expired.text, /^The code ran out before anybody approved it, so Codex was not signed in for debbie on ops-box\. Start again for a new code\. Codex is still signed in as debbie@example\.com there, since /);
+  assert.equal(expired.quietText, undefined);
+  assert.match((await b.ask('status', { sealed: true })).text, /^The code ran out before anybody approved it, so Codex was not signed in for debbie on ops-box\. Start again for a new code\. Codex is still signed in there, since \d{4}-/);
+  // A refusal that says where the sign-in stands is worded the same two ways.
+  const nothing = await b.ask('cancel', { sealed: true });
+  assert.match(nothing.text, /^No Codex sign-in was waiting for debbie on ops-box\. .* Codex is still signed in there, since /);
   assert.deepEqual(b.signins.report().map((r) => [r.state, r.since]), [['expired', first.since]], 'still reported as signed in, since the first time');
   await until(() => !b.running('fw-signin-codex-debbie'), 'the expired attempt’s container ended');
 

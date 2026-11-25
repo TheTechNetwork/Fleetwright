@@ -1,14 +1,17 @@
-// What a box signs when it answers an engine sign-in with the page and the
-// code, and so what a phone checks before it shows either (docs/engines.md,
-// "The machine signs the page and the code").
+// What a box signs when it answers an engine sign-in, and seals to a phone
+// that asked, and so what a phone opens and checks before it shows a code or
+// an account (docs/engines.md, "The machine signs what it answers").
 //
-// THE VECTOR is one answer signed once with a key made for it and kept
-// nowhere: test/fixtures/parity/engine-signin-answer.json. ECDSA signatures
-// differ each time they are made, so a phone cannot make this one again; it
-// can only show that its check takes it, and refuses it with any one field
-// changed. This file shows the same of the code a box runs, so the vector
-// the phones carry is one the box would have made. That a real box signs a
-// real answer this way is in test/vault.test.js.
+// THE VECTORS are two answers, each signed once with a key made for it and
+// kept nowhere: test/fixtures/parity/engine-signin-answer.json. One in the
+// clear, as an MCP client is answered. One sealed, as a phone is, to a key
+// whose private half is in the fixture so that a phone's test can open it.
+// ECDSA signatures and seals differ each time they are made, so a phone
+// cannot make either again; it can only show that it opens and takes them,
+// and refuses them with any one field changed. This file shows the same of
+// the code a box runs, so the vectors the phones carry are ones the box
+// would have made. That a real box answers this way is in
+// test/vault.test.js.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,6 +19,7 @@ import { readFileSync } from 'node:fs';
 import { verify, fromB64Url } from '../src/fleet/crypto.js';
 import { keyId, signinAnswerInput } from '../src/fleet/protocol/intent-signature.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
+import { open, importDepositKey, newSealKey, ENGINE_SIGNIN_AAD } from '../src/fleet/seal.js';
 
 const VECTOR = JSON.parse(readFileSync(new URL('./fixtures/parity/engine-signin-answer.json', import.meta.url), 'utf8'));
 
@@ -50,4 +54,42 @@ test('with any one field changed the signature does not hold, and it is no other
   assert.equal(await verify(other, VECTOR.signature, VECTOR.signingInput), false);
   // And the same payload under another purpose is other bytes.
   assert.equal(await verify(VECTOR.hostKey, VECTOR.signature, VECTOR.signingInput.replace('engine-signin-answer', 'vault-box')), false);
+});
+
+test('the sealed vector opens with the key a phone kept, to what a box signed: the page, the code and who is signed in', async () => {
+  const S = VECTOR.sealed;
+  assert.equal(S.aad, ENGINE_SIGNIN_AAD);
+  assert.equal(S.aad, 'fleetwright-engine-signin/v1');
+  const mine = await importDepositKey(JSON.stringify({ kty: 'EC', crv: 'P-256', d: S.recipient.d, x: S.recipient.x, y: S.recipient.y }));
+  assert.equal(mine.publicKey, S.recipient.publicKey);
+  const opened = await open({ privateKey: mine.privateKey, publicKey: mine.publicKey, aad: S.aad, sealed: S.sealed });
+  assert.deepEqual(opened, S.opened);
+  // Not with another key, and not as anything but an engine sign-in's answer.
+  const other = await newSealKey();
+  await assert.rejects(open({ privateKey: other.privateKey, publicKey: other.publicKey, aad: S.aad, sealed: S.sealed }));
+  await assert.rejects(open({ privateKey: mine.privateKey, publicKey: mine.publicKey, aad: 'fleetwright-vault-reply/v1', sealed: S.sealed }));
+
+  // WHAT WAS SIGNED is everything opened but the key and the signature, with who is signed in among it.
+  const { hostKey, signature, v, ...signed } = opened;
+  assert.equal(v, 1);
+  assert.equal(signinAnswerInput(signed), S.signingInput);
+  assert.equal(
+    S.signingInput,
+    `agent-fleet/v1/engine-signin-answer\n{"at":${signed.at},"code":"${signed.code}","engine":"${signed.engine}","host":"${S.host}","id":"${signed.id}","member":"${signed.member}",` +
+      `"signedIn":{"since":${signed.signedIn.since},"who":{"email":"${signed.signedIn.who.email}","plan":"${signed.signedIn.who.plan}"}},"url":"${signed.url}","v":1}`,
+  );
+  assert.equal(S.keyHashInput, `{"crv":"P-256","kty":"EC","x":"${hostKey.x}","y":"${hostKey.y}"}`);
+  assert.deepEqual([await keyId(hostKey), signed.host], [S.host, S.host]);
+  assert.equal(await verify(hostKey, signature, S.signingInput), true);
+  // Sealing proves nothing by itself, since anybody can seal to a public
+  // key: with anything changed, an account above all, the signature inside
+  // does not hold.
+  assert.deepEqual([...new Set(S.changed.map((/** @type {any} */ c) => c.field))].sort(), Object.keys(signed).sort());
+  for (const { field, value } of S.changed) {
+    assert.notDeepEqual(value, signed[field], `${field} is not changed`);
+    assert.equal(await verify(hostKey, signature, signinAnswerInput({ ...signed, [field]: value })), false, `a changed ${field} still passes`);
+  }
+  // And a sealed answer's bytes are not a clear one's: left out, who is signed in is not "nobody".
+  const { signedIn: _who, ...clear } = signed;
+  assert.equal(await verify(hostKey, signature, signinAnswerInput(clear)), false);
 });

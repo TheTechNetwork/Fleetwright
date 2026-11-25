@@ -501,6 +501,9 @@ const OVERRIDE = {
   // own, and `verbOfTool` is how the server finds its way back.
   enginesignin: {
     name: 'fleet_engine_signin',
+    // `reply` is a key a phone makes to have the answer sealed to it. An
+    // agent has none, and what it could do with a sealed answer is nothing.
+    omit: ['reply'],
     description:
       'Sign Codex or OpenCode in for one member on the machine it runs on, with the engine’s own device code. ' +
       '`start` answers with a page to open and a code that lasts 15 minutes: give both to the person, who enters the ' +

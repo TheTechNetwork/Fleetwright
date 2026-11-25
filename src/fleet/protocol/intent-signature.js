@@ -367,9 +367,9 @@ export function actorEmail(actor) {
 }
 
 /**
- * The exact bytes a box signs when it answers an engine sign-in with the
- * page and the code (docs/engines.md, "The machine signs the page and the
- * code"), and so the bytes a phone checks before it shows either.
+ * The exact bytes a box signs when it answers an engine sign-in
+ * (docs/engines.md, "The machine signs what it answers"), and so the bytes
+ * a phone checks before it shows a code or an account.
  *
  * WHY IT IS SIGNED AT ALL. The answer reaches the phone through the
  * coordinator, which could put a code of its own in it: one from a sign-in
@@ -377,6 +377,8 @@ export function actorEmail(actor) {
  * under their account. The box's key is the one a custodian approved for the
  * member's vault, and its hash reaches the phone in the vault's own sealed
  * answer, so a signature by it is something the coordinator cannot make.
+ * Sealing the answer to the phone does not replace this: what it is sealed
+ * to is a public key, which the coordinator has too.
  *
  *   id      the id of the request being answered, which the phone chose and
  *           signed. An older genuine answer is over another id, so it does
@@ -384,11 +386,16 @@ export function actorEmail(actor) {
  *   host    the whole SHA-256 of the box's key, hex (keyId, above): what the
  *           vault names a grant by (minter/vault.js, boxKeyHash).
  *   member, engine   the request's own.
- *   url, code        the engine's.
- *   at      when the box signed, epoch ms: `signedAt` in the answer.
+ *   url, code        the engine's, while a code is out. Left out otherwise.
+ *   at      when the box signed, epoch ms.
+ *   signedIn         who is signed in there, `{ since, who }` or null, in an
+ *           answer that is sealed. LEFT OUT of a clear one, whose bytes are
+ *           what they were before answers were sealed. signingInput drops
+ *           what is undefined and keeps a null.
  *
- * @param {{ id: string, host: string, member: string, engine: string, url: string, code: string, at: number }} answer
+ * @param {{ id: string, host: string, member: string, engine: string, url?: string, code?: string, at: number,
+ *   signedIn?: { since: number, who: { email: string|null, plan: string|null }|null }|null }} answer
  */
-export function signinAnswerInput({ id, host, member, engine, url, code, at }) {
-  return signingInput('engine-signin-answer', { v: 1, id, host, member, engine, url, code, at });
+export function signinAnswerInput({ id, host, member, engine, url, code, at, signedIn }) {
+  return signingInput('engine-signin-answer', { v: 1, id, host, member, engine, url, code, at, signedIn });
 }

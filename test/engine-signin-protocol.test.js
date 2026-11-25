@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 
 import { PROTOCOL_VERSION, buildIntent, validateIntent } from '../src/fleet/protocol/intents.js';
 import { delegationGap, delegationMemberGap } from '../src/fleet/protocol/intent-signature.js';
+import { newSealKey, canSealTo } from '../src/fleet/seal.js';
 
 const envelope = (/** @type {Record<string, unknown>} */ params, v = PROTOCOL_VERSION) => ({ v, kind: 'intent', id: 'signin-0001', verb: 'enginesignin', params, issuedAt: Date.now(), actor: 'eli@example.com' });
 
@@ -27,6 +28,9 @@ test('enginesignin names a member, one of two engines and one of four actions, a
     { engine: 'codex', action: 'start' },
     { member: 'debbie', action: 'start' },
     { member: 'debbie', engine: 'codex' },
+    // What the answer is sealed to is a seal key in the form a vault request's is, or it is refused by its shape.
+    { member: 'debbie', engine: 'codex', action: 'start', reply: 'not-a-key' },
+    { member: 'debbie', engine: 'codex', action: 'start', reply: `${'A'.repeat(86)}=` },
     // Nothing a caller could put a sign-in or a place in.
     { member: 'debbie', engine: 'codex', action: 'start', token: 'x' },
     { member: 'debbie', engine: 'codex', action: 'start', host: 'ops-box' },
@@ -35,6 +39,17 @@ test('enginesignin names a member, one of two engines and one of four actions, a
     assert.equal(r.ok, false, JSON.stringify(bad));
     assert.equal(/** @type {any} */ (r).code, 'bad_params', JSON.stringify(bad));
   }
+});
+
+test('a phone may name the key its answer is sealed to, and a string that is not one is refused in words', async () => {
+  const { publicKey } = await newSealKey();
+  for (const action of ['start', 'status', 'cancel', 'signout']) {
+    assert.equal(validateIntent(envelope({ member: 'debbie', engine: 'codex', action, reply: publicKey })).ok, true, action);
+  }
+  const bad = /** @type {any} */ (validateIntent(envelope({ member: 'debbie', engine: 'codex', action: 'start', reply: 'not-a-key' })));
+  assert.deepEqual([bad.code, bad.error], ['bad_params', 'enginesignin.reply is not in the form a P-256 public key']);
+  // The right length and alphabet is all a pattern can ask. Whether it is a key is asked by using it, before anything is started.
+  assert.deepEqual([await canSealTo(publicKey), await canSealTo('A'.repeat(87)), await canSealTo('not-a-key'), await canSealTo(undefined)], [true, false, false, false]);
 });
 
 test('nothing of an engine sign-in can be built for a box that speaks 21, and the refusal says to update it', () => {

@@ -447,7 +447,8 @@ encrypted to `reply` as a vault's answer is (`seal`, under
 says nothing of the page, the code or the account**: no `url`, no `code`,
 `signedIn` cut down to `{ since }`, and a `text` that spells none of
 them. The coordinator carries the state and the times, which it is told
-anyway when an attempt ends, and ciphertext. Every answer to a request
+anyway when an attempt ends, the engine's own sentence for an attempt
+that failed (`detail`), and ciphertext. Every answer to a request
 with `reply` that says where a sign-in stands is sealed, whatever the
 state, so the account a sign-in ended on is the box's signed word and not
 the coordinator's: a person who sees *Signed in as* an account that is

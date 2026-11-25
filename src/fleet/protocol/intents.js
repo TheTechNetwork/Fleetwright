@@ -2457,6 +2457,23 @@ export const VERBS = Object.freeze({
           'page, enter the code, then ask status until it says how it ended. A second start while one waits answers ' +
           'with the one waiting. cancel stops an attempt. signout has the engine remove its sign-in on that machine.',
       },
+      // WHAT THE ANSWER IS SEALED TO, by a phone. In the params, so it is in
+      // what the phone signs and the coordinator cannot put a key of its own
+      // there. With it the box says nothing readable of the page, the code
+      // or the account: it seals them, signed, to this key (sidecar.js,
+      // #signAnswer). With v22 and not after it: no box has spoken a 22
+      // without it.
+      reply: {
+        type: 'text',
+        required: false,
+        max: 87,
+        pattern: SEAL_KEY_RE,
+        shapeName: 'a P-256 public key',
+        since: 22,
+        describe:
+          'What the answer is sealed to: a key the asking phone made for this one request. With it, the page, the ' +
+          'code and who is signed in come back sealed and signed by the machine, and nothing of them in the clear.',
+      },
     },
     mutating: true,
     summary:

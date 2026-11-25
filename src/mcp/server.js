@@ -1270,7 +1270,7 @@ export class McpServer {
     // A SIGN-IN CODE THIS SERVER CANNOT CHECK, SAID AS THAT. The machine
     // signs the page and the code, and a phone holds that signature to the
     // machines approved for the member's vault before it shows either
-    // (docs/engines.md, "The machine signs the page and the code"). The list
+    // (docs/engines.md, "The machine signs what it answers"). The list
     // of those machines reaches a phone sealed by the minter; this server
     // has none, so the signature proves nothing to it, and a code that reads
     // as checked here would be a claim with no answer behind it.

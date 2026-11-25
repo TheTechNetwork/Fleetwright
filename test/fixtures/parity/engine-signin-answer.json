@@ -1,5 +1,5 @@
 {
- "why": "One signed answer to an engine sign-in, made the way a box makes it (src/fleet/host/sidecar.js, signed with src/fleet/crypto.js): the page and the code, signed by the box’s key over the id of the request. Both phones check a code against this before they show one, so both hold their check to this vector. test/engine-signin-answer.test.js checks it with crypto.js itself, and that every field under `changed` breaks it.",
+ "why": "Two answers to an engine sign-in, made the way a box makes them (src/fleet/host/sidecar.js, with src/fleet/crypto.js and src/fleet/seal.js). At the top, one in the clear: the page and the code, signed by the box’s key over the id of the request, as an MCP client is answered. Under `sealed`, one as a phone is answered: the same, with who is signed in, sealed to a key the phone made, whose private half is written here so a phone’s test can open it. Both phones open, check and only then show a code, so both hold that to this file. test/engine-signin-answer.test.js checks it with the box’s own code, and that every change listed breaks the signature. An ECDSA signature and a seal are different each time they are made, so neither can be made again: a test shows they are accepted, and refused once changed.",
  "context": "engine-signin-answer",
  "hostKey": {
   "kty": "EC",
@@ -50,5 +50,90 @@
    "field": "host",
    "value": "0000000000000000000000000000000000000000000000000000000000000000"
   }
- ]
+ ],
+ "sealed": {
+  "aad": "fleetwright-engine-signin/v1",
+  "recipient": {
+   "d": "JJArdNEs3PW9ri0982bCglsFDaNGnic87CXGc88lS60",
+   "x": "dw7IawHRl0kqG-NSDPJPg4cYJAipXfEQ35FjkYFrPCc",
+   "y": "I8LtBlDJZx7boLCmyzSVjV3gyqJPBBZjaiPki27L28I",
+   "publicKey": "BHcOyGsB0ZdJKhvjUgzyT4OHGCQIqV3xEN-RY5GBazwnI8LtBlDJZx7boLCmyzSVjV3gyqJPBBZjaiPki27L28I"
+  },
+  "sealed": {
+   "epk": "BHkxgVwCZ14kBVR8RJfq62qPsQmIYvPCLAK-8E2tPU95-8Li2I1HM9Z67Mdxi8R2WbEijZuf-DYX4J8zPwhQjiw",
+   "iv": "fo8cJhHlF8BfLtlx",
+   "ct": "1o2u6TmbQmUgsTI2QKBOe9rcmv84O5vTmFUYyv2l_CTqh0X30ZUIDQXPgl1XTy4yXNRZuf4E96S2rNjkQzU0Tb94eWbhaRTC0Ta5ZaCxpZqcjAxEEOXzYqsqGSxvAx6yaoA7EeM5avxawbCsT7rSooM2IcQev81ZcPc8O26G76AWjYT-_Lq4u8ggIy8YEhonAKzOSs341xbp32H4Wnx74F0AjOXeXrcCRDf7vB2lwQY8Bz857QhXUzmKxDF0SRcAQo3UWB_vv8JaMMWF1Boit42Dbj7KqUqkTi639Umrhc-Xm_rpNChrvB-kWDLI5Ojrm__cIGBOTOOpZTVHtSvT2FBvRkGky9FoXZgYciAKAtwzWzVQQbqUkOReKBOxBqc4rTLJV4NSfT7OHc43bZ7bh-kr2_0j2WpE5aPCXBh5Sls8OaBsLTrx-u6kLN7VX8HvoQO0YfvrwMq2Z5Tu-yD_lZNzAiAiejRQ719tsoX36oC__dtHlgNPFkJfxLFlREbeCesnzi2JjuCqNwLWxo6EL6lViLDPjox-oZeIf03u6ZZzZqoz4aji58YMEVa0Y5tb9lul-307r_GfFXRHooJ6yptJ18BiU4RbnCYaLit4z2xOsr1fkIyD70o8D5ksGAWc4OD13hyEEgbhfEKqc1QyU710cmrSHM-lKOD7_kJh5N0L69peXpa4za6DsSd7Z_mqebWgTZMb7Qe-DO9qAIHKrTGUeEO6gOBAWJMZjYcRhvkVl3vrvUAYsTZuao7goaNxuYE7FwShCw"
+  },
+  "opened": {
+   "v": 1,
+   "id": "7c1e0a52-3b9d-4f60-8a17-2d4c6e8f0b13",
+   "host": "d3e5b3a3fc6ab00a6bbe1a648941e34666da0527f8971eac283f9f2f808df797",
+   "member": "debbie",
+   "engine": "codex",
+   "url": "https://auth.openai.com/codex/device",
+   "code": "WXYZ-1234",
+   "at": 1764000002000,
+   "signedIn": {
+    "since": 1763990000000,
+    "who": {
+     "email": "debbie@example.com",
+     "plan": "plus"
+    }
+   },
+   "hostKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "tbewbiAX0sx3XjILku78F_GAsvlQfLXgmMKovMkxMXU",
+    "y": "6bUbG-7nlacnSGDVp9c0x_Ta3ZLCaeyUdv5izX_vwrk"
+   },
+   "signature": "4Bq8RXEtwGPkbjGEm5x5k8NF8VsqKiCg1BGiZ2m8ZZ3hTxWxR6lxncFB7BnHN3NwGrIJ4qVI3k2mBKflIK3b8w"
+  },
+  "host": "d3e5b3a3fc6ab00a6bbe1a648941e34666da0527f8971eac283f9f2f808df797",
+  "keyHashInput": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"tbewbiAX0sx3XjILku78F_GAsvlQfLXgmMKovMkxMXU\",\"y\":\"6bUbG-7nlacnSGDVp9c0x_Ta3ZLCaeyUdv5izX_vwrk\"}",
+  "signingInput": "agent-fleet/v1/engine-signin-answer\n{\"at\":1764000002000,\"code\":\"WXYZ-1234\",\"engine\":\"codex\",\"host\":\"d3e5b3a3fc6ab00a6bbe1a648941e34666da0527f8971eac283f9f2f808df797\",\"id\":\"7c1e0a52-3b9d-4f60-8a17-2d4c6e8f0b13\",\"member\":\"debbie\",\"signedIn\":{\"since\":1763990000000,\"who\":{\"email\":\"debbie@example.com\",\"plan\":\"plus\"}},\"url\":\"https://auth.openai.com/codex/device\",\"v\":1}",
+  "changed": [
+   {
+    "field": "signedIn",
+    "value": {
+     "since": 1763990000000,
+     "who": {
+      "email": "mallory@example.com",
+      "plan": "plus"
+     }
+    }
+   },
+   {
+    "field": "signedIn",
+    "value": null
+   },
+   {
+    "field": "code",
+    "value": "WXYZ-1235"
+   },
+   {
+    "field": "url",
+    "value": "https://auth.openai.com/codex/devicf"
+   },
+   {
+    "field": "id",
+    "value": "7c1e0a52-3b9d-4f60-8a17-2d4c6e8f0b14"
+   },
+   {
+    "field": "member",
+    "value": "jason"
+   },
+   {
+    "field": "engine",
+    "value": "opencode"
+   },
+   {
+    "field": "at",
+    "value": 1764000002001
+   },
+   {
+    "field": "host",
+    "value": "0000000000000000000000000000000000000000000000000000000000000000"
+   }
+  ]
+ }
 }

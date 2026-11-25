@@ -2081,7 +2081,7 @@
                   "params": {
                     "type": "object",
                     "additionalProperties": true,
-                    "description": "The verb's parameters. For `enginesignin`: `member` (a member's id), `engine` (`codex` or `opencode`) and `action` (`start`, `status`, `cancel` or `signout`), all three required, and signed by the device with the rest of the intent."
+                    "description": "The verb's parameters. For `enginesignin`: `member` (a member's id), `engine` (`codex` or `opencode`) and `action` (`start`, `status`, `cancel` or `signout`), all three required, and signed by the device with the rest of the intent. And `reply`, optional: an uncompressed P-256 public key, 87 characters of base64url, made by the asking device for this one request, as a vault request's `reply` is. With it the machine seals what it says of the page, the code and the account to that key (`sealed`) and says nothing of them in the clear. It is signed with the rest, so nobody between can change it."
                   },
                   "actor": {
                     "type": "string"
@@ -2181,11 +2181,11 @@
                         },
                         "url": {
                           "type": "string",
-                          "description": "For `enginesignin` in state `waiting`: the provider's own page to open. Not a secret, and for whoever asked: it is in this answer and in nothing the fleet keeps, logs, reports or pushes."
+                          "description": "For `enginesignin` in state `waiting`: the provider's own page to open. Not a secret, and for whoever asked: it is in this answer and in nothing the fleet keeps, logs, reports or pushes. Absent when the request carried `reply`: it is then inside `sealed`."
                         },
                         "code": {
                           "type": "string",
-                          "description": "For `enginesignin` in state `waiting`: the code to enter on that page, as the engine made it (letters, digits and hyphens). The same rule as `url`."
+                          "description": "For `enginesignin` in state `waiting`: the code to enter on that page, as the engine made it (letters, digits and hyphens). The same rule as `url`. Absent when the request carried `reply`: it is then inside `sealed`."
                         },
                         "startedAt": {
                           "type": "number",
@@ -2201,11 +2201,11 @@
                         },
                         "signedAt": {
                           "type": "integer",
-                          "description": "For `enginesignin` in state `waiting`: when the machine signed this answer, epoch ms. It is `at` in what `signature` covers."
+                          "description": "For `enginesignin` in state `waiting`: when the machine signed this answer, epoch ms. It is `at` in what `signature` covers. Absent when the request carried `reply`: it is `at` inside `sealed`."
                         },
                         "hostKey": {
                           "type": "object",
-                          "description": "For `enginesignin` in state `waiting`: the public key of the machine that answered, the P-256 key it signs its vault requests with. The SHA-256 of `{\"crv\":\u2026,\"kty\":\u2026,\"x\":\u2026,\"y\":\u2026}` in that order, in hex, is the `key` of that machine\u2019s grant in the member\u2019s vault. The coordinator passes it on and does not check it.",
+                          "description": "For `enginesignin` in state `waiting`: the public key of the machine that answered, the P-256 key it signs its vault requests with. The SHA-256 of `{\"crv\":\u2026,\"kty\":\u2026,\"x\":\u2026,\"y\":\u2026}` in that order, in hex, is the `key` of that machine\u2019s grant in the member\u2019s vault. The coordinator passes it on and does not check it. Absent when the request carried `reply`: it is then inside `sealed`.",
                           "required": [
                             "kty",
                             "crv",
@@ -2235,7 +2235,30 @@
                         },
                         "signature": {
                           "type": "string",
-                          "description": "For `enginesignin` in state `waiting`: `hostKey`\u2019s ECDSA P-256 SHA-256 signature, the 64 raw bytes r||s in base64url without padding, over the UTF-8 of `agent-fleet/v1/engine-signin-answer\\n` followed by the JSON of `{at, code, engine, host, id, member, url, v}` with keys in that order and no spaces: `at` is `signedAt`, `host` the hash of `hostKey`, `id` the id of the request, `v` 1. A caller that shows the code checks this first, and that `host` is a machine approved for the member\u2019s vault. The coordinator passes it on and does not check it."
+                          "description": "For `enginesignin` in state `waiting`: `hostKey`\u2019s ECDSA P-256 SHA-256 signature, the 64 raw bytes r||s in base64url without padding, over the UTF-8 of `agent-fleet/v1/engine-signin-answer\\n` followed by the JSON of `{at, code, engine, host, id, member, url, v}` with keys in that order and no spaces: `at` is `signedAt`, `host` the hash of `hostKey`, `id` the id of the request, `v` 1. A caller that shows the code checks this first, and that `host` is a machine approved for the member\u2019s vault. The coordinator passes it on and does not check it. When the request carried `reply`, absent here and inside `sealed`, where the signed JSON also has `signedIn` (`{since, who}` or null), and has `code` and `url` only while a code is out."
+                        },
+                        "sealed": {
+                          "type": "object",
+                          "description": "For `enginesignin` asked with `reply`, in every answer that says where a sign-in stands: what the machine says of the page, the code and the account, sealed to `reply` as a vault's answer is sealed (ECDH on P-256 with an ephemeral key, HKDF-SHA-256, AES-256-GCM), under the additional data `fleetwright-engine-signin/v1`. Opened, it is `{ v: 1, id, host, member, engine, url, code, at, signedIn, hostKey, signature }`, with `url` and `code` only while a code is out. `signature` is `hostKey`\u2019s over the rest, as described there. The coordinator carries it and cannot open it. Whoever opens it still checks `signature`, and that `host` is a machine approved for the member\u2019s vault: `reply` is a public key, so anybody could have sealed to it.",
+                          "required": [
+                            "epk",
+                            "iv",
+                            "ct"
+                          ],
+                          "properties": {
+                            "epk": {
+                              "type": "string",
+                              "description": "The ephemeral public key, 87 characters of base64url."
+                            },
+                            "iv": {
+                              "type": "string",
+                              "description": "12 bytes, base64url."
+                            },
+                            "ct": {
+                              "type": "string",
+                              "description": "The ciphertext and its 16-byte tag, base64url."
+                            }
+                          }
                         },
                         "already": {
                           "type": "boolean",
@@ -2257,10 +2280,9 @@
                             "object",
                             "null"
                           ],
-                          "description": "For `enginesignin`, beside `state` in every answer that has one: the sign-in this machine was told of for that member and engine, or null. Two facts: a new attempt that expires or fails leaves the sign-in before it in place, and the answer then says `expired` and still says who is signed in.",
+                          "description": "For `enginesignin`, beside `state` in every answer that has one: the sign-in this machine was told of for that member and engine, or null. Two facts: a new attempt that expires or fails leaves the sign-in before it in place, and the answer then says `expired` and still says who is signed in. When the request carried `reply`, this says only `since`: `who` is inside `sealed`, signed by the machine with the rest.",
                           "required": [
-                            "since",
-                            "who"
+                            "since"
                           ],
                           "properties": {
                             "since": {

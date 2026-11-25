@@ -57,7 +57,7 @@ import { redactCommandLine } from '../../core/redact.js';
 import { emailFromActor } from '../../core/accounts.js';
 import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
 import { verifyRunnerJob } from '../coordinator/oidc.js';
-import { newSealKey, bindingFor, claudeBindingFor, seal, open, VAULT_BOX_AAD } from '../seal.js';
+import { newSealKey, bindingFor, claudeBindingFor, seal, open, canSealTo, VAULT_BOX_AAD, ENGINE_SIGNIN_AAD } from '../seal.js';
 import { signingInput, fingerprint } from '../crypto.js';
 import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
@@ -1097,9 +1097,11 @@ export class Sidecar {
     // WHAT IS REMEMBERED IS THE REPLY, EXCEPT A CODE. The page and the code
     // of an engine sign-in are for whoever asked, for as long as they are of
     // use, and ten minutes in this map is neither: of such a reply only the
-    // id is remembered, as answered. The id still cannot be run twice.
+    // id is remembered, as answered. The id still cannot be run twice. A
+    // sealed reply is not kept either: it is the same page and code, and a
+    // retry is sealed to its own `reply`, which need not be the first one's.
     if (intent.verb === 'enginesignin') {
-      const kept = pending.then((r) => (typeof r?.code === 'string' || typeof r?.url === 'string' || typeof r?.signature === 'string' ? CODE_NOT_KEPT : r));
+      const kept = pending.then((r) => (typeof r?.code === 'string' || typeof r?.url === 'string' || typeof r?.signature === 'string' || r?.sealed ? CODE_NOT_KEPT : r));
       // Whoever asked is told of a failure by `pending` itself; this copy of it is only for a retry.
       kept.catch(() => {});
       this.#remember(intent.id, kept);
@@ -1349,46 +1351,74 @@ export class Sidecar {
   }
 
   /**
-   * The hub's answer to an engine sign-in, signed by this box when it
-   * carries the page and the code (docs/engines.md, "The machine signs the
-   * page and the code").
+   * The hub's answer to an engine sign-in, signed by this box and, for a
+   * phone, sealed to it (docs/engines.md, "The machine signs what it
+   * answers").
    *
-   * WITH THE KEY THIS BOX SIGNS ITS VAULT REQUESTS WITH, and by the same
-   * function, so the signature is in the one encoding everything here uses
-   * and under the key a custodian approved. Over the id of the request it
-   * answers, so an answer to one request is not an answer to another; a
+   * SIGNED WITH THE KEY THIS BOX SIGNS ITS VAULT REQUESTS WITH, and by the
+   * same function, so the signature is in the one encoding everything here
+   * uses and under the key a custodian approved. Over the id of the request
+   * it answers, so an answer to one request is not an answer to another; a
    * status asked under a new id is signed over that id.
    *
-   * A CODE THIS BOX CANNOT SIGN IS NOT PASSED ON. A phone shows only a code
-   * it can check, so an unsigned one would be shown by nothing that checks
-   * and by everything that does not. It is refused instead, in words that
-   * say the attempt is still there.
+   * SEALED TO `reply`, WHEN THE REQUEST CARRIES ONE, which is a key the
+   * asking phone made and signed for with the rest of the request. Then the
+   * page, the code and who is signed in go inside, with this box's key and
+   * its signature over them, and NOTHING OF THEM GOES ON IN THE CLEAR: the
+   * coordinator carries a state, some times and ciphertext. Every answer
+   * that says where a sign-in stands is sealed then, whatever the state,
+   * because who it ended signed in as is the thing a person checks, and it
+   * should be this box's word. The signature is what makes it so: anybody
+   * can seal to a public key.
+   *
+   * WITHOUT ONE, as it was: in the clear, and signed only while it carries
+   * the page and the code. That is an MCP client, which has no key to seal
+   * to and is told the code is unverified.
+   *
+   * WHAT THIS BOX CANNOT SIGN OR SEAL IS NOT PASSED ON. It is refused
+   * instead, in words that say so.
    *
    * @param {import('../protocol/intents.js').Intent} intent
    * @param {Record<string, any>} said
    * @returns {Promise<Record<string, any>>}
    */
   async #signAnswer(intent, said) {
-    if (said?.ok !== true || typeof said.url !== 'string' || typeof said.code !== 'string') return said;
+    const sealTo = typeof intent.params?.reply === 'string' ? intent.params.reply : null;
+    const coded = typeof said?.url === 'string' && typeof said?.code === 'string';
+    // A refusal says nothing of a page, a code or an account, and goes as it is.
+    if (said?.ok !== true || !(coded || (sealTo && typeof said.state === 'string'))) return said;
+    /** What goes on in the clear. Under a `reply`, nothing of the page, the code or the account. @type {Record<string, any>} */
+    const clear = { ...said };
+    if (sealTo) {
+      delete clear.url;
+      delete clear.code;
+      clear.signedIn = said.signedIn ? { since: said.signedIn.since } : null;
+    }
     const key = this.vaultKey;
     const at = Date.now();
     try {
       if (!key) throw new Error('it has no key of its own');
       const hostKey = { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y };
-      const signature = await key.sign(signinAnswerInput({
-        id: intent.id, host: await keyId(hostKey), member: String(intent.params.member), engine: String(intent.params.engine), url: said.url, code: said.code, at,
-      }));
-      return { ...said, signedAt: at, hostKey, signature };
+      const who = said.signedIn?.who ? { email: said.signedIn.who.email ?? null, plan: said.signedIn.who.plan ?? null } : null;
+      const signed = {
+        id: intent.id, host: await keyId(hostKey), member: String(intent.params.member), engine: String(intent.params.engine),
+        ...(coded ? { url: said.url, code: said.code } : {}), at,
+        ...(sealTo ? { signedIn: said.signedIn ? { since: Number(said.signedIn.since), who } : null } : {}),
+      };
+      const signature = await key.sign(signinAnswerInput(signed));
+      if (!sealTo) return { ...said, signedAt: at, hostKey, signature };
+      return { ...clear, sealed: await seal({ to: sealTo, aad: ENGINE_SIGNIN_AAD, payload: { v: 1, ...signed, hostKey, signature } }) };
     } catch (e) {
       // The reason only: nothing of the answer is logged.
       this.log.warn(`sidecar: could not sign the answer to enginesignin ${intent.id}: ${/** @type {Error} */ (e).message}`);
-      const rest = { ...said };
-      delete rest.url;
-      delete rest.code;
+      delete clear.url;
+      delete clear.code;
       return {
-        ...rest, ok: false, error: { code: 'answer_unsigned' },
-        text: `${this.hostId} could not sign its answer, so the page and the code are not passed on: a code this machine has not signed is one nobody can tell is its own. ` +
-          'The sign-in is still waiting there. Ask where it stands again, or cancel it.',
+        ...clear, ok: false, error: { code: 'answer_unsigned' },
+        text: coded
+          ? `${this.hostId} could not sign its answer, so the page and the code are not passed on: a code this machine has not signed is one nobody can tell is its own. ` +
+            'The sign-in is still waiting there. Ask where it stands again, or cancel it.'
+          : `${this.hostId} could not sign its answer, so what it says of this sign-in is not passed on. Ask where it stands again.`,
       };
     }
   }
@@ -1511,9 +1541,21 @@ export class Sidecar {
         if (!as || typeof as.account !== 'string') {
           return reply({ ok: false, error: { code: 'member_unchecked' }, text: `${this.hostId} did not check who may sign this member’s engine in. Nothing was done.` });
         }
+        // A `reply` NOTHING CAN BE SEALED TO is refused here, before the hub
+        // is asked and so before any container: found afterwards, it would
+        // leave an attempt out whose code nobody could be given. The
+        // protocol checked its length and alphabet, which is all a pattern
+        // can; whether it is a point on the curve is checked by using it.
+        const sealTo = typeof intent.params.reply === 'string' ? intent.params.reply : null;
+        if (sealTo && !(await canSealTo(sealTo))) {
+          return reply({
+            ok: false, error: { code: 'bad_params' },
+            text: 'enginesignin.reply is not a key an answer can be sealed to. It is the public half of a P-256 key the asking phone makes for this one request, as for a vault request. Nothing was done.',
+          });
+        }
         return reply(await this.#signAnswer(intent, await this.hub.engineSignin({
           member: String(intent.params.member), account: as.account, engine: String(intent.params.engine), action: String(intent.params.action),
-          by: String(as.by ?? ''), box: this.hostId,
+          by: String(as.by ?? ''), box: this.hostId, ...(sealTo ? { sealed: true } : {}),
         })));
       }
 

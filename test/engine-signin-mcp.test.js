@@ -33,6 +33,8 @@ test('the tool is the verb under a name of two words, with the verb’s own para
   const tool = toolsFor({ allow: ['enginesignin'] }).find((t) => t.verb === 'enginesignin');
   assert.equal(tool?.name, 'fleet_engine_signin');
   assert.deepEqual(tool?.inputSchema.required, ['member', 'engine', 'action']);
+  // Not the key a phone has its answer sealed to: an agent has none, so its answers are in the clear.
+  assert.equal(tool?.inputSchema.properties.reply, undefined);
   assert.deepEqual(tool?.inputSchema.properties.engine.enum, VERBS.enginesignin.params.engine.values);
   assert.deepEqual(tool?.inputSchema.properties.action.enum, ['start', 'status', 'cancel', 'signout']);
   assert.equal(typeof tool?.inputSchema.properties.host?.description, 'string');

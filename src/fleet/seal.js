@@ -307,6 +307,14 @@ export const VAULT_REPLY_AAD = 'fleetwright-vault-reply/v1';
 /** What a box was approved to hold, sealed to the key the box made for that one request. */
 export const VAULT_BOX_AAD = 'fleetwright-vault-box/v1';
 
+/**
+ * What a box says of an engine sign-in, the page and the code and who is
+ * signed in, sealed to the key the asking phone made for that one request
+ * (src/fleet/host/sidecar.js, #signAnswer; docs/engines.md, "Signing in on
+ * the machine"). The phones build the same string.
+ */
+export const ENGINE_SIGNIN_AAD = 'fleetwright-engine-signin/v1';
+
 /** The minter's own keys, sealed once to the operator's key so they can be kept outside it (src/fleet/minter/backup.js). */
 export const MINTER_EXPORT_AAD = 'fleetwright-minter-export/v1';
 
@@ -386,6 +394,22 @@ async function aeadKey(privateKey, publicKey, salt) {
 function importPublic(key) {
   if (!SEAL_KEY_RE.test(String(key))) throw new Error('not a P-256 public key');
   return crypto.subtle.importKey('raw', /** @type {any} */ (fromB64Url(key)), ECDH, false, []);
+}
+
+/**
+ * Whether something can be sealed to `key`: a point on P-256, and not only a
+ * string of the right length, which is all SEAL_KEY_RE can say. For whoever
+ * must refuse a key before doing the work its answer would be sealed for.
+ *
+ * @param {unknown} key
+ */
+export async function canSealTo(key) {
+  try {
+    await importPublic(String(key));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

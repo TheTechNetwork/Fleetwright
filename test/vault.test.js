@@ -11,7 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { newDepositKey, newSealKey, seal, open, atRestAad, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
+import { newDepositKey, newSealKey, seal, open, atRestAad, ENGINE_SIGNIN_AAD, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, signingInput, fingerprint, verify } from '../src/fleet/crypto.js';
 import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
@@ -24,6 +24,7 @@ import { CoordinatorCore } from '../src/fleet/coordinator/core.js';
 import { Fleet } from '../worker/src/fleet-do.js';
 import { Sidecar, VAULT_CHANGED_ASK_MS } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
+import { SessionWatcher } from '../src/fleet/host/watcher.js';
 import { HttpAdapter } from '../src/adapters/http.js';
 import { ensureApiToken } from '../src/core/api-token.js';
 import { vaultEnvFor, vaultSecret, vaultClaudeFile, vaultExpiryFor } from '../src/core/vault-store.js';
@@ -1058,7 +1059,7 @@ test('a phone lists its signing key under its own address, and a box is given th
  *
  * @param {import('node:test').TestContext} t @param {{ requireSigned?: boolean|'off'|'signers'|'all' }} [opts]
  */
-async function signingFleet(t, { requireSigned = false, hub = null } = {}) {
+async function signingFleet(t, { requireSigned = false, hub = null, push = null } = {}) {
   const m = await minter();
   t.after(m.restore);
   const real = globalThis.fetch;
@@ -1074,7 +1075,7 @@ async function signingFleet(t, { requireSigned = false, hub = null } = {}) {
 
   const boxKeys = await generateKeyPair();
   const quiet = { info() {}, warn() {}, error() {}, debug() {} };
-  const core = new CoordinatorCore({ minter: /** @type {any} */ (m.binding), intentTimeoutMs: 2_000, logger: quiet });
+  const core = new CoordinatorCore({ minter: /** @type {any} */ (m.binding), intentTimeoutMs: 2_000, logger: quiet, ...(push ? { push: /** @type {any} */ (push) } : {}) });
   await core.issueClient({ email: ELI }, 'phone');
   await core.hostIds.enrol({ hostId: 'ops-box', publicJwk: boxKeys.publicJwk, enrolledBy: ELI });
   const stub = await startStubHub({ host: 'ops-box' });
@@ -2812,6 +2813,30 @@ test('a box signs an engine in for a member only for who may start a session as 
   key.sign = signs;
   assert.deepEqual([cannotSign.ok, cannotSign.error?.code, cannotSign.url, cannotSign.code, cannotSign.signature], [false, 'answer_unsigned', undefined, undefined, undefined]);
   assert.equal(cannotSign.text, 'ops-box could not sign its answer, so the page and the code are not passed on: a code this machine has not signed is one nobody can tell is its own. The sign-in is still waiting there. Ask where it stands again, or cancel it.');
+
+  // WITH A KEY TO SEAL TO (`reply`, in what the phone signed): the hub is
+  // told the answer will be sealed, nothing of the page or the code goes on
+  // in the clear, and what is sealed is the same page and code, signed.
+  const mine = await newSealKey();
+  const sealedTo = await ask({ params: { reply: mine.publicKey } });
+  assert.equal(stub.signins.at(-1).sealed, true);
+  assert.deepEqual([sealedTo.ok, sealedTo.state, sealedTo.url, sealedTo.code, sealedTo.hostKey, sealedTo.signature, sealedTo.signedAt], [true, 'waiting', undefined, undefined, undefined, undefined, undefined]);
+  const inside = await open({ privateKey: mine.privateKey, publicKey: mine.publicKey, aad: ENGINE_SIGNIN_AAD, sealed: sealedTo.sealed });
+  assert.deepEqual([inside.id, inside.host, inside.url, inside.code, inside.signedIn, inside.hostKey], [sealedTo.id, host, 'https://auth.openai.com/codex/device', 'ABCD-EFGH', null, boxKey]);
+  const sealedSigned = { ...signed, id: sealedTo.id, at: inside.at, signedIn: null };
+  assert.equal(await verify(inside.hostKey, inside.signature, signinAnswerInput(sealedSigned)), true);
+  // Its bytes are a sealed answer's: a clear one's, which say nothing of who is signed in, are other bytes.
+  assert.equal(await verify(inside.hostKey, inside.signature, signinAnswerInput({ ...signed, id: sealedTo.id, at: inside.at })), false);
+  // A box that cannot sign seals nothing, and says nothing of the code in the clear either.
+  key.sign = async () => { throw new Error('the key store is locked'); };
+  const sealedUnsigned = await ask({ params: { action: 'status', reply: mine.publicKey } });
+  key.sign = signs;
+  assert.deepEqual([sealedUnsigned.error?.code, sealedUnsigned.sealed, sealedUnsigned.url, sealedUnsigned.code], ['answer_unsigned', undefined, undefined, undefined]);
+  // A `reply` THAT IS NO KEY, though it is the length of one: refused in words, before the hub is asked.
+  const asked = stub.signins.length;
+  const notAKey = await ask({ params: { reply: 'A'.repeat(87) } });
+  assert.deepEqual([notAKey.error?.code, notAKey.text], ['bad_params', 'enginesignin.reply is not a key an answer can be sealed to. It is the public half of a P-256 key the asking phone makes for this one request, as for a vault request. Nothing was done.']);
+  assert.equal(stub.signins.length, asked);
   // A PERSON'S OWN ENGINES, by their own record: their own address.
   assert.equal((await ask({ params: { member: 'eli', engine: 'opencode' } })).ok, true);
   assert.deepEqual([stub.signins.at(-1).member, stub.signins.at(-1).account, stub.signins.at(-1).engine], ['eli', ELI, 'opencode']);
@@ -2861,12 +2886,12 @@ test('a box signs an engine in for a member only for who may start a session as 
   assert.equal(await verify(through.hostKey, through.signature, signinAnswerInput({ ...signed, id, at: through.signedAt })), true);
 });
 
-test('a real sign-in’s code is signed by the box and is in nothing the sidecar keeps, and no token is in anything it answers or remembers', async (t) => {
-  // The whole way on one machine: a phone's signed request, the real
-  // sidecar, the real hub and its sign-in store, a stand-in Podman running
-  // the real runner, and a stand-in Codex that writes a recognisable token
-  // into the engine home (test/helpers/stub-signin-podman.js). Nothing real
-  // is reached.
+test('a phone’s sign-in is sealed to it: the coordinator carries no code, page or account, the phone opens and checks what the box signed, and no token is anywhere', async (t) => {
+  // The whole way on one machine: a phone's signed request with a key of
+  // its own to seal to, the real coordinator, the real sidecar, the real hub
+  // and its sign-in store, a stand-in Podman running the real runner, and a
+  // stand-in Codex that writes a recognisable token into the engine home
+  // (test/helpers/stub-signin-podman.js). Nothing real is reached.
   const b = signinBox(t);
   const cfg = b.cfg({ bind: '127.0.0.1', port: 0, token: '', workdir: join(b.dir, 'work'), maxSessions: 5, loginEnabled: true, sandboxCredentialsFile: '', sandboxImagePinned: false, releaseChannel: '', rulesFile: join(b.dir, 'CLAUDE.md') });
   const token = ensureApiToken(/** @type {any} */ (cfg));
@@ -2876,37 +2901,66 @@ test('a real sign-in’s code is signed by the box and is in nothing the sidecar
   });
   await adapter.start();
   t.after(() => adapter.stop());
-  const { m, box, iphone, kid } = await signingFleet(t, { hub: { baseUrl: `http://127.0.0.1:${/** @type {any} */ (adapter.server).address().port}`, token } });
+  const hubAt = { baseUrl: `http://127.0.0.1:${/** @type {any} */ (adapter.server).address().port}`, token };
+  /** Every push the coordinator sends. @type {any[]} */
+  const pushes = [];
+  const { m, core, box, iphone, kid } = await signingFleet(t, { hub: hubAt, push: { async send(/** @type {any[]} */ devices, /** @type {any} */ message) { pushes.push(message); return { sent: devices.length, dead: [] }; } } });
   let clock = Date.now() - 30_000;
   const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
   await filed({ op: 'orgadmin', address: ELI });
   await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
   await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
   const boxKey = { kty: 'EC', crv: 'P-256', x: String(box.sidecar.vaultKey?.publicJwk.x), y: String(box.sidecar.vaultKey?.publicJwk.y) };
+  const host = await boxKeyHash(boxKey);
   await filed({ op: 'grant', hostKey: boxKey, label: 'ops-box', for: 'debbie' });
   assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
   await box.sidecar.syncVault();
+  assert.equal(core.setMember(null, 'debbie', { name: 'Debbie', kind: 'agent', role: 'software engineer' }).ok, true);
+  // Eli's phone, to be told when the attempt ends.
+  const { client } = /** @type {any} */ (await core.clients.issue('phone (eli)', { admin: true, email: ELI }));
+  await core.registerDevice({ platform: 'ios', token: 'a'.repeat(64), clientId: client.id, actor: `fleet:${ELI}` });
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} };
+  const watcher = new SessionWatcher({ hub: new HubClient(hubAt), emit: (/** @type {any} */ e) => box.sidecar.emitEvent(e), logger: quiet });
+  await watcher.tick();
 
-  /** @type {any[]} */
-  const answers = [];
+  /** EVERYTHING THE COORDINATOR HANDS BACK, which is everything it was given to carry. @type {any[]} */
+  const carried = [];
   let n = 0;
-  const ask = async (/** @type {string} */ action, /** @type {string} */ id = `real-signin-${String(++n).padStart(4, '0')}`) => {
+  const mine = await newSealKey();
+  /** One request from Eli's phone through the coordinator, its answer sealed to `key`. */
+  const ask = async (/** @type {string} */ action, /** @type {string} */ id = `sealed-signin-${String(++n).padStart(4, '0')}`, key = mine) => {
     const issuedAt = Date.now();
-    const params = { member: 'debbie', engine: 'codex', action };
+    const params = { member: 'debbie', engine: 'codex', action, reply: key.publicKey };
     const sig = await sign(iphone.privateJwk, intentSigningInput({ actor: ELI, id, issuedAt, params, verb: 'enginesignin' }, 'ops-box'));
-    const r = /** @type {any} */ (await box.sidecar.handle({ v: PROTOCOL_VERSION, kind: 'intent', id, verb: 'enginesignin', params, actor: ELI, issuedAt, sig, kid }));
-    answers.push(r);
-    return r;
+    const r = /** @type {any} */ (await core.dispatch({ verb: 'enginesignin', params, id, actor: ELI, requester: { email: ELI, admin: true }, preferHost: 'ops-box', issuedAt, sig, kid }));
+    carried.push(r);
+    return { ...r, id };
   };
-  const holds = async (/** @type {any} */ r, /** @type {string} */ id) => verify(r.hostKey, r.signature, signinAnswerInput({ id, host: await boxKeyHash(boxKey), member: 'debbie', engine: 'codex', url: r.url, code: r.code, at: r.signedAt }));
+  /** What the phone does with an answer: open it with the key it kept, then hold the box's signature to its own request. */
+  const read = async (/** @type {any} */ r, key = mine) => {
+    const inside = await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: ENGINE_SIGNIN_AAD, sealed: r.sealed });
+    const holds = await verify(inside.hostKey, inside.signature, signinAnswerInput({ id: r.id, host: await boxKeyHash(inside.hostKey), member: 'debbie', engine: 'codex', url: inside.url, code: inside.code, at: inside.at, signedIn: inside.signedIn }));
+    return { inside, holds };
+  };
 
   const waiting = await ask('start');
-  assert.deepEqual([waiting.ok, waiting.state, waiting.url, waiting.code], [true, 'waiting', 'https://auth.openai.com/codex/device', 'ABCD-EFGH'], waiting.text);
-  assert.deepEqual(waiting.hostKey, boxKey);
-  assert.equal(await holds(waiting, waiting.id), true);
-  // The same request again is the attempt in flight, signed over the same id, and no second container.
-  const again = await ask('start', waiting.id);
-  assert.deepEqual([again.replayed, again.state, again.code, await holds(again, waiting.id)], [true, 'waiting', 'ABCD-EFGH', true]);
+  // IN THE CLEAR: that a code is out and until when, and nothing of it.
+  assert.deepEqual([waiting.ok, waiting.state, waiting.signedIn, waiting.url, waiting.code, waiting.hostKey, waiting.signature], [true, 'waiting', null, undefined, undefined, undefined, undefined], waiting.text);
+  assert.equal(waiting.text, 'A code is out to sign Codex in for debbie on ops-box, and lasts about 15 more minutes. It and its page are sealed to whoever asked.');
+  // OPENED BY THE PHONE THAT ASKED: the page and the code, by the machine the vault lists for Debbie, over this request's id.
+  const first = await read(waiting);
+  assert.deepEqual({ ...first.inside, at: 0, signature: '' }, { v: 1, id: waiting.id, host, member: 'debbie', engine: 'codex', url: 'https://auth.openai.com/codex/device', code: 'ABCD-EFGH', at: 0, signedIn: null, hostKey: boxKey, signature: '' });
+  assert.equal(first.holds, true);
+  assert.deepEqual((await m.phone({ op: 'list', for: 'debbie' })).answer.grants.map((/** @type {any} */ g) => [g.key, g.only]), [[first.inside.host, undefined]]);
+  // NOBODY ELSE OPENS IT, and it is sealed for this purpose and no other.
+  const other = await newSealKey();
+  await assert.rejects(open({ privateKey: other.privateKey, publicKey: other.publicKey, aad: ENGINE_SIGNIN_AAD, sealed: waiting.sealed }));
+  await assert.rejects(open({ privateKey: mine.privateKey, publicKey: mine.publicKey, aad: VAULT_REPLY_AAD, sealed: waiting.sealed }));
+  // THE SAME REQUEST AGAIN, with a key made again for the retry, is the attempt in flight, sealed to the retry's own key.
+  const again = await ask('start', waiting.id, other);
+  assert.equal(again.replayed, true);
+  assert.deepEqual([(await read(again, other)).inside.code, (await read(again, other)).holds], ['ABCD-EFGH', true]);
+  await assert.rejects(open({ privateKey: mine.privateKey, publicKey: mine.publicKey, aad: ENGINE_SIGNIN_AAD, sealed: again.sealed }));
   assert.equal(b.runs().length, 1);
 
   b.provider('approved');
@@ -2917,20 +2971,40 @@ test('a real sign-in’s code is signed by the box and is in nothing the sidecar
     now = await ask('status');
   }
   assert.equal(now?.state, 'signed_in', now?.text);
-  // An answer with no code carries nothing signed: there is nothing in it to check.
-  assert.deepEqual([now.url, now.code, now.hostKey, now.signature], [undefined, undefined, undefined, undefined]);
+  // WHO IT ENDED SIGNED IN AS is the box's signed word, read by the phone. In the clear, only since when.
+  assert.deepEqual(now.signedIn, { since: now.at });
+  assert.match(now.text, /^Codex is signed in for debbie on ops-box, since \d{4}-\d\d-\d\d \d\d:\d\d UTC\.$/);
+  const ended = await read(now);
+  assert.deepEqual([ended.holds, ended.inside.signedIn, ended.inside.url, ended.inside.code], [true, { since: now.at, who: { email: 'debbie@example.com', plan: 'plus' } }, undefined, undefined]);
+  // Another account in its place is not what the box signed.
+  const forged = { id: now.id, host, member: 'debbie', engine: 'codex', at: ended.inside.at, signedIn: { since: now.at, who: { email: 'mallory@example.com', plan: 'plus' } } };
+  assert.equal(await verify(ended.inside.hostKey, ended.inside.signature, signinAnswerInput(forged)), false);
+  assert.equal(await verify(ended.inside.hostKey, ended.inside.signature, signinAnswerInput({ ...forged, signedIn: ended.inside.signedIn })), true);
   // A request first answered with the code, asked again once it is over, is told how it ended and starts nothing.
   const late = await ask('start', waiting.id);
-  assert.deepEqual([late.replayed, late.state, late.code], [true, 'signed_in', undefined]);
+  assert.deepEqual([late.replayed, late.state, (await read(late)).inside.code], [true, 'signed_in', undefined]);
   assert.equal(b.runs().length, 1);
+  // And the custodian's phone is told it ended, by the coordinator, in its own sentence.
+  await watcher.tick();
+  await watcher.tick();
+  assert.deepEqual(pushes.map((p) => p.body), ['Codex is signed in for Debbie on ops-box.']);
 
-  // THE TOKEN IS IN THE ENGINE HOME AND NOWHERE ELSE: no answer, and nothing the sidecar remembers.
+  // THE TOKEN IS IN THE ENGINE HOME AND NOWHERE ELSE.
   assert.ok(readFileSync(b.volume('fw-engine-debbie', 'codex', 'auth.json'), 'utf8').includes(TOKEN));
   const remembered = JSON.stringify(await Promise.all([...box.sidecar.replay.values()].map((hit) => hit.reply)));
   assert.ok(box.sidecar.replay.has(waiting.id));
-  for (const [where, text] of [['an answer', JSON.stringify(answers)], ['the sidecar’s cache of replies', remembered]]) assert.ok(!text.includes('LEAKCANARY'), `a token is in ${where}`);
-  // AND THE CODE, ITS PAGE AND THE SIGNATURE OVER THEM are in the answers and not in the cache.
-  for (const kept of ['ABCD-EFGH', 'auth.openai.com', waiting.signature]) assert.ok(!remembered.includes(kept), `the sidecar’s cache of replies holds ${kept}`);
+  // THE COORDINATOR'S WHOLE VIEW: every answer it carried, every push it sent
+  // and the feed every phone reads. No code, no page, no account, no token.
+  // Nor in what the sidecar remembers of the requests it answered, which
+  // keeps no sealed answer either.
+  const views = /** @type {Array<[string, string]>} */ ([
+    ['an answer the coordinator carried', JSON.stringify(carried)], ['a push', JSON.stringify(pushes)], ['the feed', JSON.stringify(core.recentEvents(null))],
+    ['the sidecar’s cache of replies', remembered],
+  ]);
+  for (const [where, text] of views) {
+    for (const kept of ['ABCD-EFGH', 'auth.openai.com', 'debbie@example.com', 'LEAKCANARY']) assert.ok(!text.includes(kept), `${kept} is in ${where}`);
+  }
+  assert.ok(!remembered.includes(waiting.sealed.ct), 'the sidecar’s cache of replies holds a sealed answer');
 });
 
 test('a session on a task is the assignee’s, opens on the task’s own branch and words, and says where the result goes', async (t) => {

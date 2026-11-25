@@ -160,10 +160,28 @@ export class EngineSignins {
    * for a person, `<id>@members.invalid` for an agent. It names the volume,
    * through engineHomeVolume and never as text.
    *
-   * @param {{ member?: unknown, account?: unknown, engine?: unknown, action?: unknown, by?: unknown, box?: unknown }} ask
+   * WHICH WORDS. `sealed` is the sidecar saying the page, the code and the
+   * account will go to whoever asked sealed, and in the clear not at all
+   * (sidecar.js, #signAnswer). The answer's sentence then spells none of
+   * them. The fields still come back whole: they are what gets sealed, and
+   * this is the box's own loopback.
+   *
+   * @param {{ member?: unknown, account?: unknown, engine?: unknown, action?: unknown, by?: unknown, box?: unknown, sealed?: unknown }} ask
    * @returns {Promise<Record<string, any>>}
    */
   async ask(ask) {
+    const { quietText, ...said } = await this.#answer(ask);
+    return ask?.sealed === true && typeof quietText === 'string' ? { ...said, text: quietText } : said;
+  }
+
+  /**
+   * The answer, said both ways where the two differ: `text`, and `quietText`
+   * with no page, code or account in it (ask picks one and drops the other).
+   *
+   * @param {{ member?: unknown, account?: unknown, engine?: unknown, action?: unknown, by?: unknown, box?: unknown }} ask
+   * @returns {Promise<Record<string, any>>}
+   */
+  async #answer(ask) {
     const member = String(ask?.member ?? '');
     const engine = String(ask?.engine ?? '');
     const action = String(ask?.action ?? '');
@@ -213,37 +231,43 @@ export class EngineSignins {
     const [member, engine] = key.split('/');
     const entry = this.#read()?.[key] ?? null;
     const signedIn = entry?.signedIn ? { since: entry.signedIn.since, who: entry.signedIn.who ?? null } : null;
-    const as = signedIn?.who?.email ? ` as ${signedIn.who.email}` : '';
+    // The account, in words, and the same sentence without it (ask).
+    const named = signedIn?.who?.email ? ` as ${signedIn.who.email}` : '';
     const live = this.attempts.get(key);
     if (live && live.code && !live.over) {
       const left = Math.max(1, Math.ceil((live.expiresAt - this.now()) / 60_000));
+      const lasts = `about ${left} more minute${left === 1 ? '' : 's'}`;
+      const stays = (/** @type {string} */ as) => (signedIn ? ` Until it is approved, ${says(engine)} stays signed in${as} there.` : '');
       return {
         ok: true, state: 'waiting', member, engine, url: live.url, code: live.code,
         startedAt: live.startedAt, expiresAt: live.expiresAt, expiresInMinutes: left, signedIn, ...extra,
-        text: `Open ${live.url} and enter ${live.code} to sign ${says(engine)} in for ${member} on ${box}. The code lasts about ${left} more minute${left === 1 ? '' : 's'}.` +
-          (signedIn ? ` Until it is approved, ${says(engine)} stays signed in${as} there.` : ''),
+        text: `Open ${live.url} and enter ${live.code} to sign ${says(engine)} in for ${member} on ${box}. The code lasts ${lasts}.${stays(named)}`,
+        quietText: `A code is out to sign ${says(engine)} in for ${member} on ${box}, and lasts ${lasts}. It and its page are sealed to whoever asked.${stays('')}`,
       };
     }
     const last = entry?.last ?? null;
     const state = last?.state ?? 'none';
-    // A new attempt that did not complete replaces nothing: say so, where it is true.
-    const still = signedIn && state !== 'signed_in' ? ` ${says(engine)} is still signed in${as} there, since ${when(signedIn.since)}.` : '';
-    const words = {
-      none: `${box} knows of no ${says(engine)} sign-in for ${member}.`,
-      signed_in: `${says(engine)} is signed in for ${member} on ${box}${as}, since ${when(signedIn?.since ?? last?.at ?? 0)}.`,
-      expired: `The code ran out before anybody approved it, so ${says(engine)} was not signed in for ${member} on ${box}. Start again for a new code.`,
-      failed: `${says(engine)} was not signed in for ${member} on ${box}: ${last?.detail ?? 'the engine gave no reason'}.`,
-      cancelled: `The ${says(engine)} sign-in for ${member} on ${box} was cancelled.`,
-      lost: `${box} restarted while a ${says(engine)} sign-in for ${member} was waiting, so that attempt is gone. Start again for a new code.`,
-      signed_out: `${says(engine)} is signed out for ${member} on ${box}.`,
-      ended: `${says(engine)} said its sign-in for ${member} on ${box} no longer works. Sign it in again.`,
+    const sentence = (/** @type {string} */ as) => {
+      // A new attempt that did not complete replaces nothing: say so, where it is true.
+      const still = signedIn && state !== 'signed_in' ? ` ${says(engine)} is still signed in${as} there, since ${when(signedIn.since)}.` : '';
+      const words = {
+        none: `${box} knows of no ${says(engine)} sign-in for ${member}.`,
+        signed_in: `${says(engine)} is signed in for ${member} on ${box}${as}, since ${when(signedIn?.since ?? last?.at ?? 0)}.`,
+        expired: `The code ran out before anybody approved it, so ${says(engine)} was not signed in for ${member} on ${box}. Start again for a new code.`,
+        failed: `${says(engine)} was not signed in for ${member} on ${box}: ${last?.detail ?? 'the engine gave no reason'}.`,
+        cancelled: `The ${says(engine)} sign-in for ${member} on ${box} was cancelled.`,
+        lost: `${box} restarted while a ${says(engine)} sign-in for ${member} was waiting, so that attempt is gone. Start again for a new code.`,
+        signed_out: `${says(engine)} is signed out for ${member} on ${box}.`,
+        ended: `${says(engine)} said its sign-in for ${member} on ${box} no longer works. Sign it in again.`,
+      };
+      return `${words[/** @type {keyof typeof words} */ (state)] ?? words.none}${still}`;
     };
     return {
       ok: true, state, member, engine,
       ...(last ? { at: last.at } : {}),
       ...(state === 'failed' ? { detail: last?.detail ?? null } : {}),
       signedIn, ...extra,
-      text: `${words[/** @type {keyof typeof words} */ (state)] ?? words.none}${still}`,
+      text: sentence(named), quietText: sentence(''),
     };
   }
 
@@ -404,6 +428,8 @@ export class EngineSignins {
       finished();
     };
     const refusal = (/** @type {string} */ code, /** @type {string} */ text, /** @type {Record<string, any>} */ extra = {}) => ({ ok: false, error: { code }, member: a.member, engine: a.engine, ...extra, text });
+    /** A refusal in the words of where the sign-in now stands, said both ways as a view is (#view). @param {string} code @param {Record<string, any>} view @param {string} [more] @param {Record<string, any>} [extra] */
+    const refused = (code, view, more = '', extra = {}) => ({ ...refusal(code, `${view.text}${more}`, { state: 'failed', ...extra }), quietText: `${view.quietText}${more}` });
 
     const ready = await this.#ready(a, a.box);
     if (!ready.ok) {
@@ -435,7 +461,7 @@ export class EngineSignins {
         child = spawn(this.cfg.podmanBin, this.#argv(a, '--signin', ready.route), { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
       } catch (e) {
         end('failed', { detail: `the sign-in container could not be started: ${oneLine(/** @type {Error} */ (e).message) ?? 'no reason given'}` });
-        return answer(refusal('signin_failed', this.#view(a.key, a.box).text, { state: 'failed' }));
+        return answer(refused('signin_failed', this.#view(a.key, a.box)));
       }
       attempt.child = child;
       child.on('error', (e) => {
@@ -453,7 +479,7 @@ export class EngineSignins {
       attempt.timers.push(setTimeout(() => {
         if (attempt.code || attempt.over) return;
         end('failed', { detail: `${says(a.engine)} gave no sign-in code within ${Math.round(this.codeMs / 1000)} seconds` });
-        answer(refusal('no_code', `${this.#view(a.key, a.box).text} Nothing is waiting; start again.`, { state: 'failed' }));
+        answer(refused('no_code', this.#view(a.key, a.box), ' Nothing is waiting; start again.'));
       }, this.codeMs));
       // THE CODE'S LIFE, and a little more for the runner to say so itself.
       attempt.timers.push(setTimeout(() => end('expired'), this.capMs + this.graceMs));
@@ -491,11 +517,11 @@ export class EngineSignins {
               // It ended before any code: that is the start's answer.
               const off = said.why === 'device_code_off';
               const view = this.#view(a.key, a.box);
-              answer(view.state === 'failed'
-                ? refusal(off ? 'device_code_off' : 'signin_failed', off
-                  ? `${says(a.engine)} says device code sign-in is not turned on for this account or its workspace, in its words: ${view.detail}. Turn it on there, or paste a sign-in instead.`
-                  : view.text, { state: 'failed', detail: view.detail })
-                : view);
+              answer(view.state !== 'failed'
+                ? view
+                : off
+                  ? refusal('device_code_off', `${says(a.engine)} says device code sign-in is not turned on for this account or its workspace, in its words: ${view.detail}. Turn it on there, or paste a sign-in instead.`, { state: 'failed', detail: view.detail })
+                  : refused('signin_failed', view, '', { detail: view.detail }));
             }
           }
         }
@@ -505,7 +531,10 @@ export class EngineSignins {
         const had = Boolean(attempt.code);
         if (attempt.stopped) end(attempt.stopped);
         else end('failed', { detail: had ? 'the sign-in container stopped before it said how the sign-in ended' : `the sign-in container stopped before it gave a code${complaint ? `: ${complaint}` : ` (exit ${status ?? 'unknown'})`}` });
-        if (!had) answer(attempt.stopped ? this.#view(a.key, a.box) : refusal('signin_failed', this.#view(a.key, a.box).text, { state: 'failed', detail: this.#view(a.key, a.box).detail }));
+        if (!had) {
+          const view = this.#view(a.key, a.box);
+          answer(attempt.stopped ? view : refused('signin_failed', view, '', { detail: view.detail }));
+        }
       });
     });
   }
@@ -517,7 +546,8 @@ export class EngineSignins {
       this.#lostIfOrphan(key);
       const view = this.#view(key, box);
       const [member, engine] = key.split('/');
-      return { ...view, text: `No ${says(engine)} sign-in was waiting for ${member} on ${box}. ${view.text}` };
+      const none = `No ${says(engine)} sign-in was waiting for ${member} on ${box}. `;
+      return { ...view, text: `${none}${view.text}`, quietText: `${none}${view.quietText}` };
     }
     await this.#stop(live);
     return this.#view(key, box);
