@@ -230,17 +230,29 @@ the MCP server does not offer it (`COORDINATOR_ONLY`).
 
 `enginesignin` writes a credential, so the bound at the top of this page is
 derived again for it, as that paragraph asks. **What a compromised
-coordinator gains is nothing it can do alone, and one thing it can do to a
-person.** A box takes the verb only with a custodian's signature over it,
-or a delegation that names the member, so the coordinator cannot start a
-sign-in, read one's code or sign a member out by itself; the sign-in the
-engine makes never leaves the box, and no answer carries a token. What it
-carries is the box's answer to `start`: the page and the code, unsealed.
-A coordinator that lies can replace them with a code from a sign-in it
-began on a machine of its own, and a custodian who enters that has signed
-the coordinator's engine in to their account. That is the page half of
-"The exclusion that got answered" below, still true, and
-[engines.md](./engines.md) says so under "What it does not stop".
+coordinator gains is nothing it can do alone, and against a phone that
+checks, no code of its own.** A box takes the verb only with a custodian's
+signature over it, or a delegation that names the member, so the
+coordinator cannot start a sign-in or sign a member out by itself; the
+sign-in the engine makes never leaves the box, and no answer carries a
+token. A `start` is taken only by a box approved for that member's vault.
+What the coordinator carries back is the box's answer: the page and the
+code, signed by the box. The signature is the box's vault key's, over
+`signingInput('engine-signin-answer', { v: 1, id, host, member, engine,
+url, code, at })`, with `id` the request's own id and `host` the hash the
+vault names that box's grant by. A phone compares that hash with the
+grants in the member's vault `list` answer, which the minter sealed to it,
+checks the signature, and only then shows the code. A code from a sign-in
+the coordinator began on a machine of its own does not pass: that machine
+is not among the member's approved machines, and an older genuine answer
+is over another id.
+
+**Still open**, and [engines.md](./engines.md) says so under "What it does
+not stop": a phone that does not check; the MCP tool, whose caller cannot
+check and is told the code is unverified; and that the coordinator reads
+the genuine code as it passes, signed and not sealed, so it can enter it
+under an account of its own before the custodian does. The page half of
+"The exclusion that got answered" below is otherwise closed for this verb.
 
 It is one verb with an `action`, which "The workspace" below argues
 against for `files`. The argument there is that a scheduler and an MCP
@@ -868,6 +880,14 @@ not the result, so a retry arriving while the first attempt is still in flight â
 which is exactly when a retry arrives â€” waits for that attempt instead of
 starting a second session. Read-only verbs are never cached: a stale session
 list is worse than a re-read.
+
+**One reply is not kept: an engine sign-in's page and code.** For an
+`enginesignin` answer that carried them the host remembers the id and
+nothing of the answer, and a retry of that id is answered with where the
+sign-in stands now, which is the attempt in flight while there is one and
+never a second attempt ([engines.md](./engines.md), "Signing in on the
+machine"). A code a person types at a provider has no business outliving
+its use in a cache.
 
 ## What this does not cover
 

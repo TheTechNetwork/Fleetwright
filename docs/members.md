@@ -313,6 +313,9 @@ puts a sign-in where that member's sessions run on it, so a box takes it
 from exactly who may start a session as the member: on the minter's list,
 and signed, or delegated in a grant that names the member, whatever the
 box's mode. A grant that lacks the member is refused in the same words.
+A `start` is also taken only by a box approved for that member's vault,
+and its answer is signed by that box's key, which is how a phone knows
+the code it shows is that machine's.
 
 **Credentials come from the member's principal and nowhere else.** A box
 files everything a session runs on by the address of whose it is, and every
