@@ -185,6 +185,63 @@ test('Remove asks first, says what it costs by kind, and tells the vault before 
   }
 });
 
+test('File it is drawn only for somebody the vault would take it from, and anybody else reads who files it (C-2)', () => {
+  // The vault takes a place from an org admin, or from a manager its own
+  // tree already puts above it, and files nobody under a member it does not
+  // hold. The button used to be drawn for anybody the fleet lets edit: a
+  // team lead's press was refused until an admin had filed every member
+  // above theirs, and nothing said so.
+  for (const words of [
+    "This is an org admin's to file: ",
+    'The vault files a member after whoever it reports to, and ',
+    ' is not filed yet. An org admin files both: ',
+    ' is not filed yet. Go back to Organization to file them all, in order.',
+  ]) {
+    assert.ok(IOS.includes(words), `iOS lost: ${words}`);
+    assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+  // One or the other, never both: the button is what is drawn when there
+  // is nobody else to name.
+  assert.match(IOS, /if let \w+ = whoFilesInstead\([^\n]*\) \{\s*Text\(\w+\)[\s\S]{0,300}?\} else \{\s*Button\("File it"\)/);
+  assert.match(ANDROID, /= whoFilesInstead\([^\n]*\)\s*if \(\w+ != null\) \{\s*[^\n]*\n\s*\} else \{\s*OutlinedButton\([\s\S]{0,400}?Text\("File it"\)/);
+  // Every "File it" on a member's page is that one.
+  for (const [name, src, button] of [['iOS', IOS, 'Button("File it")'], ['Android', ANDROID, 'Text("File it")']]) {
+    assert.equal(src.split(button).length - 1, 1, `${name} draws File it somewhere the vault's answer does not decide`);
+  }
+});
+
+test('an org admin files every member the vault does not hold in one press, whoever it reports to first, and reads what happened', () => {
+  for (const words of [
+    'Custody is not filed for 1 member yet.',
+    'Custody is not filed for ',
+    ' members yet.',
+    'File all ',
+    'Filing…',
+    // What it did, by name, and each refusal with the vault's own sentence.
+    ' with the vault: ',
+    'Could not file ',
+  ]) {
+    assert.ok(IOS.includes(words), `iOS lost: ${words}`);
+    assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+  // THE ORDER IS THE TREE'S OWN, the one Everyone is drawn in, so a manager
+  // is filed before its reports. The vault refuses the other order with
+  // "dana is not a member, so nobody can report to it".
+  assert.match(IOS, /func membersToFile\([^\n]*\) -> \[Fleet\.Member\] \{\s*orgRows\(members\)/);
+  assert.match(ANDROID, /fun membersToFile\([^\n]*\): List<Fleet\.Member> =\s*orgRows\(members\)/);
+  // And what is filed is what the vault holds NOW: it is asked again in the
+  // same function, before the first member is sent.
+  for (const [name, src, open] of [['iOS', IOS, 'func fileAll()'], ['Android', ANDROID, 'fun fileAll()']]) {
+    const body = src.slice(src.indexOf(open)).split(/\n {4}\}\n/)[0];
+    const asks = body.search(/\.org\(fleet\)/);
+    const files = body.search(/\.fileOrgMember\(/);
+    assert.ok(asks > 0 && files > asks, `${name} files everybody from an answer it did not just ask for`);
+  }
+  // The button is the vault's org admin's, and nobody else's (C-2).
+  assert.match(IOS, /\w+\?\.youAdmin == true && !\w+\.isEmpty\n[\s\S]{0,1400}?fileAllLabel\(/);
+  assert.match(ANDROID, /\w+\?\.youAdmin == true && \w+\.isNotEmpty\(\)\n[\s\S]{0,1400}?fileAllLabel\(/);
+});
+
 test('the Organization row is drawn only once the fleet answered with its members (C-2)', () => {
   assert.match(IOS, /if let orgCount \{\s*NavigationLink \{\s*OrgView/);
   assert.match(ANDROID, /orgCount\?\.let \{ count ->\s*OpenRow\("Organization"/);

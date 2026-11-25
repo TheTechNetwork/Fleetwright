@@ -65,6 +65,16 @@ import org.json.JSONObject
  * (C-5), and it is what a person member's row says until they let their
  * managers in.
  *
+ * CUSTODY, FOR EVERYBODY AT ONCE, IS AN ORG ADMIN'S. The vault keeps its own
+ * copy of the tree and files a member only after whoever it reports to, so
+ * one page at a time an admin had to know the order, and a manager's File it
+ * was refused until every member above theirs had been filed. Here the vault
+ * is asked once for the organization as it holds it, and an org admin there
+ * is offered one button that files every member it does not hold as the
+ * fleet lists it, top of the tree first, and then says who was filed and who
+ * was not, each refusal in the vault's own sentence. Drawn for nobody else,
+ * and not at all when nothing waits (C-2).
+ *
  * The same words as iOS (OrgView.swift), held equal by
  * test/members-in-apps.test.js.
  */
@@ -107,6 +117,15 @@ internal fun OrgScreen(
     var fileBusy by remember { mutableStateOf(false) }
     var fileResult by remember { mutableStateOf("") }
     var fileFailed by remember { mutableStateOf(false) }
+    // The organization as the vault holds it. Null while it is being asked,
+    // on a phone with no GitHub sign-in, which cannot ask, and after a
+    // failure, which `vaultFailed` then says.
+    var vaultOrg by remember { mutableStateOf<PhoneVault.Org?>(null) }
+    var vaultFailed by remember { mutableStateOf<String?>(null) }
+    var filingAll by remember { mutableStateOf(false) }
+    // What filing everybody did, in words, and whether the vault refused any.
+    var filedReport by remember { mutableStateOf("") }
+    var filedRefused by remember { mutableStateOf(false) }
 
     val isAdmin = you?.admin == true
     val manages = you?.manages.orEmpty()
@@ -116,6 +135,56 @@ internal fun OrgScreen(
     // Whether this person has anywhere to add a member: anywhere, for an
     // admin; under their own member or a member they manage, for a manager.
     val canAdd = isAdmin || you?.member != null || manages.isNotEmpty()
+
+    /**
+     * The first org admin is a fleet admin filing themselves, as it is on a
+     * member's page. What the vault says is the line under the button.
+     */
+    fun becomeFirstAdmin() {
+        scope.launch {
+            filingAll = true
+            val said = PhoneVault(settings).fileOrgAdmin(Fleet(settings), settings.signedInAs.trim().lowercase())
+            filedRefused = said.isFailure
+            filedReport = said.getOrElse { it.message ?: "That did not work." }
+            asked++
+            filingAll = false
+        }
+    }
+
+    /**
+     * FILE EVERY MEMBER THE VAULT DOES NOT HOLD AS THE FLEET LISTS IT, top
+     * of the tree first, because the vault refuses a member whose manager it
+     * has not been told about. The vault is asked again before anything is
+     * sent, so what is filed is what differs now and not when the page was
+     * drawn. One member at a time, each a request of its own that the vault
+     * answers under one lock, and a refusal does not stop the rest: what
+     * follows may still be taken, and each refusal is reported in the
+     * vault's own sentence beside the name.
+     */
+    fun fileAll() {
+        scope.launch {
+            filingAll = true
+            val vault = PhoneVault(settings)
+            val fleet = Fleet(settings)
+            val held = vault.org(fleet).getOrElse {
+                filedReport = it.message ?: "That did not work."
+                filedRefused = true
+                filingAll = false
+                return@launch
+            }
+            val filed = mutableListOf<String>()
+            val refused = mutableListOf<String>()
+            for (member in membersToFile(members, held)) {
+                vault.fileOrgMember(fleet, member.id, member.kind, member.email, member.reportsTo, member.managers)
+                    .onSuccess { filed.add(member.name) }
+                    .onFailure { refused.add(couldNotFileLine(member.name, it.message ?: "That did not work.")) }
+            }
+            filedReport = fileAllReport(filed, refused)
+            filedRefused = refused.isNotEmpty()
+            asked++
+            filingAll = false
+        }
+    }
 
     LaunchedEffect(asked) {
         failed = null
@@ -133,6 +202,24 @@ internal fun OrgScreen(
         members = list
         you = got.you
         answered = true
+        // THE ORGANIZATION AS THE VAULT HOLDS IT, for Custody below. Not
+        // asked from a phone with no GitHub sign-in, which is the same test
+        // the team's sign-ins make. A fleet that keeps no vault has no
+        // custody to file, and that is not a failure to say.
+        if (PhoneGitHub(settings).signedIn) {
+            PhoneVault(settings).org(Fleet(settings))
+                .onSuccess {
+                    vaultOrg = it
+                    vaultFailed = null
+                }
+                .onFailure {
+                    vaultOrg = null
+                    vaultFailed = if (PhoneVault.saysNoVault((it as? PhoneVault.Refused)?.code)) null else it.message ?: "no answer"
+                }
+        } else {
+            vaultOrg = null
+            vaultFailed = null
+        }
         // HOW MANY APPROVALS WAIT ON THIS PERSON, for the row. Only from an
         // answer that carries the list: anything else leaves it unknown.
         approvalsWaiting = Fleet(settings).approvals().getOrNull()
@@ -248,6 +335,46 @@ internal fun OrgScreen(
                 // The row is for everybody, and its page draws a control
                 // only for an admin.
                 OpenRow("Routing") { routing = true }
+
+                // CUSTODY AS THE VAULT HOLDS IT, for the whole organization
+                // (the header). Each row is drawn only for somebody the
+                // vault would answer: the first admin's button for somebody
+                // who administers the fleet, File all for an org admin of
+                // the vault with something to file. A vault that could not
+                // be asked is said as that to a fleet admin, and is never
+                // drawn as nothing left to file (C-5).
+                val held = vaultOrg
+                val waiting = held?.let { membersToFile(members, it) }.orEmpty()
+                val first = isAdmin && held?.admins?.isEmpty() == true
+                val mine = held?.youAdmin == true && waiting.isNotEmpty()
+                val cannotTell = isAdmin && held == null && vaultFailed != null
+                if (first || mine || cannotTell || filedReport.isNotBlank()) {
+                    SectionHead("Custody")
+                    if (first) {
+                        Text(
+                            "Nobody administers the organization in your vault yet.",
+                            style = Design.Style.bodySmall,
+                            color = Design.Palette.ink.now,
+                        )
+                        OutlinedButton(enabled = !filingAll, onClick = { becomeFirstAdmin() }) {
+                            Text("Become its first admin")
+                        }
+                    } else if (mine) {
+                        Text(custodyWaitingLine(waiting.size), style = Design.Style.bodySmall, color = Design.Palette.ink.now)
+                        OutlinedButton(enabled = !filingAll, onClick = { fileAll() }) {
+                            Text(if (filingAll) "Filing…" else fileAllLabel(waiting.size))
+                        }
+                    } else if (cannotTell) {
+                        Text("The vault could not be asked.", style = Design.Style.bodySmall, color = Design.Palette.ink.now)
+                        SelectionContainer { Hint(vaultFailed.orEmpty()) }
+                        OutlinedButton(onClick = { asked++ }) { Text("Try again") }
+                    }
+                    if (filedReport.isNotBlank()) {
+                        SelectionContainer {
+                            Hint(filedReport, color = if (filedRefused) Design.Palette.bad.now else Design.Palette.ink.now)
+                        }
+                    }
+                }
 
                 // EVERY MEMBER AS A MARKDOWN FILE, for an admin: read them
                 // out, or paste one back in. A file is the record and the
@@ -654,7 +781,17 @@ private fun MemberPage(
                         style = Design.Style.bodySmall,
                         color = Design.Palette.ink.now,
                     )
-                    if (mayEdit) {
+                    // FILE IT IS DRAWN ONLY WHERE THE VAULT WOULD TAKE IT
+                    // from this person (C-2): an org admin of the vault, or
+                    // a manager the vault's own tree already puts above this
+                    // member's place. It was drawn for anybody the fleet
+                    // lets edit, and a team lead's press was refused until
+                    // an admin had filed every member above theirs. Anybody
+                    // else reads who files it instead.
+                    val who = whoFilesInstead(held, me, member, reportsToName)
+                    if (who != null) {
+                        SelectionContainer { Hint(who) }
+                    } else {
                         OutlinedButton(
                             enabled = !busy,
                             onClick = {
@@ -1137,6 +1274,104 @@ internal fun custodyDiffers(filed: PhoneVault.OrgMember, member: Fleet.Member): 
         filed.reportsTo.orEmpty() != member.reportsTo.orEmpty() ||
         filed.managers.map { it.lowercase() }.toSet() != member.managers.map { it.lowercase() }.toSet() ||
         filed.email.orEmpty().lowercase() != member.email.orEmpty().lowercase()
+
+/**
+ * The members the vault does not hold as the fleet lists them, in the order
+ * to file them: the tree's own, so whoever a member reports to comes before
+ * it. The vault refuses a member whose manager it has not been told about.
+ */
+internal fun membersToFile(members: List<Fleet.Member>, org: PhoneVault.Org): List<Fleet.Member> =
+    orgRows(members).map { it.member }.filter { member ->
+        val filed = org.member(member.id)
+        filed == null || custodyDiffers(filed, member)
+    }
+
+/**
+ * How many members wait to be filed, as the Organization page says it. The
+ * same sentence as iOS.
+ */
+fun custodyWaitingLine(count: Int): String =
+    if (count == 1) "Custody is not filed for 1 member yet." else "Custody is not filed for $count members yet."
+
+/** The button that files them: the member page's own words for one, and how many for more. */
+fun fileAllLabel(count: Int): String = if (count == 1) "File it" else "File all $count"
+
+/** One member the vault would not take, and its own sentence for why. */
+fun couldNotFileLine(name: String, why: String): String = "Could not file $name. $why"
+
+/**
+ * What filing everybody did, in words: who was filed, by name, then a line
+ * for each member that was not. Empty when there was nothing to file. The
+ * same words as iOS.
+ */
+fun fileAllReport(filed: List<String>, refused: List<String>): String {
+    val lines = mutableListOf<String>()
+    if (filed.isNotEmpty()) {
+        val count = if (filed.size == 1) "1 member" else "${filed.size} members"
+        lines.add("Filed $count with the vault: ${filed.joinToString(", ")}.")
+    }
+    lines.addAll(refused)
+    return lines.joinToString("\n")
+}
+
+/**
+ * Whether this address manages this member by the tree the vault holds: the
+ * vault's own rule, read off its answer (`manages`,
+ * src/fleet/protocol/members.js). Their person member is above it, or an
+ * admin named their address on it or on anything above it, and nobody
+ * manages their own member.
+ */
+internal fun vaultManages(org: PhoneVault.Org, address: String, id: String): Boolean {
+    val member = org.member(id) ?: return false
+    if (member.kind == "person" && member.email.orEmpty().lowercase() == address) return false
+    val line = mutableListOf(member)
+    val seen = mutableSetOf(id)
+    var at = member.reportsTo.orEmpty()
+    while (at.isNotEmpty() && at !in seen) {
+        val node = org.member(at) ?: break
+        if (node.kind == "person" && node.email.orEmpty().lowercase() == address) return true
+        line.add(node)
+        seen.add(at)
+        at = node.reportsTo.orEmpty()
+    }
+    return line.any { node -> node.managers.any { it.lowercase() == address } }
+}
+
+/**
+ * Who files this member's place when it is not this person's to file, as a
+ * sentence, or null when the vault would take it from them and File it is
+ * theirs.
+ *
+ * THE VAULT'S RULES, READ OFF ITS OWN ANSWER (`orgmember`,
+ * src/fleet/minter/org.js), so the button is drawn where a press works. It
+ * files nobody under a member it does not hold, an org admin included, and
+ * then the sentence names who is missing. An org admin files anything else.
+ * A manager files a place under their own member or under one they manage
+ * in the vault's tree; a member the vault already holds must be on their
+ * team there too, and the managers named beside the tree and whose address
+ * a person is are an org admin's to change.
+ */
+internal fun whoFilesInstead(org: PhoneVault.Org, me: String, member: Fleet.Member, reportsToName: String): String? {
+    val parent = member.reportsTo.orEmpty()
+    val admins = org.admins.joinToString(", ")
+    if (parent.isNotEmpty() && org.member(parent) == null) {
+        return if (org.youAdmin) {
+            "The vault files a member after whoever it reports to, and $reportsToName is not filed yet. Go back to Organization to file them all, in order."
+        } else {
+            "The vault files a member after whoever it reports to, and $reportsToName is not filed yet. An org admin files both: $admins."
+        }
+    }
+    if (org.youAdmin) return null
+    val own = org.members.firstOrNull { it.kind == "person" && it.email.orEmpty().lowercase() == me }
+    val under = parent.isNotEmpty() && (parent == own?.id || vaultManages(org, me, parent))
+    if (org.youBound && under) {
+        val filed = org.member(member.id) ?: return null
+        val sameManagers = filed.managers.map { it.lowercase() }.toSet() == member.managers.map { it.lowercase() }.toSet()
+        val sameAddress = filed.email.orEmpty().lowercase() == member.email.orEmpty().lowercase()
+        if (vaultManages(org, me, member.id) && sameManagers && sameAddress) return null
+    }
+    return "This is an org admin's to file: $admins."
+}
 
 /**
  * A member's id from its name: lowercase letters, digits and single
