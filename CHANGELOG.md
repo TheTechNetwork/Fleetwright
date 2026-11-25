@@ -60,6 +60,15 @@ when that version is cut.
 - **Codex and Copilot sign-ins for a member.** A member's Credentials keeps
   a Codex sign-in and a GitHub Copilot token. A Codex sign-in is handed to
   one machine, and its row says which.
+- **Sign Codex or Copilot in on a machine, with a code.** On a member's
+  Credentials, Sign in on a machine shows a short code and opens the
+  sign-in page at OpenAI or GitHub; enter the code there and the machine is
+  signed in, with nothing to paste. It then says which machine is signed in,
+  as which account when the engine names one, and has Sign out. The machine
+  has to run that engine, be updated, and be approved for the member's
+  credentials; where none is, the page says which of those is missing.
+  Pasting is still there, behind "Paste a sign-in instead", and the Copilot
+  field now says which token works.
 - **A session says why its turn ended.** A limit, a sign-in that ended, the
   wrong model or an error is named on the session, with when the limit lifts
   if the engine said.

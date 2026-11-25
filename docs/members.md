@@ -292,7 +292,18 @@ POST   /api/members/import     { text }
   with whether its vault keeps a Claude sign-in (kept is all the vault's list
   says, so the row never says *signed in*); a member's **Credentials**, which is the
   Credentials screen pointed at that vault; and **Start as** on New session,
-  listing only members the person may start as.
+  listing only members the person may start as. On a member's Credentials, a
+  custodian signs Codex, or OpenCode on GitHub Copilot, in on a machine: tap
+  *Sign in on a machine*, pick the machine when more than one runs that
+  engine and is approved for the member's credentials, open the sign-in
+  page, enter the code the phone shows, and approve it there. The phone
+  shows the code only when the answer came from a machine approved for that
+  member, and says so in one sentence when it did not. Then it reads *Signed
+  in on* that machine, with the account when the engine names one, and
+  offers *Sign out*. A machine that runs the engine and is not approved yet
+  is approved first, from the same page. Pasting a sign-in is still there,
+  behind *Paste a sign-in instead*, for an account that cannot sign in that
+  way ([engines.md](./engines.md), "Signing in on the machine").
 - **The signing page**: the same member Credentials and My team.
 
 Where the minter's tree and the coordinator's differ for a member (a record
