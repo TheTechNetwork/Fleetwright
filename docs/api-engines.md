@@ -405,14 +405,29 @@ what Podman is asked and what the fleet then says, and nothing about what
 Podman does.
 
 So CI runs the real one (`machine-image.yml`, `scripts/machine-smoke.mjs`),
-through the hub's own code: it builds the image from the checkout, checks
+through the hub's own code, twice: it builds the image from a checkout, and
+from a packaged release unpacked as a box has one, which are the two shapes
+a host comes in. Each time it checks the host in the image is that shape and
 that a start with nothing to join is refused in words, makes a machine with
 a ticket and a fleet that does not exist (`https://fleet.invalid`), reads in
 its log that the hub inside started and the sidecar tried to enrol, then
-lists it, gives it more time and ends it, and checks nothing is left. That
-run has no memory, processor or process limit on the machine, because a CI
-job's user has no cgroup controllers of its own; that Podman honours the
-limits a box passes is not checked anywhere.
+lists it, gives it more time and ends it, and checks nothing is left. Then
+it makes another and stops its container under the hub, and checks the hub
+removes it, says how its log ended, and removes a volume no machine has.
+It runs when anything the image is built from changes, the host's own code
+included. It built from a checkout only, and ran only when the image's own
+directory changed, which is how a path that was wrong only in a release
+(the SessionStart hook's) was never seen here.
+
+That run has no memory, processor or process limit on the machine, because
+a CI job's user has no cgroup controllers of its own; that Podman honours
+the limits a box passes is not checked anywhere, and neither is the hub
+inside refusing a session at its container's limit, which the tests read
+from a stand-in for the cgroup's files (`test/cgroup-memory.test.js`).
+
+**The release leg, the stopped machine and the stray volume in that run
+were written without a Podman to run them on, and have not run until CI
+runs them.**
 
 **No machine has been made on a real box, and none has joined a fleet.**
 What is left unproven is the last step: a machine enrolling with a real
