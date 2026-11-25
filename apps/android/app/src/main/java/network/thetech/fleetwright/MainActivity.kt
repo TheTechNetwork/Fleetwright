@@ -379,23 +379,6 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * The app, as three places rather than one screen with a panel on top.
- *
- * It was a session list with everything else behind a Settings button that
- * swapped the list for an 1,100-line panel: the build number, the coordinator
- * URL, every host card with six buttons on it, Siri, People, the sign-in, the
- * pin, the runner repository, this phone's GitHub sign-in, the vault, a
- * temporary machine, runner tokens, the same hosts again, devices, activity,
- * and a test notification. Every other screen was a dialog on top of that.
- *
- * Three places, one job each, the same three as iOS:
- *
- *   Sessions   what is running, and answering what is asking
- *   Machines   is each machine well, and doing something about one
- *   You        who you are here, what your sessions may use, and setup
- */
-@OptIn(ExperimentalMaterial3Api::class)
-/**
  * WHAT A START SENT FROM A MEMBER'S PAGE OR A TASK'S SAID, for that page to
  * draw: the start that was sent, the fleet's sentence, and the refusal that
  * can be acted on when it was one of those (RefusedStart).
@@ -418,6 +401,23 @@ internal object PageStarts {
     var last by mutableStateOf<PageStart?>(null)
 }
 
+/**
+ * The app, as three places rather than one screen with a panel on top.
+ *
+ * It was a session list with everything else behind a Settings button that
+ * swapped the list for an 1,100-line panel: the build number, the coordinator
+ * URL, every host card with six buttons on it, Siri, People, the sign-in, the
+ * pin, the runner repository, this phone's GitHub sign-in, the vault, a
+ * temporary machine, runner tokens, the same hosts again, devices, activity,
+ * and a test notification. Every other screen was a dialog on top of that.
+ *
+ * Three places, one job each, the same three as iOS:
+ *
+ *   Sessions   what is running, and answering what is asking
+ *   Machines   is each machine well, and doing something about one
+ *   You        who you are here, what your sessions may use, and setup
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FleetScreen(
     onSignedIn: () -> Unit = {},
