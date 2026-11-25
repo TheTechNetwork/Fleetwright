@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -402,8 +403,13 @@ internal fun EngineSignInRow(
     // LEAVING THE SCREEN EMPTIES THE FIELD, so a sign-in pasted and not sent
     // is not waiting there for the next person to open this page.
     DisposableEffect(Unit) { onDispose { pasted = "" } }
+    // Whether the pasted auth.json is shown. Not until Show is pressed.
+    var revealed by remember { mutableStateOf(false) }
     val title = PhoneVault.label(name)
-    val plain = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
+    // EVERY FIELD HERE TAKES A CREDENTIAL, so the keyboard is told each is
+    // a password: it offers no suggestions and learns nothing typed into
+    // one. The masked fields had the default text keyboard, which may do both.
+    val secret = KeyboardOptions(keyboardType = KeyboardType.Password, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
     // The provider this row is the key of, or null for one of the sign-ins.
     val provider = apiProviderOfItem(name)
 
@@ -449,19 +455,48 @@ internal fun EngineSignInRow(
                     style = Design.Style.bodySmall,
                     color = Design.Palette.ink.now,
                 )
-                // Many lines, because the file is: a one-line field would
-                // show its first forty characters and hide whether the rest
+                // HIDDEN ONCE IT IS PASTED. The file holds a refresh token,
+                // and this field showed all of it, in plain letters, for as
+                // long as the page was open. A key and a token beside it
+                // were always hidden. So the field is there to paste into,
+                // and what was pasted is a count of characters until Show
+                // is pressed. The count is how somebody sees the whole file
                 // arrived.
-                OutlinedTextField(
-                    value = pasted,
-                    onValueChange = { pasted = it },
-                    label = { Text("auth.json") },
-                    minLines = 3,
-                    maxLines = 8,
-                    textStyle = Design.Style.label.copy(fontFamily = FontFamily.Monospace),
-                    keyboardOptions = plain,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                //
+                // Many lines when it is shown, because the file is: a
+                // one-line field would show its first forty characters and
+                // no more.
+                if (pasted.isEmpty() || revealed) {
+                    OutlinedTextField(
+                        value = pasted,
+                        onValueChange = { pasted = it },
+                        label = { Text("auth.json") },
+                        minLines = 3,
+                        maxLines = 8,
+                        textStyle = Design.Style.label.copy(fontFamily = FontFamily.Monospace),
+                        keyboardOptions = secret,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    Text(pastedHiddenLine(pasted.length), style = Design.Style.bodySmall, color = Design.Palette.ink.now)
+                }
+                if (pasted.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+                        TextButton(
+                            onClick = { revealed = !revealed },
+                            modifier = Modifier.heightIn(min = 48.dp).semantics {
+                                contentDescription = if (revealed) "Hide the pasted file" else "Show the pasted file"
+                            },
+                        ) { Text(if (revealed) "Hide" else "Show") }
+                        TextButton(
+                            onClick = {
+                                pasted = ""
+                                revealed = false
+                            },
+                            modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Clear the pasted file" },
+                        ) { Text("Clear") }
+                    }
+                }
             } else if (provider != null) {
                 Text(
                     "Paste one ${provider.says} API key. OpenCode runs on it.",
@@ -474,7 +509,7 @@ internal fun EngineSignInRow(
                     label = { Text("${provider.says} API key") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = plain,
+                    keyboardOptions = secret,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Hint(apiKeyBillingLine(provider))
@@ -490,7 +525,7 @@ internal fun EngineSignInRow(
                     label = { Text("GitHub Copilot token") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = plain,
+                    keyboardOptions = secret,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -503,6 +538,7 @@ internal fun EngineSignInRow(
                         // again whole.
                         if (keep(pasted)) {
                             pasted = ""
+                            revealed = false
                             pasting = false
                         }
                     }
@@ -512,6 +548,12 @@ internal fun EngineSignInRow(
         }
     }
 }
+
+/**
+ * What stands in the field's place while a pasted auth.json is hidden. The
+ * same sentence as iOS.
+ */
+fun pastedHiddenLine(count: Int): String = "Pasted and hidden: $count characters."
 
 /**
  * A member's engines, on its form: an ordered list to add to, remove from

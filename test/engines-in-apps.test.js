@@ -410,3 +410,24 @@ test('New session says which engines a member will have on the chosen machine, b
   has(IOS, /if let (\w+) = offeredHosts\.first\(where: \{ \$0\.hostId == host \}\),\s*let (\w+) = \w+\(member: \w+, host: \1\) \{\s*Text\(\2\)/, 'iOS does not say it under As for the machine that was chosen');
   has(ANDROID, /offeredHosts\.firstOrNull \{ it\.hostId == host \}\?\.let \{ (\w+) -> \w+\(\w+, \1\) \}\?\.let \{ (\w+) ->\s*Text\(\2,/, 'Android does not say it under As for the machine that was chosen');
 });
+
+test('a pasted auth.json is hidden on both phones until Show is pressed, and says how much arrived', () => {
+  // THE FILE HOLDS A REFRESH TOKEN, and its field showed all of it in plain
+  // letters for as long as the page was open, beside a key and a token that
+  // were always hidden. What stands in its place is the same on both phones.
+  for (const words of ['Pasted and hidden: ', ' characters.', 'Show the pasted file', 'Hide the pasted file', 'Clear the pasted file']) {
+    for (const [name, src] of BOTH) assert.ok(src.includes(words), `${name} lost: ${words}`);
+  }
+  // The field is drawn while there is nothing in it, or once Show said so.
+  // Otherwise the count is, and never the text.
+  has(IOS, /if \w+\.isEmpty \|\| (\w+) \{\s*TextField\("auth\.json", text: \$(\w+), axis: \.vertical\)[\s\S]{0,360}?\} else \{\s*Text\(\w+\(\2\.count\)\)/, 'iOS shows a pasted auth.json without being asked');
+  has(ANDROID, /if \((\w+)\.isEmpty\(\) \|\| (\w+)\) \{\s*OutlinedTextField\(\s*value = \1,[\s\S]{0,600}?\} else \{\s*Text\(\w+\(\1\.length\),/, 'Android shows a pasted auth.json without being asked');
+  // Hidden is where it starts, and where it goes back to when the field is
+  // emptied: Clear, the vault taking it, and leaving the page.
+  const iosShown = /if \w+\.isEmpty \|\| (\w+) \{\s*TextField\("auth\.json"/.exec(IOS)?.[1];
+  const androidShown = /if \(\w+\.isEmpty\(\) \|\| (\w+)\) \{\s*OutlinedTextField\(\s*value = /.exec(ANDROID)?.[1];
+  has(IOS, new RegExp(`@State private var ${iosShown} = false`), 'iOS starts with a pasted file shown');
+  has(ANDROID, new RegExp(`var ${androidShown} by remember \\{ mutableStateOf\\(false\\) \\}`), 'Android starts with a pasted file shown');
+  has(IOS, new RegExp(`Button\\("Clear"\\) \\{\\s*\\w+ = ""\\s*${iosShown} = false\\s*\\}`), 'iOS leaves the next paste shown after Clear');
+  has(ANDROID, new RegExp(`onClick = \\{\\s*\\w+ = ""\\s*${androidShown} = false\\s*\\},[\\s\\S]{0,200}?\\{ Text\\("Clear"\\) \\}`), 'Android leaves the next paste shown after Clear');
+});

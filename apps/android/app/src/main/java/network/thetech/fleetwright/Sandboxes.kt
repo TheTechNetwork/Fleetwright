@@ -27,6 +27,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -249,6 +250,10 @@ internal fun SandboxProviderScreen(settings: Settings, onDismiss: () -> Unit) {
     var failed by remember { mutableStateOf(false) }
     var forgetting by remember { mutableStateOf(false) }
     val plain = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
+    // THE KEY'S FIELD IS A PASSWORD TO THE KEYBOARD TOO, which then offers
+    // no suggestions and learns nothing typed into it. Masking the letters
+    // on the screen told the keyboard nothing.
+    val secret = KeyboardOptions(keyboardType = KeyboardType.Password, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
     // LEAVING THE SCREEN EMPTIES THE FIELD, so a key typed and not kept is
     // not waiting there for the next person to open this page.
     DisposableEffect(Unit) { onDispose { key = "" } }
@@ -346,7 +351,7 @@ internal fun SandboxProviderScreen(settings: Settings, onDismiss: () -> Unit) {
                         label = { Text("${provider.says} API key") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = plain,
+                        keyboardOptions = secret,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     if (isKept) Hint(SandboxWords.REPLACE_LINE)

@@ -1077,3 +1077,17 @@ test('a box of your own that has no image to offer says why on its row and on it
     has(src, ios ? new RegExp(`if !row\\.${rowOwn} \\{\\s*if let \\w+ = box\\.problem, `) : new RegExp(`if \\(!row\\.${rowOwn}\\) box\\.problem\\?\\.takeIf`), `${name} says a box of your own’s reason twice on one page`);
   }
 });
+
+test('Android’s keyboard is told that each field taking a key, a token or a sign-in file is a password', () => {
+  // DOTS ON THE SCREEN TELL THE KEYBOARD NOTHING. With the default text
+  // keyboard it may suggest from what was typed and learn it. A password
+  // field has no suggestions and is not learned from. iOS says this with
+  // SecureField, which the tests above already hold it to.
+  const password = /val (\w+) = KeyboardOptions\(keyboardType = KeyboardType\.Password, capitalization = KeyboardCapitalization\.None, autoCorrectEnabled = false\)/g;
+  const names = new Set([...ANDROID.matchAll(password)].map((m) => m[1]));
+  assert.ok(names.size > 0, 'Android has no password keyboard for a credential’s field');
+  const fields = [...ANDROID.matchAll(/label = \{ Text\("(\$\{\w+\.\w+\} API key|GitHub Copilot token|auth\.json)"\) \},[\s\S]{0,260}?keyboardOptions = (\w+),/g)];
+  // An engine's key, a sandbox provider's key, the Copilot token, the Codex file.
+  assert.equal(fields.length, 4, 'a credential’s field moved, and this no longer reads all four');
+  for (const [, label, options] of fields) assert.ok(names.has(options), `Android’s keyboard is not told that "${label}" is a password`);
+});

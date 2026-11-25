@@ -352,6 +352,8 @@ struct EngineSignInRow: View {
 
     @State private var pasting = false
     @State private var pasted = ""
+    /// Whether the pasted auth.json is shown. Not until Show is pressed.
+    @State private var revealed = false
 
     private var title: String { PhoneVault.label(name) }
     /// What the first button does, said with the thing it does it to.
@@ -395,6 +397,8 @@ struct EngineSignInRow: View {
         // LEAVING THE SCREEN EMPTIES THE FIELD, so a sign-in pasted and not
         // sent is not waiting there for the next person to open this page.
         .onDisappear { pasted = "" }
+        // And the next file pasted here starts hidden again.
+        .onDisappear { revealed = false }
     }
 
     /// When it was kept and, for Codex, which machine holds it.
@@ -414,14 +418,40 @@ struct EngineSignInRow: View {
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.ink)
                 .fixedSize(horizontal: false, vertical: true)
-            // Many lines, because the file is: a one-line field would show
-            // its first forty characters and hide whether the rest arrived.
-            TextField("auth.json", text: $pasted, axis: .vertical)
-                .lineLimit(3...8)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .fleetType(.labelMono)
-                .accessibilityLabel("The auth.json file")
+            // HIDDEN ONCE IT IS PASTED. The file holds a refresh token, and
+            // this field showed all of it, in plain letters, for as long as
+            // the page was open. A key and a token beside it were always
+            // hidden. So the field is there to paste into, and what was
+            // pasted is a count of characters until Show is pressed. The
+            // count is how somebody sees the whole file arrived.
+            //
+            // Many lines when it is shown, because the file is: a one-line
+            // field would show its first forty characters and no more.
+            if pasted.isEmpty || revealed {
+                TextField("auth.json", text: $pasted, axis: .vertical)
+                    .lineLimit(3...8)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .fleetType(.labelMono)
+                    .accessibilityLabel("The auth.json file")
+            } else {
+                Text(pastedHiddenLine(pasted.count))
+                    .fleetType(.label)
+                    .foregroundStyle(Design.Palette.ink)
+            }
+            if !pasted.isEmpty {
+                HStack(spacing: Design.Space.insideTight) {
+                    Button(revealed ? "Hide" : "Show") { revealed.toggle() }
+                        .accessibilityLabel(revealed ? "Hide the pasted file" : "Show the pasted file")
+                    Button("Clear") {
+                        pasted = ""
+                        revealed = false
+                    }
+                    .accessibilityLabel("Clear the pasted file")
+                }
+                .frame(minHeight: 44)
+                .buttonStyle(.borderless)
+            }
         } else if let provider = apiProvider(item: name) {
             Text("Paste one \(provider.says) API key. OpenCode runs on it.")
                 .fleetType(.label)
@@ -449,6 +479,7 @@ struct EngineSignInRow: View {
                 // still there to be looked at and pasted again whole.
                 if await keep(pasted) {
                     pasted = ""
+                    revealed = false
                     pasting = false
                 }
             }
@@ -457,6 +488,12 @@ struct EngineSignInRow: View {
         .buttonStyle(.borderless)
         .disabled(busy || pasted.isBlank)
     }
+}
+
+/// What stands in the field's place while a pasted auth.json is hidden. The
+/// same sentence as Android.
+func pastedHiddenLine(_ count: Int) -> String {
+    "Pasted and hidden: \(count) characters."
 }
 
 /// A member's engines, on its form: an ordered list to add to, remove from
