@@ -141,6 +141,11 @@ struct PhoneGitHubSignIn: View {
 /// token, and an API key for each provider, each offered only when an engine
 /// of whoever this vault belongs to runs on it, or when it is already kept
 /// and can be forgotten (EngineSignInRow).
+///
+/// CODEX AND COPILOT ARE SIGNED IN ON A MACHINE FIRST (EngineMachineSignIn,
+/// above each one's row), and pasting is the way round that. Which machines
+/// could do it is read from what they report and from this vault's own
+/// approvals, the list this screen already asked the vault for.
 struct YourVault: View {
     let settings: Settings
     /// The member whose vault this is, or nil for this person's own.
@@ -161,6 +166,10 @@ struct YourVault: View {
     /// the organization lists them. Empty until that is known, and for
     /// somebody with no member, and then only a kept sign-in has a row.
     @State private var ownEngines: [EngineChoice] = []
+    /// What every machine reports of itself: which engines it runs, and
+    /// whether it is new enough to sign one in. Empty until that is known,
+    /// and then no sign-in on a machine is offered or spoken of.
+    @State private var machines: [Fleet.FleetHost] = []
 
     private var vault: PhoneVault { PhoneVault(settings: settings) }
     private var fleet: Fleet { Fleet(settings: settings) }
@@ -169,6 +178,10 @@ struct YourVault: View {
     /// The engines of whoever this vault belongs to: the member it is
     /// pointed at, or this person's own member.
     private var whoseEngines: [EngineChoice] { member?.engineChoices ?? ownEngines }
+    /// The member an engine is signed in for, by id: the one this vault is
+    /// pointed at, or this person's own member as the vault names it. Nil
+    /// for somebody with no member, who has nobody to sign an engine in as.
+    private var signsInAs: String? { member?.id ?? contents?.custody?.member }
 
     /// The fingerprints of boxes still in this fleet, worked out here from
     /// their keys, never the ones the fleet lists beside them.
@@ -271,6 +284,20 @@ struct YourVault: View {
                 .buttonStyle(.borderless)
             }
             ForEach(engineItemsOffered(engines: whoseEngines, kept: kept.items.map(\.name)), id: \.self) { name in
+                // SIGNED IN ON A MACHINE, for the two an engine signs in
+                // itself, and only for a member there is an id to ask as.
+                if let engine = EngineSignin.engine(ofItem: name), let asMember = signsInAs {
+                    EngineMachineSignIn(
+                        settings: settings,
+                        engine: engine,
+                        member: asMember,
+                        memberName: member?.name,
+                        hosts: machines,
+                        keys: boxes,
+                        grants: kept.grants,
+                        pasted: kept.items.contains { $0.name == name }
+                    )
+                }
                 EngineSignInRow(
                     name: name,
                     item: kept.items.first { $0.name == name },
@@ -389,6 +416,11 @@ struct YourVault: View {
         }
         if let got = try? await fleet.enrolledHosts() {
             boxes = got.filter { !$0.isRevoked && $0.ephemeral != true }
+        }
+        // WHAT EACH MACHINE RUNS, for signing an engine in on one. A
+        // failure leaves the list as it was: no answer is not "none".
+        if let said = try? await fleet.fleetHosts() {
+            machines = said
         }
         // WHOSE ENGINES, for this person's own vault: the vault says which
         // member is theirs, and the organization says what that member runs

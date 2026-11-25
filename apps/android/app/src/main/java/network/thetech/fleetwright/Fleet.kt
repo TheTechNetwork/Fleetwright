@@ -549,6 +549,9 @@ class Fleet(
         val hosts: List<String>,
     )
 
+    /** One entry of a machine's [FleetHost.engineSignins]: a member, an engine, and since when. */
+    data class EngineSignedInThere(val member: String, val engine: String, val since: Long?)
+
     data class FleetHost(
         val hostId: String,
         val state: String?,
@@ -827,6 +830,23 @@ class Fleet(
          * drawn as before.
          */
         val admins: PinnedAdmins? = null,
+        /**
+         * The protocol this machine speaks. 22 or more is a machine that can
+         * sign an engine in (`enginesignin`, docs/engines.md); null is one
+         * that did not say, which is not offered the verb.
+         */
+        val protocol: Int? = null,
+        /**
+         * Who is signed in to which engine on this machine, of the members
+         * this person may see (docs/engines.md, "What a machine reports").
+         *
+         * NULL IS CANNOT TELL, NEVER SIGNED OUT (C-5): a machine older than
+         * that report, or one that could not read its record. An empty list
+         * is an answer: nobody this person may see is signed in there. It
+         * carries no account; who is signed in comes from the machine's own
+         * checked answer ([EngineSignin.verified]).
+         */
+        val engineSignins: List<EngineSignedInThere>? = null,
     ) {
         /**
          * The row's word for why it is not healthy ([ReasonWords.host]), or
@@ -1165,6 +1185,19 @@ class Fleet(
          * (`over_budget`), and from a fleet older than approvals.
          */
         val approval: Approval? = null,
+        /**
+         * Where an engine's sign-in stands on the machine that answered
+         * (`enginesignin`, docs/engines.md): `waiting`, `signed_in`,
+         * `expired` and the rest. In the clear and unsigned, so it decides
+         * which sentence is drawn and nothing a person relies on: the code,
+         * its page and who is signed in come out of [sealed], checked
+         * ([EngineSignin.verified]). Null on every other reply.
+         */
+        val state: String? = null,
+        /** The engine's own sentence for a sign-in that failed. Null otherwise. */
+        val detail: String? = null,
+        /** How many minutes a code that is out still lasts. Null otherwise. */
+        val expiresInMinutes: Int? = null,
     ) {
         /**
          * The title over a refusal: its code's word ([ReasonWords.refusal]),
@@ -3712,6 +3745,32 @@ class Fleet(
         )
 
     /**
+     * Ask one machine about an engine's sign-in for a member
+     * (`enginesignin`, docs/engines.md, "Signing in on the machine"):
+     * [action] is `start`, `status`, `cancel` or `signout`, and [engine] is
+     * `codex` or `opencode`, which is the GitHub Copilot sign-in.
+     *
+     * [reply] IS ALWAYS SENT: the public half of a key made for this one
+     * request ([Seal.newKey]), so the machine seals the page, the code and
+     * who is signed in to it and the fleet between carries what it cannot
+     * read. It is a parameter, so it is in what this phone signs, and the
+     * fleet cannot put a key of its own in its place. [id] is the caller's,
+     * because the machine signs its answer over it and the caller checks
+     * that ([EngineSignin.verified]).
+     *
+     * NEVER HELD, as a setup-token's code is not: an id is given, which
+     * keeps a send that could not reach the fleet out of the outbox, and a
+     * sign-in asked for an hour ago is not one anybody is waiting on.
+     */
+    suspend fun engineSignIn(member: String, engine: String, action: String, host: String, reply: String, id: String): Reply =
+        intent(
+            "enginesignin",
+            mapOf("member" to member, "engine" to engine, "action" to action, "reply" to reply),
+            host = host,
+            idempotencyKey = id,
+        )
+
+    /**
      * A pool's page, read by one of your machines that holds its token, for
      * this phone away from the pool's network: sealed to [reply], a key made
      * for this one look (PoolWatch). Never held: an old page is no page.
@@ -4311,6 +4370,10 @@ class Fleet(
                     url = json.optString("url").takeIf { it.isNotBlank() && it != "null" },
                     sealed = json.optJSONObject("sealed"),
                     hostId = json.optString("hostId").takeIf { it.isNotBlank() && it != "null" },
+                    state = json.optString("state").takeIf { it.isNotBlank() && it != "null" },
+                    detail = json.optString("detail").takeIf { it.isNotBlank() && it != "null" },
+                    // `has` first: a missing number is not zero minutes.
+                    expiresInMinutes = json.takeIf { it.has("expiresInMinutes") && !it.isNull("expiresInMinutes") }?.optInt("expiresInMinutes"),
                     probes = json.optJSONArray("probes")?.let { a ->
                         (0 until a.length()).mapNotNull { i ->
                             a.optJSONObject(i)?.let { p ->
@@ -4570,6 +4633,20 @@ class Fleet(
                             problem = a.optString("problem").takeIf { it.isNotBlank() && it != "null" },
                             stranded = a.optString("stranded").takeIf { it.isNotBlank() && it != "null" },
                         )
+                    },
+                    // `has` first: optInt reads a missing number as 0, and a
+                    // machine that did not say is not one that said zero.
+                    protocol = health?.takeIf { it.has("protocol") && !it.isNull("protocol") }?.optInt("protocol"),
+                    // ABSENT STAYS NULL: cannot tell, never "signed out".
+                    engineSignins = health?.optJSONArray("engineSignins")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { i ->
+                            arr.optJSONObject(i)?.let { e ->
+                                val member = if (e.isNull("member")) "" else e.optString("member")
+                                val engine = if (e.isNull("engine")) "" else e.optString("engine")
+                                if (member.isBlank() || engine.isBlank()) null
+                                else EngineSignedInThere(member, engine, e.optLong("since", 0L).takeIf { it > 0L })
+                            }
+                        }
                     },
                 )
             }

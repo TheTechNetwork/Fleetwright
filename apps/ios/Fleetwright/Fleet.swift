@@ -500,6 +500,41 @@ struct Fleet {
         /// other reply, on a start refused outright at a budget
         /// (`over_budget`), and from a fleet older than approvals.
         var approval: Approval?
+        /// Where an engine's sign-in stands on the machine that answered
+        /// (`enginesignin`, docs/engines.md): `waiting`, `signed_in`,
+        /// `expired` and the rest. In the clear and unsigned, so it decides
+        /// which sentence is drawn and nothing a person relies on: the code,
+        /// its page and who is signed in come out of `sealed`, checked
+        /// (EngineSignin.verified). Nil on every other reply.
+        var state: Said?
+        /// The engine's own sentence for a sign-in that failed. Nil otherwise.
+        var detail: Said?
+        /// How many minutes a code that is out still lasts. Nil otherwise.
+        var expiresInMinutes: Count?
+
+        /// A word or a sentence of a reply, read as text or not at all.
+        ///
+        /// NEVER A REASON A REPLY DOES NOT DECODE. `state` is a short name
+        /// that other answers may come to carry in another shape, and a
+        /// reply that failed to decode over a field it does not need would
+        /// lose the text that it does (as `Refusal` below is read).
+        struct Said: Codable, Hashable {
+            let text: String?
+
+            init(from decoder: Decoder) throws {
+                text = try? decoder.singleValueContainer().decode(String.self)
+            }
+        }
+
+        /// A whole number of a reply, read as one or not at all, for the
+        /// reason `Said` is.
+        struct Count: Codable, Hashable {
+            let value: Int?
+
+            init(from decoder: Decoder) throws {
+                value = try? decoder.singleValueContainer().decode(Int.self)
+            }
+        }
 
         struct Refusal: Codable, Hashable {
             let code: String?
@@ -1832,6 +1867,27 @@ struct Fleet {
         if let code { params["code"] = code }
         if let reply { params["reply"] = reply }
         return try await intent("setuptoken", params: params, host: host, idempotencyKey: "app-\(UUID().uuidString)")
+    }
+
+    /// Ask one machine about an engine's sign-in for a member
+    /// (`enginesignin`, docs/engines.md, "Signing in on the machine"):
+    /// `action` is `start`, `status`, `cancel` or `signout`, and `engine`
+    /// is `codex` or `opencode`, which is the GitHub Copilot sign-in.
+    ///
+    /// `reply` IS ALWAYS SENT: the public half of a key made for this one
+    /// request (Seal.newKey), so the machine seals the page, the code and
+    /// who is signed in to it and the fleet between carries what it cannot
+    /// read. It is a parameter, so it is in what this phone signs, and the
+    /// fleet cannot put a key of its own in its place. `id` is the
+    /// caller's, because the machine signs its answer over it and the
+    /// caller checks that (EngineSignin.verified).
+    ///
+    /// NEVER HELD, as a setup-token's code is not: an id is given, which
+    /// keeps a send that could not reach the fleet out of the outbox, and
+    /// a sign-in asked for an hour ago is not one anybody is waiting on.
+    func engineSignIn(member: String, engine: String, action: String, host: String, reply: String, id: String) async throws -> Reply {
+        try await intent("enginesignin", params: ["member": member, "engine": engine, "action": action, "reply": reply],
+                         host: host, idempotencyKey: id)
     }
 
     /// One machine's answer to "can you reach this Xen Orchestra address".
@@ -3510,6 +3566,28 @@ struct Fleet {
         /// machine is until its operator says otherwise, so there is no
         /// third state to tell apart here.
         var apiProviders: [String]? = nil
+
+        /// The protocol this machine speaks. 22 or more is a machine that
+        /// can sign an engine in (`enginesignin`, docs/engines.md); nil is
+        /// one that did not say, which is not offered the verb. A `var`
+        /// with a default for the reason `permissions` is one.
+        var `protocol`: Int? = nil
+
+        /// Who is signed in to which engine on this machine, of the members
+        /// this person may see (docs/engines.md, "What a machine reports").
+        ///
+        /// NIL IS CANNOT TELL, NEVER SIGNED OUT (C-5): a machine older than
+        /// that report, or one that could not read its record. An empty
+        /// list is an answer: nobody this person may see is signed in
+        /// there. It carries no account; who is signed in comes from the
+        /// machine's own checked answer (EngineSignin.verified).
+        var engineSignins: [EngineSignedInThere]? = nil
+
+        struct EngineSignedInThere: Codable, Hashable {
+            let member: String?
+            let engine: String?
+            let since: Double?
+        }
 
         /// Mirrors `waiting` in the host's `/updates` reply.
         struct Waiting: Codable, Hashable {

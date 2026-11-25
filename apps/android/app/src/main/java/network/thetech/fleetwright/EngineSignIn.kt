@@ -1,0 +1,685 @@
+package network.thetech.fleetwright
+
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+
+/*
+ * Signing an engine in on the machine it runs on, from this phone
+ * (docs/engines.md, "Signing in on the machine"). EngineSignIn.swift is the
+ * same thing on iOS, in the same words, and
+ * test/engines-in-apps.test.js holds the two to each other.
+ *
+ * WHAT HAPPENS. A custodian asks one machine to sign Codex, or OpenCode on
+ * GitHub Copilot, in for a member. The engine there makes a short code, the
+ * person enters it at OpenAI or GitHub in any browser, and the engine keeps
+ * its sign-in on that machine. Nothing is pasted and nothing secret crosses
+ * the fleet.
+ *
+ * THE CODE IS SHOWN ONLY AFTER THREE CHECKS, IN ORDER, and so is who is
+ * signed in. The answer comes through the fleet, so it is sealed to a key
+ * this phone made for that one request, and the fleet carries what it cannot
+ * read. Sealing says nothing about who wrote it, because the key it is
+ * sealed to is public. What only the machine can do is sign the answer with
+ * the key a custodian approved for this member's credentials. So: open it,
+ * hold its key to the member's approved machines, check the signature over
+ * this phone's own request, and only then read anything out.
+ * `EngineSignin.verified` is those steps and the only way to the code, its
+ * page or the account. When one fails, none of the three is drawn, and the
+ * screen says which in one sentence that stays.
+ *
+ * NOTHING HERE IS KEPT. The code and its page live in this screen's state
+ * and go with it: not held for sending later, not logged, not in a
+ * notification, not in the screen's saved state. Copy and Open the sign-in
+ * page are the two ways out.
+ */
+
+/**
+ * Who is signed in to an engine on a machine, by that machine's own checked
+ * word. [email] and [plan] are null where the engine names none, which is
+ * always so for OpenCode: it keeps a token and no name.
+ */
+internal data class EngineSignedIn(val since: Long, val email: String?, val plan: String?)
+
+/**
+ * What a machine said of an engine's sign-in, read out of an answer only
+ * after every check passed. [code] and [page] are there together while a
+ * code is out, and both null otherwise.
+ */
+internal data class EngineSigninSaid(val code: String?, val page: String?, val signedIn: EngineSignedIn?)
+
+/** One answer, after the checks: what it said, or which check it failed. */
+internal sealed class EngineSigninCheck {
+    data class Verified(val said: EngineSigninSaid) : EngineSigninCheck()
+
+    /** Nothing sealed came with it, or it did not open with this request's key. */
+    object Unopened : EngineSigninCheck()
+
+    /**
+     * The key it carries is not a machine approved for the whole of this
+     * member's credentials, under the name of the machine that was asked.
+     */
+    object Unapproved : EngineSigninCheck()
+
+    /** That key did not sign this answer to this request. */
+    object Unsigned : EngineSigninCheck()
+}
+
+/**
+ * Where an engine can be signed in for one member, and what to say where it
+ * cannot. [offered] is the machines to offer, by name. [missing] is one
+ * sentence for a member with nowhere to sign in, or nothing when there is
+ * nothing certain to say.
+ */
+internal data class EngineSigninPlaces(val offered: List<String> = emptyList(), val missing: String = "")
+
+/**
+ * What the screen shows of one machine. Everything about a code or an
+ * account in it came through [EngineSignin.verified]. [minutes] is how long
+ * the code still lasts, as the machine's answer said. [says] is where the
+ * last attempt stands, or a refusal as it came. [cancel] is an answer about
+ * a code that is out failing a check: the code is not shown, and Cancel
+ * still is, so the machine does not go on asking the provider for the rest
+ * of the code's life.
+ */
+internal data class EngineSigninShown(
+    val signedIn: EngineSignedIn? = null,
+    val code: String? = null,
+    val page: String? = null,
+    val minutes: Int? = null,
+    val says: String = "",
+    val bad: Boolean = false,
+    val cancel: Boolean = false,
+)
+
+/** The sentences, in one place. The same on iOS, word for word. */
+internal object EngineSigninWords {
+    const val OFFER = "Sign in on a machine"
+    const val WHICH = "Which machine?"
+    const val OPEN_PAGE = "Open the sign-in page"
+    const val COPY = "Copy code"
+    const val COPIED = "Copied"
+    const val CANCEL = "Cancel"
+    const val SIGN_OUT = "Sign out"
+    const val THE_CODE = "the code"
+    const val WHO_IS_SIGNED_IN = "who is signed in"
+
+    /** What the block is headed, by engine. */
+    fun title(engine: String): String = if (engine == "opencode") "OpenCode on GitHub Copilot" else engineName(engine)
+
+    /** Where the code is entered. */
+    fun provider(engine: String): String = if (engine == "opencode") "GitHub" else "OpenAI"
+
+    fun offerOf(engine: String): String = "Sign $engine in on a machine"
+    fun on(box: String): String = "Sign in on $box"
+    fun asking(box: String): String = "Asking $box…"
+    fun codeFor(box: String): String = "Code to sign in on $box"
+    fun cancelOn(box: String): String = "Cancel the sign-in on $box"
+    fun signOutOf(engine: String, box: String): String = "Sign $engine out on $box"
+    fun signOutAsk(engine: String, box: String): String = "Sign $engine out on $box?"
+
+    /**
+     * A code read one character at a time, for TalkBack: "W X Y Z dash 1 2 3
+     * 4". Read as a word, a code is a noise.
+     */
+    fun spoken(code: String): String = code.map { if (it == '-') "dash" else it.toString() }.joinToString(" ")
+
+    /**
+     * While a code is out: what is being waited for, and how long the code
+     * still lasts when the machine said.
+     */
+    fun waiting(provider: String, minutes: Int?): String = when {
+        minutes == null || minutes <= 0 -> "Waiting for you to approve it at $provider."
+        minutes == 1 -> "Waiting for you to approve it at $provider. This code lasts 1 more minute."
+        else -> "Waiting for you to approve it at $provider. This code lasts $minutes more minutes."
+    }
+
+    /**
+     * "Signed in on ops-box as debbie@example.com (plus), since 25 Nov 2026,
+     * 10:02." Without "as" where the engine names no account.
+     */
+    fun signedIn(box: String, who: EngineSignedIn): String {
+        var said = "Signed in on $box"
+        val email = who.email
+        if (!email.isNullOrEmpty()) {
+            said += " as $email"
+            val plan = who.plan
+            if (!plan.isNullOrEmpty()) said += " ($plan)"
+        }
+        val since = taskTime(who.since)
+        if (since != null) said += ", since $since"
+        return "$said."
+    }
+
+    /**
+     * How an attempt that is over ended, by the machine's word for it. A
+     * state with nothing to say, and one this build has never met, say
+     * nothing: no sentence here claims more than the machine did.
+     */
+    fun ended(state: String, engine: String, box: String, detail: String?): String = when (state) {
+        "expired" -> "The code ran out before it was approved. Start again for a new one."
+        "failed" -> if (detail.isNullOrEmpty()) "$engine did not sign in." else "$engine did not sign in: $detail"
+        "cancelled" -> "Cancelled."
+        "lost" -> "$box restarted while it was waiting, so that attempt is gone. Start again."
+        "signed_out" -> "Signed out on $box."
+        "ended" -> "${engine}’s sign-in on $box no longer works. Sign it in again."
+        else -> ""
+    }
+
+    /** Whether that ending is a fault to draw as one. */
+    fun endedBadly(state: String): Boolean = state in listOf("expired", "failed", "lost", "ended")
+
+    fun unopened(box: String, what: String): String = "${box}’s answer could not be opened, so $what is not shown."
+
+    fun unapproved(member: String?, what: String): String =
+        if (member == null) "This answer did not come from a machine approved for your credentials, so $what is not shown."
+        else "This answer did not come from a machine approved for ${member}’s credentials, so $what is not shown."
+
+    fun unsigned(box: String, what: String): String = "${box}’s answer could not be checked, so $what is not shown."
+
+    fun refused(box: String): String = "$box refused that, and gave no reason."
+
+    fun noMachine(engine: String): String = "No machine that can take a session now runs $engine."
+
+    fun notApproved(box: String, engine: String, member: String?): String =
+        if (member == null) "$box runs $engine and is not approved for your credentials. Approve it from its page, then sign in."
+        else "$box runs $engine and is not approved for ${member}’s credentials. Approve it below, then sign in."
+
+    fun tooOld(box: String, engine: String): String = "$box runs $engine and is too old to sign it in. Update fleetwright on $box."
+
+    /** What signing out costs, said before it is done. */
+    fun signOutCost(member: String?, pasted: Boolean): String {
+        val stops = if (member == null) "Your sessions stop running on it there. Signing in again takes a new code."
+        else "Sessions started as $member stop running on it there. Signing in again takes a new code."
+        return if (pasted) "$stops A pasted sign-in is still kept, and the next session there runs on that." else stops
+    }
+}
+
+internal object EngineSignin {
+    /** The protocol a machine speaks once it can sign an engine in. */
+    const val PROTOCOL_NEEDED = 22
+
+    /** How often a waiting sign-in is asked after, in milliseconds. */
+    const val POLL_EVERY_MS = 4_000L
+
+    /**
+     * How long to leave a machine that was approved a moment ago before
+     * asking it once more: it hears of an approval about two seconds on.
+     */
+    const val APPROVAL_SETTLES_MS = 3_000L
+
+    /**
+     * The engine a machine can sign in for one of the vault's two pasted
+     * items, or null for any other item: `codex` is Codex's own, and
+     * `copilot` is OpenCode's.
+     */
+    fun engineOfItem(item: String): String? = when (item) {
+        "codex" -> "codex"
+        "copilot" -> "opencode"
+        else -> null
+    }
+
+    /**
+     * What one sealed answer says, or which check it failed.
+     *
+     * THE ORDER IS THE WHOLE OF IT, and no step is skipped. Opening comes
+     * first because there is nothing to check until it is open. The key
+     * comes before the signature because a signature that holds under a key
+     * nobody approved proves nothing. Reading anything out comes last.
+     *
+     * [sealed] is what the answer carried, or null when it carried none.
+     * [key] is the key this phone made for that request. [grants] are the
+     * member's approved machines, from a vault list this phone fetched
+     * itself, never from the answer or the fleet's listing. [host], [id],
+     * [member] and [engine] are this phone's own request: the signature is
+     * checked over these and not over what the answer claims they were,
+     * which is what ties it to this request.
+     */
+    fun verified(
+        sealed: JSONObject?,
+        key: Seal.OneUseKey,
+        grants: List<PhoneVault.Grant>,
+        host: String,
+        id: String,
+        member: String,
+        engine: String,
+    ): EngineSigninCheck {
+        // 1. OPEN IT, with the key made for this request and under this
+        // purpose's own name. No sealed part at all is a failure too:
+        // something on the way took it out.
+        if (sealed == null) return EngineSigninCheck.Unopened
+        val opened = runCatching { Seal.open(key, Seal.ENGINE_SIGNIN_AAD, sealed) }.getOrNull() ?: return EngineSigninCheck.Unopened
+
+        // 2. THE KEY IT CARRIES IS A MACHINE APPROVED FOR THIS MEMBER: for
+        // the whole of the member's credentials, under the name of the
+        // machine that was asked. The key's id is worked out here from the
+        // key itself and must be the one the answer names.
+        val hostKey = opened.optJSONObject("hostKey") ?: return EngineSigninCheck.Unapproved
+        if (hostKey.optString("kty") != "EC" || hostKey.optString("crv") != "P-256") return EngineSigninCheck.Unapproved
+        val keyId = PhoneVault.keyHash(hostKey)
+        if (opened.optString("host") != keyId) return EngineSigninCheck.Unapproved
+        if (PhoneVault.approval(grants, host, hostKey) != PhoneVault.Approval.APPROVED) return EngineSigninCheck.Unapproved
+
+        // 3. THAT KEY SIGNED THIS ANSWER TO THIS REQUEST: everything that
+        // was opened but the key and the signature, with the request's own
+        // id, member and engine in place of whatever the answer says they
+        // were, in the bytes every signature here is made over.
+        val signature = if (opened.isNull("signature")) "" else opened.optString("signature")
+        opened.remove("hostKey")
+        opened.remove("signature")
+        opened.put("host", keyId)
+        opened.put("id", id)
+        opened.put("member", member)
+        opened.put("engine", engine)
+        val input = IntentSigning.signingInput("engine-signin-answer", opened).toByteArray(Charsets.UTF_8)
+        if (!XoSetup.verifyKeySig(hostKey, signature, input)) return EngineSigninCheck.Unsigned
+
+        // 4. ONLY NOW IS ANYTHING READ OUT TO BE SHOWN.
+        val code = if (opened.isNull("code")) null else opened.optString("code").takeIf { it.isNotEmpty() }
+        val page = if (opened.isNull("url")) null else opened.optString("url").takeIf { it.isNotEmpty() }
+        val out = code != null && page != null
+        val there = opened.optJSONObject("signedIn")
+        val signedIn = if (there == null || there.isNull("since")) {
+            null
+        } else {
+            val who = there.optJSONObject("who")
+            EngineSignedIn(
+                since = there.optLong("since"),
+                email = if (who == null || who.isNull("email")) null else who.optString("email").takeIf { it.isNotEmpty() },
+                plan = if (who == null || who.isNull("plan")) null else who.optString("plan").takeIf { it.isNotEmpty() },
+            )
+        }
+        return EngineSigninCheck.Verified(EngineSigninSaid(if (out) code else null, if (out) page else null, signedIn))
+    }
+
+    /**
+     * Where [engine] can be signed in for a member, from what the machines
+     * report and what the member's vault approves (C-2).
+     *
+     * A MACHINE IS OFFERED ONLY WHEN IT WOULD TAKE THE REQUEST: it takes
+     * sessions now, which only a connected machine does, it is not a
+     * temporary one, it says it runs the engine, it is new enough to know
+     * how, and its key is approved for the whole of this member's
+     * credentials under its own name. The last is the check the answer is
+     * held to afterwards, made here first with the key the fleet lists, so
+     * no start is sent to a machine whose answer could not be shown.
+     *
+     * WITH NOWHERE TO OFFER, ONE SENTENCE SAYS WHAT IS MISSING, and never a
+     * button that would be refused. With no machines heard from at all it
+     * says nothing: that is not known to be "none" (C-5).
+     */
+    fun places(
+        engine: String,
+        hosts: List<Fleet.FleetHost>,
+        keys: List<Fleet.Host>,
+        grants: List<PhoneVault.Grant>,
+        member: String?,
+    ): EngineSigninPlaces {
+        if (hosts.isEmpty()) return EngineSigninPlaces()
+        val name = engineName(engine)
+        val running = hosts.filter { host ->
+            host.takesSessions == true && !host.ephemeral && host.engines.orEmpty().contains(engine)
+        }
+        if (running.isEmpty()) return EngineSigninPlaces(missing = EngineSigninWords.noMachine(name))
+        val offered = mutableListOf<String>()
+        val unapproved = mutableListOf<String>()
+        val old = mutableListOf<String>()
+        for (host in running) {
+            if ((host.protocol ?: 0) < PROTOCOL_NEEDED) {
+                old.add(host.hostId)
+                continue
+            }
+            val key = keys.firstOrNull { it.hostId == host.hostId }?.publicJwk ?: continue
+            if (PhoneVault.approval(grants, host.hostId, key) == PhoneVault.Approval.APPROVED) {
+                offered.add(host.hostId)
+            } else {
+                unapproved.add(host.hostId)
+            }
+        }
+        if (offered.isNotEmpty()) return EngineSigninPlaces(offered = offered.sorted())
+        val box = unapproved.sorted().firstOrNull()
+        if (box != null) return EngineSigninPlaces(missing = EngineSigninWords.notApproved(box, name, member))
+        val behind = old.sorted().firstOrNull()
+        if (behind != null) return EngineSigninPlaces(missing = EngineSigninWords.tooOld(behind, name))
+        return EngineSigninPlaces()
+    }
+
+    /**
+     * What the screen shows of a machine after one answer from it.
+     *
+     * A NO WITH NO CODE BESIDE IT IS NOT A MACHINE'S REFUSAL: the fleet was
+     * not reached. Everything that was checked before stands, the code
+     * included, and the sentence says what went wrong.
+     *
+     * A REFUSAL is the machine's or the fleet's own sentence, shown as it
+     * came. It carries no code and no account, so what was checked before
+     * stands: who is signed in, and the code while the refusal says one is
+     * still out.
+     *
+     * AN ANSWER goes through [verified] before anything of it is used. One
+     * that fails shows nothing of a code, a page or an account, old or new,
+     * and says which check it failed. One that passes shows the code when
+     * the checked part carries one, and otherwise a sentence for how the
+     * attempt ended. The state beside it is not signed, so it picks the
+     * sentence and is never the reason a code is drawn.
+     */
+    fun shown(
+        reply: Fleet.Reply,
+        before: EngineSigninShown,
+        key: Seal.OneUseKey,
+        grants: List<PhoneVault.Grant>,
+        host: String,
+        id: String,
+        member: String,
+        engine: String,
+        memberName: String?,
+    ): EngineSigninShown {
+        val state = reply.state.orEmpty()
+        if (!reply.ok) {
+            val text = reply.text.ifBlank { EngineSigninWords.refused(host) }
+            if (reply.code == null) return before.copy(says = text, bad = true)
+            val next = EngineSigninShown(signedIn = before.signedIn, says = text, bad = true)
+            return if (state == "waiting") {
+                next.copy(code = before.code, page = before.page, minutes = before.minutes, cancel = before.code == null)
+            } else {
+                next
+            }
+        }
+        val what = if (state == "waiting") EngineSigninWords.THE_CODE else EngineSigninWords.WHO_IS_SIGNED_IN
+        return when (val check = verified(reply.sealed, key, grants, host, id, member, engine)) {
+            EngineSigninCheck.Unopened ->
+                EngineSigninShown(says = EngineSigninWords.unopened(host, what), bad = true, cancel = state == "waiting")
+            EngineSigninCheck.Unapproved ->
+                EngineSigninShown(says = EngineSigninWords.unapproved(memberName, what), bad = true, cancel = state == "waiting")
+            EngineSigninCheck.Unsigned ->
+                EngineSigninShown(says = EngineSigninWords.unsigned(host, what), bad = true, cancel = state == "waiting")
+            is EngineSigninCheck.Verified -> {
+                val said = check.said
+                if (said.code != null && said.page != null) {
+                    EngineSigninShown(signedIn = said.signedIn, code = said.code, page = said.page, minutes = reply.expiresInMinutes)
+                } else {
+                    EngineSigninShown(
+                        signedIn = said.signedIn,
+                        says = EngineSigninWords.ended(state, engineName(engine), host, reply.detail),
+                        bad = EngineSigninWords.endedBadly(state),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * The sign-in page as something to open, only when it is an https
+     * address: the one page a code is entered on is never anything else.
+     */
+    fun pageUrl(page: String?): String? = page?.takeIf { it.startsWith("https://", ignoreCase = true) }
+}
+
+/**
+ * One engine's sign-in on the member's machines, on that member's
+ * Credentials: who is signed in where, Sign in on a machine, the code while
+ * one is out, and Sign out.
+ *
+ * ASKED WHEN THE PAGE OPENS, of each machine it could be signed in on, so a
+ * sign-in made earlier says who it is, and a code that is still out (from
+ * this phone before it left the page, or from another custodian's) is shown
+ * again. While a code is out the machine is asked every few seconds, and the
+ * asking stops when this leaves the screen. LEAVING DOES NOT CANCEL: only
+ * Cancel does.
+ *
+ * EVERY REQUEST IS ITS OWN: a new id and a new key each time, a poll
+ * included, because the machine signs its answer over the id and seals it to
+ * the key.
+ *
+ * [engine] is "codex", or "opencode" for GitHub Copilot. [member] is who it
+ * is signed in for, by id: the one whose vault is on screen, or this
+ * person's own member. [memberName] is that member's name, for a sentence,
+ * or null for this person's own. [hosts] is what every machine reports of
+ * itself, [keys] the machines in this fleet with the keys the fleet lists
+ * for them, and [grants] the machines approved in this member's vault, as
+ * this phone read them. [pasted] is whether the vault also keeps a pasted
+ * sign-in for this engine.
+ */
+@Composable
+internal fun EngineMachineSignIn(
+    settings: Settings,
+    engine: String,
+    member: String,
+    memberName: String?,
+    hosts: List<Fleet.FleetHost>,
+    keys: List<Fleet.Host>,
+    grants: List<PhoneVault.Grant>,
+    pasted: Boolean,
+) {
+    val scope = rememberCoroutineScope()
+    val uri = LocalUriHandler.current
+    val context = LocalContext.current
+    // `remember`, never rememberSaveable: a code and its page must not be
+    // written into the saved state of a screen.
+    var shown by remember { mutableStateOf(mapOf<String, EngineSigninShown>()) }
+    // Which request to each machine is the latest. An answer to an earlier
+    // one is dropped: a slow "nothing here" must not take away the code a
+    // later start brought.
+    var turns by remember { mutableStateOf(mapOf<String, Int>()) }
+    // The machine being asked for something other than where it stands.
+    var busy by remember { mutableStateOf("") }
+    var choosing by remember { mutableStateOf(false) }
+    // The machine a Sign out is waiting on, until the dialog is answered.
+    var signingOut by remember { mutableStateOf<String?>(null) }
+    // The code Copy was last pressed for.
+    var copiedCode by remember { mutableStateOf("") }
+    val places = EngineSignin.places(engine, hosts, keys, grants, memberName)
+    // The machine a code is out on, which is the one asked every few seconds.
+    val waitingOn = shown.keys.sorted().firstOrNull { shown[it]?.code != null }
+
+    /**
+     * Ask one machine one thing, and show what its answer may show.
+     *
+     * A START GOES ONLY TO A MACHINE THAT IS OFFERED, which is one whose
+     * answer this phone could check. One that was approved a moment ago may
+     * not have heard yet, and says so: it is asked once more, a few seconds
+     * on, and never a third time.
+     */
+    suspend fun ask(action: String, host: String, again: Boolean = false) {
+        if (action == "start" && host !in places.offered) return
+        val quiet = action == "status"
+        if (!quiet) busy = host
+        val turn = (turns[host] ?: 0) + 1
+        turns = turns + (host to turn)
+        val id = "app-" + java.util.UUID.randomUUID().toString()
+        val sealTo = Seal.newKey()
+        val before = shown[host] ?: EngineSigninShown()
+        val reply = Fleet(settings).engineSignIn(member, engine, action, host, sealTo.publicKey, id)
+        if (action == "start" && !again && !reply.ok && reply.code == "not_approved") {
+            delay(EngineSignin.APPROVAL_SETTLES_MS)
+            ask(action, host, true)
+            return
+        }
+        if (turns[host] == turn) {
+            shown = shown + (host to EngineSignin.shown(reply, before, sealTo, grants, host, id, member, engine, memberName))
+        }
+        if (!quiet) busy = ""
+    }
+
+    LaunchedEffect(places.offered) {
+        for (host in places.offered) ask("status", host)
+    }
+    LaunchedEffect(waitingOn) {
+        val host = waitingOn ?: return@LaunchedEffect
+        while (true) {
+            delay(EngineSignin.POLL_EVERY_MS)
+            ask("status", host)
+        }
+    }
+
+    // SIGN OUT ASKS FIRST, with what it costs, as Forget does.
+    val leaving = signingOut
+    if (leaving != null) {
+        AlertDialog(
+            onDismissRequest = { signingOut = null },
+            title = { Text(EngineSigninWords.signOutAsk(engineName(engine), leaving)) },
+            text = { Text(EngineSigninWords.signOutCost(memberName, pasted)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    signingOut = null
+                    scope.launch { ask("signout", leaving) }
+                }) { Text(EngineSigninWords.SIGN_OUT) }
+            },
+            dismissButton = { TextButton(onClick = { signingOut = null }) { Text(EngineSigninWords.CANCEL) } },
+        )
+    }
+
+    // Whether there is anything to say about this engine yet. With no machine
+    // to offer, nothing missing that is certain, and nothing a machine has
+    // said, the block is not drawn: a heading over nothing promises a
+    // sign-in the page cannot give.
+    val hasSomething = places.offered.isNotEmpty() || places.missing.isNotEmpty() ||
+        shown.values.any { it.signedIn != null || it.code != null || it.says.isNotEmpty() || it.cancel }
+    if (!hasSomething) return
+
+    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
+        Text(EngineSigninWords.title(engine), style = Design.Style.body, color = Design.Palette.ink.now)
+        for (host in shown.keys.sorted()) {
+            val one = shown[host] ?: EngineSigninShown()
+            key(host) {
+                // A CHANGE OF STATE MOVES, and nothing else: a crossfade,
+                // which is the one animation "Remove animations" keeps.
+                AnimatedContent(
+                    targetState = one,
+                    transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
+                    label = "engine sign-in",
+                ) { now ->
+                    Column(verticalArrangement = Arrangement.spacedBy(Design.Space.hair)) {
+                        val who = now.signedIn
+                        if (who != null) {
+                            SelectionContainer {
+                                Text(EngineSigninWords.signedIn(host, who), style = Design.Style.bodySmall, color = Design.Palette.ink.now)
+                            }
+                            TextButton(
+                                enabled = busy.isEmpty(),
+                                onClick = { signingOut = host },
+                                modifier = Modifier.heightIn(min = 48.dp).semantics {
+                                    contentDescription = EngineSigninWords.signOutOf(engineName(engine), host)
+                                },
+                            ) { Text(EngineSigninWords.SIGN_OUT, color = Design.Palette.bad.now) }
+                        }
+                        val code = now.code
+                        if (code != null) {
+                            Hint(EngineSigninWords.codeFor(host))
+                            // LARGE, AND FREE TO WRAP: at the largest font
+                            // scale the code is wider than the row, and it
+                            // breaks at its dash into its two groups, never
+                            // clipped and never shrunk.
+                            SelectionContainer {
+                                Text(
+                                    code,
+                                    style = Design.Style.title.copy(fontFamily = FontFamily.Monospace, letterSpacing = 0.sp),
+                                    color = Design.Palette.ink.now,
+                                    modifier = Modifier.semantics { contentDescription = EngineSigninWords.spoken(code) },
+                                )
+                            }
+                            val url = EngineSignin.pageUrl(now.page)
+                            if (url != null) {
+                                OutlinedButton(
+                                    onClick = { runCatching { uri.openUri(url) } },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) { Text(EngineSigninWords.OPEN_PAGE) }
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    context.getSystemService(android.content.ClipboardManager::class.java)
+                                        ?.setPrimaryClip(android.content.ClipData.newPlainText("Sign-in code", code))
+                                    copiedCode = code
+                                },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                            ) { Text(if (copiedCode == code) EngineSigninWords.COPIED else EngineSigninWords.COPY) }
+                            Text(
+                                EngineSigninWords.waiting(EngineSigninWords.provider(engine), now.minutes),
+                                style = Design.Style.bodySmall,
+                                color = Design.Palette.ink.now,
+                            )
+                        }
+                        if (now.says.isNotEmpty()) {
+                            SelectionContainer {
+                                Text(
+                                    now.says,
+                                    style = Design.Style.bodySmall,
+                                    color = if (now.bad) Design.Palette.bad.now else Design.Palette.ink.now,
+                                )
+                            }
+                        }
+                        if (now.code != null || now.cancel) {
+                            TextButton(
+                                enabled = busy.isEmpty(),
+                                onClick = { scope.launch { ask("cancel", host) } },
+                                modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = EngineSigninWords.cancelOn(host) },
+                            ) { Text(EngineSigninWords.CANCEL) }
+                        }
+                    }
+                }
+            }
+        }
+        // ONE THING AT A TIME: while a code is out, the next step is that
+        // code, and a second start is not offered beside it.
+        if (waitingOn == null) {
+            if (places.offered.isNotEmpty()) {
+                OutlinedButton(
+                    enabled = busy.isEmpty(),
+                    onClick = {
+                        if (places.offered.size == 1) {
+                            scope.launch { ask("start", places.offered.first()) }
+                        } else {
+                            choosing = !choosing
+                        }
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp).semantics {
+                        contentDescription = if (busy.isEmpty()) EngineSigninWords.offerOf(engineName(engine)) else EngineSigninWords.asking(busy)
+                    },
+                ) { Text(if (busy.isEmpty()) EngineSigninWords.OFFER else EngineSigninWords.asking(busy)) }
+                if (choosing && places.offered.size > 1) {
+                    Hint(EngineSigninWords.WHICH)
+                    for (host in places.offered) {
+                        TextButton(
+                            enabled = busy.isEmpty(),
+                            onClick = {
+                                choosing = false
+                                scope.launch { ask("start", host) }
+                            },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        ) { Text(EngineSigninWords.on(host)) }
+                    }
+                }
+            } else if (places.missing.isNotEmpty()) {
+                Hint(places.missing)
+            }
+        }
+    }
+}

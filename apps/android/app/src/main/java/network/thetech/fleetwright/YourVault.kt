@@ -60,6 +60,11 @@ import kotlinx.coroutines.launch
  * token, and an API key for each provider, each offered only when an engine
  * of whoever this vault belongs to runs on it, or when it is already kept
  * and can be forgotten ([EngineSignInRow]).
+ *
+ * CODEX AND COPILOT ARE SIGNED IN ON A MACHINE FIRST ([EngineMachineSignIn],
+ * above each one's row), and pasting is the way round that. Which machines
+ * could do it is read from what they report and from this vault's own
+ * approvals, the list this screen already asked the vault for.
  */
 @Composable
 internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListed: (PhoneVault.Contents) -> Unit = {}) {
@@ -86,6 +91,14 @@ internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListe
     // The engines of whoever this vault belongs to: the member it is pointed
     // at, or this person's own member.
     val whoseEngines = member?.engines ?: ownEngines
+    // What every machine reports of itself: which engines it runs, and
+    // whether it is new enough to sign one in. Empty until that is known,
+    // and then no sign-in on a machine is offered or spoken of.
+    var machines by remember { mutableStateOf<List<Fleet.FleetHost>>(emptyList()) }
+    // The member an engine is signed in for, by id: the one this vault is
+    // pointed at, or this person's own member as the vault names it. Null
+    // for somebody with no member, who has nobody to sign an engine in as.
+    val signsInAs = member?.id ?: contents?.custody?.member
 
     suspend fun reload() {
         val fleet = Fleet(settings)
@@ -99,6 +112,11 @@ internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListe
                 result = it.message ?: "Your credentials did not load."
             }
         boxes = fleet.enrolledHosts().filter { !it.revoked && !it.ephemeral }
+        // WHAT EACH MACHINE RUNS, for signing an engine in on one. A failure
+        // is an empty list here, and an empty list is not shown as "none":
+        // the list is left as it was.
+        val said = fleet.fleetHosts()
+        if (said.isNotEmpty()) machines = said
         // WHOSE ENGINES, for this person's own vault: the vault says which
         // member is theirs, and the organization says what that member runs
         // on. Asked only when the vault named one. A failure leaves the
@@ -233,6 +251,21 @@ internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListe
                 }
             }
             engineItemsOffered(whoseEngines, kept.items.map { it.name }).forEach { name ->
+                // SIGNED IN ON A MACHINE, for the two an engine signs in
+                // itself, and only for a member there is an id to ask as.
+                val engine = EngineSignin.engineOfItem(name)
+                if (engine != null && signsInAs != null) {
+                    EngineMachineSignIn(
+                        settings = settings,
+                        engine = engine,
+                        member = signsInAs,
+                        memberName = member?.name,
+                        hosts = machines,
+                        keys = boxes,
+                        grants = kept.grants,
+                        pasted = kept.items.any { it.name == name },
+                    )
+                }
                 EngineSignInRow(
                     name = name,
                     item = kept.items.firstOrNull { it.name == name },

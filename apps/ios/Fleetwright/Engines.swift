@@ -340,6 +340,12 @@ struct SessionEngineLines: View {
 ///
 /// AN API KEY SPENDS MONEY NO BUDGET HERE COUNTS, so where one is pasted the
 /// row says who bills and where its limit is set (`apiKeyBillingLine`).
+///
+/// PASTING A SIGN-IN IS THE WAY ROUND, NOT THE WAY IN. Codex and Copilot
+/// are signed in on a machine (EngineMachineSignIn, drawn above this row),
+/// so the paste field for either is behind a button that says it is the
+/// other way, with one sentence for when to use it. An API key has no
+/// other way in, and its Keep stays on the row.
 struct EngineSignInRow: View {
     /// "codex", "copilot" or a provider's key, as the vault names it.
     let name: String
@@ -358,6 +364,9 @@ struct EngineSignInRow: View {
     private var title: String { PhoneVault.label(name) }
     /// What the first button does, said with the thing it does it to.
     private var keepLabel: String { item == nil ? "Keep \(title)" : "Replace \(title)" }
+    /// Whether this is one of the two sign-ins a machine makes itself, and
+    /// so one that is pasted only when that cannot be done.
+    private var madeOnAMachine: Bool { EngineSignin.engine(ofItem: name) != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.hair) {
@@ -366,12 +375,22 @@ struct EngineSignInRow: View {
                     .fleetType(.body)
                     .foregroundStyle(Design.Palette.ink)
                 Spacer()
-                Text(item == nil ? "Not kept" : "Kept")
-                    .fleetType(.label)
-                    .foregroundStyle(Design.Palette.inkDim)
-                Button(item == nil ? "Keep" : "Replace") { pasting.toggle() }
-                    .accessibilityLabel(keepLabel)
-                    .disabled(busy)
+                // PASTED, NOT KEPT, FOR A SIGN-IN: the block above this row
+                // may say it is signed in on a machine, and "Not kept" under
+                // that would read as its opposite. What this row knows is
+                // whether one was pasted.
+                if madeOnAMachine {
+                    Text(item == nil ? "None pasted" : "Pasted")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                } else {
+                    Text(item == nil ? "Not kept" : "Kept")
+                        .fleetType(.label)
+                        .foregroundStyle(Design.Palette.inkDim)
+                    Button(item == nil ? "Keep" : "Replace") { pasting.toggle() }
+                        .accessibilityLabel(keepLabel)
+                        .disabled(busy)
+                }
                 if item != nil {
                     Button("Forget", role: .destructive) { forget() }
                         .accessibilityLabel("Forget \(title)")
@@ -386,11 +405,20 @@ struct EngineSignInRow: View {
                     .foregroundStyle(Design.Palette.ink)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if name == "codex" {
+            // ABOUT A PASTED ONE, so said where one is kept or being pasted.
+            if name == "codex", item != nil || pasting {
                 Text("Goes to one machine. Pasting it again moves it.")
                     .fleetType(.label)
                     .foregroundStyle(Design.Palette.inkDim)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if madeOnAMachine {
+                // ON A LINE OF ITS OWN, because its words are longer than a
+                // row has room for beside a name at a large text size.
+                Button(enginePasteInstead(name)) { pasting.toggle() }
+                    .frame(minHeight: 44)
+                    .buttonStyle(.borderless)
+                    .disabled(busy)
             }
             if pasting { pasteStep }
         }
@@ -409,6 +437,12 @@ struct EngineSignInRow: View {
     }
 
     @ViewBuilder private var pasteStep: some View {
+        if let when = enginePasteWhen(name) {
+            Text(when)
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.inkDim)
+                .fixedSize(horizontal: false, vertical: true)
+        }
         if name == "codex" {
             Text("Paste the whole of ~/.codex/auth.json, the file codex login leaves.")
                 .fleetType(.label)
@@ -469,6 +503,14 @@ struct EngineSignInRow: View {
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.ink)
                 .fixedSize(horizontal: false, vertical: true)
+            // WHICH TOKEN. GitHub makes several kinds, and the field said
+            // "a Copilot token" without saying that only one of them is one
+            // OpenCode can use, or where it is found.
+            Text(copilotTokenLine)
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
             SecureField("GitHub Copilot token", text: $pasted)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -495,6 +537,30 @@ struct EngineSignInRow: View {
         .disabled(busy || pasted.isBlank)
     }
 }
+
+/// The button a sign-in's paste field is behind: the other way in, named as
+/// that. The same words as Android.
+func enginePasteInstead(_ item: String) -> String {
+    item == "codex" ? "Paste a sign-in instead" : "Paste a token instead"
+}
+
+/// When to paste a sign-in and not sign in on a machine, in one sentence, or
+/// nil for an item that is only ever pasted. OpenAI lets an account or a
+/// whole workspace turn device codes off, and Codex then says so; for
+/// Copilot nothing more is known than that some account may not be able to.
+func enginePasteWhen(_ item: String) -> String? {
+    switch item {
+    case "codex": return "Use this when the account cannot sign in on a machine: OpenAI lets an account or its workspace switch device codes off."
+    case "copilot": return "Use this when the account cannot sign in on a machine."
+    default: return nil
+    }
+}
+
+/// Which GitHub token is a Copilot token OpenCode can use, and where it is
+/// (docs/engines.md, "A pasted sign-in, the fallback"): the one OpenCode's
+/// own login makes. A personal access token, or one another app made, is
+/// kept without complaint and then fails at the first turn.
+let copilotTokenLine = "It is the refresh value under github-copilot in ~/.local/share/opencode/auth.json, on a computer where opencode auth login signed in to Copilot. No other GitHub token works."
 
 /// What stands in the field's place while a pasted auth.json is hidden. The
 /// same sentence as Android.

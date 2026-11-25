@@ -34,15 +34,28 @@ enum XOSetupKey {
     /// does with the answer is refuse. `pin` is the certificate's SHA-256, or
     /// "" for a setup the person accepted over plain HTTP; nothing in between.
     static func isSigned(key: String, keySig: String, hostKey: Fleet.Host.PublicKey, address: String, job: String, pin: String) -> Bool {
-        guard isJob(job), pin.isEmpty || isPin(pin), Seal.isKey(key), isAddress(address),
-              hostKey.kty == "EC", hostKey.crv == "P-256",
+        guard isJob(job), pin.isEmpty || isPin(pin), Seal.isKey(key), isAddress(address) else { return false }
+        let signed = signingPrefix + "{\"address\":\"\(address)\",\"job\":\"\(job)\",\"key\":\"\(key)\",\"pin\":\"\(pin)\"}"
+        return holds(signed, sig: keySig, hostKey: hostKey)
+    }
+
+    /// Whether `sig` is `hostKey`'s signature over the text `signed`: ECDSA
+    /// P-256 over SHA-256, the signature as the 64 raw bytes r||s, base64url
+    /// without padding, and the key as its two 32-byte coordinates.
+    ///
+    /// THE ONE PLACE A MACHINE'S SIGNATURE IS CHECKED on this phone. A job's
+    /// key above and below, and what a machine says of an engine's sign-in
+    /// (EngineSignin.verified), are the same question over different text,
+    /// so they ask it here. Anything malformed is false, never a throw: a
+    /// caller that swallowed one would go on as if it had been checked.
+    static func holds(_ signed: String, sig: String, hostKey: Fleet.Host.PublicKey) -> Bool {
+        guard hostKey.kty == "EC", hostKey.crv == "P-256",
               let x = Seal.unb64(hostKey.x), x.count == 32,
               let y = Seal.unb64(hostKey.y), y.count == 32,
-              let raw = Seal.unb64(keySig), raw.count == 64,
+              let raw = Seal.unb64(sig), raw.count == 64,
               let publicKey = try? P256.Signing.PublicKey(x963Representation: Data([0x04]) + x + y),
               let signature = try? P256.Signing.ECDSASignature(rawRepresentation: raw)
         else { return false }
-        let signed = signingPrefix + "{\"address\":\"\(address)\",\"job\":\"\(job)\",\"key\":\"\(key)\",\"pin\":\"\(pin)\"}"
         return publicKey.isValidSignature(signature, for: Data(signed.utf8))
     }
 
@@ -82,16 +95,9 @@ enum XOSetupKey {
     /// because there is no plain SSH for a person to accept.
     private static func isSignedOverHostKey(_ prefix: String, key: String, keySig: String, hostKey: Fleet.Host.PublicKey,
                                             address: String, job: String, pin: String) -> Bool {
-        guard isJob(job), isPin(pin), Seal.isKey(key), isAddress(address),
-              hostKey.kty == "EC", hostKey.crv == "P-256",
-              let x = Seal.unb64(hostKey.x), x.count == 32,
-              let y = Seal.unb64(hostKey.y), y.count == 32,
-              let raw = Seal.unb64(keySig), raw.count == 64,
-              let publicKey = try? P256.Signing.PublicKey(x963Representation: Data([0x04]) + x + y),
-              let signature = try? P256.Signing.ECDSASignature(rawRepresentation: raw)
-        else { return false }
+        guard isJob(job), isPin(pin), Seal.isKey(key), isAddress(address) else { return false }
         let signed = prefix + "{\"address\":\"\(address)\",\"job\":\"\(job)\",\"key\":\"\(key)\",\"pin\":\"\(pin)\"}"
-        return publicKey.isValidSignature(signature, for: Data(signed.utf8))
+        return holds(signed, sig: keySig, hostKey: hostKey)
     }
 
     /// An SSH host key fingerprint as OpenSSH prints it (SSH_HOST_KEY_RE):
