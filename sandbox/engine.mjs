@@ -32,7 +32,7 @@
 
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -96,10 +96,34 @@ export function providerOf(engine, model) {
  */
 const withheld = new Set();
 
-/** Never say this value. One short enough to be an ordinary word is not kept, or it would be cut out of every sentence. */
+/**
+ * Never say this value. One short enough to be an ordinary word is not kept, or it would be cut out of every sentence.
+ *
+ * A FILE IS WITHHELD BY WHAT IS IN IT. A Codex sign-in is a JSON file, and
+ * what must not be said is each token inside it. Kept only whole, a file
+ * with a space or a line break in it was not kept at all, and a line that
+ * quoted its refresh token went to the pane and into a turn's detail. So
+ * every string in a file this runner is handed is withheld on its own,
+ * except one that is plainly a date (`last_refresh`), which is no secret
+ * and would otherwise be cut out of ordinary output.
+ */
 export function withhold(value) {
   const v = typeof value === 'string' ? value.trim() : '';
-  if (v.length >= 12 && !/\s/.test(v)) withheld.add(v);
+  const one = (/** @type {string} */ text) => {
+    if (text.length >= 12 && !/\s/.test(text)) withheld.add(text);
+  };
+  one(v);
+  if (v[0] !== '{') return;
+  const each = (/** @type {unknown} */ node, depth = 0) => {
+    if (typeof node === 'string') {
+      if (!/^\d{4}-\d\d-\d\dT/.test(node)) one(node.trim());
+    } else if (node && typeof node === 'object' && depth < 6) {
+      for (const inner of Object.values(node)) each(inner, depth + 1);
+    }
+  };
+  try {
+    each(JSON.parse(v));
+  } catch { /* not a file of values: the whole text was looked at above */ }
 }
 
 /** The same text with every value this runner was handed taken out. */
@@ -124,20 +148,61 @@ export function line(value, max = 200) {
  * workspace and commits (docs/engines.md, "At a limit").
  */
 function relayErrors(stream, to) {
+  eachLine(stream, ERROR_LINE_MAX, (text, whole) => to(hide(whole ? `${text}\n` : text)), (text) => to(`${hide(text)} [the rest of this line was not kept]\n`));
+}
+
+/** The longest line of an engine's error output that is passed on, in characters. */
+export const ERROR_LINE_MAX = 64 * 1024;
+/** The longest message an engine may send, in characters. One longer ends the conversation with it. */
+export const MESSAGE_MAX = 8 * 1024 * 1024;
+
+/**
+ * A stream, a line at a time, WITH A BOUND ON A LINE. Both things this
+ * runner reads from an engine were held until a newline came, however long
+ * that took: 200 MB with no newline in it took the runner to 895 MB, in a
+ * container that shares its memory limit with the work. A line that passes
+ * `max` is given to `tooLong` as far as it had got, once, and the rest of
+ * it is dropped unread up to its newline.
+ *
+ * @param {any} stream
+ * @param {number} max
+ * @param {(text: string, whole: boolean) => void} line  `whole` is false for what was left when the stream ended
+ * @param {(text: string) => void} tooLong
+ * @param {() => void} [ended]
+ */
+export function eachLine(stream, max, line, tooLong, ended) {
   if (!stream || typeof stream.on !== 'function') return;
   let held = '';
+  let dropping = false;
   stream.setEncoding?.('utf8');
-  stream.on('data', (chunk) => {
-    held += String(chunk);
-    const at = held.lastIndexOf('\n');
-    if (at < 0) return;
-    to(hide(held.slice(0, at + 1)));
-    held = held.slice(at + 1);
+  stream.on('data', (/** @type {unknown} */ chunk) => {
+    let text = String(chunk);
+    for (let at = text.indexOf('\n'); at >= 0; at = text.indexOf('\n')) {
+      const head = text.slice(0, at);
+      text = text.slice(at + 1);
+      if (dropping) dropping = false;
+      else if (held.length + head.length > max) tooLong((held + head).slice(0, max));
+      else line(held + head, true);
+      held = '';
+    }
+    if (dropping) return;
+    if (held.length + text.length > max) {
+      tooLong((held + text).slice(0, max));
+      held = '';
+      dropping = true;
+    } else held += text;
   });
-  stream.on('end', () => {
-    if (held) to(hide(held));
+  let over = false;
+  const end = () => {
+    if (over) return;
+    over = true;
+    if (held && !dropping) line(held, false);
     held = '';
-  });
+    ended?.();
+  };
+  stream.on('end', end);
+  stream.on('close', end);
+  stream.on('error', end);
 }
 
 /** A turn's end in the one shape, from whatever an adapter worked out. */
@@ -165,9 +230,9 @@ export function ended(engine, reason, extra = {}) {
 export class Peer {
   /**
    * @param {{ stdin: import('node:stream').Writable, stdout: import('node:stream').Readable }} pipes
-   * @param {{ version?: string|null }} [opts]
+   * @param {{ version?: string|null, maxMessage?: number }} [opts]
    */
-  constructor(pipes, { version = '2.0' } = {}) {
+  constructor(pipes, { version = '2.0', maxMessage = MESSAGE_MAX } = {}) {
     this.pipes = pipes;
     this.version = version;
     this.nextId = 1;
@@ -178,9 +243,17 @@ export class Peer {
     /** Answers the engine's own requests. Returning undefined is "method not found". @type {(method: string, params: any) => any} */
     this.onRequest = () => undefined;
     this.closed = false;
-    const lines = createInterface({ input: pipes.stdout });
-    lines.on('line', (text) => this.#read(text));
-    lines.on('close', () => this.#end('the engine closed its pipe'));
+    // A MESSAGE HAS A LONGEST LENGTH. One that passes it cannot be read, and
+    // may have been the answer a turn is waiting on, so the conversation
+    // ends there and says why: every request still waiting is settled with
+    // it, and the runner starts the engine again for the next line.
+    eachLine(
+      pipes.stdout,
+      maxMessage,
+      (text) => this.#read(text),
+      () => this.#end(`the engine sent one message longer than ${Math.round(maxMessage / 1024)} KiB, which is more than this runner reads`),
+      () => this.#end('the engine closed its pipe'),
+    );
     pipes.stdin.on('error', () => this.#end('the engine closed its pipe'));
   }
 
@@ -205,6 +278,7 @@ export class Peer {
   }
 
   #read(text) {
+    if (this.closed) return;
     let m;
     try {
       m = JSON.parse(text);
@@ -576,6 +650,59 @@ export function stage(engine, value, home, provider = null) {
   }
 }
 
+/**
+ * Where OpenCode reads a machine's own settings, which override a person's
+ * and a project's (https://opencode.ai/docs/config/, "Locations": "The
+ * system config overrides all of them").
+ */
+export const OPENCODE_SYSTEM_DIR = '/etc/opencode';
+
+/**
+ * The settings that make OpenCode ask before it acts
+ * (https://opencode.ai/docs/permissions/). Everything asks, and a later
+ * OpenCode's new tool asks too, except looking: reading a file, with the
+ * `.env` rules OpenCode's own defaults have, and the two searches.
+ */
+export const OPENCODE_ASKS = Object.freeze({
+  $schema: 'https://opencode.ai/config.json',
+  permission: Object.freeze({
+    '*': 'ask',
+    read: Object.freeze({ '*': 'allow', '*.env': 'deny', '*.env.*': 'deny', '*.env.example': 'allow' }),
+    glob: 'allow',
+    grep: 'allow',
+  }),
+});
+
+/**
+ * Make an engine ask before it acts, in a session that asks first.
+ *
+ * OPENCODE DOES NOT ASK UNLESS IT IS TOLD TO: its permissions default to
+ * allow. The runner declines what an engine asks to do in a `safe` session,
+ * and OpenCode never asked, so a `safe` session on OpenCode edited files and
+ * ran commands with nobody declining anything. So it is told, in the one
+ * place a workspace cannot answer back from: a project's own
+ * `opencode.json` overrides a person's settings and not the machine's, and
+ * the workspace is the session's to write.
+ *
+ * NOT WRITTEN IS NOT STARTED. A `safe` session whose engine could not be
+ * told to ask is one that would not ask.
+ *
+ * Codex needs nothing here: it is told on `thread/start`.
+ *
+ * @param {string} engine @param {string} mode @param {string} dir  where the engine reads its machine's settings
+ * @returns {{ ok: true } | { ok: false, text: string }}
+ */
+export function askFirst(engine, mode, dir) {
+  if (engine !== 'opencode' || mode === 'dangerous') return { ok: true };
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o755 });
+    writeFileSync(path.join(dir, 'opencode.json'), `${JSON.stringify(OPENCODE_ASKS, null, 2)}\n`, { mode: 0o644 });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, text: `could not tell OpenCode to ask before it acts, so it was not started: ${e?.message ?? e}` };
+  }
+}
+
 /** `--engine codex --model gpt --mode safe -- <prompt>`, as an object. The prompt is the last argument, whole. */
 export function parseArgs(argv) {
   const out = { engine: '', model: null, mode: 'safe', prompt: '' };
@@ -599,13 +726,15 @@ export function parseArgs(argv) {
  * Run one engine in this pane until the session is stopped.
  *
  * @param {{ engine: string, model: string|null, mode: string, prompt: string }} args
- * @param {{ socket?: string, home?: string, cwd?: string, out?: (text: string) => void, stdin?: import('node:stream').Readable, spawnEngine?: Function, env?: Record<string, string|undefined> }} [io]
+ * @param {{ socket?: string, home?: string, cwd?: string, out?: (text: string) => void, err?: (text: string) => void, stdin?: import('node:stream').Readable, spawnEngine?: Function, env?: Record<string, string|undefined>, systemDir?: string, signals?: { once: (name: string, then: () => void) => any }, watchMs?: number }} [io]
+ *   `systemDir` is where OpenCode reads its machine's settings; `signals` is what says the session is being stopped; `watchMs` how often a sign-in file is looked at for a renewal
  */
 export async function run(args, io = {}) {
   const socket = io.socket ?? SOCKET;
   const home = io.home ?? homedir();
   const cwd = io.cwd ?? process.cwd();
   const env = io.env ?? process.env;
+  const systemDir = io.systemDir ?? env.FLEETWRIGHT_OPENCODE_SYSTEM_DIR ?? OPENCODE_SYSTEM_DIR;
   const write = io.out ?? ((text) => process.stdout.write(text));
   // EVERYTHING THE PANE IS SHOWN PASSES HERE, the agent's own words included:
   // an agent that echoes its key is as much a leak as a provider that does.
@@ -631,6 +760,8 @@ export async function run(args, io = {}) {
     withhold(got.value);
     const staged = stage(args.engine, got.value, home, provider);
     if (!staged.ok) return { failed: ended(args.engine, 'error', { detail: staged.text }) };
+    const asks = askFirst(args.engine, args.mode, systemDir);
+    if (!asks.ok) return { failed: ended(args.engine, 'error', { detail: asks.text }) };
     const command = env[spec.bin] ? [env[spec.bin]] : [spec.command[0]];
     let child;
     try {
@@ -654,22 +785,78 @@ export async function run(args, io = {}) {
       child.kill?.();
       return { failed: spawnError ? ended(args.engine, 'error', { detail: spawnError }) : failed };
     }
-    return { adapter, child, file: staged.file, was: staged.file ? got.value : null };
+    return { adapter, child, peer, file: staged.file, was: staged.file ? got.value : null };
   };
 
-  /** Hand a renewed sign-in back to the box, when the engine rewrote its file. */
-  const keep = async (/** @type {any} */ live) => {
-    if (!live?.file) return;
-    try {
-      const now = readFileSync(live.file, 'utf8');
-      if (now && now !== live.was) {
-        const kept = await post(socket, '/internal/engine-credential', { kind: spec.credential, value: now });
-        if (kept?.ok) live.was = now;
-      }
-    } catch { /* gone or unreadable: the box keeps what it had */ }
+  /**
+   * Hand a renewed sign-in back to the box, when the engine rewrote its file.
+   *
+   * AS SOON AS IT CHANGES, and again as the session is stopped. A renewal
+   * ends the copy the box holds, and it was handed back only when a turn
+   * ended: a session stopped in the middle of the turn that renewed left
+   * the box holding a sign-in that had already been used up, and the next
+   * session on this machine signed out. One at a time, so a look that finds
+   * the file changed while the last is still being sent does not send the
+   * same file twice.
+   */
+  let keeping = Promise.resolve();
+  const keep = (/** @type {any} */ live) => {
+    keeping = keeping.then(async () => {
+      if (!live?.file) return;
+      try {
+        const now = readFileSync(live.file, 'utf8');
+        if (now && now !== live.was) {
+          // What Codex wrote is as much this runner's to keep quiet as what it was handed.
+          withhold(now);
+          const kept = await post(socket, '/internal/engine-credential', { kind: spec.credential, value: now });
+          if (kept?.ok) live.was = now;
+        }
+      } catch { /* gone or unreadable: the box keeps what it had */ }
+    });
+    return keeping;
+  };
+  /**
+   * Look at a live engine's sign-in file for a renewal, for as long as it is
+   * live. By looking, every couple of seconds, and not by being told: Codex
+   * replaces its file, so a watch on the file it replaced hears nothing
+   * more, and a renewal made while the engine was still opening happened
+   * before any watch could have been set. The first look is at once.
+   */
+  const watch = (/** @type {any} */ live) => {
+    if (!live.file) return;
+    let seen = '';
+    const look = () => {
+      try {
+        const at = statSync(live.file);
+        const now = `${at.mtimeMs}:${at.size}:${at.ino}`;
+        if (now === seen) return;
+        seen = now;
+        void keep(live);
+      } catch { /* gone: nothing to hand back */ }
+    };
+    look();
+    live.watching = setInterval(look, io.watchMs ?? 2000);
+    live.watching.unref?.();
+  };
+  const unwatch = (/** @type {any} */ live) => {
+    if (live?.watching) clearInterval(live.watching);
   };
 
   let live = null;
+  // THE SESSION BEING STOPPED is tmux closing the pane or the container
+  // being told to end, and arrives as a signal. It used to exit at once,
+  // mid-turn or not. Now whatever was waited on is given up, the sign-in is
+  // handed back if it changed, and then the runner ends.
+  /** @type {Promise<'stopped'>} */
+  const stopped = new Promise((resolve) => {
+    for (const name of ['SIGTERM', 'SIGINT', 'SIGHUP']) io.signals?.once(name, () => resolve('stopped'));
+  });
+  const leave = async () => {
+    unwatch(live);
+    await keep(live);
+    live?.child.kill?.();
+    return 0;
+  };
   let prompt = args.prompt;
   const typed = createInterface({ input: io.stdin ?? process.stdin });
   const lines = typed[Symbol.asyncIterator]();
@@ -677,35 +864,44 @@ export async function run(args, io = {}) {
     if (prompt.trim()) {
       await post(socket, '/internal/session-event', { event: 'UserPromptSubmit' });
       if (!live) {
-        const opened = await open();
+        const opened = await Promise.race([open(), stopped]);
+        if (opened === 'stopped') return leave();
         if (opened.failed) {
           note(`${args.engine} did not start a turn: ${opened.failed.reason}${opened.failed.detail ? ` (${opened.failed.detail})` : ''}.`);
           await report(opened.failed);
-        } else live = opened;
+        } else {
+          live = opened;
+          watch(live);
+        }
       }
       if (live) {
-        const turn = await live.adapter.turn(prompt);
+        const turn = await Promise.race([live.adapter.turn(prompt), stopped]);
+        if (turn === 'stopped') return leave();
         await keep(live);
         if (turn.reason !== 'done') note(`${args.engine}’s turn ended: ${turn.reason}${turn.detail ? ` (${turn.detail})` : ''}.`);
         await report(turn);
-        // A pipe that closed is an engine that is gone: the next line typed
-        // starts it again.
-        if (live.child.exitCode !== null && live.child.exitCode !== undefined) live = null;
+        // A pipe that closed is an engine that is gone, and one whose
+        // conversation was ended here (a message too long to read) is of no
+        // more use: the next line typed starts it again.
+        if ((live.child.exitCode !== null && live.child.exitCode !== undefined) || live.peer.closed) {
+          unwatch(live);
+          live.child.kill?.();
+          live = null;
+        }
       }
     }
     out('\n> ');
-    const next = await lines.next();
-    if (next.done) break;
+    const next = await Promise.race([lines.next(), stopped]);
+    if (next === 'stopped' || next.done) break;
     prompt = String(next.value ?? '');
   }
-  live?.child.kill?.();
-  return 0;
+  return leave();
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.on('SIGTERM', () => process.exit(0));
-  process.on('SIGHUP', () => process.exit(0));
-  run(parseArgs(process.argv.slice(2))).then((code) => process.exit(code), (e) => {
+  // The signals that stop a session are `run`'s to hear: it hands a renewed
+  // sign-in back before it ends.
+  run(parseArgs(process.argv.slice(2)), { signals: process }).then((code) => process.exit(code), (e) => {
     process.stdout.write(`\n[fleetwright] the engine runner stopped: ${e?.message ?? e}\n`);
     process.exit(1);
   });

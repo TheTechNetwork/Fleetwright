@@ -115,7 +115,7 @@ export function answerEngineCredential(cfg, rec, kind, value = null) {
   }
   return keepEngineItem(cfg, who, kind, value)
     ? { ok: true, kind }
-    : { ok: false, error: 'not_kept', message: 'That does not read as the sign-in this machine holds, so it was not kept.' };
+    : { ok: false, error: 'not_kept', message: 'That does not read as a newer copy of the sign-in this machine holds, so it was not kept.' };
 }
 
 /**

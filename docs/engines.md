@@ -139,6 +139,29 @@ runs commands (`safe`) declines what the engine asks to do and prints that it
 did; one that does not (`dangerous`) allows it, inside the box's container as
 Claude Code's are.
 
+**OpenCode is told to ask.** Its permissions default to allow, so left alone
+it never asks and there is nothing for the runner to decline. In a `safe`
+session the runner writes OpenCode's machine settings
+(`/etc/opencode/opencode.json`, inside the container) before it starts the
+engine: every permission asks, except reading a file and the two searches.
+OpenCode's machine settings override a project's, so an `opencode.json` in
+the workspace cannot turn the asking off. A `safe` session on OpenCode
+therefore looks and answers, and each edit and each command is asked about,
+declined, and said in the pane. If the settings cannot be written the engine
+is not started. This is OpenCode's documented configuration
+([config](https://opencode.ai/docs/config/),
+[permissions](https://opencode.ai/docs/permissions/)), tested against a
+stand-in that reads the file. It has not been run against a real OpenCode.
+Codex is told on `thread/start`, as it always was.
+
+**What the runner will not say, and how much it will read.** Anything it was
+handed is taken out of what it prints and reports: a key, a Copilot token,
+and each token inside a Codex sign-in file, as handed over and as Codex
+renews it. A line of an engine's error output is passed on up to 64 KiB and
+the rest of that line is dropped. A message from an engine longer than 8 MiB
+ends the conversation with it, says so as the turn's error, and the next
+line typed starts the engine again.
+
 ## Before a turn
 
 The runner sends no prompt until two things are true, and says which was not.
@@ -242,9 +265,13 @@ hub (`/internal/engine-credential`) for the item its engine runs on. The hub
 answers only for the session whose socket it is, only for an item one of
 that session's engines runs on, and only from that member's vault on this
 box. The runner writes it where the engine reads its sign-in, inside the
-container. When Codex has renewed its file by the end of a run, the runner
-hands the new one back the same way and the box keeps it in place of the
-old, so the next session on this machine is not signed out.
+container. The runner looks at Codex's file every couple of seconds while
+the engine is live and hands a renewed one back the same way when it sees
+one, and once more as the session is stopped, so a session stopped in the
+middle of the turn that renewed does not leave the box with a used-up
+sign-in. The box keeps the copy that was renewed later, by the file's own
+`last_refresh`, and refuses an older one: two sessions of one member each
+hand back their own copy, and the last to arrive is not always the newest.
 
 ## What a machine reports
 
@@ -291,6 +318,11 @@ the engines this machine does not run.
   an agent that says which model it fell back to.
 - **`HANDOFF.md` holds what the engine printed last**, which may be anything
   the session had on its screen.
+- **Two sessions of one member share one Codex sign-in.** Each is handed its
+  own copy of the file, and when one renews, the other's copy is used up: its
+  next renewal fails and its turn ends as `auth`. The box keeps the newer
+  file, so the next session started is signed in. Signing in on the machine
+  itself, which ends this, is not built yet.
 - **A session can say its own turn ended any way it likes.** TurnEnded comes
   over the session's socket from a process inside the session. A lie there
   puts a wrong word on a screen, or starts the member's own next engine in
@@ -315,7 +347,9 @@ real launch, tmux and the runner: no wait for a link, the task on the first
 note, and three engines in turn), `test/engines-run.test.js` (each adapter and the runner against a
 stand-in server speaking the published protocol: sign-in, the model check,
 a turn, a limit, a refusal, a permission request, the sign-in staged and
-handed back), `test/engines-hub.test.js` (TurnEnded and the sign-in on a
+handed back when it changes and as the session stops, OpenCode told to ask,
+the tokens in a sign-in withheld, a line and a message bounded),
+`test/engines-hub.test.js` (TurnEnded and the sign-in on a
 session's socket, the launch command, what the watcher says as a session
 moves), `test/engines-coordinator.test.js` (the list a start carries, the
 protocol 20 refusal, the task's handoff), the engine items in

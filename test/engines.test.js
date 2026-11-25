@@ -194,6 +194,35 @@ test('a Codex sign-in renewed on the box is kept through the vault’s next answ
   assert.equal(vaultEngineItem(cfg, 'debbie@members.invalid', 'codex'), null);
 });
 
+test('of two copies of a Codex sign-in handed back, the one renewed later is kept, whichever arrives last', (t) => {
+  // As Codex writes the file: it says when it was last renewed.
+  const at = (/** @type {string} */ refresh, /** @type {string|null} */ when) => JSON.stringify({ tokens: { access_token: 'a', refresh_token: refresh }, ...(when ? { last_refresh: when } : {}) });
+  const { cfg } = boxHolding(t, [{ name: 'codex', value: at('r-1', '2026-11-24T10:00:00Z'), expiresAt: null }]);
+  const rec = { createdBy: 'fleet:debbie@members.invalid', engines: [{ engine: 'codex' }] };
+  const held = () => vaultEngineItem(cfg, 'debbie@members.invalid', 'codex');
+  // Two sessions of Debbie's were each handed r-1. One renews at noon and hands its file back.
+  assert.equal(answerEngineCredential(cfg, rec, 'codex', at('r-2', '2026-11-24T12:00:00Z')).ok, true);
+  // THE OTHER ARRIVES LAST WITH AN OLDER FILE: one it renewed at eleven,
+  // whose token the noon renewal has since used up. It used to replace the
+  // good copy, and the next session on this machine was signed out.
+  const older = /** @type {any} */ (answerEngineCredential(cfg, rec, 'codex', at('r-1b', '2026-11-24T11:00:00Z')));
+  assert.deepEqual([older.ok, older.error, older.message], [false, 'not_kept', 'That does not read as a newer copy of the sign-in this machine holds, so it was not kept.']);
+  assert.equal(held(), at('r-2', '2026-11-24T12:00:00Z'));
+  // Neither is one renewed at the same moment that says something else, nor one that does not say when.
+  assert.equal(answerEngineCredential(cfg, rec, 'codex', at('r-x', '2026-11-24T12:00:00Z')).ok, false);
+  assert.equal(answerEngineCredential(cfg, rec, 'codex', at('r-y', null)).ok, false);
+  assert.equal(held(), at('r-2', '2026-11-24T12:00:00Z'));
+  // A later renewal is the one now, and handing the same file back twice is no refusal.
+  assert.equal(answerEngineCredential(cfg, rec, 'codex', at('r-3', '2026-11-24T13:00:00Z')).ok, true);
+  assert.equal(answerEngineCredential(cfg, rec, 'codex', at('r-3', '2026-11-24T13:00:00Z')).ok, true);
+  assert.equal(held(), at('r-3', '2026-11-24T13:00:00Z'));
+
+  // A copy held here that says nothing about when it was renewed, or does not read at all, has no claim to be the newer.
+  const plain = boxHolding(t, [{ name: 'codex', value: 'not a file at all', expiresAt: null }]);
+  assert.equal(answerEngineCredential(plain.cfg, rec, 'codex', at('r-9', null)).ok, true);
+  assert.equal(vaultEngineItem(plain.cfg, 'debbie@members.invalid', 'codex'), at('r-9', null));
+});
+
 test('the handoff note says who stopped, why, what was asked and what the checkout said, and that a machine wrote it', () => {
   const note = handoffNote({
     turn: { engine: 'claude-code', reason: 'limit', detail: 'usage limit reached', model: null, usage: null, resetsAt: Date.UTC(2026, 10, 24, 18, 30) },

@@ -11,13 +11,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
+import { EventEmitter } from 'node:events';
 import { createInterface } from 'node:readline';
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { Peer, codexAdapter, acpAdapter, run, parseArgs, stage, providerOf, acpModel, reasonFromCodexError, codexResetsAt } from '../sandbox/engine.mjs';
+import { Peer, codexAdapter, acpAdapter, run, parseArgs, stage, providerOf, acpModel, reasonFromCodexError, codexResetsAt, ERROR_LINE_MAX, OPENCODE_ASKS } from '../sandbox/engine.mjs';
+
+/** Wait until `said()` is true, or say what never happened. */
+async function until(/** @type {() => boolean} */ said, /** @type {string} */ what, ms = 3000) {
+  const by = Date.now() + ms;
+  while (!said()) {
+    if (Date.now() > by) assert.fail(`waited ${ms} ms and never saw: ${what}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 
 /**
  * A server on a pipe. `answer(message, send)` is called for each line the
@@ -372,7 +382,8 @@ async function sessionSocket(/** @type {import('node:test').TestContext} */ t, /
     server.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  return { socket, home: path.join(dir, 'home'), posts };
+  // `systemDir` stands for /etc/opencode, where a session that asks first has OpenCode told to ask.
+  return { socket, home: path.join(dir, 'home'), systemDir: path.join(dir, 'etc-opencode'), posts };
 }
 /** A pane's keyboard: the lines given, then closed. */
 const typed = (/** @type {string[]} */ lines = []) => {
@@ -466,12 +477,12 @@ test('an engine this runner does not speak to is said, and nothing is asked of t
 
 test('an OpenCode model on an API provider asks the socket for that provider’s key, files it under OpenCode’s name for the provider, and gives the engine its variable', async (t) => {
   const model = 'openrouter/anthropic/claude-sonnet-5.5';
-  const { socket, home, posts } = await sessionSocket(t, (kind) => (kind === 'apikey:openrouter' ? { ok: true, kind, value: ' sk-or-v1-0123456789abcdef\n' } : { ok: false, error: 'not_granted', message: 'This session’s member names no engine that runs on that sign-in.' }));
+  const { socket, home, systemDir, posts } = await sessionSocket(t, (kind) => (kind === 'apikey:openrouter' ? { ok: true, kind, value: ' sk-or-v1-0123456789abcdef\n' } : { ok: false, error: 'not_granted', message: 'This session’s member names no engine that runs on that sign-in.' }));
   const server = acpServer({ session: { configOptions: modelOption('opencode/big-pickle') }, set: (m) => ({ result: { configOptions: modelOption(m.params.value) } }) });
   /** @type {any[]} */
   const spawned = [];
   const code = await run({ engine: 'opencode', model, mode: 'safe', prompt: 'Fix the redirect.' }, {
-    socket, home, cwd: '/work', env: { PATH: '/usr/bin', OPENROUTER_API_KEY: 'somebody-elses' }, out: () => {}, stdin: typed(),
+    socket, home, systemDir, cwd: '/work', env: { PATH: '/usr/bin', OPENROUTER_API_KEY: 'somebody-elses' }, out: () => {}, stdin: typed(),
     spawnEngine: (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts) => {
       spawned.push({ argv: [cmd, ...args], env: opts.env });
       // By the time the engine starts, the key is where it reads keys, private, and nothing else is in the file.
@@ -492,12 +503,12 @@ test('an OpenCode model on an API provider asks the socket for that provider’s
 test('a provider that quotes the key back in its refusal does not put the key in the turn’s detail', async (t) => {
   // The detail goes to the coordinator, a notification and a screen.
   const KEY = 'sk-or-v1-fedcba9876543210';
-  const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: KEY }));
+  const { socket, home, systemDir, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: KEY }));
   const server = acpServer({ session: { error: { code: -32000, message: `401 from the provider: key ${KEY} is not valid` } } });
   /** @type {string[]} */
   const printed = [];
   await run({ engine: 'opencode', model: 'openrouter/anthropic/claude-sonnet-5.5', mode: 'safe', prompt: 'Go.' }, {
-    socket, home, cwd: '/work', env: { PATH: '/usr/bin' }, out: (/** @type {string} */ s) => printed.push(s), stdin: typed(), spawnEngine: () => server.child,
+    socket, home, systemDir, cwd: '/work', env: { PATH: '/usr/bin' }, out: (/** @type {string} */ s) => printed.push(s), stdin: typed(), spawnEngine: () => server.child,
   });
   const turn = posts.at(-1).body.turn;
   assert.equal(turn.detail, '401 from the provider: key [withheld] is not valid');
@@ -508,7 +519,7 @@ test('a provider that quotes the key back in its refusal does not put the key in
 test('an engine that prints the key, in its answer or on its error output, does not put it in the pane a handoff note is cut from', async (t) => {
   const KEY = 'sk-or-v1-0011223344556677';
   const model = 'openrouter/anthropic/claude-sonnet-5.5';
-  const { socket, home } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: KEY }));
+  const { socket, home, systemDir } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: KEY }));
   const server = acpServer({
     session: { configOptions: modelOption(model) },
     set: (m) => ({ result: { configOptions: modelOption(m.params.value) } }),
@@ -525,7 +536,7 @@ test('an engine that prints the key, in its answer or on its error output, does 
   /** @type {string[]} */
   const errors = [];
   const done = run({ engine: 'opencode', model, mode: 'safe', prompt: 'Go.' }, {
-    socket, home, cwd: '/work', env: { PATH: '/usr/bin' }, out: (/** @type {string} */ s) => pane.push(s), err: (/** @type {string} */ s) => errors.push(s), stdin: typed(), spawnEngine: () => server.child,
+    socket, home, systemDir, cwd: '/work', env: { PATH: '/usr/bin' }, out: (/** @type {string} */ s) => pane.push(s), err: (/** @type {string} */ s) => errors.push(s), stdin: typed(), spawnEngine: () => server.child,
   });
   stderr.write(`WARN provider rejected Authorization: Bearer ${KEY}\nsecond `);
   stderr.end('half');
@@ -555,4 +566,178 @@ test('with no key on the machine for its member, no engine is started and the tu
   assert.equal(started, false);
   assert.equal(code, 0, 'the pane stays for whoever looks at it; the turn is what failed');
   assert.deepEqual([posts.at(-1).body.turn.reason, posts.at(-1).body.turn.detail], ['auth', 'The operator of this machine has not turned that API provider on.']);
+});
+
+// ── A session that asks first (docs/engines.md, "Where an engine runs") ─────
+
+/**
+ * What OpenCode does with a tool, from its machine's settings, by the rules
+ * its permissions page gives: the tool's own rule, else `*`, else allow,
+ * which is its default for nearly everything.
+ */
+function openCodeWould(/** @type {string} */ systemDir, /** @type {string} */ tool) {
+  /** @type {any} */
+  let permission = {};
+  try {
+    permission = JSON.parse(readFileSync(path.join(systemDir, 'opencode.json'), 'utf8')).permission ?? {};
+  } catch { /* no settings: its defaults */ }
+  if (typeof permission === 'string') return permission;
+  const rule = permission[tool] ?? permission['*'] ?? 'allow';
+  return typeof rule === 'string' ? rule : (rule['*'] ?? 'allow');
+}
+
+/** OpenCode's ACP agent on a turn that reads a file, edits one and runs a command, asking where its settings say to. */
+function openCodeActing(/** @type {string} */ systemDir) {
+  /** @type {string[]} */
+  const did = [];
+  /** @type {Map<number, string>} */
+  const asking = new Map();
+  let turn = 0;
+  // The three options OpenCode offers with every question (packages/opencode/src/acp/permission.ts).
+  const options = [{ optionId: 'once', kind: 'allow_once', name: 'Allow once' }, { optionId: 'always', kind: 'allow_always', name: 'Always allow' }, { optionId: 'reject', kind: 'reject_once', name: 'Reject' }];
+  const server = standIn((m, send) => {
+    const reply = (/** @type {any} */ body) => send({ jsonrpc: '2.0', id: m.id, ...body });
+    const finish = () => send({ jsonrpc: '2.0', id: turn, result: { stopReason: 'end_turn' } });
+    if (m.method === 'initialize') reply({ result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } });
+    else if (m.method === 'session/new') reply({ result: { sessionId: 's-1', configOptions: modelOption(ASKED) } });
+    else if (m.method === 'session/prompt') {
+      turn = m.id;
+      for (const [i, tool] of ['read', 'edit', 'bash'].entries()) {
+        const would = openCodeWould(systemDir, tool);
+        if (would === 'allow') did.push(tool);
+        else if (would === 'ask') {
+          asking.set(900 + i, tool);
+          send({ jsonrpc: '2.0', id: 900 + i, method: 'session/request_permission', params: { sessionId: 's-1', toolCall: { toolCallId: `c${i}`, title: tool }, options } });
+        }
+      }
+      if (!asking.size) finish();
+    } else if (!m.method && asking.has(m.id)) {
+      const tool = String(asking.get(m.id));
+      asking.delete(m.id);
+      if (m.result?.outcome?.outcome === 'selected' && ['once', 'always'].includes(m.result.outcome.optionId)) did.push(tool);
+      if (!asking.size) finish();
+    }
+  });
+  return { server, did };
+}
+
+test('a session that asks first has OpenCode told to ask, so the runner’s no is reached: it looks, and neither edits nor runs anything', async (t) => {
+  const { socket, home, systemDir, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: 'gho_0123456789abcdef' }));
+  const going = async (/** @type {string} */ mode, /** @type {string} */ dir) => {
+    const { server, did } = openCodeActing(dir);
+    /** @type {string[]} */
+    const out = [];
+    await run({ engine: 'opencode', model: ASKED, mode, prompt: 'Fix the redirect.' }, { socket, home, systemDir: dir, cwd: '/work', env: {}, out: (s) => out.push(s), stdin: typed(), spawnEngine: () => server.child });
+    return { did, said: out.join('') };
+  };
+
+  // OPENCODE ALLOWS UNLESS IT IS TOLD OTHERWISE, and was told nothing: a
+  // session that asks first edited and ran with nobody asked.
+  const safe = await going('safe', systemDir);
+  assert.deepEqual(safe.did, ['read'], 'it read; the edit and the command were asked about and declined');
+  assert.equal(safe.said.split('Declined something opencode asked to do').length - 1, 2);
+  assert.equal(posts.at(-1)?.body.turn.reason, 'done');
+  // In the machine's own settings, which a project's opencode.json does not override.
+  assert.deepEqual(JSON.parse(readFileSync(path.join(systemDir, 'opencode.json'), 'utf8')), OPENCODE_ASKS);
+  assert.deepEqual([OPENCODE_ASKS.permission['*'], OPENCODE_ASKS.permission.read['*.env']], ['ask', 'deny']);
+
+  // A session that does not ask first is told nothing, and OpenCode goes on as it does.
+  const free = path.join(home, 'etc-none');
+  assert.deepEqual((await going('dangerous', free)).did, ['read', 'edit', 'bash']);
+  assert.equal(existsSync(path.join(free, 'opencode.json')), false);
+});
+
+test('a session that asks first does not start an OpenCode it could not tell to ask', async (t) => {
+  const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: 'gho_0123456789abcdef' }));
+  let started = 0;
+  // Its settings directory cannot be made: the path runs through a socket.
+  await run({ engine: 'opencode', model: ASKED, mode: 'safe', prompt: 'Go.' }, { socket, home, systemDir: path.join(socket, 'etc'), cwd: '/work', env: {}, out: () => {}, stdin: typed(), spawnEngine: () => void (started += 1) });
+  assert.equal(started, 0);
+  const turn = posts.at(-1)?.body.turn;
+  assert.equal(turn.reason, 'error');
+  assert.match(turn.detail, /^could not tell OpenCode to ask before it acts, so it was not started: /);
+});
+
+// ── A Codex sign-in that renews while the session runs ──────────────────────
+
+test('a Codex sign-in renewed in the middle of a turn goes back to the box when it changes, and again as the session is stopped', async (t) => {
+  const signIn = (/** @type {string} */ refresh, /** @type {string} */ at) => JSON.stringify({ tokens: { access_token: `at-${refresh}-0123456789`, refresh_token: `rt-${refresh}-0123456789` }, last_refresh: at });
+  const first = signIn('one', '2026-11-24T10:00:00Z');
+  const renewed = signIn('two', '2026-11-24T12:00:00Z');
+  const again = signIn('three', '2026-11-24T12:30:00Z');
+  for (const watchMs of [20, 60_000]) {
+    const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: first }));
+    const file = path.join(home, '.codex', 'auth.json');
+    const signals = new EventEmitter();
+    /** @type {() => void} */
+    let inTurn = () => {};
+    const turning = new Promise((r) => (inTurn = () => r(null)));
+    // A turn that renews the sign-in and is still going when the session is stopped.
+    const server = codexServer({ turn: () => { writeFileSync(file, renewed); inTurn(); } });
+    const done = run({ engine: 'codex', model: 'gpt-5.1-codex', mode: 'safe', prompt: 'Fix the redirect.' }, { socket, home, cwd: '/work', env: {}, out: () => {}, stdin: new PassThrough(), spawnEngine: () => server.child, signals, watchMs });
+    // If it never ends, end it, so a failure here is a failure and not a test that hangs.
+    t.after(() => server.child.kill());
+    await turning;
+    const handedBack = () => posts.filter((p) => p.path === '/internal/engine-credential' && typeof p.body.value === 'string').map((p) => p.body.value);
+    if (watchMs < 1000) {
+      // WHEN IT CHANGES. It used to wait for the turn to end, and a turn can be an hour.
+      await until(() => handedBack().includes(renewed), 'the renewed sign-in handed back while the turn is still going');
+    }
+    // AS IT IS STOPPED, which is tmux closing the pane mid-turn. It used to exit holding the only good copy.
+    writeFileSync(file, again);
+    signals.emit('SIGTERM');
+    assert.equal(await Promise.race([done, new Promise((r) => setTimeout(() => r('still running'), 3000))]), 0);
+    assert.equal(handedBack().at(-1), again, `stopped mid-turn, looking every ${watchMs} ms`);
+    assert.ok(server.child.exitCode !== null, 'and the engine is ended with it');
+    assert.deepEqual(posts.filter((p) => p.body.event === 'TurnEnded'), [], 'a stop is not a turn’s end');
+  }
+});
+
+test('the tokens inside a Codex sign-in are never said, in the pane or in a turn’s detail, and its date still is', async (t) => {
+  // As `codex login` leaves it: a file with line breaks in it, which was not withheld at all.
+  const file = JSON.stringify({ OPENAI_API_KEY: null, tokens: { id_token: 'idtok-aaaaaaaaaaaaaaaa', access_token: 'acctok-bbbbbbbbbbbbbbbb', refresh_token: 'reftok-cccccccccccccccc', account_id: 'acct-dddddddddddddddd' }, last_refresh: '2026-11-24T10:00:00.000000Z' }, null, 2);
+  const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: file }));
+  const server = codexServer({
+    turn: (send) => {
+      send({ method: 'item/agentMessage/delta', params: { delta: 'auth.json has "refresh_token": "reftok-cccccccccccccccc", last renewed 2026-11-24T10:00:00.000000Z' } });
+      completed(send, { status: 'failed', error: { message: 'token acctok-bbbbbbbbbbbbbbbb was rejected' } });
+    },
+  });
+  /** @type {string[]} */
+  const out = [];
+  await run({ engine: 'codex', model: 'gpt-5.1-codex', mode: 'safe', prompt: 'Go.' }, { socket, home, cwd: '/work', env: {}, out: (s) => out.push(s), stdin: typed(), spawnEngine: () => server.child });
+  const pane = out.join('');
+  assert.match(pane, /auth\.json has "refresh_token": "\[withheld\]", last renewed 2026-11-24T10:00:00\.000000Z/);
+  for (const token of ['idtok-aaaaaaaaaaaaaaaa', 'acctok-bbbbbbbbbbbbbbbb', 'reftok-cccccccccccccccc']) assert.ok(!pane.includes(token), token);
+  assert.equal(posts.at(-1)?.body.turn.detail, 'token [withheld] was rejected');
+  assert.ok(!JSON.stringify(posts.filter((p) => p.path === '/internal/session-event')).includes('tok-'), 'nothing reported names a token');
+});
+
+// ── What an engine sends is bounded ─────────────────────────────────────────
+
+test('a message longer than the runner reads ends the conversation and says so, and an error line is cut at its bound', async (t) => {
+  // It was held until its newline came, however long that took.
+  const server = standIn(() => {});
+  const peer = new Peer(server.child, { version: null, maxMessage: 1000 });
+  const asked = peer.request('thread/start', {}, 0);
+  server.child.stdout.write('x'.repeat(5000));
+  const failed = await Promise.race([asked.then(() => 'answered', (e) => e), new Promise((r) => setTimeout(() => r('still waiting'), 1000))]);
+  assert.match(String(/** @type {any} */ (failed)?.message ?? failed), /^the engine sent one message longer than 1 KiB, which is more than this runner reads$/);
+  assert.equal(peer.closed, true);
+  // The rest of that line, and what follows, moves nothing.
+  server.child.stdout.write(`${'x'.repeat(5000)}\n{"id":1,"result":{}}\n`);
+
+  const { socket, home, systemDir } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: 'gho_0123456789abcdef' }));
+  const agent = acpServer({ session: { configOptions: modelOption(ASKED) } });
+  const stderr = new PassThrough();
+  /** @type {any} */ (agent.child).stderr = stderr;
+  /** @type {string[]} */
+  const errors = [];
+  const done = run({ engine: 'opencode', model: ASKED, mode: 'safe', prompt: 'Go.' }, { socket, home, systemDir, cwd: '/work', env: {}, out: () => {}, err: (s) => errors.push(s), stdin: typed(), spawnEngine: () => agent.child });
+  for (let i = 0; i < 8; i++) stderr.write('e'.repeat(ERROR_LINE_MAX / 2));
+  stderr.end('\nthe next line\n');
+  await done;
+  const said = errors.join('');
+  assert.ok(said.length < ERROR_LINE_MAX + 200, `${said.length} characters of one line were passed on`);
+  assert.match(said, /e \[the rest of this line was not kept\]\nthe next line\n$/);
 });

@@ -114,7 +114,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-export AGENT_SESSION_HOOK_SOCKET="$own/hub.sock" HOME="$D/home" FLEETWRIGHT_OPENCODE_BIN="$D/opencode"
+export AGENT_SESSION_HOOK_SOCKET="$own/hub.sock" HOME="$D/home" FLEETWRIGHT_OPENCODE_BIN="$D/opencode" FLEETWRIGHT_OPENCODE_SYSTEM_DIR="$D/etc-opencode"
 case "$1" in
   fleetwright-engine) shift; exec ${q(node)} ${q(RUNNER)} "$@" ;;
   claude) exec ${q(node)} "$D/claude.mjs" ;;
