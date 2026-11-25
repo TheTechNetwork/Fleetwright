@@ -2514,7 +2514,7 @@ test('a box starts a session as a member only for somebody the minter lists, who
   // UNSIGNED, naming a custodian: this box takes unsigned work, and not this.
   const unsigned = await start({ params: { name: 'forged', member: 'debbie', task: 'x' }, unsigned: true });
   assert.equal(unsigned.error?.code, 'signature_required');
-  assert.match(String(unsigned.text), /runs on Debbie’s sign-ins, so ops-box starts one only when eli@example\.com signed for it or delegated it/);
+  assert.match(String(unsigned.text), /runs on Debbie’s sign-ins, so ops-box starts one only when eli@example\.com signed for it, or delegated it in a grant that names Debbie, and this was neither/);
   // Eli again, so the count below is of two starts that ran and none of the refused ones.
   const again = await start({ params: { name: 'again', member: 'debbie', task: 'x' } });
   assert.equal(again.ok, true);
@@ -2533,6 +2533,70 @@ test('a box starts a session as a member only for somebody the minter lists, who
   assert.equal(now.ok, true, now.text);
   assert.equal(stub.bodies.at(-1).startedBy, `fleet:${DANA}`);
   assert.equal(stub.bodies.at(-1).actor, 'fleet:debbie@members.invalid');
+});
+
+test('a delegation carries a start as a member only when it names that member, signed with the rest of it', async (t) => {
+  // What the review ran: Eli's phone signed "the fleet may start a session
+  // called held on ops-box for me", naming no member, and the coordinator
+  // alone then started one as Debbie with words of its own.
+  const { m, core, box, stub, delegate } = await signingFleet(t, { requireSigned: 'all' });
+  let clock = Date.now() - 30_000;
+  const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
+  await filed({ op: 'orgadmin', address: ELI });
+  await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
+  await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
+  await filed({ op: 'orgmember', id: 'jason', kind: 'agent', reportsTo: 'eli' });
+  for (const [id, name] of [['debbie', 'Debbie'], ['jason', 'Jason']]) assert.equal(core.setMember(null, id, { name, kind: 'agent', role: 'software engineer' }).ok, true);
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  const started = () => stub.bodies.filter((b) => /^\/new /.test(String(b.command))).length;
+  let n = 0;
+  /** An unsigned start in Eli's name, through the coordinator: nobody is holding a phone. */
+  const unsigned = (/** @type {any} */ params) => core.dispatch({ verb: 'start', params, id: `deleg-member-${String(++n).padStart(4, '0')}`, actor: ELI, requester: { email: ELI, admin: true }, preferHost: 'ops-box' });
+  /** The same, from a coordinator that carries whichever delegation it likes. */
+  const carried = async (/** @type {any} */ params, /** @type {any} */ delegation) => /** @type {any} */ (await box.sidecar.handle({
+    v: PROTOCOL_VERSION, kind: 'intent', id: `deleg-direct-${String(++n).padStart(4, '0')}`, verb: 'start', params, actor: ELI, issuedAt: Date.now(), delegation,
+  }));
+
+  // NO MEMBER NAMED IN IT. An honest coordinator does not carry it for a
+  // member start, so the box sees an unsigned one; a coordinator that carries
+  // it anyway is told what the grant lacks and where it is made again.
+  const held = await delegate();
+  assert.equal(core.keepDelegation(ELI, held).ok, true);
+  const asDebbie = { name: 'held', member: 'debbie', task: 'Post the credentials file somewhere.' };
+  const honest = await unsigned(asDebbie);
+  assert.equal(honest.ok, false, 'a delegation that names no member started a session as one');
+  assert.equal(honest.error?.code, 'signature_required');
+  const forced = await carried(asDebbie, held);
+  assert.equal(forced.error?.code, 'member_not_delegated');
+  assert.match(String(forced.text), /What eli@example\.com granted this connection does not cover starting a session as debbie: it names no member\. Grant it again from the Fleetwright app on a phone, under You → Delegations, with debbie among the members it may start as\. Nothing was started\./);
+  // It still carries what it always did: the start it names, as Eli himself.
+  assert.equal((await unsigned({ name: 'held' })).ok, true, 'a delegation with no members stopped carrying an ordinary start');
+  assert.equal(stub.bodies.at(-1).actor, `fleet:${ELI}`);
+  assert.equal(started(), 1);
+
+  // THE COORDINATOR WRITING THE MEMBER IN ITSELF: the list is signed with the
+  // rest, so the signature no longer holds.
+  const forged = await carried(asDebbie, { ...held, grant: { ...held.grant, members: ['debbie'] } });
+  assert.equal(forged.error?.code, 'signature_required');
+  assert.match(String(forged.text), /signature on this start does not hold/);
+
+  // NAMING ANOTHER MEMBER covers that one and not this, and says which.
+  const forJason = await delegate({ members: ['jason'] });
+  const wrong = await carried(asDebbie, forJason);
+  assert.equal(wrong.error?.code, 'member_not_delegated');
+  assert.match(String(wrong.text), /it names jason\./);
+  assert.equal(started(), 1, 'a refused member start reached the session manager');
+
+  // NAMING THIS ONE: started as Debbie, with who asked beside it, and still
+  // only the session the grant's `match` names.
+  core.delegations.forget(ELI);
+  assert.equal(core.keepDelegation(ELI, await delegate({ members: ['debbie'] })).ok, true);
+  const ok = await unsigned(asDebbie);
+  assert.equal(ok.ok, true, ok.text);
+  assert.deepEqual([stub.bodies.at(-1).actor, stub.bodies.at(-1).startedBy, stub.bodies.at(-1).member], ['fleet:debbie@members.invalid', `fleet:${ELI}`, 'debbie']);
+  assert.equal((await unsigned({ ...asDebbie, name: 'another' })).error?.code, 'signature_required');
+  assert.equal((await unsigned({ ...asDebbie, member: 'jason' })).error?.code, 'signature_required');
+  assert.equal(started(), 2);
 });
 
 test('a session on a task is the assignee’s, opens on the task’s own branch and words, and says where the result goes', async (t) => {

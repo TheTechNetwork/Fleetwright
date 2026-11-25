@@ -248,6 +248,21 @@ list**, whatever the box's signature mode: an unsigned actor here would be the
 coordinator naming a custodian. Otherwise it refuses, `not_custodian`, saying
 who the minter lists.
 
+**A delegation covers a member only by naming it.** A delegation is a standing
+permission the coordinator carries ([signed-intents.md](./signed-intents.md),
+"Delegations"), and one that named no member used to carry a start as any
+member its signer could act for: a grant made to hold one start, or an MCP
+client's for a week, let the coordinator alone start a session on an agent's
+sign-ins with a task of its own. So a delegation may carry `members`, a list
+of member ids signed with the rest of it, and a delegated start that names
+`member` is covered only when that list has the id. No list means no member.
+The coordinator does not carry a delegation that lacks the member, and a box
+handed one anyway refuses, `member_not_delegated`, saying which members the
+grant does name and that it is made again from the phone, under You →
+Delegations, with the member among them. The task and the session's name are
+held to the grant's `match` as before. A request the person signs on their own
+phone needs none of this: the member is in what they signed.
+
 **Credentials come from the member's principal and nowhere else.** A box
 files everything a session runs on by the address of whose it is, and every
 reader there, the credential broker included, finds a session's sign-ins by
@@ -327,7 +342,14 @@ tree as the minter's.
   admin sees somebody else listed as the org's admin.
 - **A member's instructions are the coordinator's word.** A compromised
   coordinator can change what a member's session is told at its start. It
-  cannot start one, or change the task, without a custodian's signature.
+  cannot start one, or change the task, without a custodian's signature, or
+  a delegation of theirs that names that member.
+- **A delegation that names a member is a standing start as it.** While it
+  lasts, the coordinator can start that member as often as it likes, with
+  any task the grant's `match` leaves open. An MCP client's grant matches
+  nothing, so it leaves the task open: that is what lets an agent hand work
+  to a member, and it is why the grant lists members one by one and runs out
+  in a day or a week.
 - **A custodian can use what they keep.** Approving a box for a member's
   vault hands that box the member's tokens. Custody is that power; who added
   the member, the tree and the person's switch decide who has it.

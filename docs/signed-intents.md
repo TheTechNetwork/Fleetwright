@@ -559,12 +559,22 @@ something in their name later, when they are not there to sign it
 
 ```
 agent-fleet/v1/delegation
-<canonical JSON of { actor, expires, hosts, id, issuedAt, match, v: 1, verbs }>
+<canonical JSON of { actor, expires, hosts, id, issuedAt, match, members?, v: 1, verbs }>
 ```
 
 - **What it names, all of it signed:** the person, the verbs, the boxes (or
   `["*"]` for whichever box the fleet places it on), parameters the intent must
   carry exactly (`match`), and a window of at most a month.
+- **And the members it may start a session as** (`members`, a list of member
+  ids, at most 64). A start that names `member` is covered only by a
+  delegation whose list has that id, and a delegation with no list covers no
+  member start at all ([members.md](./members.md), "Starting as a member").
+  The key is signed only when the grant carries it: with none it is left out
+  of the JSON altogether, so a delegation made before the field existed is
+  the same bytes it always was and still verifies. With some it is the array
+  as the grant carries it, in that order, sorted between `match` and `v` like
+  any other key. A phone that names nobody leaves the key out and does not
+  send an empty list, which a box from before the field would not check.
 - **How a box checks it:** against the same key list it checks a signature with,
   and then whether it covers this intent, to this box, now. A box takes a
   delegation only on an intent with no signature, because what the person
@@ -596,7 +606,7 @@ they sign intents with, and only once it is listed:
 | Finishing a GitHub or Cloudflare sign-in | `exchange`, `link`, `renew` | the box it was for, or any | the provider | ten minutes |
 | Keeping machines ready: making them | `provision` | any | `platform: vm` and the image | a month, signed again daily while kept |
 | Keeping machines ready: ending them | `vmctl` | any | `action: stop` | a month, the same |
-| An MCP client, chosen under You → Delegations | what the MCP tools offer, less `exchange` and `update` | any | nothing | a day or a week |
+| An MCP client, chosen under You → Delegations | what the MCP tools offer, less `exchange` and `update` | any | nothing, and the members picked when it is made | a day or a week |
 
 The phones list every delegation under You → Delegations, with Revoke.
 

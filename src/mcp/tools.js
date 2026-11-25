@@ -220,7 +220,8 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
       'The organization: every member of the fleet, each a person or an AI agent, with its role, who it ' +
       'reports to, the kinds of work it takes and where it runs. Read this to choose who a piece of work ' +
       'belongs to, then pass a member’s id as `member` to fleet_start. It also says which members you may ' +
-      'start a session as.',
+      'start a session as. Starting as one from here also needs the grant you act under to name that member: ' +
+      'its person makes that grant on their phone, under You \u2192 Delegations, and picks the members there.',
     schema: {},
     requires: [],
     local: true,

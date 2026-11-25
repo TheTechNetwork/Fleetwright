@@ -950,9 +950,11 @@ export class Sidecar {
     let verdict = null;
     /** @type {'taken'|'failed'|'held'|undefined} */
     let askedAgain;
+    /** The members a delegation names, when that is the one thing it lacks for this start. @type {string[]|undefined} */
+    let grantNames;
     if (this.intentKeys) {
       try {
-        ({ verdict, askedAgain } = await this.intentKeys.check(intent, this.hostId));
+        ({ verdict, askedAgain, members: grantNames } = await this.intentKeys.check(intent, this.hostId));
         if (verdict === 'bad-signature' || verdict === 'unknown-key' || verdict === 'revoked') {
           const what = intent.sig ? 'a signature' : 'a delegation';
           this.log.warn(`sidecar: ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'} carries ${what} that does not hold (${verdict})${this.requireSigned !== 'off' ? '' : '; not refused, as this box does not enforce'}`);
@@ -960,6 +962,24 @@ export class Sidecar {
       } catch (e) {
         this.log.warn(`sidecar: could not check ${intent.id}'s signature: ${/** @type {Error} */ (e).message}`);
       }
+    }
+    // A DELEGATION THAT DOES NOT NAME THE MEMBER, on a start as one. Its
+    // signer's key is listed and the grant holds in every other way, so this
+    // is said in its own words on every box, enforcing or not: what the grant
+    // does name, and that the way on is a grant made again on the phone. A
+    // delegation used to carry a start as any member its signer could act
+    // for, which let the coordinator alone start a session on a member's
+    // sign-ins with words of its own (intent-signature.js, `members`).
+    if (verdict === 'not-covered' && grantNames) {
+      const id = String(intent.params?.member ?? '');
+      const name = typeof intent.params?.memberName === 'string' && intent.params.memberName ? intent.params.memberName : id;
+      const names = grantNames.length ? grantNames.join(', ') : 'no member';
+      this.log.warn(`sidecar: refused start ${intent.id} as ${id} from ${intent.actor ?? 'nobody'}: the delegation it carries names ${names}`);
+      return {
+        v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'member_not_delegated' },
+        text: `What ${intent.actor} granted this connection does not cover starting a session as ${name}: it names ${names}. ` +
+          `Grant it again from the Fleetwright app on a phone, under You \u2192 Delegations, with ${name} among the members it may start as. Nothing was started.`,
+      };
     }
     if (this.#enforces(intent) && verdict !== 'signed' && verdict !== 'delegated' && needsSignature(intent.verb)) {
       const why = unsignedReason(verdict, intent, this.intentKeys?.problem ?? null, askedAgain);
@@ -1098,7 +1118,10 @@ export class Sidecar {
    * (core.js, #startAs): it is the party this box does not believe. What
    * this box believes is the minter's signed list of who may start as each
    * member, and a signature or delegation, by a key the same list names for
-   * that person, over this start with this member in it.
+   * that person, over this start with this member in it. A delegation says
+   * so by naming the member (`members`), and one that does not never gets
+   * here: checkDelegation finds it does not cover the start, and handle()
+   * refuses it first.
    *
    *  - SIGNED OR DELEGATED, WHATEVER THE MODE. A box set to take unsigned
    *    work takes the coordinator's word for who asked. Here that word would
@@ -1134,7 +1157,7 @@ export class Sidecar {
       return refuse('not_custodian', `${asker || 'Nobody named'} may not start a session as ${name}. The vault lists ${who}.`);
     }
     if (verdict !== 'signed' && verdict !== 'delegated') {
-      return refuse('signature_required', `A session as ${name} runs on ${name}’s sign-ins, so ${this.hostId} starts one only when ${asker} signed for it or delegated it, and this was neither.`);
+      return refuse('signature_required', `A session as ${name} runs on ${name}’s sign-ins, so ${this.hostId} starts one only when ${asker} signed for it, or delegated it in a grant that names ${name}, and this was neither.`);
     }
     const instructions = typeof intent.params.memberBrief === 'string' ? intent.params.memberBrief : '';
     const words = typeof intent.params.task === 'string' ? intent.params.task : '';
