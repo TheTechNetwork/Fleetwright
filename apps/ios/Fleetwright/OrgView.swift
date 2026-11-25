@@ -1244,8 +1244,10 @@ struct MemberForm: View {
         fields["hosts"] = placement
         let budgetText = budget.trimmingCharacters(in: .whitespacesAndNewlines)
         if !budgetText.isEmpty {
-            guard let amount = Double(budgetText), amount >= 0 else {
-                result = "The monthly budget is a number of dollars, or empty."
+            // ONLY A NUMBER THE FLEET WOULD TAKE IS PUT IN THE REQUEST
+            // (memberBudgetAmount). Anything else is refused here in words.
+            guard let amount = memberBudgetAmount(budgetText) else {
+                result = memberBudgetRefusal
                 return
             }
             fields["budgetUsdMonth"] = amount
@@ -1510,6 +1512,34 @@ func memberList(_ text: String) -> [String] {
     text.split(separator: ",")
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
         .filter { !$0.isEmpty }
+}
+
+/// The most a member's monthly budget may be, in dollars: the fleet's own
+/// bound (`MAX_BUDGET`, src/fleet/protocol/members.js).
+let memberBudgetMost = 1_000_000.0
+
+/// What the form says of a budget it will not send. The same sentence as
+/// Android.
+let memberBudgetRefusal = "The monthly budget is a number of dollars, at most a million, or empty."
+
+/// A typed monthly budget as dollars, or nil for anything that is not one.
+///
+/// DIGITS AND ONE DECIMAL MARK, THEN A FINITE NUMBER. `Double("inf")` and
+/// `Double("nan")` are numbers to Swift, and JSONSerialization raises on
+/// either, so a pasted word took the whole form down. The text is held to
+/// digits first, and the number to finite, not negative and no more than
+/// the fleet takes.
+///
+/// A COMMA IS THE DECIMAL MARK WHERE THE LOCALE WRITES ONE. The decimal pad
+/// on such a phone has no full stop to type, and "12,5" was refused as not a
+/// number. Anywhere else a comma groups thousands, and it is refused rather
+/// than guessed at: a guess would save the wrong amount.
+func memberBudgetAmount(_ text: String, decimalMark: String = Locale.current.decimalSeparator ?? ".") -> Double? {
+    var plain = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if decimalMark == "," { plain = plain.replacingOccurrences(of: ",", with: ".") }
+    guard !plain.isEmpty, plain.allSatisfy({ ($0.isASCII && $0.isNumber) || $0 == "." }) else { return nil }
+    guard let amount = Double(plain), amount.isFinite, amount >= 0, amount <= memberBudgetMost else { return nil }
+    return amount
 }
 
 /// A budget as the field shows it: whole dollars without a decimal point.

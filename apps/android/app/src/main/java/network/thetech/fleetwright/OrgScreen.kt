@@ -1100,7 +1100,8 @@ private fun MemberForm(
             label = { Text("Monthly budget (USD)") },
             placeholder = { Text("Optional") },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            // Decimal, so cents can be typed with the locale's own mark.
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth(),
         )
         Hint("Dollars a month, at API prices. Approvals decides what happens when it is passed.")
@@ -1132,7 +1133,10 @@ private fun MemberForm(
                     result = ""
                     val id = existing?.id ?: memberSlug(name)
                     val budgetText = budget.trim()
-                    val amount = budgetText.toDoubleOrNull()
+                    // ONLY A NUMBER THE FLEET WOULD TAKE IS PUT IN THE
+                    // REQUEST (memberBudgetAmount). Anything else is
+                    // refused here in words.
+                    val amount = memberBudgetAmount(budgetText)
                     // THE LIST, IN ITS ORDER, and never an empty one or an
                     // OpenCode with no model, whatever pressed Save. The
                     // rest of the rules are your fleet's, and its refusal
@@ -1145,8 +1149,7 @@ private fun MemberForm(
                         // member, since saving one is how it is changed.
                         // Refused here, by name.
                         creating && roster.any { it.id == id } -> result = "$id is already a member. Choose another name."
-                        budgetText.isNotEmpty() && (amount == null || amount < 0) ->
-                            result = "The monthly budget is a number of dollars, or empty."
+                        budgetText.isNotEmpty() && amount == null -> result = MEMBER_BUDGET_REFUSAL
                         engineList == null -> result = sending.problem ?: "A member has at least one engine."
                         else -> {
                             val fields = JSONObject()
@@ -1426,6 +1429,39 @@ fun memberSlug(name: String): String {
 /** A comma-separated field as a list: trimmed, lowercased, empties dropped. */
 fun memberList(text: String): List<String> =
     text.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+
+/**
+ * The most a member's monthly budget may be, in dollars: the fleet's own
+ * bound (`MAX_BUDGET`, src/fleet/protocol/members.js).
+ */
+const val MEMBER_BUDGET_MOST = 1_000_000.0
+
+/** What the form says of a budget it will not send. The same sentence as iOS. */
+const val MEMBER_BUDGET_REFUSAL = "The monthly budget is a number of dollars, at most a million, or empty."
+
+/**
+ * A typed monthly budget as dollars, or null for anything that is not one.
+ *
+ * DIGITS AND ONE DECIMAL MARK, THEN A FINITE NUMBER. "NaN" and "Infinity"
+ * are numbers to `toDoubleOrNull`, NaN is not less than zero, and
+ * `JSONObject.put` throws on either, so a pasted word took the whole form
+ * down. The text is held to digits first, and the number to finite, not
+ * negative and no more than the fleet takes.
+ *
+ * A COMMA IS THE DECIMAL MARK WHERE THE LOCALE WRITES ONE, and "12,5" was
+ * refused there as not a number. Anywhere else a comma groups thousands, and
+ * it is refused rather than guessed at: a guess would save the wrong amount.
+ */
+fun memberBudgetAmount(
+    text: String,
+    decimalMark: Char = java.text.DecimalFormatSymbols.getInstance().decimalSeparator,
+): Double? {
+    val typed = text.trim()
+    val plain = if (decimalMark == ',') typed.replace(',', '.') else typed
+    if (plain.isEmpty() || !plain.all { it in '0'..'9' || it == '.' }) return null
+    val amount = plain.toDoubleOrNull() ?: return null
+    return if (amount.isFinite() && amount >= 0 && amount <= MEMBER_BUDGET_MOST) amount else null
+}
 
 /** A budget as the field shows it: whole dollars without a decimal point. */
 fun memberBudgetText(amount: Double): String =
