@@ -383,6 +383,10 @@ export async function verifyRemoteControl(cfg, name) {
 //         2. Resume full session as-is
 //         3. Don't ask me again
 //
+// (Since 2.1.330 the sentence is "Resuming the full session uses a lot of
+// your usage limits. Resuming from a summary uses less.", and there is no
+// third option. The two that are matched on below are as they were.)
+//
 // and then blocks forever waiting for a keypress nobody sends. Unattended
 // restore therefore fails silently for exactly the long-running sessions it
 // exists to protect — one sat at this dialog for two days, alive in tmux and

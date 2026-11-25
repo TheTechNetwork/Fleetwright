@@ -60,6 +60,8 @@ import { log } from '../log.js';
  */
 
 const VERSION = 1;
+/** What a start from the fleet says about a session, which its record carries from its first write (upsert). */
+const FROM_THE_FLEET = Object.freeze(['member', 'memberName', 'memberRole', 'startedBy', 'taskId', 'taskBranch']);
 
 export class Registry {
   /** @param {{ stateFile: string, spoolFile: string }} opts */
@@ -186,6 +188,13 @@ export class Registry {
           // `archive` is: dropped on a fresh start, the session would read
           // as one that names no engines, and nothing would be handed on.
           ...(patch.engines ? { engines: patch.engines, engineAt: patch.engineAt ?? 0 } : {}),
+          // Which member it runs as, who asked, and which task it is on, when
+          // the fleet's start says (docs/members.md, docs/tasks.md). Named
+          // here for the reason `engines` is. They used to arrive in a second
+          // write, after the start had answered, and a first engine that
+          // stopped before then was handed on from a record that named no
+          // task (sessions.js, start).
+          ...Object.fromEntries(FROM_THE_FLEET.filter((k) => k in patch).map((k) => [k, /** @type {any} */ (patch)[k]])),
           account: patch.account ?? null,
           detail: patch.detail ?? null,
           rcUrl: patch.rcUrl ?? null,

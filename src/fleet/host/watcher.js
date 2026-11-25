@@ -516,7 +516,14 @@ export class SessionWatcher {
       // no hook record, or one whose last hook said ready, is CANNOT TELL — a
       // dialog nothing here recognises, an image older than the hooks — and
       // cannot-tell is reported as waiting (above), never restarted onto.
-      if (running && !awaiting && !atRest && activity?.phase === 'working') await this.#maybeRestartIdle(name, quiet);
+      // AND ONLY A SESSION THAT COMES BACK. The restart is a stop and a
+      // resume, and a resume is Claude Code's own conversation by its id. A
+      // pane on another engine has no conversation to resume
+      // (docs/engines.md), and neither has one whose id was never recorded,
+      // so the stop was the end of it: after an hour with a still pane, which
+      // is what an engine waiting out its provider's rate limit looks like,
+      // the session was stopped and the resume refused.
+      if (running && !awaiting && !atRest && activity?.phase === 'working' && comesBack(session)) await this.#maybeRestartIdle(name, quiet);
 
       // `worked` is set by any tick that finds a running session away from
       // its prompt and not waiting on a person, and cleared by the tick that
@@ -927,4 +934,15 @@ function turnOf(session) {
 /** @param {any} session */
 function firstPrompt(session) {
   return session?.detail || 'is waiting for input';
+}
+
+/**
+ * Would a stop and a resume bring this session back as it was? Only when its
+ * pane is Claude Code's and its conversation's id is on the record.
+ *
+ * @param {Record<string, any>} session
+ */
+function comesBack(session) {
+  const on = Array.isArray(session.engines) ? session.engines[Number.isInteger(session.engineAt) ? session.engineAt : 0]?.engine : null;
+  return (on ?? 'claude-code') === 'claude-code' && typeof session.uuid === 'string' && session.uuid !== '';
 }

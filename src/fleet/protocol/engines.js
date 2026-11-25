@@ -119,7 +119,10 @@ export function checkEngines(input) {
     const raw = /** @type {any} */ (e).model;
     const model = raw === undefined || raw === null || raw === '' ? null : String(raw);
     if (id === 'opencode') {
-      if (model === null) return refuse('OpenCode needs a model, written provider/model, like “github-copilot/gpt-5”: the model says whose account pays.');
+      // The example is a model OpenCode's catalog lists for Copilot
+      // (models.dev). It is an example: the account's own list decides, and
+      // the box finds out before a turn (docs/engines.md, "Before a turn").
+      if (model === null) return refuse('OpenCode needs a model, written provider/model, like “github-copilot/claude-sonnet-5.5”: the model says whose account pays.');
       if (model.length > 120) return refuse('That model’s name is too long to be one.');
       if (!OPENCODE_COPILOT_RE.test(model) && !OPENCODE_API_RE.test(model)) {
         return refuse(`An OpenCode model is written github-copilot/<model>, or ${Object.values(API_PROVIDERS).map((p) => `${p.opencode}/<model>`).join(' or ')} for one that runs on an API key.`);
@@ -238,15 +241,42 @@ export const HANDS_ON = Object.freeze(['limit', 'auth', 'model']);
  * sandbox/engine.mjs, which a session's image carries alone;
  * test/engines.test.js says if the two stop agreeing. A limit worded some
  * way nobody has seen is an `error`, and hands nothing on: the safe side.
+ * An account out of money is at its limit, in each provider's own wording
+ * (the runner's copy says whose).
  */
-export const LIMIT_WORDS = /rate.?limit|usage.?limit|quota|too many requests|\b429\b|credit balance|limit (?:reached|exceeded)|out of (?:credits|usage)/i;
+export const LIMIT_WORDS = /rate.?limit|usage.?limit|quota|too many requests|\b429\b|credit balance|limit (?:reached|exceeded)|out of (?:credits|usage)|insufficient (?:credits?|funds|balance)|more credits|payment.?required|\b402\b|exceeded your [a-z ]{0,40}allowance/i;
 /** Words that mean the sign-in is missing or ended. Mirrored the same way. */
 export const AUTH_WORDS = /not (?:logged|signed) in|unauthori[sz]ed|authentication|\b401\b|invalid (?:api key|token|credentials)|(?:token|credentials|session) (?:has |have )?expired|log ?in required|please (?:log|sign) in/i;
 
 /**
+ * Claude Code's own names for why a turn failed, as reasons: the `error`
+ * field its StopFailure hook is given
+ * (https://code.claude.com/docs/en/hooks, "StopFailure input"), which the
+ * session's hook sends as `detail` (sandbox/hook.mjs).
+ *
+ * An account that cannot pay is at its limit, and one that is on hold, not
+ * allowed by its organization, or whose cloud credential did not load has
+ * no sign-in this turn can use. Those four were read by their words alone
+ * and came out `error`, so nothing was handed on. `server_error` (which is
+ * also an overloaded provider), `invalid_request` and `unknown` are not
+ * here: they are errors.
+ */
+const CLAUDE_ERRORS = Object.freeze(/** @type {Record<string, TurnEnded['reason']>} */ ({
+  rate_limit: 'limit',
+  billing_error: 'limit',
+  authentication_failed: 'auth',
+  oauth_org_not_allowed: 'auth',
+  account_on_hold: 'auth',
+  cloud_credential_error: 'auth',
+  model_not_found: 'model',
+  max_output_tokens: 'cut',
+}));
+
+/**
  * Claude Code's own two hooks, as a TurnEnded. `Stop` is a turn that ended;
- * `StopFailure` is one that ended on an error, whose first line is `detail`.
- * Any other hook is not a turn's end.
+ * `StopFailure` is one that ended on an error, whose `detail` is Claude
+ * Code's name for the error, or from a version that sent none, the error's
+ * first line, which is read by its words. Any other hook is not a turn's end.
  *
  * @param {string} event @param {string|null} [detail]
  * @returns {TurnEnded|null}
@@ -255,7 +285,8 @@ export function turnFromHook(event, detail = null) {
   if (event === 'Stop') return { engine: DEFAULT_ENGINE, reason: 'done', detail: null, model: null, usage: null, resetsAt: null };
   if (event !== 'StopFailure') return null;
   const said = String(detail ?? '');
-  const reason = LIMIT_WORDS.test(said) ? 'limit' : AUTH_WORDS.test(said) ? 'auth' : 'error';
+  const named = Object.hasOwn(CLAUDE_ERRORS, said.trim()) ? CLAUDE_ERRORS[said.trim()] : null;
+  const reason = named ?? (LIMIT_WORDS.test(said) ? 'limit' : AUTH_WORDS.test(said) ? 'auth' : 'error');
   return { engine: DEFAULT_ENGINE, reason, detail: line(detail, 200), model: null, usage: null, resetsAt: null };
 }
 

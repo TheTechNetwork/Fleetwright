@@ -99,6 +99,28 @@ test('a dialog the fleet answers with a digit, drawn without digits, fails', () 
   assert.ok(problems.some((p) => /Bash permission dialog draws its options without numbers/.test(p)), problems.join('\n'));
 });
 
+test('the resume dialog is found under either of the sentences it has been drawn with', () => {
+  // 2.1.330 reworded the sentence and dropped the third option. The anchor
+  // was the old sentence's first half, so the bump failed with "Cannot find
+  // the resume dialog" while the two options a session is answered by were
+  // exactly as before. What the wordings share names it on both.
+  const reworded = RESUME
+    .replace(
+      'Resuming the full session will consume a substantial portion of your usage limits. We recommend resuming from a summary.',
+      'Resuming the full session uses a lot of your usage limits. Resuming from a summary uses less.',
+    )
+    .replace(',Ct={value:"never",label:"Don\'t ask me again"}', '')
+    .replace('yt,Ct]', 'yt]');
+  assert.notEqual(reworded, RESUME);
+  assert.ok(!reworded.includes('ask me again') && !reworded.includes('will consume'));
+  assert.deepEqual(dialogProblems(binary(WORKSPACE_TRUST, RC_TRUST, CD, BASH, reworded)).problems, []);
+  // AND A SENTENCE THAT IS NOT ITS OWN ANY MORE still fails: the check must
+  // not have been loosened into finding the dialog by anything at all.
+  const gone = RESUME.replace('Resuming the full session will consume', 'Loading the whole conversation will consume');
+  const { problems } = dialogProblems(binary(WORKSPACE_TRUST, RC_TRUST, CD, BASH, gone));
+  assert.ok(problems.some((x) => /^Cannot find the resume dialog/.test(x)), problems.join('\n'));
+});
+
 test('a binary this cannot read fails closed', () => {
   // Stripped, compressed, or bytecode only: no dialog found is not a pass.
   const { problems } = dialogProblems('nothing about a dialog in here');

@@ -93,8 +93,18 @@ export const DIALOGS = [
     answered: true,
   },
   {
+    // THE BEGINNING OF ITS SENTENCE, AND NO MORE OF IT. Up to 2.1.325 it read
+    // "Resuming the full session will consume a substantial portion of your
+    // usage limits. We recommend resuming from a summary."; 2.1.330 says
+    // "Resuming the full session uses a lot of your usage limits. Resuming
+    // from a summary uses less.", and dropped "Don't ask me again" from its
+    // options. The anchor was the first half of the old sentence, so the
+    // reword read here as the dialog having gone, when what a session answers
+    // by (the two options, which prompt.js and core/claude.js match on) had
+    // not changed at all. What the two wordings share is enough to name the
+    // component and is what a box on either release draws.
     name: 'the resume dialog',
-    anchor: 'Resuming the full session will consume',
+    anchor: 'Resuming the full session ',
     kind: 'resume',
     answered: true,
   },
