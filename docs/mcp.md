@@ -155,9 +155,11 @@ cover it.
 the page and the code, and a phone checks that signature against the
 machines approved for the member's vault before it shows either. This
 server holds no vault answer to check against, so it cannot tell a code
-the machine made from one the coordinator put in its place. The tool's
-description says that, and so does every answer that carries a code, in
-the words the agent reads.
+the machine made from one the coordinator put in its place. A phone also
+has the machine seal the answer to a key of its own (`reply`), which the
+tool does not offer, so what comes back here crossed the coordinator in
+the clear. The tool's description says the code is unverified, and so
+does every answer that carries one, in the words the agent reads.
 
 **`sandbox` is offered and `labels` is not,** which looks inconsistent from the
 outside and is the same rule applied twice. The variant decides what the next

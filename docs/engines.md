@@ -371,6 +371,7 @@ stop running on an account has the item forgotten in its Credentials too.
 | `member` | the member's id. Always given: engines are a member's, so a person signs their own in by naming their own record |
 | `engine` | `codex` or `opencode`. OpenCode is signed in to GitHub Copilot. An engine on an API key has a key, not a sign-in ([api-engines.md](./api-engines.md)) |
 | `action` | `start`, `status`, `cancel` or `signout` |
+| `reply` | optional. A key the asking phone made for this one request, in the form a vault request's `reply` has (an uncompressed P-256 public key, 87 characters of base64url). With it, the machine seals what it says of the page, the code and the account to that key, and the coordinator carries ciphertext. It is in what the phone signs, so nobody between can change it |
 | the machine | beside the intent, as `host`, never in it. Named whenever more than one machine could take it |
 
 **Who may** is exactly who may start a session as that member on that
@@ -405,7 +406,8 @@ could not have written.
 engine home mounted and the runner in its sign-in mode
 (`fleetwright-engine --signin <engine>`), on the member's own network when
 the box is behind an egress list. The runner asks the engine for a device
-code and prints one line; the box answers as soon as it has it:
+code and prints one line; the box answers as soon as it has it. Asked
+with no `reply`, which a phone never does, the answer is in the clear:
 
 ```json
 { "ok": true, "state": "waiting", "member": "debbie", "engine": "codex",
@@ -417,44 +419,90 @@ code and prints one line; the box answers as soon as it has it:
   "signedIn": null, "text": "Open … and enter ABCD-EFGH …" }
 ```
 
-**The machine signs the page and the code.** Every answer that carries
-them, the one to `start` and the one to `status` while a code is out,
-carries `hostKey`, the box's public key (the P-256 key it signs its vault
-requests with), `signature`, and `signedAt`. The signature is that key's,
-made by the function that signs a vault request, over
+**The machine signs what it answers, and seals it to the phone that
+asked.** Two things are done to an answer, and a phone asks for both.
+
+*Signed.* The box signs with the P-256 key it signs its vault requests
+with, by the same function, over
 
 ```
 signingInput('engine-signin-answer',
-  { v: 1, id, host, member, engine, url, code, at })
+  { v: 1, id, host, member, engine, url, code, at, signedIn })
 ```
 
 where `id` is the id of the request being answered, which the phone chose
-and signed; `host` is the whole SHA-256 of `hostKey` in hex, which is what
-the vault names a grant by (`key`); `member` and `engine` are the
-request's; `url` and `code` are the engine's; and `at` is `signedAt`.
-Binding the id is what makes an older genuine answer useless for a newer
-request, and a `status` asked under a new id is signed over that id. The
-coordinator carries `hostKey` and `signature` as it carries the rest of
-the answer: it neither checks nor removes them. A box that cannot sign
-does not pass an unsigned code on. It refuses (`answer_unsigned`) and says
-the attempt is still waiting there.
+and signed; `host` is the whole SHA-256 of the box's key in hex, which is
+what the vault names a grant by (`key`); `member` and `engine` are the
+request's; `url` and `code` are the engine's, there while a code is out
+and left out otherwise; `at` is when the box signed; and `signedIn` is
+who is signed in there, `{ since, who }` or `null`, in a sealed answer
+and left out of a clear one. Binding the id is what makes an older
+genuine answer useless for a newer request, and a `status` asked under a
+new id is signed over that id.
 
-**What a phone checks before it shows a code**, all of it, in this order:
+*Sealed.* A request that carries `reply` is answered with `sealed`: the
+signed fields, the box's public key (`hostKey`) and the `signature`,
+encrypted to `reply` as a vault's answer is (`seal`, under
+`fleetwright-engine-signin/v1`). **The clear part of that answer then
+says nothing of the page, the code or the account**: no `url`, no `code`,
+`signedIn` cut down to `{ since }`, and a `text` that spells none of
+them. The coordinator carries the state and the times, which it is told
+anyway when an attempt ends, and ciphertext. Every answer to a request
+with `reply` that says where a sign-in stands is sealed, whatever the
+state, so the account a sign-in ended on is the box's signed word and not
+the coordinator's: a person who sees *Signed in as* an account that is
+not theirs is seeing what the machine said.
 
-1. `host`, worked out from `hostKey`, is the `key` of a grant for the
-   whole vault in that member's vault `list` answer, under the name of the
-   machine it asked. That answer is sealed by the minter, so this is the
-   step a coordinator cannot stand in for.
-2. `signature` holds under `hostKey` over the payload above, rebuilt from
-   the phone's own request (its `id`, `member` and `engine`) and the
-   answer's `url`, `code` and `signedAt`.
-3. Only then are `url` and `code` shown, from those two fields. The
-   answer's `text` says them in words and is not signed, so a phone that
-   checks does not show `text` for a code that is waiting.
+```json
+{ "ok": true, "state": "waiting", "member": "debbie", "engine": "codex",
+  "startedAt": 1764000000000, "expiresAt": 1764000900000, "expiresInMinutes": 15,
+  "signedIn": null,
+  "sealed": { "epk": "…", "iv": "…", "ct": "…" },
+  "text": "A code is out to sign Codex in for debbie on ops-box, …" }
+```
 
-A phone that finds either check failing shows nothing of the code and one
-sentence. The vector both phones hold their check to is
-`test/fixtures/parity/engine-signin-answer.json`.
+and inside `sealed`, once the phone has opened it:
+
+```json
+{ "v": 1, "id": "…", "host": "9294…3866", "member": "debbie", "engine": "codex",
+  "url": "https://auth.openai.com/codex/device", "code": "ABCD-EFGH",
+  "at": 1764000001000, "signedIn": null,
+  "hostKey": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
+  "signature": "…" }
+```
+
+A `reply` that is not a key something can be sealed to is refused before
+anything is started (`bad_params`). A box that cannot sign or seal passes
+nothing on: it refuses (`answer_unsigned`) and says so.
+
+**What a phone does before it shows a code or an account**, in this
+order:
+
+1. Makes a seal key for this one request, as it does for a vault
+   request, and sends its public half as `reply`.
+2. Opens `sealed` with that key. Only the phone that asked can.
+3. Works out `host` from the `hostKey` inside, and finds it as the `key`
+   of a grant for the whole vault in that member's vault `list` answer,
+   under the name of the machine it asked. That answer is sealed by the
+   minter, so this is the step a coordinator cannot stand in for: it can
+   seal a payload of its own to `reply`, which is a public key, and it
+   cannot make this hash one of the member's approved machines.
+4. Checks `signature` under `hostKey` over the payload above, rebuilt
+   with its own request's `id`, `member` and `engine` and the opened
+   `url`, `code`, `at` and `signedIn`.
+5. Only then shows `url` and `code`, or who is signed in, from the opened
+   payload and from nowhere else.
+
+A phone that finds a step failing shows nothing of the code or the
+account and one sentence. The vectors both phones hold this to are in
+`test/fixtures/parity/engine-signin-answer.json`: a signed answer, and a
+sealed one with the key that opens it.
+
+**Without `reply`** the answer is as it was before sealing: in the clear,
+with `url`, `code`, `hostKey`, `signature` and `signedAt` (the `at` that
+was signed) beside them while a code is out, and `signedIn` with its
+`who`, unsigned. That is what the MCP tool gets, and what it is told is
+unverified ("What it does not stop").
 
 The page and the code are not secrets, and they are for whoever asked and
 nobody else: they are in the answer to `start` and to `status`, and in no
@@ -462,10 +510,11 @@ file, no log line, no event, no health frame and no push. They are held in
 memory in one place for as long as they are of use, the hub's attempt.
 **The sidecar's cache of replies does not keep them.** It remembers every
 mutating request by its id for ten minutes, to answer a retry with what
-the first attempt was told. For an answer that carried a code it remembers
-only that the id was answered, and a retry of that id is answered afresh
-with where the sign-in stands now, signed over the same id: the attempt in
-flight while one is, and never a second attempt.
+the first attempt was told. For an answer that carried a code, or was
+sealed, it remembers only that the id was answered, and a retry of that
+id is answered afresh with where the sign-in stands now, signed over the
+same id and sealed to the retry's own `reply`: the attempt in flight
+while one is, and never a second attempt.
 The container then waits, for as long as the code lasts, for the engine to
 say how it ended. **One attempt a member and engine at a time**: a second `start`
 while one waits answers with the one in flight (`already: true`) and
@@ -492,7 +541,8 @@ new attempt that expires leaves the sign-in before it in place, and the
 answer then says `expired` and still says who is signed in. `who` is what
 the engine itself says of the account, `{ email, plan }` for Codex
 (`account/read`), and `null` for OpenCode, which keeps a token and no name.
-No token is in any answer.
+In a sealed answer `who` is inside `sealed`, signed with the rest, and the
+clear `signedIn` says only `since`. No token is in any answer.
 
 **`cancel`** stops the container. **`signout`** cancels an attempt that is
 waiting, then has the engine sign out in a container of the same kind
@@ -550,7 +600,9 @@ its audit ring, and keeps nothing of a sign-in but what machines report.
 **Refused by the machine**, each with a sentence: it is not approved for
 the member's vault (`not_approved`, on `start`), or the vault has not told
 it yet whose it is approved for (`approval_unknown`, on `start`); it could
-not sign its answer (`answer_unsigned`, with the code withheld); it does not run the
+not sign or seal its answer (`answer_unsigned`, with the code and the
+account withheld), or was given a `reply` nothing can be sealed to
+(`bad_params`, before anything is started); it does not run the
 engine (`no_engine`, for every action); its session image is not fetched
 yet (`no_image`); Podman is missing (`no_podman`) or the member's way out
 behind an egress list could not be made (`no_egress`); the engine gave no
@@ -666,8 +718,9 @@ the engines this machine does not run.
   sign-in, and an MCP client acts on a delegation, so a box takes it only
   under a grant that carries `enginesignin` and names the member. Its
   caller cannot check the machine's signature, having no vault answer to
-  check it against, so the tool's description and every answer that
-  carries a code say the code is unverified.
+  check it against, and sends no `reply`, so its answers are in the clear:
+  the tool's description and every answer that carries a code say the
+  code is unverified.
 - **Both phones**: Engines on a member's edit page, to add, remove, reorder
   and name a model; under a member's Credentials, for Codex and for
   Copilot, *Sign in on a machine* where a connected machine runs the
@@ -680,23 +733,25 @@ the engines this machine does not run.
 
 ## What it does not stop
 
-- **A code is only as checked as whoever shows it.** The machine signs
-  the page and the code with the key a custodian approved for the member's
-  vault, over the id of the request ("The machine signs the page and the
-  code"), so a coordinator can no longer put a code of its own in the
-  answer and have it pass. That holds for a surface that checks. Three
-  things are still open. **A phone that does not check** shows whatever
-  arrived; the check is each app's to make, and the wire cannot make it
-  for them. **The MCP tool** cannot check at all: its caller holds no
-  vault answer to compare the machine's key with, so it is told, in the
-  tool's description and in the answer, that the code is unverified. And
-  **the coordinator still reads the genuine code** as it carries it, since
-  the answer is signed and not sealed. It cannot sign the box's engine in
-  to anything with it, but it can enter the code itself, under an account
-  of its own, before the custodian does. The member's engine is then
-  signed in to that account: for Codex the answer names the account
-  (`signedIn.who`), which is where a custodian would see it, and for
-  OpenCode nothing does.
+- **A code is only as checked as whoever shows it.** For a phone that
+  sends `reply` and makes the checks, the coordinator cannot read the
+  code, cannot put one of its own in its place, and cannot say who a
+  sign-in ended on: the machine seals all three to the phone and signs
+  them with the key a custodian approved for the member's vault ("The
+  machine signs what it answers"). Two things are still open, and only
+  these. **A phone that skips the checks** shows whatever arrived: one
+  that sends no `reply` is answered in the clear, and one that opens
+  `sealed` without holding the key to the member's approved machines, or
+  without checking the signature, has only shown that somebody knew its
+  public key. The checks are each app's to make, and the wire cannot make
+  them for it. **The MCP path** has none of it: its caller holds no vault
+  answer to compare a machine's key with and no key to seal to, so its
+  answers are clear, the coordinator reads the code as it carries it and
+  could change it or enter it first under an account of its own, and the
+  tool says, in its description and after every code, that the code is
+  unverified.
+- **OpenCode names no account**, so for a Copilot sign-in there is no
+  *Signed in as* for a person to find wrong, sealed or not.
 - **A machine cannot tell a grant for some of a vault from one for all of
   it.** The vault's answer to a box does not say which it has, so a box
   approved for one named item of a member's vault takes a `start` for that
@@ -785,11 +840,13 @@ in anything printed), `test/engine-signin-hub.test.js` (the box, through a
 stand-in Podman and the real runner: the volume and its name, one attempt
 at a time, what is kept and what a restart loses, who may and who may not,
 a delegation that does not name the member, and no token in any answer,
-file, event or log line), `test/engine-signin-answer.test.js` (the vector
-both phones check a signed answer against, and every field of it changed
-in turn), the sign-in tests in `test/vault.test.js` (a box not approved
-for the member's vault, one the vault has not answered, the signature over
-a real answer, and a reply cache with no code in it),
+file, event or log line), `test/engine-signin-answer.test.js` (the vectors
+both phones check an answer against: a signed one with every field of it
+changed in turn, and a sealed one with the key that opens it), the
+sign-in tests in `test/vault.test.js` (a box not approved for the
+member's vault, one the vault has not answered, the signature over a real
+answer, a reply cache with no code in it, and a sealed answer as the
+coordinator sees it and as the phone that asked opens and checks it),
 `test/engine-signin-coordinator.test.js` (the
 refusals before anything is sent, the protocol 21 refusal, who is shown
 which machine's sign-ins, and who is told when an attempt ends).
