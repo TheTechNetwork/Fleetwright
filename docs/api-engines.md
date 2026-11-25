@@ -234,6 +234,18 @@ ticket it was started with and then takes sessions like any machine.
 Sessions inside it run as plain panes: the container is the sandbox, and
 there is not a second one inside the first.
 
+**The hub inside counts its sessions against the machine's own memory
+limit.** A hub takes sessions while there is memory for them, and what a
+container reads as available is the box's: allowed 8 GB on a box with 60
+free, it would have taken sixteen sessions into the eight, and the kernel
+ends a container that passes its limit, with every session in it. So what
+is available is the less of what the box has and what the hub's cgroup
+still allows it (`src/core/cgroup-memory.js`, cgroup version 2), and at the
+limit a session is refused for memory in words, as on any full box. This
+holds for any hub under a limit, a unit's `MemoryMax` included. The load
+it reads is still the box's, and what its sidecar reports as its memory
+is too.
+
 **Not on a box that keeps its sessions behind an egress allowlist.** A
 machine dials the fleet itself, and its sessions reach what it reaches, so a
 container made there would be one that is not behind the list. Such a box
@@ -487,12 +499,13 @@ and no environment; the cap; the box's clock; more time and end; a volume
 a making left behind; a machine that stopped by itself and how its log
 ended, with no ticket or token in what is kept; what is refused in words;
 the API with its token), `test/own-pools.test.js` (the driver over the
-real hub routes: off unless named, a place per approved person, the image offered once built,
-the sign-in sealed to the machine's key and to no other, a stopped
-machine said on its owner's place and nobody else's, a hub that cannot be
-asked, and its place behind the one seam), `test/machine-image.test.js`
+real hub routes: off unless named, a place per approved person, the image
+offered once built, the sign-in sealed to the machine's key and to no
+other, a stopped machine said on its owner's place and nobody else's, a
+hub that cannot be asked, and its place behind the one seam), `test/machine-image.test.js`
 (the entrypoint run for real against stand-ins for the hub and the
 sidecar), the fourth test in `test/sandbox-coordinator.test.js` (marked
 `own`, named for the box, why it has no image yet, retired at the box's
 next look and not when the box could not look), and the on-box case in
-`test/mcp.test.js`.
+`test/mcp.test.js`. And `test/cgroup-memory.test.js` for the memory a hub
+under a limit may still take.
