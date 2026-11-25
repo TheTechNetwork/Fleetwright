@@ -340,6 +340,13 @@ the people entitled to change it (`src/fleet/minter/org.js`):
 | an agent member's own custodians, and every manager above it | that agent's vault |
 | a person's managers, once that person turned it on from their own device | that person's vault |
 | the coordinator, or a fleet admin by being one | nothing |
+| the coordinator, by lying about who is signing in | whatever the tree gives an address nobody has signed in under yet, or one an org admin released: the first GitHub account to list a key under it holds it |
+
+That last row is not a right anybody was given, and it is here because a
+table of who may act that left it out would be claiming more than is true
+([members.md](./members.md), "What it does not stop"). An address somebody
+has signed in under is its first GitHub account's for good, whether or not a
+key is still listed, and only an org admin releases one.
 
 A custodian sends the request they would send for their own vault with
 `for: <member id>` inside the seal. A person reads who their managers are and
@@ -356,6 +363,20 @@ person, and the Claude token as a file of its own so a session's command reads
 it with `$(cat …)` and never carries it. Written whole on every answer, so a
 person who removed the box, or emptied their vault, is gone from it on the
 next pass.
+
+**What makes a box forget, and what does not.** Two things clear what a box
+holds: an answer the vault sealed that names nobody for it, and the
+coordinator saying the request is not signed by the key this box enrolled
+with (`not_this_box`). Every other refusal is cannot tell, and the box keeps
+what it holds until it runs out and asks again at its usual time: no answer,
+an answer that does not open, a fleet that says it has no vault just now,
+and `bad_signature`. That last one used to forget. A vault from before a box
+said what it takes (`accepts`) checks the signature without that list, so it
+answers a box that signs one with `bad_signature` every time, and a box
+upgraded before its vault dropped every credential it held and got none
+back. The box writes which refusal it was in its log, with the vault's own
+sentence. Somebody taking a vault away for good removes the boxes' approvals
+first, or the files under `vault/` on each box.
 
 **A change reaches the boxes in a moment, not at their next ten minutes.**
 When somebody keeps, forgets, approves or tests something, the minter's answer
@@ -612,9 +633,11 @@ any other item, by name and state, and never read back.
 They differ from a Claude sign-in in three ways. **Nothing renews them from
 here**, so Test answers that they are not tried from the vault. **Only a box
 that says it takes them is given them** (`accepts` names `engines` in its
-signed request). **A Codex sign-in goes to one machine**: the first approved
-box that asks holds it, `list` names that box (`heldBy`), every other box is
-told it is held elsewhere, and depositing it again is how it moves. Codex
+signed request, and the engines it runs beside it: `codex`, `opencode`), and
+then only the items of an engine it runs. **A Codex sign-in goes to one
+machine**: the first approved box that runs Codex and asks holds it, `list`
+names that box (`heldBy`), every other box that runs Codex is told it is
+held elsewhere, and depositing it again is how it moves. Codex
 renews its own tokens where it runs, and a renewal ends every other copy.
 
 **An API key is an engine's item too** (`apikey:openrouter`,

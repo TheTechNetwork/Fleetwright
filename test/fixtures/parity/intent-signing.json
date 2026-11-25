@@ -214,6 +214,30 @@
         "expires": 1792645378141
       },
       "input": "agent-fleet/v1/delegation\n{\"actor\":\"nina@example.test\",\"expires\":1792645378141,\"hosts\":[\"*\"],\"id\":\"mcp-claude-desktop-0001\",\"issuedAt\":1792558978141,\"match\":{},\"v\":1,\"verbs\":[\"peek\",\"start\",\"stop\"]}"
+    },
+    {
+      "why": "an MCP client that may start a session as two members: the list is signed in the order the grant carries it, between match and v",
+      "grant": {
+        "v": 1,
+        "id": "mcp-claude-desktop-0002",
+        "actor": "nina@example.test",
+        "verbs": [
+          "peek",
+          "start",
+          "stop"
+        ],
+        "hosts": [
+          "*"
+        ],
+        "match": {},
+        "members": [
+          "jason",
+          "debbie"
+        ],
+        "issuedAt": 1792558978141,
+        "expires": 1792645378141
+      },
+      "input": "agent-fleet/v1/delegation\n{\"actor\":\"nina@example.test\",\"expires\":1792645378141,\"hosts\":[\"*\"],\"id\":\"mcp-claude-desktop-0002\",\"issuedAt\":1792558978141,\"match\":{},\"members\":[\"jason\",\"debbie\"],\"v\":1,\"verbs\":[\"peek\",\"start\",\"stop\"]}"
     }
   ]
 }

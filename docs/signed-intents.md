@@ -195,7 +195,9 @@ that, and does not remove it:
   file a person's own credentials under the wrong name. A key under the wrong
   name is a forged actor, so `devicekey` binds the address to the GitHub
   account on first use and refuses another account's key for it afterwards
-  (`address_taken`), until the first one removes its own. A person who never
+  (`address_taken`), for good: removing every key does not free the address,
+  and only an org admin releases one ([members.md](./members.md), "Whose an
+  address is"). A person who never
   files a key can have their address claimed first, so their app shows every
   key filed under their address, and says so when one is not their own.
 - **It could still say an outsider is a member.** Anybody can sign in to the
@@ -559,12 +561,22 @@ something in their name later, when they are not there to sign it
 
 ```
 agent-fleet/v1/delegation
-<canonical JSON of { actor, expires, hosts, id, issuedAt, match, v: 1, verbs }>
+<canonical JSON of { actor, expires, hosts, id, issuedAt, match, members?, v: 1, verbs }>
 ```
 
 - **What it names, all of it signed:** the person, the verbs, the boxes (or
   `["*"]` for whichever box the fleet places it on), parameters the intent must
   carry exactly (`match`), and a window of at most a month.
+- **And the members it may start a session as** (`members`, a list of member
+  ids, at most 64). A start that names `member` is covered only by a
+  delegation whose list has that id, and a delegation with no list covers no
+  member start at all ([members.md](./members.md), "Starting as a member").
+  The key is signed only when the grant carries it: with none it is left out
+  of the JSON altogether, so a delegation made before the field existed is
+  the same bytes it always was and still verifies. With some it is the array
+  as the grant carries it, in that order, sorted between `match` and `v` like
+  any other key. A phone that names nobody leaves the key out and does not
+  send an empty list, which a box from before the field would not check.
 - **How a box checks it:** against the same key list it checks a signature with,
   and then whether it covers this intent, to this box, now. A box takes a
   delegation only on an intent with no signature, because what the person
@@ -596,7 +608,7 @@ they sign intents with, and only once it is listed:
 | Finishing a GitHub or Cloudflare sign-in | `exchange`, `link`, `renew` | the box it was for, or any | the provider | ten minutes |
 | Keeping machines ready: making them | `provision` | any | `platform: vm` and the image | a month, signed again daily while kept |
 | Keeping machines ready: ending them | `vmctl` | any | `action: stop` | a month, the same |
-| An MCP client, chosen under You → Delegations | what the MCP tools offer, less `exchange` and `update` | any | nothing | a day or a week |
+| An MCP client, chosen under You → Delegations | what the MCP tools offer, less `exchange` and `update` | any | nothing, and the members picked when it is made | a day or a week |
 
 The phones list every delegation under You → Delegations, with Revoke.
 

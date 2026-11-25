@@ -1004,7 +1004,9 @@ export const VERBS = Object.freeze({
           'Start the session as this member of the organization, by id (fleet_members lists them). It runs on ' +
           'that member’s own sign-ins, never yours, opens with the member’s instructions and then your task, and ' +
           'goes to a machine carrying the member’s tag when you name none. You must be that person, or one of ' +
-          'the member’s custodians.',
+          'the member’s custodians. A request you do not sign yourself, as from an MCP client, also needs the ' +
+          'grant it is sent under to name this member: that grant is made on your phone, under You \u2192 ' +
+          'Delegations, where the members it may start as are picked.',
       },
       // WHAT THE COORDINATOR KNOWS ABOUT THAT MEMBER, written by it and never
       // by a caller, so left out of what a device signs: the name and role a

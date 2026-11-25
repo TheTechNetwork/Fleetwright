@@ -69,7 +69,7 @@
 //
 // NEVER THROWS. Every refusal is a code and a sentence.
 
-import { API_PROVIDERS, API_KEY_ITEMS } from '../protocol/engines.js';
+import { API_PROVIDERS, API_KEY_ITEMS, ENGINES, ENGINE_IDS, DEFAULT_ENGINE } from '../protocol/engines.js';
 import { SANDBOX_PROVIDER_NAMES, sandboxProviderOf, sandboxDepositProblem } from '../protocol/sandboxes.js';
 import { SEAL_KEY_RE, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, atRestAad, vaultAtRestAad, seal, open } from '../seal.js';
 import { verify, sign, signingInput } from '../crypto.js';
@@ -247,6 +247,7 @@ export const CLAUDE_CHECK_MIN_MS = 10 * 60_000;
  * @property {Record<string, { clientId: string, secret: string }>} [clients]  each OAuth provider's client, from the environment
  * @property {typeof globalThis.fetch} [fetchImpl]
  * @property {boolean} [takesEngines]  set per box request: whether that box said it takes the sign-ins an engine runs on (answerVaultBox)
+ * @property {string[]|null} [boxEngines]  set per box request: the engines that box said it runs, or null from a box that says only that it takes engines
  * @property {boolean} [takesApiKeys]  set per box request: whether that box said it takes metered API keys (docs/api-engines.md)
  * @property {boolean} [takesSandboxes]  set per box request: whether that box said it takes a sandbox provider's record
  * @property {() => number} [now]
@@ -478,6 +479,37 @@ async function emptyMemberVault(store, vaultId, at) {
   return { items, grants };
 }
 
+/**
+ * Take back every approval one account's vault made under an address that is
+ * no longer that account's (org.js, `releaseaddress`). Each is left as a
+ * removal, as the person's own would be, so an older approval sent again
+ * cannot bring it back. Nothing the vault keeps is touched: it is still that
+ * account's, and is approved again under whatever address they hold next.
+ * Called under the vault's own lock.
+ *
+ * @param {VaultStore} store @param {string} account @param {string} address @param {number} at
+ * @returns {Promise<number>} how many approvals went
+ */
+async function unfileAddress(store, account, address, at) {
+  const kept = await store.get(`v:${account}`);
+  if (!kept) return 0;
+  const row = emptyRow(kept);
+  let gone = 0;
+  for (const [hash, grant] of Object.entries(row.grants)) {
+    if (!grant || grant.revoked || !grant.jwk || normaliseEmail(grant.email) !== address) continue;
+    row.grants[hash] = { at: Math.max(at, Number(grant.at) || 0), revoked: true };
+    gone += 1;
+    await withLock(`box:${hash}`, async () => {
+      const index = (await store.get(`box:${hash}`)) || { accounts: {} };
+      const accounts = { ...(index.accounts || {}) };
+      delete accounts[account];
+      await store.put(`box:${hash}`, { accounts });
+    });
+  }
+  if (gone) await store.put(`v:${account}`, row);
+  return gone;
+}
+
 /** @param {any} row */
 function emptyRow(row) {
   return {
@@ -570,6 +602,18 @@ export async function answerVaultDevice(ask, config) {
         await logCustody(store, memberVault, { at, by: email, op: 'forget', name: 'what an earlier member left' });
       }
     }
+    // AN ADDRESS RELEASED (org.js, `releaseaddress`): the machines its old
+    // account approved under it stop being given that account's sign-ins.
+    // A box files what it is handed by the address, so without this whoever
+    // signs in under the address next would start sessions on them.
+    if (done.released) {
+      const { address, account } = done.released;
+      const machines = await withLock(`row:${account}`, () => unfileAddress(store, account, address, at));
+      if (machines) {
+        text += ` ${machines} machine${machines === 1 ? '' : 's'} approved under it ${machines === 1 ? 'is' : 'are'} no longer approved, and ${machines === 1 ? 'stops' : 'stop'} being given anything when ${machines === 1 ? 'it next asks' : 'they next ask'}. What that account keeps is still its own.`;
+      }
+      await logCustody(store, account, { at, by: email, op: 'release', name: address });
+    }
     return { ok: true, sealed: await seal({ to: reply, aad: VAULT_REPLY_AAD, payload: done.answer ?? {} }), text, ...(inside.op === 'org' ? {} : { changed: true }) };
   }
   // FOR A MEMBER'S VAULT, when the request names one (docs/members.md): an
@@ -596,7 +640,12 @@ export async function answerVaultDevice(ask, config) {
   /** @type {{ notify?: { email: string, text: string } }} */
   let told = {};
   if (acting && CUSTODY_LOGGED.includes(inside.op)) {
-    const name = String(inside.name ?? inside.provider ?? (inside.op === 'grant' || inside.op === 'revoke' ? 'a machine' : '')).slice(0, 96);
+    // NAMED BY WHAT THE OP DID (`did`, runDeviceOp), never by a field of the
+    // request. It used to be `name`, then `provider`, as sent: a sign-in to
+    // Cloudflare takes `provider` and reads no `name`, so a custodian who
+    // sent both replaced a person's Cloudflare sign-in and had it written
+    // here, and pushed to their phone, as a note they kept.
+    const name = String(result.did ?? '').slice(0, 96);
     await logCustody(store, vault.userId, { at, by: acting.by, op: inside.op, name });
     if (acting.kind === 'person') told = { notify: { email: acting.owner, text: custodySentence(acting.by, inside.op, name) } };
   }
@@ -629,7 +678,10 @@ function custodySentence(by, op, name) {
  * @param {string} email  the asker's fleet address
  * @param {number} at
  * @param {Acting|null} [acting]  set when a custodian opened somebody else's vault (org.js, resolveFor)
- * @returns {Promise<{ ok: true, answer?: any, text: string } | { ok: false, error: { code: string }, text: string }>}
+ * @returns {Promise<{ ok: true, answer?: any, text: string, did?: string } | { ok: false, error: { code: string }, text: string }>}
+ *   `did` is what a change was made to, as the op itself read it: the item
+ *   kept or forgotten, the provider signed in to, the machine's fingerprint.
+ *   It is what the custody log names (answerVaultDevice).
  */
 async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
   const store = /** @type {VaultStore} */ (config.store);
@@ -685,8 +737,16 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
   // A DEVICE'S SIGNING KEY, filed under the fleet address the request names
   // (docs/signed-intents.md). A box takes a person's signature only with a key
   // this lists for them, so a key under the wrong address is a forged actor:
-  // the address belongs to the first GitHub account that files a key under it,
-  // and another account's key for it is refused while that one keeps any.
+  // the address belongs to the first GitHub account that files a key under it.
+  //
+  // FOR GOOD, whether or not that account still lists a key. It used to be
+  // "while that one keeps any", and the gap was the moment a person is least
+  // able to notice: Dana loses her phone and removes its key, and a
+  // coordinator that lies about who is signing in vouches her address for
+  // another GitHub account, which is then Dana to every box she approved and
+  // to every vault the tree gives her. An address changes hands only when an
+  // org admin releases it (org.js, `releaseaddress`), which is somebody with
+  // a name deciding it, written where the people it touches read it.
   if (inside.op === 'devicekey') {
     const jwk = boxKey(inside.key);
     if (!jwk) return refuse('bad_key', 'That is not a device’s signing key.');
@@ -695,9 +755,13 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
     const remove = inside.remove === true;
     return withLock(`${DEVICE_KEYS_PREFIX}${email}`, async () => {
       const kept = await store.get(`${DEVICE_KEYS_PREFIX}${email}`);
-      if (kept && kept.github !== who.userId && liveKeys(kept).length) {
-        return refuse('address_taken', `Signing keys for ${email} are filed by another GitHub account than ${who.login}. Nothing was changed. If that is not you, tell whoever runs the fleet.`);
+      if (kept && typeof kept.github === 'string' && kept.github !== who.userId) {
+        return refuse('address_taken', `${email} belongs to another GitHub account than ${who.login}: the first that listed a signing key under it, whether or not it lists one now. Nothing was changed. If the address is yours and you sign in to GitHub as somebody else now, an org admin releases it for you. If it is not yours, tell whoever runs the fleet.`);
       }
+      // AN ADDRESS AN ORG ADMIN RELEASED takes no change made before the
+      // release: a request the account it was taken from sealed a minute
+      // earlier, sent again, would otherwise take it straight back.
+      if (kept?.released && Number(kept.released.at) >= at) return refuse('stale', `${email} was released after this was asked, so this could be a replay. Nothing was changed.`);
       /** @type {Array<{ kid: string, key: any, label: string, at: number, removed?: boolean }>} */
       const keys = kept?.github === who.userId && Array.isArray(kept.keys) ? kept.keys : [];
       const prior = keys.find((k) => k.kid === kid);
@@ -712,6 +776,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       await store.put(`${DEVICE_KEYS_PREFIX}${email}`, {
         github: who.userId, login: who.login, keys: next.filter((k) => !dropped.has(k.kid)),
         ...(kept?.github === who.userId && Array.isArray(kept.revoked) ? { revoked: kept.revoked } : {}),
+        ...(kept?.released ? { released: kept.released } : {}),
       });
       // THIS ACCOUNT'S FIRST KEY UNDER THIS ADDRESS, and it has a vault
       // already: whoever added a person member at this address did not add
@@ -764,7 +829,8 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
     const kind = itemKind(name);
     if (kind === 'claude') {
       const what = inside.op === 'forget' ? null : inside.signIn !== undefined ? { signIn: inside.signIn } : String(inside.value ?? '');
-      return putClaude(store, key, who, owner, at, what, config.fetchImpl);
+      const kept = await putClaude(store, key, who, owner, at, what, config.fetchImpl);
+      return kept.ok ? { ...kept, did: 'claude' } : kept;
     }
     if (inside.op === 'put' && kind !== 'secret' && kind !== 'hypervisor' && kind !== 'engine' && kind !== 'sandbox') {
       return refuse('bad_name', 'A value put in a vault is a named secret (secret:NAME), a hypervisor’s token or a Claude token. GitHub and Cloudflare are kept by signing in.');
@@ -777,7 +843,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       // request inside its ten minutes cannot bring the item back.
       row.items[name] = { at, forgotten: true };
       await save();
-      return { ok: true, text: `Forgot ${label(name)}. Boxes stop being given it when they next ask.` };
+      return { ok: true, did: name, text: `Forgot ${label(name)}. Boxes stop being given it when they next ask.` };
     }
     const value = String(inside.value ?? '');
     if (!value || value.length > MAX_SECRET) {
@@ -809,8 +875,9 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
     if (kind === 'engine') {
       return {
         ok: true,
+        did: name,
         text: name === 'codex'
-          ? 'Kept the Codex sign-in. It is handed to one approved machine, the first that asks for it, because Codex renews it there and a renewal ends every other copy, the one on the computer it was pasted from included.'
+          ? 'Kept the Codex sign-in. It is handed to one approved machine, the first that runs Codex and asks for it, because Codex renews it there and a renewal ends every other copy, the one on the computer it was pasted from included.'
           : API_KEY_ITEMS.includes(name)
             ? `Kept ${label(name)}. It is given only to approved machines whose operator turned that provider on, for sessions whose engine bills to it. What it may spend is set at the provider, not here.`
             : 'Kept the GitHub Copilot token. The machines approved for this vault are given it for sessions whose engine runs on it.',
@@ -818,6 +885,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
     }
     return {
       ok: true,
+      did: name,
       text: kind === 'sandbox'
         ? `Kept ${label(name)}. Approved machines whose operator turned that provider on can make machines there, and hold its key in memory only. The key is that whole account: what it may spend is set at the provider.`
         : kind === 'hypervisor'
@@ -870,7 +938,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       }),
     };
     await save();
-    return { ok: true, answer: { account }, text: `Kept ${p.label}${account ? ` as ${account}` : ''} for the boxes you approve.` };
+    return { ok: true, did: provider, answer: { account }, text: `Kept ${p.label}${account ? ` as ${account}` : ''} for the boxes you approve.` };
   }
 
   if (inside.op === 'grant') {
@@ -899,7 +967,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       await store.put(`box:${hash}`, index);
     });
     const what = only ? only.map(label).join(', ') : 'your credentials';
-    return { ok: true, answer: { fingerprint: hash.slice(0, 16) }, text: `Approved ${boxLabel || 'that box'} (${hash.slice(0, 16)}) to hold ${what}.` };
+    return { ok: true, did: hash.slice(0, 16), answer: { fingerprint: hash.slice(0, 16) }, text: `Approved ${boxLabel || 'that box'} (${hash.slice(0, 16)}) to hold ${what}.` };
   }
 
   if (inside.op === 'revoke') {
@@ -916,7 +984,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       delete accounts[who.userId];
       await store.put(`box:${hash}`, { accounts });
     });
-    return { ok: true, text: `${boxLabel} is no longer approved. It stops being given your credentials when it next asks, and forgets what it holds then.` };
+    return { ok: true, did: hash.slice(0, 16), text: `${boxLabel} is no longer approved. It stops being given your credentials when it next asks, and forgets what it holds then.` };
   }
 
   return refuse('bad_params', `A vault does not do “${String(inside.op).slice(0, 40)}”.`);
@@ -1125,7 +1193,12 @@ async function describe(row, store, userId) {
   items.sort((x, y) => (x.name < y.name ? -1 : 1));
   const grants = Object.entries(row.grants)
     .filter(([, g]) => g && !g.revoked && g.jwk)
-    .map(([hash, g]) => ({ key: hash, fingerprint: hash.slice(0, 16), label: String(g.label || ''), email: String(g.email || ''), at: Number(g.at), ...(Array.isArray(g.only) ? { only: g.only.map(String) } : {}) }))
+    // WHO APPROVED IT, when that was a custodian and not the vault's own
+    // person (`by`, kept on the grant since custodians could approve one):
+    // the log of what a custodian did is a hundred lines, and a machine that
+    // holds a person's sign-ins should say whose doing that is for as long
+    // as it holds them.
+    .map(([hash, g]) => ({ key: hash, fingerprint: hash.slice(0, 16), label: String(g.label || ''), email: String(g.email || ''), at: Number(g.at), ...(Array.isArray(g.only) ? { only: g.only.map(String) } : {}), ...(typeof g.by === 'string' && g.by ? { by: g.by } : {}) }))
     .sort((x, y) => (x.label < y.label ? -1 : 1));
   return { login: row.login, items, grants };
 }
@@ -1189,6 +1262,11 @@ export async function answerVaultBox(ask, config) {
 
   /** @type {Array<{ email: string, login: string, items: Array<{ name: string, value: string, expiresAt: number|null }>, problems: string[] }>} */
   const accounts = [];
+  // WHICH ENGINES IT RUNS, named beside `engines` by a box that knows
+  // (sidecar.js, #askVault): `codex`, `opencode`. A box from before the
+  // names says `engines` alone, and is handed every engine's item as it
+  // always was.
+  const runs = (accepts ?? []).filter((x) => x !== DEFAULT_ENGINE && ENGINE_IDS.includes(x));
   const tree = accepts?.includes('members') ? await loadTree(store) : null;
   for (const userId of Object.keys(index.accounts || {})) {
     if (!isVaultId(userId)) continue;
@@ -1201,11 +1279,22 @@ export async function answerVaultBox(ask, config) {
       if (!tree?.has(member)) continue;
       custodians = await mayActFor(store, tree, member);
     }
-    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now, takesEngines: accepts?.includes('engines') === true, takesApiKeys: accepts?.includes('apikeys') === true, takesSandboxes: accepts?.includes('sandboxes') === true }, members, custodians));
+    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now, takesEngines: accepts?.includes('engines') === true, boxEngines: runs.length ? runs : null, takesApiKeys: accepts?.includes('apikeys') === true, takesSandboxes: accepts?.includes('sandboxes') === true }, members, custodians));
     if (one) accounts.push(one);
   }
   const sealed = await seal({ to: String(req.reply), aad: VAULT_BOX_AAD, payload: { at: now(), accounts } });
   return { ok: true, sealed, text: accounts.length ? `This box holds credentials for ${accounts.length} ${accounts.length === 1 ? 'person' : 'people'}.` : 'Nobody has approved this box to hold their credentials.' };
+}
+
+/**
+ * The engine an engine's item is for (protocol/engines.js): a Codex sign-in
+ * is Codex's, and a Copilot token and every metered API key are OpenCode's,
+ * which is the engine that speaks to those providers.
+ *
+ * @param {string} name @returns {string}
+ */
+function engineOfItem(name) {
+  return Object.entries(ENGINES).find(([, e]) => e.credential === name)?.[0] ?? 'opencode';
 }
 
 /**
@@ -1278,6 +1367,12 @@ async function itemsFor(userId, hash, jwk, store, key, config, members, custodia
       // ONLY TO A BOX THAT TAKES THEM (`accepts`, signed in its request): a
       // box from before engines would file it where nothing reads it.
       if (!config.takesEngines) continue;
+      // AND ONLY FOR AN ENGINE IT RUNS, when it says which. Every box used
+      // to say `engines` whatever it ran, so the one machine a Codex sign-in
+      // goes to (below) was whichever asked first, and a box with no Codex
+      // on it held the sign-in while the machine that could run it was told
+      // to have it deposited again, which was the same race run once more.
+      if (config.boxEngines && !config.boxEngines.includes(engineOfItem(name))) continue;
       // AND A KEY ONLY TO A BOX THAT ASKS FOR KEYS (`apikeys`), which it does
       // only while its operator has an API provider turned on. A box from
       // step 4 takes sign-ins and is never handed something that bills.

@@ -73,6 +73,7 @@ import { IntentKeys } from './intent-keys.js';
 import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
 import { actorEmail, needsSignature } from '../protocol/intent-signature.js';
 import { accountOfMember, memberOfAccount, composeFirstMessage } from '../protocol/members.js';
+import { ENGINE_IDS, DEFAULT_ENGINE } from '../protocol/engines.js';
 import { composeTaskMessage, TASK_BRANCH_RE } from '../protocol/tasks.js';
 import { runnerJobProblem, runnerJobRepoProblem, ownerAllowed, permissionsFor, mintRepoToken } from '../../core/repo-tokens.js';
 import { CLAUDE_REFRESH_AHEAD_MS } from '../minter/claude-login.js';
@@ -950,9 +951,11 @@ export class Sidecar {
     let verdict = null;
     /** @type {'taken'|'failed'|'held'|undefined} */
     let askedAgain;
+    /** The members a delegation names, when that is the one thing it lacks for this start. @type {string[]|undefined} */
+    let grantNames;
     if (this.intentKeys) {
       try {
-        ({ verdict, askedAgain } = await this.intentKeys.check(intent, this.hostId));
+        ({ verdict, askedAgain, members: grantNames } = await this.intentKeys.check(intent, this.hostId));
         if (verdict === 'bad-signature' || verdict === 'unknown-key' || verdict === 'revoked') {
           const what = intent.sig ? 'a signature' : 'a delegation';
           this.log.warn(`sidecar: ${intent.verb} ${intent.id} from ${intent.actor ?? 'nobody'} carries ${what} that does not hold (${verdict})${this.requireSigned !== 'off' ? '' : '; not refused, as this box does not enforce'}`);
@@ -960,6 +963,24 @@ export class Sidecar {
       } catch (e) {
         this.log.warn(`sidecar: could not check ${intent.id}'s signature: ${/** @type {Error} */ (e).message}`);
       }
+    }
+    // A DELEGATION THAT DOES NOT NAME THE MEMBER, on a start as one. Its
+    // signer's key is listed and the grant holds in every other way, so this
+    // is said in its own words on every box, enforcing or not: what the grant
+    // does name, and that the way on is a grant made again on the phone. A
+    // delegation used to carry a start as any member its signer could act
+    // for, which let the coordinator alone start a session on a member's
+    // sign-ins with words of its own (intent-signature.js, `members`).
+    if (verdict === 'not-covered' && grantNames) {
+      const id = String(intent.params?.member ?? '');
+      const name = typeof intent.params?.memberName === 'string' && intent.params.memberName ? intent.params.memberName : id;
+      const names = grantNames.length ? grantNames.join(', ') : 'no member';
+      this.log.warn(`sidecar: refused start ${intent.id} as ${id} from ${intent.actor ?? 'nobody'}: the delegation it carries names ${names}`);
+      return {
+        v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'member_not_delegated' },
+        text: `What ${intent.actor} granted this connection does not cover starting a session as ${name}: it names ${names}. ` +
+          `Grant it again from the Fleetwright app on a phone, under You \u2192 Delegations, with ${name} among the members it may start as. Nothing was started.`,
+      };
     }
     if (this.#enforces(intent) && verdict !== 'signed' && verdict !== 'delegated' && needsSignature(intent.verb)) {
       const why = unsignedReason(verdict, intent, this.intentKeys?.problem ?? null, askedAgain);
@@ -1098,7 +1119,10 @@ export class Sidecar {
    * (core.js, #startAs): it is the party this box does not believe. What
    * this box believes is the minter's signed list of who may start as each
    * member, and a signature or delegation, by a key the same list names for
-   * that person, over this start with this member in it.
+   * that person, over this start with this member in it. A delegation says
+   * so by naming the member (`members`), and one that does not never gets
+   * here: checkDelegation finds it does not cover the start, and handle()
+   * refuses it first.
    *
    *  - SIGNED OR DELEGATED, WHATEVER THE MODE. A box set to take unsigned
    *    work takes the coordinator's word for who asked. Here that word would
@@ -1134,7 +1158,7 @@ export class Sidecar {
       return refuse('not_custodian', `${asker || 'Nobody named'} may not start a session as ${name}. The vault lists ${who}.`);
     }
     if (verdict !== 'signed' && verdict !== 'delegated') {
-      return refuse('signature_required', `A session as ${name} runs on ${name}’s sign-ins, so ${this.hostId} starts one only when ${asker} signed for it or delegated it, and this was neither.`);
+      return refuse('signature_required', `A session as ${name} runs on ${name}’s sign-ins, so ${this.hostId} starts one only when ${asker} signed for it, or delegated it in a grant that names ${name}, and this was neither.`);
     }
     const instructions = typeof intent.params.memberBrief === 'string' ? intent.params.memberBrief : '';
     const words = typeof intent.params.task === 'string' ? intent.params.task : '';
@@ -1940,7 +1964,9 @@ export class Sidecar {
    * never holds a refresh token and never renews one. An answer that is an
    * answer (nobody approved this box, or this is not the key it enrolled
    * with) clears what was held, which is how removing a box from a phone
-   * reaches it. Silence keeps what was held until it runs out.
+   * reaches it. Silence keeps what was held until it runs out, and so does
+   * every other refusal (#askVault): a vault that could not read the
+   * question has not said this box is approved for nothing.
    *
    * @returns {Promise<number>} how long until the next ask
    */
@@ -2105,6 +2131,31 @@ export class Sidecar {
   /** Whether the last vault request asked for API keys, or null before any and once a change has been acted on. @type {boolean|null} */
   askedForKeys = null;
 
+  /** The engines beside Claude Code this box's hub last said it runs, in the order they are signed in. @type {string[]} */
+  engines = [];
+  /** The engines the last vault request named, as one string, or null before any and once a change has been acted on. @type {string|null} */
+  askedForEngines = null;
+
+  /**
+   * Keep what the hub says it runs beside Claude Code (engine-box.js,
+   * boxEngines), held to the engines there are. Asked again in a moment when
+   * it has changed since the vault was last asked, for the reason API
+   * providers are: a box that asked before its hub had answered asked for no
+   * engine's sign-in, and would hold none for ten minutes.
+   *
+   * @param {unknown} said @returns {string[]}
+   */
+  #noteEngines(said) {
+    this.engines = Array.isArray(said)
+      ? [...new Set(said.filter((/** @type {unknown} */ e) => typeof e === 'string' && e !== DEFAULT_ENGINE && ENGINE_IDS.includes(e)))].sort()
+      : [];
+    if (this.askedForEngines !== null && this.askedForEngines !== this.engines.join(',')) {
+      this.askedForEngines = null;
+      this.#vaultChangedSoon();
+    }
+    return this.engines;
+  }
+
   /** Keep what the hub says of its API providers, held to short strings. @param {unknown} said @returns {string[]} */
   #noteApiProviders(said) {
     this.apiProviders = Array.isArray(said) ? said.filter((/** @type {unknown} */ p) => typeof p === 'string' && /^[a-z0-9-]{1,40}$/.test(p)).slice(0, 8) : [];
@@ -2129,14 +2180,24 @@ export class Sidecar {
     // an account of its own (vault-store.js, applyVault), so the minter may
     // hand it one. A box from before members sends none and is handed none.
     // And `engines`: the sign-ins an engine runs on, which this box hands a
-    // session's runner over its socket (docs/engines.md). IN ALPHABETICAL
+    // session's runner over its socket (docs/engines.md). ONLY WHEN IT RUNS
+    // ONE, and with which beside it (`codex`, `opencode`): the vault hands a
+    // Codex sign-in to one machine, the first that asks, and every box used
+    // to say `engines` whatever it ran, so the sign-in went to whichever
+    // asked first, a box with no Codex on it included, and the machine that
+    // could run it was refused. A vault from before the names reads `engines`
+    // as it always did. IN ALPHABETICAL
     // ORDER, because the minter checks the signature over the list sorted.
     // And `apikeys`, only while this box's operator has an API provider
     // turned on: a box that bills nobody is handed no key (docs/api-engines.md).
     // And `sandboxes`, only while it has a sandbox provider turned on: the
     // record is a provider's whole account, held here in memory and nowhere else.
     this.askedForKeys = this.apiProviders.length > 0;
-    const accepts = [...(this.apiProviders.length ? ['apikeys'] : []), 'engines', 'members', ...(/** @type {any} */ (this.pools)?.sandbox?.takes ? ['sandboxes'] : [])];
+    this.askedForEngines = this.engines.join(',');
+    const accepts = [
+      ...(this.apiProviders.length ? ['apikeys'] : []), ...(this.engines.length ? ['engines', ...this.engines] : []), 'members',
+      ...(/** @type {any} */ (this.pools)?.sandbox?.takes ? ['sandboxes'] : []),
+    ].sort();
     const request = { v: 1, hostKey: { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y }, at: Date.now(), reply: publicKey, accepts };
     let signature;
     try {
@@ -2167,9 +2228,24 @@ export class Sidecar {
     });
     if (!answer) return { ok: false, forget: false, text: 'the fleet did not answer; a coordinator from before the vault drops the question' };
     if (answer.ok !== true) {
-      // DEFINITE ANSWERS forget what was held; anything that could be a blip keeps it.
-      const forget = ['not_this_box', 'bad_signature', 'no_deposit_key', 'no_minter'].includes(String(answer.error?.code || ''));
-      return { ok: false, forget, text: String(answer.text || 'the fleet refused') };
+      // ONE REFUSAL FORGETS WHAT WAS HELD: the one that says this is not the
+      // key this box enrolled with. Beside it only an answer the vault
+      // itself sealed does (above, an answer naming nobody). Everything else
+      // is cannot tell, and keeps what is held until it runs out.
+      //
+      // `bad_signature` used to forget, as did a fleet saying it has no
+      // vault. A vault from before `accepts` checks the signature without
+      // it, so it answered every request from a box that signs one with
+      // `bad_signature`, and such a box, upgraded first, dropped every
+      // credential it held within ten minutes and never got them back. A
+      // vault that could not read the question has not answered it.
+      const code = String(answer.error?.code || '');
+      const said = String(answer.text || 'the fleet refused');
+      if (code === 'not_this_box') return { ok: false, forget: true, text: said };
+      const why = code === 'bad_signature'
+        ? `the vault could not check this box’s request (${said}), which is what a vault older than this box answers`
+        : `the vault did not answer for this box (${said})`;
+      return { ok: false, forget: false, text: `${why}. Nothing this box holds was forgotten, and it asks again in ${Math.round(this.vaultIntervalMs / 60_000)} minutes.` };
     }
     try {
       const inside = /** @type {any} */ (await open({ privateKey, publicKey, aad: VAULT_BOX_AAD, sealed: answer.sealed }));
@@ -2503,6 +2579,9 @@ export class Sidecar {
     if (state) {
       const sessions = /** @type {any[]} */ (Array.isArray(state.sessions) ? state.sessions : []);
       const running = sessions.filter((s) => s?.status === 'running').length;
+      // WHAT THE HUB RUNS BESIDE CLAUDE CODE, kept because it is also what
+      // this box tells the vault it can be handed a sign-in for (#askVault).
+      this.#noteEngines(state.engines);
       return {
         ...base,
         hub: { reachable: true, host: state.host ?? null },

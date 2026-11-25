@@ -325,9 +325,11 @@ export class IntentKeys {
    * @param {{ actor?: string, id: string, issuedAt: number, params?: Record<string, unknown>, verb: string, sig?: string, kid?: string, delegation?: unknown }} intent
    * @param {string} host  this box's id
    * @returns {Promise<{ verdict: import('../protocol/intent-signature.js').Verdict | import('../protocol/intent-signature.js').DelegationVerdict, label?: string, gap?: string,
-   *   askedAgain?: 'taken'|'failed'|'held' }>}
+   *   askedAgain?: 'taken'|'failed'|'held', members?: string[] }>}
    *   `askedAgain`, for an unknown key: whether the box asked again and took a
-   *   list, asked and got none, or held back because it asked moments ago
+   *   list, asked and got none, or held back because it asked moments ago;
+   *   `members`, for a delegation that covers a start in everything but the
+   *   member it names: the members the grant does name (checkDelegation)
    */
   async check(intent, host) {
     const once = async () => {

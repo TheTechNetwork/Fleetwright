@@ -832,9 +832,13 @@ test('a box keeps what it holds through a blip, and forgets it on an answer that
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const handed = [];
+  /** What each box wrote in its log. @type {string[]} */
+  const logged = [];
+  const logger = { info: (/** @type {string} */ l) => logged.push(l), warn: (/** @type {string} */ l) => logged.push(l), error() {}, debug() {} };
   /** @param {(frame: any) => any} send @param {any} [vaultKey] */
   const sidecar = (send, vaultKey) => {
     const s = new Sidecar({
+      logger,
       hub: /** @type {any} */ ({ vault: async (/** @type {any} */ b) => { handed.push(b); return { ok: true, text: 'held' }; } }),
       transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => send(f) }),
       hostId: 'box',
@@ -856,6 +860,28 @@ test('a box keeps what it holds through a blip, and forgets it on an answer that
   await garbled.syncVault();
   await sidecar(() => true, { publicJwk: keys.publicJwk, sign: async () => { throw new Error('no key'); } }).syncVault();
   assert.deepEqual(handed, [], 'nothing held was cleared by a blip');
+  // A VAULT FROM BEFORE `accepts`, asked by this box. It checks the signature
+  // over the request as it knew one, without `accepts`, so it refuses every
+  // request this box signs. That is a vault that could not read the question,
+  // and a box upgraded before its vault used to forget everything it held.
+  /** @type {Sidecar} */
+  let ahead;
+  ahead = sidecar((f) => {
+    const { v, hostKey, at, reply } = f.request;
+    void verify(hostKey, f.signature, signingInput('vault-box', { v, hostKey, at, reply })).then((held) => ahead.handle(held
+      ? { kind: 'minted', id: f.id, ok: true, sealed: { epk: 'a', iv: 'b', ct: 'c' } }
+      : { kind: 'minted', id: f.id, ok: false, error: { code: 'bad_signature' }, text: 'That request is not signed by the key it names.' }));
+    return true;
+  });
+  assert.equal(await ahead.syncVault(), 600_000, 'and it asks again at its usual time');
+  assert.deepEqual(handed, [], 'a vault older than the box made it forget what it held');
+  assert.match(logged.join('\n'), /the vault could not check this box’s request \(That request is not signed by the key it names\.\), which is what a vault older than this box answers\. Nothing this box holds was forgotten, and it asks again in 10 minutes\./);
+  // Nor is a fleet saying it has no vault just now an answer about this box.
+  /** @type {Sidecar} */
+  let none;
+  none = sidecar((f) => { queueMicrotask(() => void none.handle({ kind: 'minted', id: f.id, ok: false, error: { code: 'no_minter' }, text: 'This fleet has no minting Worker to keep a vault.' })); return true; });
+  await none.syncVault();
+  assert.deepEqual(handed, []);
   // "Not the key this box enrolled with" is an answer, and clears what was held.
   /** @type {Sidecar} */
   let told;
@@ -2206,7 +2232,7 @@ test('a member’s Codex sign-in and Copilot token are kept, handed only to a bo
   assert.match((await put('copilot', 'two words')).text, /not a GitHub Copilot token/);
   const kept = await put('codex', signIn);
   assert.equal(kept.ok, true, kept.text);
-  assert.match(kept.text, /handed to one approved machine, the first that asks/);
+  assert.match(kept.text, /handed to one approved machine, the first that runs Codex and asks for it/);
   assert.equal((await put('copilot', `  ${'gho_'}${'c'.repeat(36)}\n`)).ok, true);
   // Listed by name, never read back; and not tried from the vault, said as that.
   const listed = (await as(ELI, { op: 'list', for: 'debbie' })).answer;
@@ -2224,6 +2250,16 @@ test('a member’s Codex sign-in and Copilot token are kept, handed only to a bo
   const names = (/** @type {any} */ r) => (r.answer.accounts[0]?.items ?? []).map((/** @type {any} */ i) => i.name).sort();
   // A box that takes members and not engines is handed neither.
   assert.deepEqual(names(await m.box(one, { members: [ELI], accepts: ['members'] })), []);
+  // A BOX THAT RUNS OPENCODE AND NO CODEX asks first. It says which engines
+  // it runs, so it is not the one machine: it used to be, by saying `engines`
+  // whatever it ran, and the machine that could run Codex was then refused.
+  const noCodex = await m.box(one, { members: [ELI], accepts: ['engines', 'members', 'opencode'] });
+  assert.deepEqual(names(noCodex), ['copilot']);
+  assert.deepEqual(noCodex.answer.accounts[0].problems, [], 'and it is told nothing about a sign-in it could not use');
+  assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.find((/** @type {any} */ i) => i.name === 'codex').heldBy, undefined);
+  // One that runs Codex and nothing else is handed that and no Copilot token.
+  assert.deepEqual(names(await m.box(two, { members: [ELI], accepts: ['codex', 'engines', 'members'] })), ['codex']);
+  // A BOX FROM BEFORE THE NAMES says `engines` alone, and is treated as it was.
   // THE FIRST THAT ASKS HOLDS THE CODEX SIGN-IN; the second gets the token that does not rotate, and is told why not the other.
   const first = await m.box(two, { members: [ELI], accepts: ['engines', 'members'] });
   assert.deepEqual(names(first), ['codex', 'copilot']);
@@ -2241,6 +2277,81 @@ test('a member’s Codex sign-in and Copilot token are kept, handed only to a bo
   assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.find((/** @type {any} */ i) => i.name === 'codex').heldBy, undefined);
   assert.deepEqual(names(await m.box(one, { members: [ELI], accepts: ['engines', 'members'] })), ['codex', 'copilot']);
   assert.deepEqual(names(await m.box(two, { members: [ELI], accepts: ['engines', 'members'] })), ['copilot']);
+});
+
+test('a box tells the vault which engines it runs, so a Codex sign-in goes to a machine that can run Codex', async (t) => {
+  // The box and the vault together: what the hub says it runs, what the box
+  // signs from that, and what the vault then hands each of three machines
+  // approved for the same member.
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  const signIn = JSON.stringify({ auth_mode: 'chatgpt', tokens: { id_token: 'i', access_token: 'a', refresh_token: 'r-1', account_id: 'acct' } });
+  assert.equal((await as(ELI, { op: 'put', name: 'codex', value: signIn, for: 'debbie' })).ok, true);
+  assert.equal((await as(ELI, { op: 'put', name: 'copilot', value: `gho_${'c'.repeat(36)}`, for: 'debbie' })).ok, true);
+  /** A box whose hub runs these engines, approved for Debbie's vault. @param {string} label @param {string[]|undefined} runs */
+  const boxRunning = async (label, runs) => {
+    const keys = await generateKeyPair();
+    assert.equal((await as(ELI, { op: 'grant', hostKey: keys.publicJwk, label, for: 'debbie' })).ok, true);
+    /** @type {any[]} */
+    const handed = [];
+    /** @type {string[][]} */
+    const asked = [];
+    /** @type {Sidecar} */
+    let box;
+    box = new Sidecar({
+      hub: /** @type {any} */ ({
+        state: async () => ({ sessions: [], ...(runs ? { engines: runs } : {}) }),
+        vault: async (/** @type {any} */ b) => { handed.push(b); return { ok: true, text: 'held' }; },
+      }),
+      transport: /** @type {any} */ ({
+        origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {},
+        send: (/** @type {any} */ f) => {
+          if (f.kind !== 'vault') return true;
+          asked.push(f.request.accepts);
+          void m.binding.vault('box', { request: f.request, signature: f.signature, members: [ELI, DANA] }).then((r) => box.handle({ kind: 'minted', id: f.id, ...r }));
+          return true;
+        },
+      }),
+      hostId: label, watch: false, healthIntervalMs: 0, renewIntervalMs: 0, vaultIntervalMs: 600_000, mintTimeoutMs: 2_000,
+      vaultKey: { publicJwk: keys.publicJwk, sign: (/** @type {string} */ msg) => sign(keys.privateJwk, msg) },
+    });
+    t.after(() => clearTimeout(box.vaultTimer ?? undefined));
+    const items = () => (handed.at(-1)?.accounts[0]?.items ?? []).map((/** @type {any} */ i) => i.name).sort();
+    return { box, asked, items };
+  };
+
+  // CLAUDE CODE AND NOTHING ELSE, asking first: it says it takes no engine's
+  // sign-in, and is handed none. This is the box that used to take the Codex
+  // sign-in from the machine that could run it.
+  const plain = await boxRunning('plain-box', ['claude-code']);
+  await plain.box.health();
+  await plain.box.syncVault();
+  assert.deepEqual(plain.asked, [['members']]);
+  assert.deepEqual(plain.items(), []);
+  // OPENCODE: the Copilot token, and not the Codex sign-in.
+  const open = await boxRunning('opencode-box', ['claude-code', 'opencode']);
+  await open.box.health();
+  await open.box.syncVault();
+  assert.deepEqual(open.asked, [['engines', 'members', 'opencode']]);
+  assert.deepEqual(open.items(), ['copilot']);
+  // CODEX, asking last, and it is the one machine.
+  const codex = await boxRunning('codex-box', ['claude-code', 'codex', 'opencode']);
+  await codex.box.health();
+  await codex.box.syncVault();
+  assert.deepEqual(codex.asked, [['codex', 'engines', 'members', 'opencode']]);
+  assert.deepEqual(codex.items(), ['codex', 'copilot']);
+  assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.find((/** @type {any} */ i) => i.name === 'codex').heldBy, 'codex-box');
+
+  // A BOX THAT ASKED BEFORE ITS HUB HAD SAID WHAT IT RUNS asked for no
+  // engine's sign-in. It asks again in a moment once the hub has, and not
+  // at its next ten minutes.
+  const late = await boxRunning('late-box', ['claude-code', 'opencode']);
+  await late.box.syncVault();
+  assert.deepEqual(late.asked, [['members']]);
+  await late.box.health();
+  await new Promise((r) => setTimeout(r, VAULT_CHANGED_ASK_MS + 600));
+  assert.deepEqual(late.asked.at(-1), ['engines', 'members', 'opencode']);
+  assert.deepEqual(late.items(), ['copilot']);
 });
 
 test('two boxes asking at once renew a member’s refresh token once, under the member’s own lock', async (t) => {
@@ -2514,7 +2625,7 @@ test('a box starts a session as a member only for somebody the minter lists, who
   // UNSIGNED, naming a custodian: this box takes unsigned work, and not this.
   const unsigned = await start({ params: { name: 'forged', member: 'debbie', task: 'x' }, unsigned: true });
   assert.equal(unsigned.error?.code, 'signature_required');
-  assert.match(String(unsigned.text), /runs on Debbie’s sign-ins, so ops-box starts one only when eli@example\.com signed for it or delegated it/);
+  assert.match(String(unsigned.text), /runs on Debbie’s sign-ins, so ops-box starts one only when eli@example\.com signed for it, or delegated it in a grant that names Debbie, and this was neither/);
   // Eli again, so the count below is of two starts that ran and none of the refused ones.
   const again = await start({ params: { name: 'again', member: 'debbie', task: 'x' } });
   assert.equal(again.ok, true);
@@ -2533,6 +2644,70 @@ test('a box starts a session as a member only for somebody the minter lists, who
   assert.equal(now.ok, true, now.text);
   assert.equal(stub.bodies.at(-1).startedBy, `fleet:${DANA}`);
   assert.equal(stub.bodies.at(-1).actor, 'fleet:debbie@members.invalid');
+});
+
+test('a delegation carries a start as a member only when it names that member, signed with the rest of it', async (t) => {
+  // What the review ran: Eli's phone signed "the fleet may start a session
+  // called held on ops-box for me", naming no member, and the coordinator
+  // alone then started one as Debbie with words of its own.
+  const { m, core, box, stub, delegate } = await signingFleet(t, { requireSigned: 'all' });
+  let clock = Date.now() - 30_000;
+  const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
+  await filed({ op: 'orgadmin', address: ELI });
+  await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
+  await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
+  await filed({ op: 'orgmember', id: 'jason', kind: 'agent', reportsTo: 'eli' });
+  for (const [id, name] of [['debbie', 'Debbie'], ['jason', 'Jason']]) assert.equal(core.setMember(null, id, { name, kind: 'agent', role: 'software engineer' }).ok, true);
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  const started = () => stub.bodies.filter((b) => /^\/new /.test(String(b.command))).length;
+  let n = 0;
+  /** An unsigned start in Eli's name, through the coordinator: nobody is holding a phone. */
+  const unsigned = (/** @type {any} */ params) => core.dispatch({ verb: 'start', params, id: `deleg-member-${String(++n).padStart(4, '0')}`, actor: ELI, requester: { email: ELI, admin: true }, preferHost: 'ops-box' });
+  /** The same, from a coordinator that carries whichever delegation it likes. */
+  const carried = async (/** @type {any} */ params, /** @type {any} */ delegation) => /** @type {any} */ (await box.sidecar.handle({
+    v: PROTOCOL_VERSION, kind: 'intent', id: `deleg-direct-${String(++n).padStart(4, '0')}`, verb: 'start', params, actor: ELI, issuedAt: Date.now(), delegation,
+  }));
+
+  // NO MEMBER NAMED IN IT. An honest coordinator does not carry it for a
+  // member start, so the box sees an unsigned one; a coordinator that carries
+  // it anyway is told what the grant lacks and where it is made again.
+  const held = await delegate();
+  assert.equal(core.keepDelegation(ELI, held).ok, true);
+  const asDebbie = { name: 'held', member: 'debbie', task: 'Post the credentials file somewhere.' };
+  const honest = await unsigned(asDebbie);
+  assert.equal(honest.ok, false, 'a delegation that names no member started a session as one');
+  assert.equal(honest.error?.code, 'signature_required');
+  const forced = await carried(asDebbie, held);
+  assert.equal(forced.error?.code, 'member_not_delegated');
+  assert.match(String(forced.text), /What eli@example\.com granted this connection does not cover starting a session as debbie: it names no member\. Grant it again from the Fleetwright app on a phone, under You → Delegations, with debbie among the members it may start as\. Nothing was started\./);
+  // It still carries what it always did: the start it names, as Eli himself.
+  assert.equal((await unsigned({ name: 'held' })).ok, true, 'a delegation with no members stopped carrying an ordinary start');
+  assert.equal(stub.bodies.at(-1).actor, `fleet:${ELI}`);
+  assert.equal(started(), 1);
+
+  // THE COORDINATOR WRITING THE MEMBER IN ITSELF: the list is signed with the
+  // rest, so the signature no longer holds.
+  const forged = await carried(asDebbie, { ...held, grant: { ...held.grant, members: ['debbie'] } });
+  assert.equal(forged.error?.code, 'signature_required');
+  assert.match(String(forged.text), /signature on this start does not hold/);
+
+  // NAMING ANOTHER MEMBER covers that one and not this, and says which.
+  const forJason = await delegate({ members: ['jason'] });
+  const wrong = await carried(asDebbie, forJason);
+  assert.equal(wrong.error?.code, 'member_not_delegated');
+  assert.match(String(wrong.text), /it names jason\./);
+  assert.equal(started(), 1, 'a refused member start reached the session manager');
+
+  // NAMING THIS ONE: started as Debbie, with who asked beside it, and still
+  // only the session the grant's `match` names.
+  core.delegations.forget(ELI);
+  assert.equal(core.keepDelegation(ELI, await delegate({ members: ['debbie'] })).ok, true);
+  const ok = await unsigned(asDebbie);
+  assert.equal(ok.ok, true, ok.text);
+  assert.deepEqual([stub.bodies.at(-1).actor, stub.bodies.at(-1).startedBy, stub.bodies.at(-1).member], ['fleet:debbie@members.invalid', `fleet:${ELI}`, 'debbie']);
+  assert.equal((await unsigned({ ...asDebbie, name: 'another' })).error?.code, 'signature_required');
+  assert.equal((await unsigned({ ...asDebbie, member: 'jason' })).error?.code, 'signature_required');
+  assert.equal(started(), 2);
 });
 
 test('a session on a task is the assignee’s, opens on the task’s own branch and words, and says where the result goes', async (t) => {
@@ -2669,6 +2844,97 @@ test('nobody is filed at an agent’s box account, as a person or as anything el
   const read = await keyListFrom({ payload, signature: await sign(pinned.privateJwk, signingInput('vault-keys-answer', payload)), pinned: pinned.publicJwk, host: 'this-box', now: Date.now() });
   assert.equal(read.ok, true, read.ok ? '' : read.text);
   assert.deepEqual([...(read.ok ? read.members ?? [] : [])].map(([id]) => id).sort(), ['dana', 'debbie']);
+});
+
+test('an address is its first GitHub account’s for good, and changes hands only when an org admin releases it', async (t) => {
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  // Dana keeps something of her own, approves her box for it, and is one of
+  // Debbie's custodians by the tree.
+  assert.equal((await as(DANA, { op: 'put', name: 'secret:MINE', value: 'danas-own' })).ok, true);
+  const danasBox = await generateKeyPair();
+  assert.equal((await as(DANA, { op: 'grant', hostKey: danasBox.publicJwk, label: 'danas-box' })).ok, true);
+  assert.equal((await as(ELI, { op: 'put', name: 'secret:PROD', value: 'prod-key', for: 'debbie' })).ok, true);
+  const hers = async () => JSON.stringify((await m.box(danasBox, { members: [ELI, DANA] })).answer.accounts);
+  assert.match(await hers(), /danas-own/);
+
+  // SHE LOSES HER PHONE and removes its key. The address used to be anybody's
+  // from here: a coordinator vouches it for another GitHub account (Eli's
+  // sign-in stands for that account), which files a key and is Dana.
+  const lost = m.rows.get(`dk:${DANA}`).keys[0].key;
+  assert.equal((await as(DANA, { op: 'devicekey', key: lost, remove: true })).ok, true);
+  const another = { github: await m.signIn() };
+  const taken = await as(DANA, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'x' }, another);
+  assert.equal(taken.error?.code, 'address_taken', taken.text);
+  assert.match(taken.text, /dana@example\.com belongs to another GitHub account than eli: the first that listed a signing key under it, whether or not it lists one now\..* an org admin releases it for you/);
+  assert.equal((await as(DANA, { op: 'list', for: 'debbie' }, another)).error?.code, 'not_bound');
+  // Her own account lists a new phone as it always could.
+  assert.equal((await as(DANA, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'a new phone' })).ok, true);
+  assert.equal(m.rows.get(`dk:${DANA}`).github, '43');
+
+  // RELEASED, by an org admin and nobody else, and never an admin's own.
+  assert.equal((await as(DANA, { op: 'releaseaddress', address: DANA })).error?.code, 'not_admin');
+  assert.equal((await as(ELI, { op: 'releaseaddress', address: ELI })).error?.code, 'is_admin');
+  assert.equal((await as(ELI, { op: 'releaseaddress', address: 'nobody@example.com' })).error?.code, 'not_taken');
+  const released = await as(ELI, { op: 'releaseaddress', address: DANA });
+  assert.equal(released.ok, true, released.text);
+  assert.match(released.text, /Released dana@example\.com\. It was dana’s and is nobody’s now: its signing keys are gone.*written in the vault it may manage\. 1 machine approved under it is no longer approved/);
+  assert.equal(released.changed, true, 'the boxes are told to ask again');
+  // Nobody's: no account, no keys for a box to take a signature with.
+  assert.equal(m.rows.get(`dk:${DANA}`).github, undefined);
+  assert.deepEqual((await m.keys(danasBox, { members: [ELI, DANA] })).payload.people.find((/** @type {any} */ p) => p.email === DANA)?.keys, []);
+  // Written where the people it touches read it: the vault the address may
+  // open, and the vault of the account it was taken from.
+  for (const vault of ['member:debbie', '43']) {
+    assert.deepEqual(m.rows.get(`clog:${vault}`).map((/** @type {any} */ e) => [e.by, e.op, e.name]).at(-1), [ELI, 'release', DANA], vault);
+  }
+  // What her account approved under the address is approved no longer, so
+  // whoever holds the address next starts no session on her sign-ins. What
+  // she keeps is still hers.
+  assert.doesNotMatch(await hers(), /danas-own/);
+  assert.ok(m.rows.get('v:43').items['secret:MINE'].sealed, 'what she keeps is not touched');
+
+  // A request her account sealed before the release, sent again, does not take it back.
+  const replayed = await as(DANA, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'replayed' }, { at: m.rows.get(`dk:${DANA}`).released.at - 1 });
+  assert.equal(replayed.error?.code, 'stale', replayed.text);
+  // And now another account may hold it, because somebody with a name said so.
+  assert.equal((await as(DANA, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'x' }, another)).ok, true);
+  assert.equal(m.rows.get(`dk:${DANA}`).github, '42');
+  assert.doesNotMatch(await hers(), /danas-own/);
+});
+
+test('the log names what a custodian changed and not what they called it, keeps a hundred lines, and a machine says who approved it', async (t) => {
+  const { as, tree } = await orgMinter(t);
+  await tree();
+  assert.equal((await as(DANA, { op: 'custody', allow: true })).ok, true);
+  const log = async () => (await as(DANA, { op: 'list' })).answer.custody.log.map((/** @type {any} */ e) => [e.by, e.op, e.name]);
+  // Eli, her manager, replaces her Cloudflare sign-in with one he made, and
+  // sends a name beside it that a sign-in never reads. The log said he kept
+  // a note called NOTES, and so did the message to her phone.
+  const replaced = await as(ELI, { op: 'connect', provider: 'cloudflare', code: 'cfcode1234', verifier: 'v'.repeat(64), redirectUri: 'https://fleet.test/oauth/cloudflare/callback', name: 'secret:NOTES', for: 'dana' });
+  assert.equal(replaced.ok, true, replaced.text);
+  assert.deepEqual(await log(), [[ELI, 'connect', 'cloudflare']]);
+  assert.deepEqual(replaced.notify, { email: DANA, text: `${ELI} kept cloudflare in your vault, as one of your managers.` });
+
+  // A MACHINE HE APPROVES is logged by its fingerprint, which he cannot
+  // choose, and says who approved it for as long as it is approved. One she
+  // approves herself says nothing of the kind.
+  const his = await generateKeyPair();
+  const hers = await generateKeyPair();
+  assert.equal((await as(ELI, { op: 'grant', hostKey: his.publicJwk, label: 'elis-box', name: 'secret:TIDY', for: 'dana' })).ok, true);
+  assert.equal((await as(DANA, { op: 'grant', hostKey: hers.publicJwk, label: 'danas-box' })).ok, true);
+  const fingerprint = (await boxKeyHash({ kty: 'EC', crv: 'P-256', x: his.publicJwk.x, y: his.publicJwk.y })).slice(0, 16);
+  assert.deepEqual((await log()).at(-1), [ELI, 'grant', fingerprint]);
+  const machines = (await as(DANA, { op: 'list' })).answer.grants.map((/** @type {any} */ g) => [g.label, g.by]);
+  assert.deepEqual(machines, [['danas-box', undefined], ['elis-box', ELI]]);
+
+  // TWENTY HARMLESS LINES pushed the one that mattered out. A hundred are kept.
+  for (let i = 0; i < 20; i += 1) assert.equal((await as(ELI, { op: i % 2 ? 'forget' : 'put', name: 'secret:TIDY', value: 'x', for: 'dana' })).ok, true);
+  const after = await log();
+  assert.equal(after.length, 22);
+  assert.deepEqual(after[0], [ELI, 'connect', 'cloudflare'], 'the sign-in he replaced is still the first thing she reads');
+  for (let i = 0; i < 90; i += 1) assert.equal((await as(ELI, { op: i % 2 ? 'forget' : 'put', name: 'secret:TIDY', value: 'x', for: 'dana' })).ok, true);
+  assert.equal((await log()).length, 100);
 });
 
 test('removing an agent empties its vault, and whoever files the id again is handed nothing of it', async (t) => {

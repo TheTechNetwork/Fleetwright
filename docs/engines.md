@@ -186,9 +186,9 @@ never read back. Neither is in a member's record or file.
 
 **A Codex sign-in is handed to one machine.** Codex renews its own tokens on
 the machine it runs on, and a renewal ends the copy anywhere else. So the
-vault gives a member's `codex` item to the first approved machine that asks
-for it and to no other, says which machine holds it, and gives it to another
-only after a custodian deposits it again. A Copilot token does not rotate
+vault gives a member's `codex` item to the first approved machine that runs
+Codex and asks for it, and to no other, says which machine holds it, and
+gives it to another only after a custodian deposits it again. A Copilot token does not rotate
 and goes to every machine approved for the vault.
 
 **Nothing renews these from the vault**, unlike a Claude sign-in, and Test
@@ -197,9 +197,16 @@ the check before a turn, on the machine. An ended one is a TurnEnded with
 reason `auth`: it is said on the session, to whoever that session's events
 reach, and the member's next engine takes over if there is one.
 
-A box asks the vault for them by saying it takes them (`accepts: ["engines",
-"members"]`), so a box from before this is never handed a file it would
-leave lying where nothing reads it.
+A box asks the vault for them by saying it takes them and which engines it
+runs (`accepts: ["codex", "engines", "members", "opencode"]`, from what its
+hub reports, so from `FLEETWRIGHT_ENGINES`). A box that runs Claude Code
+alone says neither and is handed none; one that runs OpenCode and no Codex
+is handed the Copilot token and never the Codex sign-in. Every box used to
+say `engines` whatever it ran, so the one machine a Codex sign-in goes to
+was whichever asked first, a box that could not run it included. A box from
+before the engines were named still says `engines` alone and is handed every
+engine's item, as it was; one from before engines says nothing and is never
+handed a file it would leave lying where nothing reads it.
 
 **A session is handed one only through its own socket.** The runner asks the
 hub (`/internal/engine-credential`) for the item its engine runs on. The hub
