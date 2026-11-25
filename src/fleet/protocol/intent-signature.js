@@ -110,6 +110,11 @@ export function intentSigningInput(intent, host) {
 // phone that has never heard of the field signs the bytes it always did, and
 // starts as nobody's member.
 //
+// AND THE MEMBERS IT MAY SIGN AN ENGINE IN FOR, by the same list
+// (`enginesignin`, docs/engines.md). That puts a sign-in where the member's
+// sessions run on it, and its answer carries the code a person types, so a
+// grant that names no member carries it for nobody.
+//
 // WHAT A COORDINATOR CAN STILL DO WITH ONE is exactly that, as many times as it
 // likes inside the window: it is a standing permission, not a single request,
 // and that is the whole reason a phone keeps them short and narrow. `id` is what
@@ -222,20 +227,24 @@ export function delegationSigningInput(grant) {
   });
 }
 
+/** The verbs that act as a member, which a grant covers only by naming that member. */
+const MEMBER_VERBS = Object.freeze(['start', 'enginesignin']);
+
 /**
- * Why a grant does not cover the member a start names, or null when it does or
- * when the intent is no member start. Apart from delegationGap so a box can
- * tell this refusal from the others and say what to do about it: the grant is
- * made again on the phone, naming the member.
+ * Why a grant does not cover the member a start or an engine sign-in names,
+ * or null when it does or when the intent names no member. Apart from
+ * delegationGap so a box can tell this refusal from the others and say what
+ * to do about it: the grant is made again on the phone, naming the member.
  *
  * @param {Grant} grant
  * @param {{ verb: string, params?: Record<string, unknown> }} intent
  * @returns {string|null}
  */
 export function delegationMemberGap(grant, intent) {
-  const member = intent.verb === 'start' ? intent.params?.member : undefined;
+  const member = MEMBER_VERBS.includes(intent.verb) ? intent.params?.member : undefined;
   if (member === undefined) return null;
-  return (grant.members ?? []).includes(String(member)) ? null : `it does not cover starting a session as ${String(member)}`;
+  if ((grant.members ?? []).includes(String(member))) return null;
+  return intent.verb === 'start' ? `it does not cover starting a session as ${String(member)}` : `it does not cover signing an engine in for ${String(member)}`;
 }
 
 /**

@@ -77,6 +77,13 @@ export const DEFAULT_DENY = ([
   // phone, which an agent has no use for, and an action on somebody's pool
   // is the page's to offer with its confirmation, not a tool's.
   'xolook', 'xoact',
+  // SIGNING AN ENGINE IN FOR A MEMBER puts a sign-in where that member's
+  // sessions run on it, and ends with a person entering a code at the
+  // provider under their own account. It is with `connect` and `link`: not
+  // something to reach for unasked. An operator who wants it says so
+  // (FLEETWRIGHT_MCP_ALLOW=enginesignin), and a box still takes it from an
+  // MCP client only under a grant that carries the verb and names the member.
+  'enginesignin',
   // NOT `forget`, ANY MORE. It was withheld as "destroys a conversation that
   // cannot be recovered", and that stopped being true when the seven-day
   // recycle bin shipped — `forget` is now the RECOVERABLE one and `purge` is

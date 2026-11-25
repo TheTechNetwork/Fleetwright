@@ -54,6 +54,10 @@ test('the verb set is exactly what is documented', () => {
     // decides whether a bump is needed.
     'copyfile',
     'deletefile',
+    // An engine signed in on the machine it runs on, for one member, with the
+    // engine's own device code (v22, docs/engines.md). A new verb, and the
+    // number with it is how the coordinator knows which boxes have it.
+    'enginesignin',
     // The PKCE finish: the coordinator relays the callback's code to the host
     // that minted the verifier, and the host exchanges it. No version bump for
     // the verb itself — an older host never offers a challenge, so it is never
@@ -291,8 +295,11 @@ test('only state-changing verbs are marked mutating', () => {
     // not come back as "no such VM" for the one it just removed.
     // forgetperson bins a removed person's sessions and deletes their
     // sign-ins; a retry must not report nothing done for what it just did.
+    // enginesignin starts and ends a sign-in on the box and writes how it
+    // ended; its `status` reads, and a verb is mutating or it is not. The key
+    // is what stops a retried start beginning a second attempt.
     // files/readfile are reads and are deliberately absent.
-    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'exchange', 'forget', 'forgetperson', 'labels', 'link', 'pinadmin', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'vmctl', 'writefile', 'xoact', 'xosetup'],
+    ['answer', 'channel', 'connect', 'copyfile', 'deletefile', 'enginesignin', 'exchange', 'forget', 'forgetperson', 'labels', 'link', 'pinadmin', 'provision', 'purge', 'reboot', 'renew', 'restore', 'resume', 'sandbox', 'setuptoken', 'start', 'stop', 'unlink', 'update', 'upgrade', 'vmctl', 'writefile', 'xoact', 'xosetup'],
   );
   for (const readOnly of ['list', 'status', 'peek', 'health', 'files', 'readfile']) {
     assert.equal(isMutating(readOnly), false, `${readOnly} must not be mutating`);

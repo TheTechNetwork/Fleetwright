@@ -512,8 +512,23 @@ export const PVESETUP_STEPS = Object.freeze([
 // Code and nothing else, so it is sent a member whose list is Claude Code
 // alone with no model, exactly as before, and refused any other: dropped,
 // the parameter would leave the session on Claude whatever the member says.
+//
+// v22, 25 Nov 2026: AN ENGINE IS SIGNED IN ON THE MACHINE IT RUNS ON.
+// `enginesignin` asks one box to sign Codex or OpenCode in for one member:
+// the engine's own device-code sign-in, in a short container with that
+// member's engine home mounted, answered with the page to open and the code
+// (docs/engines.md, "Signing in on the machine"). Before this a sign-in was
+// a file a custodian pasted into the member's vault, which an outside review
+// found could not work as built. A new verb, which an older host answers
+// `unknown_verb` to; it carries a version all the same, as `xolook` does,
+// because the number is how the coordinator knows a box has it, and refuses
+// an older one by name, as a machine to update, before anything is sent.
+// With it a box's health may say which members are signed in to which
+// engine there (`engineSignins`), and a box says when an attempt ends
+// (`engine.signin`); the coordinator reads both only from a box that
+// speaks 22.
 /** @type {number} */
-export const PROTOCOL_VERSION = 21;
+export const PROTOCOL_VERSION = 22;
 
 /**
  * The GitHub images each runner platform may run on, newest first, and the
@@ -2381,6 +2396,73 @@ export const VERBS = Object.freeze({
     summary:
       'Hand a machine made on your pool your Claude login, sealed so only that machine can read it, once it has joined. ' +
       'Sent by the coordinator on the machine\'s behalf, to the box that made it; refused from anybody else.',
+  },
+
+  // AN ENGINE SIGNED IN ON THE MACHINE IT RUNS ON (v22, docs/engines.md,
+  // "Signing in on the machine"). The box runs the engine's own device-code
+  // sign-in for one member and answers with the page and the code; the
+  // sign-in the engine then makes is kept in that member's engine home on
+  // that box and never leaves it.
+  //
+  // WHOSE: `member`, and it is signed. A box takes this from exactly who may
+  // start a session as that member, checked against the list the minter
+  // signed, with a signature or a delegation that names the member, whatever
+  // the box's mode (sidecar.js). The coordinator can ask none of the four
+  // actions by itself, `status` included, whose answer carries the code.
+  //
+  // ALWAYS A MEMBER. Engines are a member's (`start.memberEngines`), so a
+  // person signs their own in by naming their own record, and there is no
+  // second way to say whose.
+  //
+  // `engine` IS AN ENUM OF TWO, not every engine there is: Claude Code is
+  // signed in through the vault (docs/vault.md), and an engine on an API
+  // key has a key and no sign-in (docs/api-engines.md).
+  //
+  // ONE VERB AND AN `action`, where the workspace has five verbs: all four
+  // are one custodian's act on one sign-in under one rule, and docs/intents.md
+  // says why that argument does not carry here. Mutating, all of it, so a
+  // retried `start` is answered from the box's cache and not made twice.
+  //
+  // NO SECRET IS A PARAMETER, and none is in an answer: the code a person
+  // types is made by the engine on the box and travels back, never in.
+  enginesignin: {
+    params: {
+      member: {
+        type: 'text',
+        required: true,
+        max: 40,
+        pattern: MEMBER_ID_RE,
+        shapeName: 'a member’s id',
+        since: 22,
+        describe:
+          'The member whose engine this is, by id (fleet_members lists them). You must be that person, or one of the ' +
+          'member’s custodians, and the request must be signed by you or sent under a grant that names this member.',
+      },
+      engine: {
+        type: 'enum',
+        required: true,
+        values: ['codex', 'opencode'],
+        since: 22,
+        describe:
+          'codex signs Codex in to a ChatGPT account. opencode signs OpenCode in to GitHub Copilot. ' +
+          'Name a machine that runs it with `host`.',
+      },
+      action: {
+        type: 'enum',
+        required: true,
+        values: ['start', 'status', 'cancel', 'signout'],
+        since: 22,
+        describe:
+          'start asks the engine for a sign-in page and a code that lasts 15 minutes, and answers with both: open the ' +
+          'page, enter the code, then ask status until it says how it ended. A second start while one waits answers ' +
+          'with the one waiting. cancel stops an attempt. signout has the engine remove its sign-in on that machine.',
+      },
+    },
+    mutating: true,
+    summary:
+      'Sign Codex or OpenCode in for one member on the machine it runs on, with the engine’s own device code. ' +
+      'The sign-in is made and kept on that machine; no token is sent or returned. ' +
+      'Only who may start a session as the member may, on a permanent machine that runs the engine.',
   },
 });
 

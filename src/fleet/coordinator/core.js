@@ -158,6 +158,12 @@ const TASK_PROTOCOL = 20;
  */
 const ENGINES_PROTOCOL = 21;
 /**
+ * The protocol a box must speak to sign an engine in on itself
+ * (`enginesignin`, intents.js, v22), to report who is signed in there and to
+ * say when an attempt ends.
+ */
+const ENGINE_SIGNIN_PROTOCOL = 22;
+/**
  * How long a task's lock is kept for a start whose box never answered, PAST
  * THE TIME THE START ITSELF IS WAITED FOR (`intentTimeoutMs`). After it the
  * start is taken not to have happened; a session that did start is taken up
@@ -7150,6 +7156,22 @@ export class CoordinatorCore {
             `session was for, or send its result back. Update it, or pick another machine.`,
         };
       }
+    }
+    // SIGNING AN ENGINE IN, which an older box would answer `unknown_verb`
+    // to: true, and said here as which machine and what to do about it. All
+    // three of its parameters are newer than such a box, so nothing of it
+    // could be built for one either (intents.js, buildIntent).
+    if (spec.verb === 'enginesignin') {
+      const speaks = Number(host?.health?.protocol);
+      if (Number.isInteger(speaks) && speaks >= ENGINE_SIGNIN_PROTOCOL) return null;
+      return {
+        ok: false,
+        error: { code: 'host_outdated' },
+        text:
+          `${host?.hostId} is too old to sign an engine in. It speaks protocol ` +
+          `${Number.isInteger(speaks) ? speaks : 'an older version'}, and this needs ${ENGINE_SIGNIN_PROTOCOL}. ` +
+          `Update fleetwright on ${host?.hostId}, or pick another machine.`,
+      };
     }
     // A RELAY, which dropped would answer for the machine's own network, or
     // begin a job that has no way to Xen Orchestra.
