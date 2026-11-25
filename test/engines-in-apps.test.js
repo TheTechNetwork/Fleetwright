@@ -431,3 +431,13 @@ test('a pasted auth.json is hidden on both phones until Show is pressed, and say
   has(IOS, new RegExp(`Button\\("Clear"\\) \\{\\s*\\w+ = ""\\s*${iosShown} = false\\s*\\}`), 'iOS leaves the next paste shown after Clear');
   has(ANDROID, new RegExp(`onClick = \\{\\s*\\w+ = ""\\s*${androidShown} = false\\s*\\},[\\s\\S]{0,200}?\\{ Text\\("Clear"\\) \\}`), 'Android leaves the next paste shown after Clear');
 });
+
+test('a pasted key or token is kept without the space a paste brings, on both phones, and the auth.json file whole', () => {
+  // Android's two fields drop it as it is typed. iOS sent what was in the
+  // field, so a key pasted with a newline after it was kept as that.
+  has(IOS, /if name != "codex" \{ (\w+) = \1\.trimmingCharacters\(in: \.whitespacesAndNewlines\) \}\s*if await keep\(\1\)/, 'iOS keeps a pasted key or token with the space around it');
+  has(ANDROID, /onValueChange = \{ \w+ = it\.trim\(\) \},\s*label = \{ Text\("GitHub Copilot token"\) \}/, 'Android keeps a pasted Copilot token with the space around it');
+  has(ANDROID, /onValueChange = \{ \w+ = it\.trim\(\) \},\s*label = \{ Text\("\$\{\w+\.\w+\} API key"\) \},\s*singleLine = true,\s*visualTransformation/, 'Android keeps a pasted API key with the space around it');
+  // The file is JSON, and is sent as it was pasted.
+  has(ANDROID, /onValueChange = \{ \w+ = it \},\s*label = \{ Text\("auth\.json"\) \}/, 'Android changes a pasted auth.json before it is kept');
+});

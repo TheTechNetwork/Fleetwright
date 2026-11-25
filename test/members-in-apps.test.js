@@ -295,3 +295,24 @@ test('an organization that could not be loaded says so under You, with the reaso
   assert.match(IOS, /Text\(what\)[\s\S]{0,200}?Text\(why\)[\s\S]{0,260}?Button\("Try again"\) \{ Task \{ await \w+\(\) \} \}/);
   assert.match(ANDROID, /Hint\(what, color = Design\.Palette\.bad\.now\)\s*SelectionContainer \{ Hint\(why\) \}\s*OutlinedButton\(onClick = again[^\n]*\{ Text\("Try again"\) \}/);
 });
+
+test('a start from a member’s page is answered on that page on both phones, and a timeout there says where to look', () => {
+  // docs/app-parity.md says the two pages are the same. iOS drew the answer
+  // under the button; Android moved the person to Sessions, off the member
+  // they were looking at, and told a timeout to "Pull to refresh" on a page
+  // with nothing to pull.
+  assert.match(IOS, /Button\("Start a session as \\\(shown\.name\)"\)[\s\S]{0,700}?RefusedStartView\(settings: settings, refused: \w+\)[\s\S]{0,160}?\} else if !(\w+)\.isBlank \{\s*Text\(\1\)/, 'iOS no longer draws a start’s answer on the member’s page');
+  assert.match(ANDROID, /Text\("Start a session as \$\{member\.name\}"\)\s*\}[\s\S]{0,700}?RefusedStartCard\(settings, (\w+)\) \{ onStart\(\1\.request\) \}\s*\} else if \((\w+) != null && \2\.text\.isNotBlank\(\)\) \{\s*SelectionContainer \{ Hint\(\2\.text\) \}/, 'Android does not draw a start’s answer on the member’s page');
+  // And the person stays there: what sends a start from under You does not
+  // change the tab.
+  const you = ANDROID.slice(ANDROID.indexOf('"you" -> YouScreen('));
+  const sends = /onStart = \{ request ->([\s\S]{0,240}?)\n {16}\},/.exec(you)?.[1] ?? '';
+  assert.match(sends, /startInBackground\(request\)/, 'this no longer reads what sends a start from under You on Android');
+  assert.doesNotMatch(sends, /tab = /, 'Android moves a person off the page whose start they pressed');
+  // The timeout's sentence, from a page: the session, if there is one, is
+  // under Sessions. On Sessions itself both phones still say to pull.
+  for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
+    assert.ok(src.includes('Not sure it started. Look under Sessions.'), `${name} lost: Not sure it started. Look under Sessions.`);
+    assert.ok(src.includes('Not sure it started. Pull to refresh.'), `${name} lost: Not sure it started. Pull to refresh.`);
+  }
+});

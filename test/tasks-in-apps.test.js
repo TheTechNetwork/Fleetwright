@@ -333,3 +333,15 @@ test('a session started on a task says so on its page, and that opens the task',
   has(IOS, /lockSession = listed\.first \{ \$0\.name == name && \$0\.hostId == lock\.hostId \}/, 'iOS opens a session its own list does not have');
   has(ANDROID, /sessions\?\.firstOrNull \{ it\.name == name && it\.hostId == lock\.hostId \}/, 'Android opens a session its own list does not have');
 });
+
+test('a start on a task is answered on the task’s page on both phones, whether or not the task can still be started', () => {
+  // The start's answer is a line on the page, and the card for one that
+  // waits for approval or stopped at a budget. Android put it on Sessions.
+  has(IOS, /NavigationLink\("Start a session"\)[\s\S]{0,900}?RefusedStartView\(settings: settings, refused: \w+\)[\s\S]{0,200}?\} else if !(\w+)\.isBlank \{\s*Text\(\1\)/, 'iOS no longer draws a start’s answer on the task’s page');
+  // Outside the Start button's own condition: a start that was taken locks
+  // the task, and the fleet then sends nothing to start.
+  has(ANDROID, /start\?\.let \{\s*OutlinedButton\([^\n]*\n\s*Text\("Start a session"\)\s*\}\s*\}\n[\s\S]{0,700}?RefusedStartCard\(settings, (\w+)\) \{ onStart\(\1\.request\) \}\s*\} else if \((\w+) != null && \2\.text\.isNotBlank\(\)\) \{\s*SelectionContainer \{ Hint\(\2\.text\) \}/, 'Android does not draw a start’s answer on the task’s page');
+  // It is this task's answer and no other's: known by the task's id in the
+  // parameters the fleet gave (`taskId`, src/fleet/protocol/tasks.js).
+  has(ANDROID, /\.takeIf \{ it\.request\.onTask\?\.get\("taskId"\) == id \}/, 'Android draws a start’s answer on a task it was not for');
+});

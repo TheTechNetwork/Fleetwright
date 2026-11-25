@@ -20,6 +20,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -657,6 +658,13 @@ private fun MemberPage(
     }
 
     LaunchedEffect(member.id, asked) { askVault() }
+    // LEAVING THE PAGE DROPS ITS START'S ANSWER, so it is not drawn on this
+    // member's page the next time it is opened, long after it was news.
+    DisposableEffect(member.id) {
+        onDispose {
+            if (PageStarts.last?.request?.member == member.id && PageStarts.last?.request?.onTask == null) PageStarts.last = null
+        }
+    }
 
     if (editing) {
         MemberForm(
@@ -746,6 +754,18 @@ private fun MemberPage(
         if (mayStart) {
             OutlinedButton(onClick = { starting = true }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text("Start a session as ${member.name}")
+            }
+            // THE START'S ANSWER, ON THIS PAGE, as iOS draws it: the
+            // fleet's sentence, or for a start that waits for approval or
+            // stopped at a budget what can be done about it from here
+            // (RefusedStartCard). Only a start sent as this member, from a
+            // page that is still open (PageStarts).
+            val started = PageStarts.last?.takeIf { it.request.member == member.id && it.request.onTask == null }
+            val refused = started?.refused
+            if (refused != null) {
+                RefusedStartCard(settings, refused) { onStart(refused.request) }
+            } else if (started != null && started.text.isNotBlank()) {
+                SelectionContainer { Hint(started.text) }
             }
         }
 

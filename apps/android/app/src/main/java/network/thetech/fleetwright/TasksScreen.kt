@@ -22,6 +22,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -411,6 +412,18 @@ internal fun TaskPage(
     var inspecting by remember { mutableStateOf<Fleet.Session?>(null) }
     var browsing by remember { mutableStateOf<Fleet.Session?>(null) }
 
+    // THE ANSWER TO A START SENT FROM THIS PAGE, while the page is open
+    // (PageStarts). Known as this task's by the `taskId` in the parameters
+    // the fleet gave and the person signed.
+    val started = PageStarts.last?.takeIf { it.request.onTask?.get("taskId") == id }
+    // The lock, or its absence, is the fleet's to say: the task is asked
+    // for again when the start is sent and when it is answered.
+    LaunchedEffect(started?.text) { if (started != null && started.text.isNotBlank()) asked++ }
+    // Leaving the page drops the answer, so it is not drawn here long after.
+    DisposableEffect(id) {
+        onDispose { if (PageStarts.last?.request?.onTask?.get("taskId") == id) PageStarts.last = null }
+    }
+
     LaunchedEffect(id, asked) {
         val got = fleet.task(id).getOrElse {
             // NOT REACHED. What the list had stays, said as that, and Start
@@ -516,7 +529,8 @@ internal fun TaskPage(
             onDismiss = { starting = false },
             // HANDED UP, NOT SENT FROM HERE: a start waits out its machine,
             // and a job scoped to a page that has closed is one that may not
-            // finish. Its answer is on Sessions, where a start's always is.
+            // finish. Its answer is a line on this page, as it is on iOS
+            // (PageStarts).
             onStart = { host ->
                 starting = false
                 onStart(StartRequest(title = null, brief = null, mode = null, host = host, task = signable["task"], onTask = signable))
@@ -775,6 +789,17 @@ internal fun TaskPage(
                 OutlinedButton(onClick = { starting = true }, enabled = !busy, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text("Start a session")
                 }
+            }
+            // THE START'S ANSWER, ON THIS PAGE, as iOS draws it: the
+            // fleet's sentence, or for a start that waits for approval or
+            // stopped at a budget what can be done about it from here
+            // (RefusedStartCard). Drawn whether or not the task can still
+            // be started, since a start that was taken locks it.
+            val refused = started?.refused
+            if (refused != null) {
+                RefusedStartCard(settings, refused) { onStart(refused.request) }
+            } else if (started != null && started.text.isNotBlank()) {
+                SelectionContainer { Hint(started.text) }
             }
             // REASSIGN, only on an open task nobody holds: work in flight is
             // released or comes back first.

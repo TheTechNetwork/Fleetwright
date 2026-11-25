@@ -477,6 +477,12 @@ struct EngineSignInRow: View {
             Task {
                 // Emptied only once the vault took it: a file it refused is
                 // still there to be looked at and pasted again whole.
+                // A KEY OR A TOKEN GOES WITHOUT THE SPACE OR NEWLINE A PASTE
+                // BRINGS WITH IT, as Android sends one: there the field
+                // drops them as they are typed, and here a pasted key with
+                // a newline after it was kept as that and worked nowhere.
+                // The auth.json file is sent as it was pasted.
+                if name != "codex" { pasted = pasted.trimmingCharacters(in: .whitespacesAndNewlines) }
                 if await keep(pasted) {
                     pasted = ""
                     revealed = false
