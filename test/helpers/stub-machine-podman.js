@@ -95,6 +95,18 @@ const main = async () => {
     write(s);
     return done(0, 'c0ffee\\n');
   }
+  // WHAT A CONTAINER PRINTED, as Podman hands it back: what it printed on
+  // one stream and what it printed as errors on the other, each line with
+  // Podman's own time in front when that is asked for, and only the last
+  // few of both together. A container is given its log by a test, as
+  // \`log: [{ at, err, line }]\`, oldest first.
+  if (args[0] === 'logs') {
+    const c = s.containers.find((x) => x.name === args[args.length - 1]);
+    if (!c || s.failLogs) return done(125, '', 'Error: no container with name or ID "' + args[args.length - 1] + '" found: no such container\\n');
+    const tail = (c.log || []).slice(-Number(after('--tail') || 1e9));
+    const put = (err) => tail.filter((l) => Boolean(l.err) === err).map((l) => (args.includes('--timestamps') ? l.at + ' ' : '') + l.line + '\\n').join('');
+    return done(0, put(false), put(true));
+  }
   if (args[0] === 'rm') {
     // ONE SLOW REMOVAL, once (slowRmOnceMs): how a test holds a look at the
     // machines open while something else changes one.

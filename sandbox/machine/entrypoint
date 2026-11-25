@@ -102,5 +102,8 @@ trap 'kill "$HUB" 2>/dev/null || true' EXIT
 
 status=0
 node "$ROOT/bin/fleetwright-sidecar" || status=$?
+# THE LAST LINE OF EVERY MACHINE THAT STOPPED, so it is no reason. The box
+# that made this one reads its log before removing it and shows its owner
+# the line before this (src/core/machines.js, which knows this sentence).
 say "the sidecar ended with status $status, so this machine is ending"
 exit "$status"

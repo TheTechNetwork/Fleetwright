@@ -336,6 +336,19 @@ behind the hub's token like every route there.
   ends a machine by its labels, and a machine whose container stopped by
   itself (its sidecar ended, or the box restarted) is cleared away with
   its volume.
+- **Why one stopped is kept, for an hour.** A machine's log goes with its
+  container, and it is the one place the machine said why. So before the
+  hub removes one that stopped by itself it reads the last twenty lines of
+  that log, in the order they were printed, and writes them to its own
+  log. The last line that says something is kept for an hour and shown on
+  its owner's place for this box, where that place says why it has no
+  image, as *"This machine found vm-… stopped 12 minutes ago and removed
+  it with its disk. Its log ends: …"*. Nobody else is shown it. Anything
+  in those lines that looks like a ticket or a token is withheld before
+  they are logged or kept, and so is any long unbroken run of a token's
+  letters, which costs a long path or host name too. A log Podman could
+  not read, or an empty one, is said as that. A machine the box ended, on
+  its owner's word or when its time was up, is not said: its owner knows.
 - **Asked first, by name.** For more time, an end or a sign-in, this
   driver is asked before a hypervisor's: the hub is on the box and answers
   at once whether a machine is its own, where a pool that is down would
@@ -420,7 +433,9 @@ ticket sits in its boot data in the same way.
   your machines*, never called rented and never said to be readable by
   anybody else, with why it offers no image yet while it builds one, and
   with the line that a network, a lab, a restart, a resize and a console
-  need a hypervisor.
+  need a hypervisor. The same line says, for an hour, that a machine of
+  yours there stopped by itself and how its log ended; neither phone
+  changed for it.
 - **The signing page**: the same two items. A box of your own has no item:
   there is nothing to keep.
 - **The API**: `GET /api/hosts` marks a place, an image and a machine with
@@ -463,11 +478,13 @@ For a machine on a box of your own: `test/machines.test.js` (the hub: the
 build from either shape of release, in the background and never waited
 for; the ticket into the volume from standard input, in no command line
 and no environment; the cap; the
-box's clock; more time and end; what is refused in words; the API with its
-token), `test/own-pools.test.js` (the driver over the real hub routes: off
+box's clock; more time and end; a machine that stopped by itself and how
+its log ended, with no ticket or token in what is kept; what is refused in
+words; the API with its token), `test/own-pools.test.js` (the driver over the real hub routes: off
 unless named, a place per approved person, the image offered once built,
-the sign-in sealed to the machine's key and to no other, a hub that cannot
-be asked, and its place behind the one seam), `test/machine-image.test.js`
+the sign-in sealed to the machine's key and to no other, a stopped
+machine said on its owner's place and nobody else's, a hub that cannot be
+asked, and its place behind the one seam), `test/machine-image.test.js`
 (the entrypoint run for real against stand-ins for the hub and the
 sidecar), the fourth test in `test/sandbox-coordinator.test.js` (marked
 `own`, named for the box, why it has no image yet, retired at the box's

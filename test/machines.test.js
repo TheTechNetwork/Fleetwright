@@ -11,13 +11,14 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Machines, machineImage, machineNames, releaseTag, stageMachineContext, MACHINE_MAX_MINUTES } from '../src/core/machines.js';
 import { HttpAdapter } from '../src/adapters/http.js';
 import { ensureApiToken } from '../src/core/api-token.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
+import { setLogStream } from '../src/log.js';
 import { stubMachinePodman } from './helpers/stub-machine-podman.js';
 
 const ELI = 'eli@example.com';
@@ -310,6 +311,68 @@ test('a machine the hub has no note of ends by its label, and one that stopped b
   // machine's container has is not one, and is left alone.
   podman.set({ containers: [{ name: 'my-own-thing', state: 'running', labels: { 'fleetwright.machine': VM, 'fleetwright.owner': ELI, 'fleetwright.until': '1' } }] });
   assert.deepEqual((await fresh.list()).ok && podman.state().containers.length, 1);
+});
+
+test('a machine that stopped by itself is removed with how its log ended kept for its owner, and no ticket or token in it', async (t) => {
+  const { podman, cfg, clock, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 60 });
+  await machines.make({ owner: SAM, ticket: ticket('b'.repeat(12)), coordinator: FLEET, minutes: 5 });
+  const TOKEN = 'sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789';
+  // What this hub writes to its own log, which a phone can read.
+  let journal = '';
+  setLogStream(/** @type {any} */ ({ write: (/** @type {string} */ l) => { journal += l; return true; } }));
+  t.after(() => setLogStream(null));
+  // ELI'S SIDECAR ENDED, and its container with it. Its warning went out as
+  // an error and everything else did not, which is how Podman hands the two
+  // back: apart. The reason is the last thing it said, by the time on it.
+  const s = podman.state();
+  s.containers[0].state = 'Exited (1) 3 seconds ago';
+  s.containers[0].log = [
+    { at: '2026-11-24T10:00:01.000000001Z', line: 'fleetwright-machine: joining https://fleet.example as its owner\'s temporary machine' },
+    { at: '2026-11-24T10:00:02.000000001Z', err: true, line: '2026-11-24T10:00:02.000Z WARN  sidecar: could not enrol itself, and will try again' },
+    { at: '2026-11-24T10:00:03.000000001Z', line: `2026-11-24T10:00:03.000Z INFO  sidecar: the fleet refused ${ticket()} (Bearer ${TOKEN}), so this is over` },
+    { at: '2026-11-24T10:00:04.000000001Z', line: 'fleetwright-machine: the sidecar ended with status 1, so this machine is ending' },
+  ];
+  podman.set({ containers: s.containers });
+  const seen = await machines.list();
+  assert.deepEqual(seen.ok && seen.machines.map((m) => m.name), ['vm-bbbbbbbbbbbb']);
+  assert.deepEqual(seen.ok && seen.ended, [{
+    name: VM, owner: ELI, at: clock.now,
+    text: `This machine found ${VM} stopped just now and removed it with its disk. Its log ends: sidecar: the fleet refused [ticket] (Bearer [removed]), so this is over`,
+  }]);
+  assert.deepEqual([podman.state().containers.length, podman.state().volumes], [1, [machineNames('vm-bbbbbbbbbbbb').volume]]);
+  // THE WHOLE END OF IT IS IN THIS HUB'S LOG, and neither there nor in
+  // anything this hub keeps is the ticket or the sign-in the machine printed.
+  assert.match(journal, new RegExp(`machines: ${VM} \\| fleetwright-machine: joining`));
+  const kept = readdirSync(cfg.stateDir, { recursive: true, withFileTypes: true }).filter((f) => f.isFile()).map((f) => readFileSync(path.join(f.parentPath, f.name), 'utf8')).join('\n');
+  for (const secret of [ticket(), TOKEN]) assert.equal(`${journal}${kept}${JSON.stringify(seen)}`.includes(secret), false);
+  // KEPT WHERE A RESTARTED HUB READS IT, and said for an hour and no longer.
+  clock.now += 12 * 60_000;
+  const later = await new Machines(cfg, { now: () => clock.now }).list();
+  assert.match(String(later.ok && later.ended[0]?.text), new RegExp(`^This machine found ${VM} stopped 12 minutes ago and removed it`));
+  // SAM'S TIME IS UP by now. This box ended that one, and its owner knows
+  // why: it is not among the ones that stopped by themselves.
+  assert.deepEqual(later.ok && [later.machines, later.ended.map((e) => e.name)], [[], [VM]]);
+  clock.now += 49 * 60_000;
+  const gone = await machines.list();
+  assert.deepEqual(gone.ok && gone.ended, []);
+});
+
+test('a stopped machine whose log cannot be read, or is empty, is said as that and not as a reason', async (t) => {
+  const { podman, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET });
+  await machines.make({ owner: SAM, ticket: ticket('b'.repeat(12)), coordinator: FLEET });
+  const s = podman.state();
+  s.containers[0].state = 'exited';
+  podman.set({ containers: s.containers, failLogs: true });
+  const unread = await machines.list();
+  assert.equal(unread.ok && unread.ended[0].text, `This machine found ${VM} stopped just now and removed it with its disk. Podman could not read its log.`);
+  // And one that printed nothing at all is said as that.
+  const again = podman.state();
+  again.containers[0].state = 'exited';
+  podman.set({ containers: again.containers, failLogs: false });
+  const empty = await machines.list();
+  assert.equal(empty.ok && empty.ended[1].text, 'This machine found vm-bbbbbbbbbbbb stopped just now and removed it with its disk. Its log was empty.');
 });
 
 test('a machine is its owner’s to end, and what needs a hypervisor is said', async (t) => {

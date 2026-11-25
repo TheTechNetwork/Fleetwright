@@ -15,6 +15,13 @@
 // the file does not know ends when its labels say, and a name in the file
 // with no container is dropped.
 //
+// And why a machine ended, when nobody ended it: one whose container had
+// stopped is removed with its volume, and its log would go with it, which is
+// the one place it said why. So the end of that log is read first, with
+// anything that looks like a credential taken out, written to this hub's own
+// log, and its last line kept for an hour in `machines-ended.json` for its
+// owner's list to say.
+//
 // THE TICKET NEVER TOUCHES A COMMAND LINE OR AN ENVIRONMENT. An argument is
 // readable by every user of the box for as long as the process lives, and a
 // container's environment is kept in Podman's own record of it and in its
@@ -47,6 +54,17 @@ export const MACHINE_MIN_MINUTES = 5;
 export const MACHINE_MAX_MINUTES = 350;
 const DEFAULT_MINUTES = 60;
 const BUILD_TIMEOUT_MS = 20 * 60_000;
+/** How long the reason a machine ended by itself is kept for its owner's list: as long as a machine lives unless said. */
+const ENDED_KEPT_MS = 60 * 60_000;
+/** How many such reasons are kept at once, the oldest dropped first. */
+const ENDED_KEPT = 20;
+/** How much of a stopped machine's log is read, and how much of one line of it goes to this hub's log. */
+const LOG_LINES = 20;
+const LOG_LINE_CHARS = 240;
+/** How much of its last line reaches a screen. The whole sentence has 200 characters there (own-pools.js, and the coordinator after it). */
+const LAST_LINE_CHARS = 95;
+/** What the entrypoint says as it ends (sandbox/machine/entrypoint), which is true of every machine that stopped and so is no reason. */
+const ENTRYPOINT_ENDING = /^fleetwright-machine: the sidecar ended with status \d+, so this machine is ending$/;
 /** What marks a container as a machine of this fleet's, and whose. */
 export const MACHINE_LABEL = 'fleetwright.machine';
 /** What marks an image as one this builds, so an old one can be found and removed. */
@@ -90,6 +108,40 @@ function stateOf(said) {
 /** One printable line, bounded: Podman's own words reach a screen. */
 function line(/** @type {unknown} */ v) {
   return String(v ?? '').trim().split('\n').pop()?.replace(/[^\x20-\x7e]/g, '').trim().slice(0, 200) ?? '';
+}
+
+/**
+ * A machine's own words with anything that looks like a credential taken
+ * out, before they are kept, logged or shown. Its log is its hub's and its
+ * sidecar's, and neither prints one on purpose, but a log is whatever a
+ * program said on its way down. A ticket and the fleet's other tokens by
+ * their shape, and any long unbroken run of a token's alphabet, as a VM's
+ * report of its own boot withholds them (pve-pools.js). A long path or host
+ * name goes the same way, which is the price of not listing shapes.
+ *
+ * @param {string} text
+ */
+function withheld(text) {
+  return text
+    .replace(/\bfwt_[A-Za-z0-9_-]+/g, '[ticket]')
+    .replace(/\b(?:fw[a-z]_|sk-ant-)[A-Za-z0-9._~+/=-]+/g, '[removed]')
+    .replace(/[A-Za-z0-9_+/=.~-]{32,}/g, '[removed]');
+}
+
+/**
+ * What its owner's list says of a machine that ended by itself, as one
+ * sentence that fits whole where a place's problem is drawn. Only what this
+ * box knows: it found the container stopped and removed it, and how its log
+ * ended. Why it stopped is in that line or it is not known.
+ *
+ * @param {{ name: string, at: number, said: string|null }} e  `said` is null when the log could not be read, and empty when it was empty
+ * @param {number} now
+ */
+function endedText(e, now) {
+  const minutes = Math.max(0, Math.round((now - e.at) / 60_000));
+  const found = `This machine found ${e.name} stopped ${minutes < 1 ? 'just now' : minutes === 1 ? 'a minute ago' : `${minutes} minutes ago`} and removed it with its disk.`;
+  if (e.said === null) return `${found} Podman could not read its log.`;
+  return e.said ? `${found} Its log ends: ${e.said}` : `${found} Its log was empty.`;
 }
 
 /**
@@ -258,6 +310,98 @@ export class Machines {
     return path.join(this.cfg.stateDir, 'machines.json');
   }
 
+  /** Where the reasons machines ended by themselves are kept, for a while. */
+  get endedFile() {
+    return path.join(this.cfg.stateDir, 'machines-ended.json');
+  }
+
+  /**
+   * The machines that ended by themselves within the last hour, oldest first.
+   *
+   * @returns {Array<{ name: string, owner: string, at: number, said: string|null }>}
+   */
+  #ended() {
+    try {
+      const read = JSON.parse(readFileSync(this.endedFile, 'utf8'));
+      const now = this.now();
+      return (Array.isArray(read) ? read : [])
+        .filter((e) => NAME_RE.test(e?.name) && typeof e.owner === 'string' && Number.isFinite(e.at) && now - e.at < ENDED_KEPT_MS && (e.said === null || typeof e.said === 'string'))
+        .map((e) => ({ name: e.name, owner: e.owner, at: e.at, said: e.said }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** @param {Array<{ name: string, owner: string, at: number, said: string|null }>} ended */
+  #keepEnded(ended) {
+    mkdirSync(path.dirname(this.endedFile), { recursive: true });
+    writeFileSync(`${this.endedFile}.new`, `${JSON.stringify(ended.slice(-ENDED_KEPT))}\n`, { mode: 0o600 });
+    renameSync(`${this.endedFile}.new`, this.endedFile);
+  }
+
+  /**
+   * The end of a stopped machine's log, oldest line first, with anything
+   * that looks like a credential taken out. Null when Podman could not read it.
+   *
+   * WITH PODMAN'S OWN TIME ON EACH LINE, and put back in order by it. Podman
+   * hands back what a container printed and what it printed as errors
+   * apart, and the fleet's host prints its warnings as errors: read one after
+   * the other, the last line would be the last warning, however long before
+   * the end that was. The time is taken off again. A Podman that prints no
+   * time gives the lines as it gave them.
+   *
+   * @param {string} name
+   * @returns {Promise<string[]|null>}
+   */
+  async #lastWords(name) {
+    const r = await podmanAsync(this.cfg, ['logs', '--timestamps', '--tail', String(LOG_LINES), machineNames(name).container], { timeout: 30_000 });
+    if (r.status !== 0) return null;
+    /** @type {Array<{ at: string, text: string }>} */
+    const lines = [];
+    for (const stream of [r.stdout, r.stderr]) {
+      for (const l of String(stream || '').split('\n')) {
+        const m = /^(\d{4}-\d\d-\d\dT[\d:.,]+(?:Z|[+-]\d\d:?\d\d))\s(.*)$/.exec(l);
+        lines.push({ at: m ? m[1] : '', text: m ? m[2] : l });
+      }
+    }
+    return lines
+      .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+      .map((l) => withheld(l.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/[^\x20-\x7e’]/g, '')).trim().slice(0, LOG_LINE_CHARS))
+      .filter(Boolean)
+      .slice(-LOG_LINES);
+  }
+
+  /**
+   * Read how a stopped machine's log ended, before it is removed with it:
+   * into this hub's own log, and its last line kept for its owner's list.
+   *
+   * THE LAST LINE THAT SAYS SOMETHING. The entrypoint's own last line is
+   * that the sidecar ended, which is true of every machine that stopped; the
+   * line before it is the sidecar's, and is the reason where there is one.
+   * This hub's own time and level are taken off the front of a line, since a
+   * screen has 200 characters for the whole sentence.
+   *
+   * @param {{ name: string, owner: string }} c
+   */
+  async #noteEnded(c) {
+    const words = await this.#lastWords(c.name);
+    // TWO LOOKS CAN MEET THE SAME STOPPED CONTAINER (the minute's, and
+    // somebody asking). The first to read its log keeps what it read; the
+    // second may find the container already gone, and "could not read" must
+    // not be written over what was read.
+    const ended = this.#ended();
+    if (ended.some((e) => e.name === c.name)) return;
+    if (words === null) log.warn(`machines: ${c.name} had stopped, and Podman could not read its log before it was removed`);
+    else if (!words.length) log.warn(`machines: ${c.name} had stopped, with nothing in its log`);
+    else {
+      log.warn(`machines: ${c.name} had stopped. Its log ended:`);
+      for (const l of words) log.warn(`machines: ${c.name} | ${l}`);
+    }
+    const last = words === null ? null : ([...words].reverse().find((l) => !ENTRYPOINT_ENDING.test(l)) ?? words.at(-1) ?? '').replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s+(?:DEBUG|INFO|WARN|ERROR)\s+/, '');
+    const said = last !== null && last.length > LAST_LINE_CHARS ? `${last.slice(0, LAST_LINE_CHARS - 3)}...` : last;
+    this.#keepEnded([...ended, { name: c.name, owner: c.owner, at: this.now(), said }]);
+  }
+
   /** How many may run at once: `FLEETWRIGHT_MACHINE_MAX`, two unless set. */
   get max() {
     return Number.isInteger(this.cfg.machineMax) && this.cfg.machineMax >= 0 ? this.cfg.machineMax : 2;
@@ -419,7 +563,12 @@ export class Machines {
    * whole answer the sidecar reports from.
    *
    * @param {{ prepare?: boolean }} [opts]  also start building the image if there is none
-   * @returns {Promise<{ ok: true, max: number, image: { name: string, ready: boolean, building: boolean, problem: string|null }, machines: Array<{ name: string, owner: string, state: string, until: number|null, madeAt: number|null }> } | { ok: false, text: string }>}
+   * `ended` is the machines that stopped by themselves in the last hour and
+   * were removed, each with a sentence for its owner on how its log ended.
+   * One this box ended, on its owner's word or when its time was up, is not
+   * among them: its owner knows why.
+   *
+   * @returns {Promise<{ ok: true, max: number, image: { name: string, ready: boolean, building: boolean, problem: string|null }, machines: Array<{ name: string, owner: string, state: string, until: number|null, madeAt: number|null }>, ended: Array<{ name: string, owner: string, at: number, text: string }> } | { ok: false, text: string }>}
    */
   async list({ prepare = false } = {}) {
     if (!podmanAvailable(this.cfg)) return { ok: false, text: 'Podman is not installed on this machine, and a machine here is a Podman container.' };
@@ -439,6 +588,9 @@ export class Machines {
       // box restarted): either way it is over, and it goes with its volume.
       const over = (until !== null && until <= now) || c.state === 'over';
       if (over) {
+        // ITS LOG GOES WITH ITS CONTAINER, and is the one place it said why
+        // it stopped. Read first, for a machine nobody ended.
+        if (c.state === 'over') await this.#noteEnded(c);
         await this.#remove(c.name);
         log.info(`machines: ended ${c.name} (${until !== null && until <= now ? 'its time was up' : 'its container had stopped'})`);
         continue;
@@ -456,7 +608,8 @@ export class Machines {
     const still = Object.fromEntries(Object.entries(fresh).filter(([n]) => live.has(n)));
     if (Object.keys(still).length !== Object.keys(fresh).length) this.#keep(still);
     const image = await (prepare ? this.prepare() : this.imageState());
-    return { ok: true, max: this.max, image: { name: MACHINE_IMAGE_NAME, ...image }, machines };
+    const ended = this.#ended().map((e) => ({ name: e.name, owner: e.owner, at: e.at, text: endedText(e, now) }));
+    return { ok: true, max: this.max, image: { name: MACHINE_IMAGE_NAME, ...image }, machines, ended };
   }
 
   /**
