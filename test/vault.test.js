@@ -832,9 +832,13 @@ test('a box keeps what it holds through a blip, and forgets it on an answer that
   const keys = await generateKeyPair();
   /** @type {any[]} */
   const handed = [];
+  /** What each box wrote in its log. @type {string[]} */
+  const logged = [];
+  const logger = { info: (/** @type {string} */ l) => logged.push(l), warn: (/** @type {string} */ l) => logged.push(l), error() {}, debug() {} };
   /** @param {(frame: any) => any} send @param {any} [vaultKey] */
   const sidecar = (send, vaultKey) => {
     const s = new Sidecar({
+      logger,
       hub: /** @type {any} */ ({ vault: async (/** @type {any} */ b) => { handed.push(b); return { ok: true, text: 'held' }; } }),
       transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => send(f) }),
       hostId: 'box',
@@ -856,6 +860,28 @@ test('a box keeps what it holds through a blip, and forgets it on an answer that
   await garbled.syncVault();
   await sidecar(() => true, { publicJwk: keys.publicJwk, sign: async () => { throw new Error('no key'); } }).syncVault();
   assert.deepEqual(handed, [], 'nothing held was cleared by a blip');
+  // A VAULT FROM BEFORE `accepts`, asked by this box. It checks the signature
+  // over the request as it knew one, without `accepts`, so it refuses every
+  // request this box signs. That is a vault that could not read the question,
+  // and a box upgraded before its vault used to forget everything it held.
+  /** @type {Sidecar} */
+  let ahead;
+  ahead = sidecar((f) => {
+    const { v, hostKey, at, reply } = f.request;
+    void verify(hostKey, f.signature, signingInput('vault-box', { v, hostKey, at, reply })).then((held) => ahead.handle(held
+      ? { kind: 'minted', id: f.id, ok: true, sealed: { epk: 'a', iv: 'b', ct: 'c' } }
+      : { kind: 'minted', id: f.id, ok: false, error: { code: 'bad_signature' }, text: 'That request is not signed by the key it names.' }));
+    return true;
+  });
+  assert.equal(await ahead.syncVault(), 600_000, 'and it asks again at its usual time');
+  assert.deepEqual(handed, [], 'a vault older than the box made it forget what it held');
+  assert.match(logged.join('\n'), /the vault could not check this box’s request \(That request is not signed by the key it names\.\), which is what a vault older than this box answers\. Nothing this box holds was forgotten, and it asks again in 10 minutes\./);
+  // Nor is a fleet saying it has no vault just now an answer about this box.
+  /** @type {Sidecar} */
+  let none;
+  none = sidecar((f) => { queueMicrotask(() => void none.handle({ kind: 'minted', id: f.id, ok: false, error: { code: 'no_minter' }, text: 'This fleet has no minting Worker to keep a vault.' })); return true; });
+  await none.syncVault();
+  assert.deepEqual(handed, []);
   // "Not the key this box enrolled with" is an answer, and clears what was held.
   /** @type {Sidecar} */
   let told;
@@ -2206,7 +2232,7 @@ test('a member’s Codex sign-in and Copilot token are kept, handed only to a bo
   assert.match((await put('copilot', 'two words')).text, /not a GitHub Copilot token/);
   const kept = await put('codex', signIn);
   assert.equal(kept.ok, true, kept.text);
-  assert.match(kept.text, /handed to one approved machine, the first that asks/);
+  assert.match(kept.text, /handed to one approved machine, the first that runs Codex and asks for it/);
   assert.equal((await put('copilot', `  ${'gho_'}${'c'.repeat(36)}\n`)).ok, true);
   // Listed by name, never read back; and not tried from the vault, said as that.
   const listed = (await as(ELI, { op: 'list', for: 'debbie' })).answer;
@@ -2224,6 +2250,16 @@ test('a member’s Codex sign-in and Copilot token are kept, handed only to a bo
   const names = (/** @type {any} */ r) => (r.answer.accounts[0]?.items ?? []).map((/** @type {any} */ i) => i.name).sort();
   // A box that takes members and not engines is handed neither.
   assert.deepEqual(names(await m.box(one, { members: [ELI], accepts: ['members'] })), []);
+  // A BOX THAT RUNS OPENCODE AND NO CODEX asks first. It says which engines
+  // it runs, so it is not the one machine: it used to be, by saying `engines`
+  // whatever it ran, and the machine that could run Codex was then refused.
+  const noCodex = await m.box(one, { members: [ELI], accepts: ['engines', 'members', 'opencode'] });
+  assert.deepEqual(names(noCodex), ['copilot']);
+  assert.deepEqual(noCodex.answer.accounts[0].problems, [], 'and it is told nothing about a sign-in it could not use');
+  assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.find((/** @type {any} */ i) => i.name === 'codex').heldBy, undefined);
+  // One that runs Codex and nothing else is handed that and no Copilot token.
+  assert.deepEqual(names(await m.box(two, { members: [ELI], accepts: ['codex', 'engines', 'members'] })), ['codex']);
+  // A BOX FROM BEFORE THE NAMES says `engines` alone, and is treated as it was.
   // THE FIRST THAT ASKS HOLDS THE CODEX SIGN-IN; the second gets the token that does not rotate, and is told why not the other.
   const first = await m.box(two, { members: [ELI], accepts: ['engines', 'members'] });
   assert.deepEqual(names(first), ['codex', 'copilot']);
@@ -2241,6 +2277,81 @@ test('a member’s Codex sign-in and Copilot token are kept, handed only to a bo
   assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.find((/** @type {any} */ i) => i.name === 'codex').heldBy, undefined);
   assert.deepEqual(names(await m.box(one, { members: [ELI], accepts: ['engines', 'members'] })), ['codex', 'copilot']);
   assert.deepEqual(names(await m.box(two, { members: [ELI], accepts: ['engines', 'members'] })), ['copilot']);
+});
+
+test('a box tells the vault which engines it runs, so a Codex sign-in goes to a machine that can run Codex', async (t) => {
+  // The box and the vault together: what the hub says it runs, what the box
+  // signs from that, and what the vault then hands each of three machines
+  // approved for the same member.
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  const signIn = JSON.stringify({ auth_mode: 'chatgpt', tokens: { id_token: 'i', access_token: 'a', refresh_token: 'r-1', account_id: 'acct' } });
+  assert.equal((await as(ELI, { op: 'put', name: 'codex', value: signIn, for: 'debbie' })).ok, true);
+  assert.equal((await as(ELI, { op: 'put', name: 'copilot', value: `gho_${'c'.repeat(36)}`, for: 'debbie' })).ok, true);
+  /** A box whose hub runs these engines, approved for Debbie's vault. @param {string} label @param {string[]|undefined} runs */
+  const boxRunning = async (label, runs) => {
+    const keys = await generateKeyPair();
+    assert.equal((await as(ELI, { op: 'grant', hostKey: keys.publicJwk, label, for: 'debbie' })).ok, true);
+    /** @type {any[]} */
+    const handed = [];
+    /** @type {string[][]} */
+    const asked = [];
+    /** @type {Sidecar} */
+    let box;
+    box = new Sidecar({
+      hub: /** @type {any} */ ({
+        state: async () => ({ sessions: [], ...(runs ? { engines: runs } : {}) }),
+        vault: async (/** @type {any} */ b) => { handed.push(b); return { ok: true, text: 'held' }; },
+      }),
+      transport: /** @type {any} */ ({
+        origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {},
+        send: (/** @type {any} */ f) => {
+          if (f.kind !== 'vault') return true;
+          asked.push(f.request.accepts);
+          void m.binding.vault('box', { request: f.request, signature: f.signature, members: [ELI, DANA] }).then((r) => box.handle({ kind: 'minted', id: f.id, ...r }));
+          return true;
+        },
+      }),
+      hostId: label, watch: false, healthIntervalMs: 0, renewIntervalMs: 0, vaultIntervalMs: 600_000, mintTimeoutMs: 2_000,
+      vaultKey: { publicJwk: keys.publicJwk, sign: (/** @type {string} */ msg) => sign(keys.privateJwk, msg) },
+    });
+    t.after(() => clearTimeout(box.vaultTimer ?? undefined));
+    const items = () => (handed.at(-1)?.accounts[0]?.items ?? []).map((/** @type {any} */ i) => i.name).sort();
+    return { box, asked, items };
+  };
+
+  // CLAUDE CODE AND NOTHING ELSE, asking first: it says it takes no engine's
+  // sign-in, and is handed none. This is the box that used to take the Codex
+  // sign-in from the machine that could run it.
+  const plain = await boxRunning('plain-box', ['claude-code']);
+  await plain.box.health();
+  await plain.box.syncVault();
+  assert.deepEqual(plain.asked, [['members']]);
+  assert.deepEqual(plain.items(), []);
+  // OPENCODE: the Copilot token, and not the Codex sign-in.
+  const open = await boxRunning('opencode-box', ['claude-code', 'opencode']);
+  await open.box.health();
+  await open.box.syncVault();
+  assert.deepEqual(open.asked, [['engines', 'members', 'opencode']]);
+  assert.deepEqual(open.items(), ['copilot']);
+  // CODEX, asking last, and it is the one machine.
+  const codex = await boxRunning('codex-box', ['claude-code', 'codex', 'opencode']);
+  await codex.box.health();
+  await codex.box.syncVault();
+  assert.deepEqual(codex.asked, [['codex', 'engines', 'members', 'opencode']]);
+  assert.deepEqual(codex.items(), ['codex', 'copilot']);
+  assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).answer.items.find((/** @type {any} */ i) => i.name === 'codex').heldBy, 'codex-box');
+
+  // A BOX THAT ASKED BEFORE ITS HUB HAD SAID WHAT IT RUNS asked for no
+  // engine's sign-in. It asks again in a moment once the hub has, and not
+  // at its next ten minutes.
+  const late = await boxRunning('late-box', ['claude-code', 'opencode']);
+  await late.box.syncVault();
+  assert.deepEqual(late.asked, [['members']]);
+  await late.box.health();
+  await new Promise((r) => setTimeout(r, VAULT_CHANGED_ASK_MS + 600));
+  assert.deepEqual(late.asked.at(-1), ['engines', 'members', 'opencode']);
+  assert.deepEqual(late.items(), ['copilot']);
 });
 
 test('two boxes asking at once renew a member’s refresh token once, under the member’s own lock', async (t) => {

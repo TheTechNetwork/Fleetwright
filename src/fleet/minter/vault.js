@@ -69,7 +69,7 @@
 //
 // NEVER THROWS. Every refusal is a code and a sentence.
 
-import { API_PROVIDERS, API_KEY_ITEMS } from '../protocol/engines.js';
+import { API_PROVIDERS, API_KEY_ITEMS, ENGINES, ENGINE_IDS, DEFAULT_ENGINE } from '../protocol/engines.js';
 import { SANDBOX_PROVIDER_NAMES, sandboxProviderOf, sandboxDepositProblem } from '../protocol/sandboxes.js';
 import { SEAL_KEY_RE, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, atRestAad, vaultAtRestAad, seal, open } from '../seal.js';
 import { verify, sign, signingInput } from '../crypto.js';
@@ -247,6 +247,7 @@ export const CLAUDE_CHECK_MIN_MS = 10 * 60_000;
  * @property {Record<string, { clientId: string, secret: string }>} [clients]  each OAuth provider's client, from the environment
  * @property {typeof globalThis.fetch} [fetchImpl]
  * @property {boolean} [takesEngines]  set per box request: whether that box said it takes the sign-ins an engine runs on (answerVaultBox)
+ * @property {string[]|null} [boxEngines]  set per box request: the engines that box said it runs, or null from a box that says only that it takes engines
  * @property {boolean} [takesApiKeys]  set per box request: whether that box said it takes metered API keys (docs/api-engines.md)
  * @property {boolean} [takesSandboxes]  set per box request: whether that box said it takes a sandbox provider's record
  * @property {() => number} [now]
@@ -866,7 +867,7 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       return {
         ok: true,
         text: name === 'codex'
-          ? 'Kept the Codex sign-in. It is handed to one approved machine, the first that asks for it, because Codex renews it there and a renewal ends every other copy, the one on the computer it was pasted from included.'
+          ? 'Kept the Codex sign-in. It is handed to one approved machine, the first that runs Codex and asks for it, because Codex renews it there and a renewal ends every other copy, the one on the computer it was pasted from included.'
           : API_KEY_ITEMS.includes(name)
             ? `Kept ${label(name)}. It is given only to approved machines whose operator turned that provider on, for sessions whose engine bills to it. What it may spend is set at the provider, not here.`
             : 'Kept the GitHub Copilot token. The machines approved for this vault are given it for sessions whose engine runs on it.',
@@ -1245,6 +1246,11 @@ export async function answerVaultBox(ask, config) {
 
   /** @type {Array<{ email: string, login: string, items: Array<{ name: string, value: string, expiresAt: number|null }>, problems: string[] }>} */
   const accounts = [];
+  // WHICH ENGINES IT RUNS, named beside `engines` by a box that knows
+  // (sidecar.js, #askVault): `codex`, `opencode`. A box from before the
+  // names says `engines` alone, and is handed every engine's item as it
+  // always was.
+  const runs = (accepts ?? []).filter((x) => x !== DEFAULT_ENGINE && ENGINE_IDS.includes(x));
   const tree = accepts?.includes('members') ? await loadTree(store) : null;
   for (const userId of Object.keys(index.accounts || {})) {
     if (!isVaultId(userId)) continue;
@@ -1257,11 +1263,22 @@ export async function answerVaultBox(ask, config) {
       if (!tree?.has(member)) continue;
       custodians = await mayActFor(store, tree, member);
     }
-    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now, takesEngines: accepts?.includes('engines') === true, takesApiKeys: accepts?.includes('apikeys') === true, takesSandboxes: accepts?.includes('sandboxes') === true }, members, custodians));
+    const one = await withLock(`row:${userId}`, () => itemsFor(userId, hash, jwk, store, key, { ...config, fetchImpl, now, takesEngines: accepts?.includes('engines') === true, boxEngines: runs.length ? runs : null, takesApiKeys: accepts?.includes('apikeys') === true, takesSandboxes: accepts?.includes('sandboxes') === true }, members, custodians));
     if (one) accounts.push(one);
   }
   const sealed = await seal({ to: String(req.reply), aad: VAULT_BOX_AAD, payload: { at: now(), accounts } });
   return { ok: true, sealed, text: accounts.length ? `This box holds credentials for ${accounts.length} ${accounts.length === 1 ? 'person' : 'people'}.` : 'Nobody has approved this box to hold their credentials.' };
+}
+
+/**
+ * The engine an engine's item is for (protocol/engines.js): a Codex sign-in
+ * is Codex's, and a Copilot token and every metered API key are OpenCode's,
+ * which is the engine that speaks to those providers.
+ *
+ * @param {string} name @returns {string}
+ */
+function engineOfItem(name) {
+  return Object.entries(ENGINES).find(([, e]) => e.credential === name)?.[0] ?? 'opencode';
 }
 
 /**
@@ -1334,6 +1351,12 @@ async function itemsFor(userId, hash, jwk, store, key, config, members, custodia
       // ONLY TO A BOX THAT TAKES THEM (`accepts`, signed in its request): a
       // box from before engines would file it where nothing reads it.
       if (!config.takesEngines) continue;
+      // AND ONLY FOR AN ENGINE IT RUNS, when it says which. Every box used
+      // to say `engines` whatever it ran, so the one machine a Codex sign-in
+      // goes to (below) was whichever asked first, and a box with no Codex
+      // on it held the sign-in while the machine that could run it was told
+      // to have it deposited again, which was the same race run once more.
+      if (config.boxEngines && !config.boxEngines.includes(engineOfItem(name))) continue;
       // AND A KEY ONLY TO A BOX THAT ASKS FOR KEYS (`apikeys`), which it does
       // only while its operator has an API provider turned on. A box from
       // step 4 takes sign-ins and is never handed something that bills.
