@@ -5421,15 +5421,8 @@ fun describeUntil(epochMs: Long, now: Long = System.currentTimeMillis()): String
  * src/mcp/tools.js offers by default, less `exchange` (finishing a sign-in,
  * which an MCP client never does) and `update` (restarting a box somebody else
  * is working on). Fleet.swift `mcpVerbs` is the same list.
- *
- * AND `enginesignin`, LAST: signing an engine in for a member
- * (docs/engines.md). A machine takes it from an MCP client only under a
- * grant that carries the verb and names the member, so the grant carries it,
- * and the members turned on under it are who it reaches. A machine older
- * than the verb refuses a grant that names it, whole, as it does any verb it
- * has never met: update that machine.
  */
 internal val MCP_DELEGATED_VERBS = listOf(
     "peek", "start", "channel", "sandbox", "secrets", "resume", "stop", "logs", "files", "readfile",
-    "forget", "verify", "provision", "vmctl", "runnerrepo", "linkrepo", "xoprobe", "enginesignin",
+    "forget", "verify", "provision", "vmctl", "runnerrepo", "linkrepo", "xoprobe",
 )

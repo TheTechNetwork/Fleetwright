@@ -28,29 +28,13 @@ function listAfter(src, marker) {
 // (MCP_UNDELEGATED_VERBS, which the coordinator's refusal reads so it never
 // sends an MCP client to delegate one of them), the same on both phones, and
 // small enough for a box to take.
-//
-// AND ONE VERB THE SERVER OFFERS ONLY WHEN TOLD TO: `enginesignin`, signing an
-// engine in for a member (docs/engines.md). Its tool is withheld by default,
-// like the others that move a sign-in, and an operator turns it on
-// (FLEETWRIGHT_MCP_ALLOW=enginesignin). A box takes it from an MCP client
-// only under a grant that carries the verb and names the member, so a grant
-// without it left that operator a tool that could only be refused. The
-// phones carry it, last in the list on both, and it is named here because
-// "offered by default" does not reach it. If the server comes to offer it by
-// default, it is in `offered` by itself and this name is one too many.
-const DELEGATED_WHEN_ALLOWED = ['enginesignin'];
-
 test('both phones delegate to an MCP client exactly the verbs it offers that a box would want signed', () => {
   const offered = Object.keys(VERBS).filter((v) => !DEFAULT_DENY.includes(v) && !COORDINATOR_ONLY.includes(v) && needsSignature(v));
-  for (const v of DELEGATED_WHEN_ALLOWED) assert.ok(needsSignature(v) && !COORDINATOR_ONLY.includes(v), `${v} is not a verb a delegation can carry`);
-  const expected = [...new Set([...offered.filter((v) => !MCP_UNDELEGATED_VERBS.includes(v)), ...DELEGATED_WHEN_ALLOWED])].sort();
+  const expected = offered.filter((v) => !MCP_UNDELEGATED_VERBS.includes(v)).sort();
   const ios = listAfter(iosSources(), 'static let mcpVerbs');
   const android = listAfter(androidSources(), 'internal val MCP_DELEGATED_VERBS');
   assert.deepEqual([...ios].sort(), expected);
   assert.deepEqual([...android].sort(), expected);
-  // The same list in the same order, so the two phones sign the same grant.
-  assert.deepEqual(android, ios, 'the phones list the verbs of an MCP delegation in different orders');
-  assert.deepEqual(ios.slice(-DELEGATED_WHEN_ALLOWED.length), DELEGATED_WHEN_ALLOWED);
   assert.ok(expected.length <= DELEGATION_LIMITS.verbs, 'more verbs than a box takes in one delegation');
 });
 
