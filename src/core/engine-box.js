@@ -127,20 +127,41 @@ export function answerEngineCredential(cfg, rec, kind, value = null) {
  * what the checkout says, and the last of the pane. It is a place to start
  * reading and not an account of the work.
  *
+ * WHAT THE SESSION WAS ASKED IS NOT IN IT. The note is a file in the
+ * workspace, committed on the task's branch, and it carried the session's
+ * first message word for word: the words of a task, which this box keeps in
+ * memory only and never on its disk (sessions.js, firstMessages). The next
+ * engine is given them again as its own first message, so the note says
+ * that, and where the brief is kept, and holds none of it.
+ *
+ * WHAT IT QUOTES CANNOT END THE QUOTE. The pane's tail and git's output are
+ * somebody else's text inside a code fence, and a line of three backticks in
+ * either closed the fence and made the rest of the note theirs to write, in
+ * a file the next engine is told to read first. Each fence is one backtick
+ * longer than the longest run inside it.
+ *
  * @param {{
  *   turn: import('../fleet/protocol/engines.js').TurnEnded,
  *   next: { engine: string, model?: string },
  *   taskId?: string|null, taskBranch?: string|null,
- *   firstMessage?: string|null,
+ *   firstMessageHeld?: boolean,
  *   checkout?: { where: string, branch: string, status: string, log: string }|null,
  *   pane?: string|null,
  *   at: number,
  * }} facts
+ *   `firstMessageHeld` is whether this box still has the session's first message to hand the next engine
  */
-export function handoffNote({ turn, next, taskId = null, taskBranch = null, firstMessage = null, checkout = null, pane = null, at }) {
+export function handoffNote({ turn, next, taskId = null, taskBranch = null, firstMessageHeld = false, checkout = null, pane = null, at }) {
   const says = (/** @type {string} */ id) => ENGINES[/** @type {keyof typeof ENGINES} */ (id)]?.says ?? id;
   const when = new Date(at).toISOString().replace('T', ' ').slice(0, 16);
   const tail = String(pane ?? '').replace(/\s+$/, '');
+  /** Text in a code fence it cannot close. */
+  const fenced = (/** @type {string} */ text) => {
+    const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+    const fence = '`'.repeat(Math.max(3, longest + 1));
+    return [fence, text, fence];
+  };
+  const brief = taskId ? ` The brief is on task ${taskId}’s page.` : '';
   const lines = [
     `# Handoff: ${says(turn.engine)} to ${says(next.engine)}`,
     '',
@@ -152,7 +173,9 @@ export function handoffNote({ turn, next, taskId = null, taskBranch = null, firs
     '',
     '## What was asked',
     '',
-    firstMessage ? firstMessage : 'This machine no longer holds the first message of this session (it was restarted since). The task’s page has the brief.',
+    firstMessageHeld
+      ? `Not written here: the words a session is given are kept in no file on this machine. The engine that takes over is given them again as its own first message.${brief}`
+      : `This machine no longer holds the first message of this session (it was restarted since), so the engine that takes over is given this note and no first message.${brief}`,
     '',
     '## The checkout',
     '',
@@ -162,23 +185,17 @@ export function handoffNote({ turn, next, taskId = null, taskBranch = null, firs
           '',
           'Uncommitted changes (`git status --short`):',
           '',
-          '```',
-          checkout.status.replace(/^\n+|\s+$/g, '') || '(none)',
-          '```',
+          ...fenced(checkout.status.replace(/^\n+|\s+$/g, '') || '(none)'),
           '',
           'Last commits (`git log -5 --oneline`):',
           '',
-          '```',
-          checkout.log.trim() || '(none)',
-          '```',
+          ...fenced(checkout.log.trim() || '(none)'),
         ]
       : ['No git checkout was found at the top of the workspace or one directory down.']),
     '',
     `## The last of what ${says(turn.engine)} printed`,
     '',
-    '```',
-    tail ? tail.slice(-HANDOFF_TAIL) : '(nothing could be read off the pane)',
-    '```',
+    ...fenced(tail ? tail.slice(-HANDOFF_TAIL) : '(nothing could be read off the pane)'),
     '',
   ];
   return lines.join('\n');

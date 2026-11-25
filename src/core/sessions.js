@@ -95,7 +95,8 @@ export class SessionManager {
     this.activity = new Map();
     // What each session with more than one engine was first asked, so the
     // engine that takes over can be told it (handOn). Runtime state and
-    // never a record: the words of a task are kept nowhere on this box.
+    // never a record: the words of a task are kept nowhere on this box, the
+    // handoff note included (engine-box.js, handoffNote).
     /** @type {Map<string, string>} */
     this.firstMessages = new Map();
     /** Sessions being handed from one engine to the next right now. @type {Set<string>} */
@@ -1526,7 +1527,7 @@ export class SessionManager {
       // What the pane says now, before it is gone.
       const pane = this.peek(name, 80);
       const checkout = checkoutFacts(this.cfg, name, rec.taskBranch ?? null) ?? checkoutFacts(this.cfg, name, null);
-      const note = handoffNote({ turn, next, taskId: rec.taskId ?? null, taskBranch: rec.taskBranch ?? null, firstMessage: first, checkout, pane: pane ? pane.slice(-HANDOFF_TAIL * 2) : null, at: Date.now() });
+      const note = handoffNote({ turn, next, taskId: rec.taskId ?? null, taskBranch: rec.taskBranch ?? null, firstMessageHeld: first !== null, checkout, pane: pane ? pane.slice(-HANDOFF_TAIL * 2) : null, at: Date.now() });
       const wrote = writeFile(this.cfg, name, HANDOFF_FILE, note, rec);
       if (!wrote.ok) log.warn(`engines: ${name}: could not write ${HANDOFF_FILE}: ${wrote.text}`);
       // ON THE TASK'S OWN BRANCH, AND ONLY THERE, it is also committed, as

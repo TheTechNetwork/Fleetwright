@@ -156,6 +156,11 @@ is not started. This is OpenCode's documented configuration
 stand-in that reads the file. It has not been run against a real OpenCode.
 Codex is told on `thread/start`, as it always was.
 
+**Not restarted for being still.** The watcher stops and resumes a Claude
+Code session whose pane has not moved for an hour. A session on another
+engine has no conversation to resume, so it is left alone: a stop would be
+the end of it.
+
 **What the runner will not say, and how much it will read.** Anything it was
 handed is taken out of what it prints and reports: a key, a Copilot token,
 and each token inside a Codex sign-in file, as handed over and as Codex
@@ -194,7 +199,10 @@ member's list has an engine after this one that the machine has, the box:
 1. writes `HANDOFF.md` at the top of the session's workspace: the task and
    branch when the session is on one, which engine stopped, why, when it
    says its limit lifts, what `git status` and the last five commits say when
-   the workspace is a checkout, and the last of what the engine said;
+   the workspace is a checkout, and the last of what the engine said. It does
+   not hold what the session was asked: those words are in no file on the
+   box, and the note says the next engine is given them again and that the
+   task's page has the brief;
 2. commits that file, and only that file, inside the checkout, when the
    session is on a task and the checkout is on that task's own branch. On
    any other branch, or with no task, the note is written and not committed.
@@ -370,12 +378,17 @@ the engines this machine does not run.
   and runs another is not caught. What is caught is the case that was seen:
   an agent that says which model it fell back to.
 - **`HANDOFF.md` holds what the engine printed last**, which may be anything
-  the session had on its screen.
+  the session had on its screen. It is quoted in a fence the text cannot
+  close, so it stays a quotation, and it is still the session's own words in
+  a file the next engine is told to read.
 - **Two sessions of one member share one Codex sign-in.** Each is handed its
   own copy of the file, and when one renews, the other's copy is used up: its
   next renewal fails and its turn ends as `auth`. The box keeps the newer
   file, so the next session started is signed in. Signing in on the machine
   itself, which ends this, is not built yet.
+- **A session on OpenCode or Codex that sits still is not restarted**, and
+  nothing says it is stuck. An engine waiting out a provider's rate limit
+  looks the same from the pane.
 - **A session can say its own turn ended any way it likes.** TurnEnded comes
   over the session's socket from a process inside the session. A lie there
   puts a wrong word on a screen, or starts the member's own next engine in
