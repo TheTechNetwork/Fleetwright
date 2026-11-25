@@ -12,16 +12,19 @@ import UIKit
 /// answer (C-2).
 ///
 /// TWO LISTS, IN THE ORDER A MANAGER NEEDS THEM. My team first, each member
-/// with whether its vault holds a Claude sign-in, because "can it run" is the
+/// with whether its vault keeps a Claude sign-in, because "can it run" is the
 /// question a manager opens this for. Then Everyone, as the tree, a report
 /// indented under whoever it reports to. An admin manages everybody, so their
 /// team is Everyone and is not drawn twice.
 ///
-/// A SIGN-IN'S STATE IS THE VAULT'S ANSWER AND NOTHING ELSE. "Not signed in"
-/// is said only when the member's vault answered without a Claude item. A
-/// vault that could not be asked is "Not checked", which is a different fact
-/// (C-5), and it is what a person member's row says until they let their
-/// managers in.
+/// A SIGN-IN'S STATE IS THE VAULT'S ANSWER AND NOTHING ELSE, and the answer
+/// is a list of what is kept: a name, a time and a kind. So the row says
+/// "Keeps a Claude sign-in" and never "Signed in to Claude": nobody tried the
+/// sign-in, and one that has run out is kept all the same. "No Claude sign-in
+/// kept" is said only when the member's vault answered without a Claude item.
+/// A vault that could not be asked is "Not checked", which is a different
+/// fact (C-5), and it is what a person member's row says until they let
+/// their managers in.
 ///
 /// CUSTODY, FOR EVERYBODY AT ONCE, IS AN ORG ADMIN'S. The vault keeps its own
 /// copy of the tree and files a member only after whoever it reports to, so
@@ -42,7 +45,7 @@ struct OrgView: View {
     @State private var load = Load.asking
     @State private var members: [Fleet.Member] = []
     @State private var you: Fleet.Members.Standing?
-    /// What each team member's vault said about a Claude sign-in, by id.
+    /// Whether each team member's vault keeps a Claude sign-in, by id.
     /// Absent while it is being asked.
     @State private var signIns: [String: MemberSignIn] = [:]
     /// Every member as a file, once an admin asked for them.
@@ -123,7 +126,7 @@ struct OrgView: View {
                         Spacer(minLength: 0)
                         Text(memberSignInWord(signIns[member.id]))
                             .fleetType(.label)
-                            .foregroundStyle(signIns[member.id] == .signedIn ? Design.Palette.ink : Design.Palette.inkDim)
+                            .foregroundStyle(signIns[member.id] == .kept ? Design.Palette.ink : Design.Palette.inkDim)
                     }
                     .frame(minHeight: 44)
                 }
@@ -409,11 +412,11 @@ struct OrgView: View {
         approvalsWaiting = list.filter { approvalWaitsOnYou($0) }.count
     }
 
-    /// Ask each team member's vault whether it holds a Claude sign-in. One
+    /// Ask each team member's vault whether it keeps a Claude sign-in. One
     /// at a time, because each is a request this phone seals and the vault
     /// answers under one lock. A vault that refuses, or cannot be asked
-    /// without this phone's GitHub sign-in, is Not checked and never Not
-    /// signed in (C-5).
+    /// without this phone's GitHub sign-in, is Not checked and never No
+    /// Claude sign-in kept (C-5).
     @MainActor
     private func checkTeam() async {
         guard !team.isEmpty else { return }
@@ -425,7 +428,7 @@ struct OrgView: View {
         let fleet = Fleet(settings: settings)
         for member in team {
             if let contents = try? await vault.list(fleet, for: member.id) {
-                signIns[member.id] = contents.items.contains { $0.name == "claude" } ? .signedIn : .notSignedIn
+                signIns[member.id] = contents.items.contains { $0.name == "claude" } ? .kept : .notKept
             } else {
                 signIns[member.id] = .notChecked
             }
@@ -498,6 +501,8 @@ struct MemberView: View {
     @State private var removing = false
     /// Whose custody of this person is being given up, while the question is open.
     @State private var stopping: String?
+    /// Which of an agent's own custodians is being removed, while the question is open.
+    @State private var removingCustodian: String?
     @State private var removeResult = ""
     @State private var starting = false
     @State private var startResult = ""
@@ -577,6 +582,18 @@ struct MemberView: View {
             }
         } message: {
             Text(stopManagingSentence)
+        }
+        // AND SO IS REMOVING AN AGENT'S CUSTODIAN, which was done at the
+        // press: one tap on a row took somebody's custody away. The same act
+        // on a person's page always asked.
+        .confirmationDialog("Remove this custodian?", isPresented: Binding(get: { removingCustodian != nil }, set: { if !$0 { removingCustodian = nil } }), titleVisibility: .visible) {
+            Button("Remove custodian", role: .destructive) {
+                if let address = removingCustodian {
+                    act { try await vault.setCustodian(fleet, member: shown.id, address: address, remove: true) }
+                }
+            }
+        } message: {
+            Text(removeCustodianSentence(removingCustodian ?? "", of: shown.name))
         }
     }
 
@@ -788,8 +805,9 @@ struct MemberView: View {
     /// own custodians, and its managers for as long as the tree says so.
     /// Remove is on its own custodians only, since a manager's custody ends
     /// with the tree and not with a button, and adding or removing is offered
-    /// only to somebody already on the list (C-2). The last custodian stays,
-    /// and the vault's sentence says so.
+    /// only to somebody already on the list (C-2). The last custodian stays:
+    /// the vault refuses to remove it, so with one left no Remove is drawn.
+    /// Remove asks first.
     @ViewBuilder private func agentCustodians(_ filed: PhoneVault.OrgMember) -> some View {
         Text("Custodians")
             .fleetType(.bodyStrong)
@@ -809,10 +827,8 @@ struct MemberView: View {
                     Text("Manager")
                         .fleetType(.label)
                         .foregroundStyle(Design.Palette.inkDim)
-                } else if filed.may.contains(me) {
-                    Button("Remove", role: .destructive) {
-                        act { try await vault.setCustodian(fleet, member: filed.id, address: address, remove: true) }
-                    }
+                } else if filed.may.contains(me), filed.custodians.count > 1 {
+                    Button("Remove", role: .destructive) { removingCustodian = address }
                     .accessibilityLabel("Remove \(address)")
                     .disabled(busy)
                 }
@@ -1273,12 +1289,14 @@ private func orgSectionHead(_ text: String) -> some View {
     Text(text).fleetType(.section).foregroundStyle(Design.Palette.ink).textCase(nil)
 }
 
-/// What a team member's vault said about a Claude sign-in.
+/// What a team member's vault said about a Claude sign-in: whether it keeps
+/// one. Kept is all the vault's list says. Whether the sign-in still works
+/// is a test nobody ran here, and the row does not claim it.
 enum MemberSignIn: Equatable {
-    /// The vault answered, and it holds a Claude item.
-    case signedIn
-    /// The vault answered, and it holds none.
-    case notSignedIn
+    /// The vault answered, and it keeps a Claude item.
+    case kept
+    /// The vault answered, and it keeps none.
+    case notKept
     /// The vault could not be asked, or refused: cannot tell (C-5).
     case notChecked
 }
@@ -1287,8 +1305,8 @@ enum MemberSignIn: Equatable {
 /// words on both phones (test/members-in-apps.test.js).
 func memberSignInWord(_ state: MemberSignIn?) -> String {
     switch state {
-    case .some(.signedIn): return "Signed in to Claude"
-    case .some(.notSignedIn): return "Not signed in"
+    case .some(.kept): return "Keeps a Claude sign-in"
+    case .some(.notKept): return "No Claude sign-in kept"
     case .some(.notChecked): return "Not checked"
     case .none: return "Checking…"
     }
@@ -1318,6 +1336,12 @@ let removalNeedsGitHub = "Sign in to GitHub under Runners first. Removing a memb
 /// What giving up custody of a person costs, asked before it is done. The
 /// same sentence as Android and the signing page.
 let stopManagingSentence = "This is not given back. After it, managing their credentials is theirs to allow, as it is for their other managers."
+
+/// What removing one of an agent's custodians does, asked before it is done.
+/// The same sentence as Android.
+func removeCustodianSentence(_ address: String, of name: String) -> String {
+    "\(address) stops being a custodian of \(name). Anybody still listed can add them again."
+}
 
 /// Whether a person lets their managers manage their credentials, as the
 /// vault says it. Anything else is an answer this build has not met, and is

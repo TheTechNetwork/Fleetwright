@@ -289,7 +289,8 @@ POST   /api/members/import     { text }
   person's own sign-in.
 - **Both phones**: an **Org** screen, the tree by `reportsTo`; a member's page,
   with Edit for whoever manages it; **My team** for a manager, each member
-  with its sign-in's state; a member's **Credentials**, which is the
+  with whether its vault keeps a Claude sign-in (kept is all the vault's list
+  says, so the row never says *signed in*); a member's **Credentials**, which is the
   Credentials screen pointed at that vault; and **Start as** on New session,
   listing only members the person may start as.
 - **The signing page**: the same member Credentials and My team.

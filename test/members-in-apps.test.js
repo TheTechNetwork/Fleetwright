@@ -95,10 +95,17 @@ test('both phones read the list, write one member, and move members as files', (
   }
 });
 
-test('a member is signed in, not signed in, or not checked, and a vault that did not answer is never "Not signed in" (C-5)', () => {
-  for (const words of ['Signed in to Claude', 'Not signed in', 'Not checked']) {
+test('a member’s row says what the vault keeps, never that it is signed in, and a vault that did not answer is "Not checked" (C-5)', () => {
+  for (const words of ['Keeps a Claude sign-in', 'No Claude sign-in kept', 'Not checked']) {
     assert.ok(IOS.includes(words), `iOS lost: ${words}`);
     assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+  // THE VAULT'S LIST IS NAMES, TIMES AND KINDS (src/fleet/minter/vault.js,
+  // `list`). An item named claude is a sign-in somebody kept: nobody tried
+  // it, and one that ran out is kept all the same. So no row may say the
+  // member is signed in, which is a state nobody checked.
+  for (const [name, src] of [['iOS', IOS], ['Android', ANDROID]]) {
+    assert.doesNotMatch(src, /(?:return|->) "Signed in to Claude"/, `${name} says a member is signed in on the strength of a kept item`);
   }
   // The answer decides between the first two; no answer is the third.
   assert.match(IOS, /if let contents = try\? await vault\.list\(fleet, for: member\.id\) \{[\s\S]{0,160}\} else \{\s*signIns\[member\.id\] = \.notChecked/);
@@ -139,6 +146,26 @@ test('giving up custody of a person is offered to whoever holds it or an org adm
   // The first press only opens the question; its own button asks the vault.
   assert.match(IOS, /\.confirmationDialog\("Stop managing their credentials\?"[\s\S]{0,260}Button\("Stop managing", role: \.destructive\) \{\s*if let address = stopping \{\s*act \{ try await vault\.setCustodian\(fleet, member: shown\.id, address: address, remove: true\) \}/);
   assert.match(ANDROID, /title = \{ Text\("Stop managing their credentials\?"\) \},[\s\S]{0,260}act \{ vault\.setCustodian\(Fleet\(settings\), filed\.id, address, remove = true\) \}\s*\}\) \{ Text\("Stop managing"\) \}/);
+});
+
+test('removing an agent’s custodian asks first, and is not offered for the last one, which the vault keeps (C-2)', () => {
+  for (const words of ['Remove this custodian?', 'Remove custodian', ' stops being a custodian of ', '. Anybody still listed can add them again.']) {
+    assert.ok(IOS.includes(words), `iOS lost: ${words}`);
+    assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+  // The row's button only opens the question, and is drawn while more than
+  // one custodian is left: the vault refuses to remove the last
+  // (`last_custodian`, src/fleet/minter/org.js).
+  assert.match(IOS, /\.custodians\.count > 1 \{\s*Button\("Remove", role: \.destructive\) \{ (\w+) = address \}/);
+  assert.match(ANDROID, /\.custodians\.size > 1\) \{\s*TextButton\(\s*enabled = !busy,\s*onClick = \{ (\w+) = address \},[\s\S]{0,200}?Text\("Remove", /);
+  // Only the question's own button asks the vault.
+  assert.match(IOS, /\.confirmationDialog\("Remove this custodian\?"[\s\S]{0,260}?Button\("Remove custodian", role: \.destructive\) \{\s*if let address = \w+ \{\s*act \{ try await vault\.setCustodian\(fleet, member: shown\.id, address: address, remove: true\) \}/);
+  assert.match(ANDROID, /title = \{ Text\("Remove this custodian\?"\) \},[\s\S]{0,300}?act \{ vault\.setCustodian\(Fleet\(settings\), filed\.id, address, remove = true\) \}\s*\}\) \{ Text\("Remove custodian"\) \}/);
+  // And nothing takes a custodian away at a press: every removal sits in a
+  // question's own button.
+  for (const [name, src, call] of [['iOS', IOS, /setCustodian\([^\n]*remove: true\)/g], ['Android', ANDROID, /setCustodian\([^\n]*remove = true\)/g]]) {
+    assert.equal(src.match(call)?.length, 2, `${name} removes a custodian somewhere other than its two questions`);
+  }
 });
 
 test('a person is told who added them and manages what they keep, with nothing drawn to end it, before the switch for the rest (C-2)', () => {

@@ -54,15 +54,18 @@ import org.json.JSONObject
  * answer (C-2).
  *
  * TWO LISTS, IN THE ORDER A MANAGER NEEDS THEM. My team first, each member
- * with whether its vault holds a Claude sign-in, because "can it run" is the
+ * with whether its vault keeps a Claude sign-in, because "can it run" is the
  * question a manager opens this for. Then Everyone, as the tree, a report
  * indented under whoever it reports to. An admin manages everybody, so their
  * team is Everyone and is not drawn twice.
  *
- * A SIGN-IN'S STATE IS THE VAULT'S ANSWER AND NOTHING ELSE. "Not signed in"
- * is said only when the member's vault answered without a Claude item. A
- * vault that could not be asked is "Not checked", which is a different fact
- * (C-5), and it is what a person member's row says until they let their
+ * A SIGN-IN'S STATE IS THE VAULT'S ANSWER AND NOTHING ELSE, and the answer
+ * is a list of what is kept: a name, a time and a kind. So the row says
+ * "Keeps a Claude sign-in" and never "Signed in to Claude": nobody tried the
+ * sign-in, and one that has run out is kept all the same. "No Claude sign-in
+ * kept" is said only when the member's vault answered without a Claude item.
+ * A vault that could not be asked is "Not checked", which is a different
+ * fact (C-5), and it is what a person member's row says until they let their
  * managers in.
  *
  * CUSTODY, FOR EVERYBODY AT ONCE, IS AN ORG ADMIN'S. The vault keeps its own
@@ -96,7 +99,7 @@ internal fun OrgScreen(
     var asked by remember { mutableIntStateOf(0) }
     var members by remember { mutableStateOf(listOf<Fleet.Member>()) }
     var you by remember { mutableStateOf<Fleet.Standing?>(null) }
-    // What each team member's vault said about a Claude sign-in, by id.
+    // Whether each team member's vault keeps a Claude sign-in, by id.
     // Absent while it is being asked.
     val signIns = remember { mutableStateMapOf<String, MemberSignIn>() }
     // The member whose page is open, by id, so the page draws the record as
@@ -224,11 +227,11 @@ internal fun OrgScreen(
         // answer that carries the list: anything else leaves it unknown.
         approvalsWaiting = Fleet(settings).approvals().getOrNull()
             ?.takeIf { it.ok != false }?.approvals?.count { approvalWaitsOnYou(it) }
-        // ASK EACH TEAM MEMBER'S VAULT whether it holds a Claude sign-in. One
+        // ASK EACH TEAM MEMBER'S VAULT whether it keeps a Claude sign-in. One
         // at a time, because each is a request this phone seals and the vault
         // answers under one lock. A vault that refuses, or cannot be asked
-        // without this phone's GitHub sign-in, is Not checked and never Not
-        // signed in (C-5).
+        // without this phone's GitHub sign-in, is Not checked and never No
+        // Claude sign-in kept (C-5).
         val managed = got.you?.manages.orEmpty()
         val mine = if (got.you?.admin == true) emptyList<Fleet.Member>() else list.filter { it.id in managed }
         if (mine.isEmpty()) return@LaunchedEffect
@@ -242,8 +245,8 @@ internal fun OrgScreen(
             val contents = runCatching { vault.list(fleet, member.id) }.getOrNull()
             signIns[member.id] = when {
                 contents == null -> MemberSignIn.NotChecked
-                contents.items.any { it.name == "claude" } -> MemberSignIn.SignedIn
-                else -> MemberSignIn.NotSignedIn
+                contents.items.any { it.name == "claude" } -> MemberSignIn.Kept
+                else -> MemberSignIn.NotKept
             }
         }
     }
@@ -309,7 +312,7 @@ internal fun OrgScreen(
                         MemberRow(
                             member = member,
                             trailing = memberSignInWord(signIns[member.id]),
-                            strong = signIns[member.id] == MemberSignIn.SignedIn,
+                            strong = signIns[member.id] == MemberSignIn.Kept,
                         ) { opened = member.id }
                     }
                 }
@@ -556,6 +559,8 @@ private fun MemberPage(
     var removing by remember { mutableStateOf(false) }
     // Whose custody of this person is being given up, while the question is open.
     var stopping by remember { mutableStateOf<String?>(null) }
+    // Which of an agent's own custodians is being removed, while the question is open.
+    var removingCustodian by remember { mutableStateOf<String?>(null) }
     var removeResult by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf(false) }
     var credentials by remember { mutableStateOf(false) }
@@ -809,8 +814,9 @@ private fun MemberPage(
                     // custodians only, since a manager's custody ends with
                     // the tree and not with a button, and adding or removing
                     // is offered only to somebody already on the list (C-2).
-                    // The last custodian stays, and the vault's sentence
-                    // says so.
+                    // The last custodian stays: the vault refuses to remove
+                    // it, so with one left no Remove is drawn. Remove asks
+                    // first.
                     Text("Custodians", style = Design.Style.bodyStrong, color = Design.Palette.ink.now)
                     if (filed.may.isEmpty()) Hint("None yet.")
                     filed.may.forEach { address ->
@@ -822,14 +828,31 @@ private fun MemberPage(
                             Text(address, style = Design.Style.bodySmall, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
                             if (address !in filed.custodians) {
                                 Text("Manager", style = Design.Style.label, color = Design.Palette.inkDim.now)
-                            } else if (me in filed.may) {
+                            } else if (me in filed.may && filed.custodians.size > 1) {
                                 TextButton(
                                     enabled = !busy,
-                                    onClick = { act { vault.setCustodian(Fleet(settings), filed.id, address, remove = true) } },
+                                    onClick = { removingCustodian = address },
                                     modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Remove $address" },
                                 ) { Text("Remove", color = Design.Palette.bad.now) }
                             }
                         }
+                    }
+                    // ASKED FIRST. It was done at the press: one tap on a
+                    // row took somebody's custody away, where the same act
+                    // on a person's page always asked.
+                    removingCustodian?.let { address ->
+                        AlertDialog(
+                            onDismissRequest = { removingCustodian = null },
+                            title = { Text("Remove this custodian?") },
+                            text = { Text(removeCustodianSentence(address, member.name)) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    removingCustodian = null
+                                    act { vault.setCustodian(Fleet(settings), filed.id, address, remove = true) }
+                                }) { Text("Remove custodian") }
+                            },
+                            dismissButton = { TextButton(onClick = { removingCustodian = null }) { Text("Cancel") } },
+                        )
                     }
                     if (me in filed.may) {
                         OutlinedTextField(
@@ -1168,13 +1191,17 @@ private fun MemberForm(
     }
 }
 
-/** What a team member's vault said about a Claude sign-in. */
+/**
+ * What a team member's vault said about a Claude sign-in: whether it keeps
+ * one. Kept is all the vault's list says. Whether the sign-in still works is
+ * a test nobody ran here, and the row does not claim it.
+ */
 enum class MemberSignIn {
-    /** The vault answered, and it holds a Claude item. */
-    SignedIn,
+    /** The vault answered, and it keeps a Claude item. */
+    Kept,
 
-    /** The vault answered, and it holds none. */
-    NotSignedIn,
+    /** The vault answered, and it keeps none. */
+    NotKept,
 
     /** The vault could not be asked, or refused: cannot tell (C-5). */
     NotChecked,
@@ -1185,8 +1212,8 @@ enum class MemberSignIn {
  * words on both phones (test/members-in-apps.test.js).
  */
 fun memberSignInWord(state: MemberSignIn?): String = when (state) {
-    MemberSignIn.SignedIn -> "Signed in to Claude"
-    MemberSignIn.NotSignedIn -> "Not signed in"
+    MemberSignIn.Kept -> "Keeps a Claude sign-in"
+    MemberSignIn.NotKept -> "No Claude sign-in kept"
     MemberSignIn.NotChecked -> "Not checked"
     null -> "Checking…"
 }
@@ -1220,6 +1247,13 @@ const val REMOVAL_NEEDS_GITHUB = "Sign in to GitHub under Runners first. Removin
  * same sentence as iOS and the signing page.
  */
 const val STOP_MANAGING_SENTENCE = "This is not given back. After it, managing their credentials is theirs to allow, as it is for their other managers."
+
+/**
+ * What removing one of an agent's custodians does, asked before it is done.
+ * The same sentence as iOS.
+ */
+fun removeCustodianSentence(address: String, name: String): String =
+    "$address stops being a custodian of $name. Anybody still listed can add them again."
 
 /**
  * Whether a person lets their managers manage their credentials, as the
