@@ -267,9 +267,13 @@ itself. A packaged box has `lib/` with everything bundled in and no `src/`
 but the web pages; a checkout has `src/` and `node_modules`, and an `apps/`
 and a `.git` that have no business in an image. The hub copies the parts
 that exist into a directory of its own and builds from that
-(`stageMachineContext`). The image's tag is made from the files a host runs
-from, so a release that changed is another image, and the one before it is
-removed once no machine uses it.
+(`stageMachineContext`). The image's tag is made from the bytes of the
+files a host runs from, so a release that changed is another image, and the
+one before it is removed once no machine uses it. It is the bytes and not
+each file's size and time, because a release has no times: the packager
+stamps every file 2020, and a fix that kept a file's length would have kept
+the tag, and the old host in every machine. The same bytes unpacked again
+are the same image, and nothing is rebuilt.
 
 ### The same image is the template a provider needs
 

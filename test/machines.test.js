@@ -11,7 +11,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readdirSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Machines, machineImage, machineNames, releaseTag, stageMachineContext, MACHINE_MAX_MINUTES } from '../src/core/machines.js';
@@ -57,10 +57,25 @@ test('the image is built from whichever shape of release the box has, and from n
 test('a release that changed is another image, so a machine runs what its box runs', (t) => {
   const podman = stubMachinePodman(t);
   const root = podman.release('packaged');
+  // EVERY FILE OF A RELEASE CARRIES ONE TIME: the packager stamps them all
+  // 2020, so that two builds of one commit are the same bytes.
+  const bundle = path.join(root, 'lib', 'fleetwright.mjs');
+  const packed = new Date('2020-01-01T00:00:00Z');
+  utimesSync(bundle, packed, packed);
   const before = machineImage({ installDir: root });
   assert.match(before, /^localhost\/fleetwright-machine:[0-9a-f]{12}$/);
   assert.equal(machineImage({ installDir: root }), before, 'the same release is the same image');
-  utimesSync(path.join(root, 'lib', 'fleetwright.mjs'), new Date(1_900_000_000_000), new Date(1_900_000_000_000));
+  // THE SAME BYTES UNPACKED AGAIN, somewhere else and with other times on
+  // them, are the same image: a box that reinstalled its release builds nothing.
+  assert.equal(machineImage({ installDir: podman.release('packaged') }), before);
+  // A FIX THAT KEEPS A FILE'S LENGTH. The next release's copy of this file
+  // has the size and the time the last one had, and the tag was made of
+  // those two: the machines of a box that had updated went on running the
+  // host from before.
+  const was = statSync(bundle);
+  writeFileSync(bundle, 'y\n');
+  utimesSync(bundle, packed, packed);
+  assert.deepEqual([statSync(bundle).size, statSync(bundle).mtimeMs], [was.size, was.mtimeMs]);
   assert.notEqual(releaseTag(root), before.split(':')[1]);
   // The operator's own image is used as named, whatever the release is.
   assert.equal(machineImage({ installDir: root, machineImage: 'registry.example/ours:1' }), 'registry.example/ours:1');

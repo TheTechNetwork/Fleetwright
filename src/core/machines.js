@@ -34,7 +34,7 @@
 // starts one with a real one (scripts/machine-smoke.mjs).
 
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { log } from '../log.js';
 import { podmanAsync, podmanAvailable } from './podman.js';
@@ -93,16 +93,43 @@ function line(/** @type {unknown} */ v) {
 }
 
 /**
- * What identifies the release this box runs, as a short tag: every file a
- * host runs from, by its path, size and time. A checkout that pulled and a
- * release that was replaced both change it, and the image is built again;
- * `node_modules` is named and not walked, since a release that changed its
- * dependencies changed its `package.json` or its bundle.
+ * How new a file may be and still have its tag kept. A file's times are
+ * written on the kernel's coarse clock, so one changed twice inside a tick
+ * shows the same times for both; a tag is kept only once every file is older
+ * than this, when a later change cannot hide in the same tick.
+ */
+const SETTLED_MS = 2000;
+/** The tag last worked out for a release, and what its files looked like then. @type {Map<string, { seen: string, tag: string }>} */
+const tags = new Map();
+
+/**
+ * What identifies the release this box runs, as a short tag: THE BYTES of
+ * every file a host runs from, by its path. A checkout that pulled and a
+ * release that was replaced both change it, and the image is built again.
+ *
+ * IT WAS EACH FILE'S PATH, SIZE AND TIME, and a release has no times: the
+ * packager stamps every file 2020 so that two builds of one commit are the
+ * same bytes (tools/build-host-package.mjs). So a fix that kept a file's
+ * length kept the tag, and machines went on being made from the image with
+ * the old host in it. The same bytes are now the same image whenever they
+ * were unpacked, and different bytes never are.
+ *
+ * WORKED OUT ONCE AND KEPT, because this is asked at every look at the
+ * machines and a checkout's `src/` is megabytes. What says a kept tag is
+ * stale is each file's size, both its times and its inode: the time a file
+ * was last changed in any way is the kernel's own and nothing unpacking a
+ * release can set, so a file rewritten at the same length with its old time
+ * put back still shows.
+ *
+ * `node_modules` is not walked. What npm installed there is listed in its
+ * own `.package-lock.json`, and that file's bytes stand for the directory; a
+ * release has no `node_modules`, since everything is in its bundle.
  *
  * @param {string} installDir
  */
 export function releaseTag(installDir) {
-  const h = createHash('sha256');
+  /** @type {Array<{ rel: string, at: string, st: import('node:fs').Stats }>} */
+  const files = [];
   /** @param {string} rel */
   const walk = (rel) => {
     const at = path.join(installDir, rel);
@@ -112,15 +139,39 @@ export function releaseTag(installDir) {
     } catch {
       return;
     }
-    if (st.isDirectory() && rel !== 'node_modules') {
+    if (rel === 'node_modules') {
+      const lock = path.join(at, '.package-lock.json');
+      try {
+        files.push({ rel: path.join(rel, '.package-lock.json'), at: lock, st: statSync(lock) });
+      } catch {
+        files.push({ rel, at: '', st });
+      }
+      return;
+    }
+    if (st.isDirectory()) {
       for (const n of readdirSync(at).sort()) walk(path.join(rel, n));
       return;
     }
-    h.update(`${rel}\0${st.size}\0${Math.floor(st.mtimeMs)}\n`);
+    files.push({ rel, at, st });
   };
   for (const part of RELEASE_PARTS) walk(part);
   walk(path.join('sandbox', 'machine'));
-  return h.digest('hex').slice(0, 12);
+  const seen = files.map((f) => `${f.rel}\0${f.st.size}\0${f.st.mtimeMs}\0${f.st.ctimeMs}\0${f.st.ino}`).join('\n');
+  const kept = tags.get(installDir);
+  if (kept?.seen === seen) return kept.tag;
+  const h = createHash('sha256');
+  for (const f of files) {
+    // A link is where it points, and anything else that is not a file is
+    // only its name: neither is read through.
+    const bytes = f.st.isSymbolicLink() ? Buffer.from(readlinkSync(f.at)) : f.st.isFile() ? readFileSync(f.at) : Buffer.alloc(0);
+    h.update(`${f.rel}\0${bytes.length}\0`);
+    h.update(bytes);
+  }
+  const tag = h.digest('hex').slice(0, 12);
+  const newest = Math.max(0, ...files.map((f) => Math.max(f.st.mtimeMs, f.st.ctimeMs)));
+  if (Date.now() - newest > SETTLED_MS) tags.set(installDir, { seen, tag });
+  else tags.delete(installDir);
+  return tag;
 }
 
 /**
