@@ -273,3 +273,25 @@ test('the Organization row is drawn only once the fleet answered with its member
   assert.match(IOS, /if let orgCount \{\s*NavigationLink \{\s*OrgView/);
   assert.match(ANDROID, /orgCount\?\.let \{ count ->\s*OpenRow\("Organization"/);
 });
+
+test('an organization that could not be loaded says so under You, with the reason and Try again, and is not drawn as a fleet with none (C-5)', () => {
+  // A request that failed and a fleet from before members both drew no row,
+  // so a person on a bad connection was shown a fleet with no organization.
+  // In the row's place, and only when there is no answer to draw instead:
+  const ios = /if let orgCount \{\s*NavigationLink \{\s*OrgView[\s\S]{0,400}?\} else if let (\w+) \{[\s\S]{0,200}?\w+\("Could not load the organization\.", why: \1\)/.exec(IOS)?.[1];
+  assert.ok(ios, 'iOS draws nothing where the organization could not be loaded');
+  const android = /if \(orgCount == null && (\w+) != null\) \{\s*\w+\("Could not load the organization\.", \1\) \{/.exec(ANDROID)?.[1];
+  assert.ok(android, 'Android draws nothing where the organization could not be loaded');
+  // The reason is the request's own failure, or the fleet's sentence. An
+  // answer with neither a list nor a sentence is a fleet from before
+  // members: no reason, so no row, as before.
+  assert.match(IOS, new RegExp(`\\} catch \\{\\s*if !Task\\.isCancelled \\{ ${ios} = error\\.localizedDescription \\}`), 'iOS drops why the organization could not be loaded');
+  assert.match(IOS, new RegExp(`${ios} = \\(\\w+\\.text \\?\\? ""\\)\\.isBlank \\? nil : \\w+\\.text`), 'iOS takes an answer with no sentence for a failure');
+  const whyAndroid = /val (\w+) = (\w+)\s*if \(orgCount == null && \1 != null\)/.exec(ANDROID)?.[2];
+  assert.ok(whyAndroid, 'Android has no reason to show');
+  assert.match(ANDROID, new RegExp(`\\.onFailure \\{ if \\(it !is [\\w.]+CancellationException\\) ${whyAndroid} = it\\.message \\?: "no answer" \\}`), 'Android drops why the organization could not be loaded');
+  assert.match(ANDROID, new RegExp(`\\} else \\{\\s*${whyAndroid} = \\w+\\.text\\s*\\}`), 'Android takes an answer with no sentence for a failure');
+  // And the row that says so has the reason under it and a way to ask again.
+  assert.match(IOS, /Text\(what\)[\s\S]{0,200}?Text\(why\)[\s\S]{0,260}?Button\("Try again"\) \{ Task \{ await \w+\(\) \} \}/);
+  assert.match(ANDROID, /Hint\(what, color = Design\.Palette\.bad\.now\)\s*SelectionContainer \{ Hint\(why\) \}\s*OutlinedButton\(onClick = again[^\n]*\{ Text\("Try again"\) \}/);
+});

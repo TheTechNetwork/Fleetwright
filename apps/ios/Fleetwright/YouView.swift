@@ -47,6 +47,12 @@ struct YouView: View {
     /// has said; nil until then and from a fleet older than tasks, and the
     /// row is not drawn.
     @State private var tasksBack: Int?
+    /// Why the organization could not be loaded, when it could not: the
+    /// request failed, or the fleet refused in a sentence. Nil otherwise,
+    /// and for a fleet from before members, which has none to load.
+    @State private var orgFailed: String?
+    /// The same for tasks.
+    @State private var tasksFailed: String?
     // Eggs.swift: taps on the build line. Not saved, so leaving You hides it again.
     @State private var buildTaps = 0
 
@@ -101,6 +107,10 @@ struct YouView: View {
                                 Text(describeOrganization(orgCount)).fleetType(.label)
                             }
                         }
+                    } else if let orgFailed {
+                        // COULD NOT BE LOADED IS NOT "THIS FLEET HAS NONE"
+                        // (C-5). Both used to draw no row at all.
+                        couldNotLoadRow("Could not load the organization.", why: orgFailed)
                     }
                     // THE WORK HANDED TO THE ORGANIZATION, beside it: tasks,
                     // the ones that came back first (docs/tasks.md). Drawn
@@ -116,6 +126,8 @@ struct YouView: View {
                                 }
                             }
                         }
+                    } else if let tasksFailed {
+                        couldNotLoadRow("Could not load the tasks.", why: tasksFailed)
                     }
                 }
             }
@@ -358,6 +370,23 @@ struct YouView: View {
         }
     }
 
+    /// A ROW THAT COULD NOT BE LOADED, said as that: what failed, the reason
+    /// smaller under it, there to be copied, and a way to ask again. Drawn
+    /// in the row's place, so a request that failed is not mistaken for a
+    /// fleet that has no organization or no tasks.
+    @ViewBuilder private func couldNotLoadRow(_ what: String, why: String) -> some View {
+        VStack(alignment: .leading, spacing: Design.Space.hair) {
+            Text(what)
+                .fleetType(.label)
+                .foregroundStyle(Design.Palette.bad)
+            Text(why)
+                .fleetType(.micro)
+                .foregroundStyle(Design.Palette.inkDim)
+                .textSelection(.enabled)
+        }
+        Button("Try again") { Task { await loadRunners() } }
+    }
+
     // MARK: - actions
 
     @MainActor
@@ -376,14 +405,34 @@ struct YouView: View {
         }
         // Only from an answer that carries the list: a fleet older than
         // members answers without one, and "no members yet" would be a claim.
-        if let org = try? await Fleet(settings: settings).members(), org.ok != false, let list = org.members {
-            orgCount = list.count
+        // A REQUEST THAT FAILED, OR A REFUSAL IN A SENTENCE, IS NEITHER: the
+        // row then says it could not be loaded, and why. An answer with no
+        // list and no sentence is what a fleet from before members sends,
+        // and that fleet has no row.
+        do {
+            let org = try await Fleet(settings: settings).members()
+            if org.ok != false, let list = org.members {
+                orgCount = list.count
+                orgFailed = nil
+            } else {
+                orgFailed = (org.text ?? "").isBlank ? nil : org.text
+            }
+        } catch {
+            if !Task.isCancelled { orgFailed = error.localizedDescription }
         }
         // The same rule for tasks: only an answer that carries the list. The
         // ones that came back are asked for alone, since they are the count
         // this row shows and a fleet keeps hundreds of the others.
-        if let back = try? await Fleet(settings: settings).tasks(state: "returned"), back.ok != false, let list = back.tasks {
-            tasksBack = list.count
+        do {
+            let back = try await Fleet(settings: settings).tasks(state: "returned")
+            if back.ok != false, let list = back.tasks {
+                tasksBack = list.count
+                tasksFailed = nil
+            } else {
+                tasksFailed = (back.text ?? "").isBlank ? nil : back.text
+            }
+        } catch {
+            if !Task.isCancelled { tasksFailed = error.localizedDescription }
         }
     }
 

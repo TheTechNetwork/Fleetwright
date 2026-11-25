@@ -103,6 +103,14 @@ fun YouScreen(
     // said; null until then and from a fleet older than tasks, and the row
     // is not drawn.
     var tasksBack by remember { mutableStateOf<Int?>(null) }
+    // Why the organization could not be loaded, when it could not: the
+    // request failed, or the fleet refused in a sentence. Null otherwise,
+    // and for a fleet from before members, which has none to load.
+    var orgFailed by remember { mutableStateOf<String?>(null) }
+    // The same for tasks.
+    var tasksFailed by remember { mutableStateOf<String?>(null) }
+    // Bumped by Try again on the Organization row, which asks again.
+    var orgAsked by remember { mutableIntStateOf(0) }
     // Bumped when the Tasks screen closes, so the count beside its row is
     // asked again: an accepted task would otherwise go on being counted.
     var tasksAsked by remember { mutableIntStateOf(0) }
@@ -112,7 +120,7 @@ fun YouScreen(
     val inDemo = signedIn && Demo.isActive(settings.coordinatorUrl)
 
     LaunchedEffect(Unit) { pushDoubt = settings.pushKeyEvidence?.doubt }
-    LaunchedEffect(signedIn) {
+    LaunchedEffect(signedIn, orgAsked) {
         if (!signedIn) return@LaunchedEffect
         Fleet(settings).runnerRepoSetting().onSuccess { got ->
             if (got.ok != false) {
@@ -126,20 +134,38 @@ fun YouScreen(
         }
         // Only from an answer that carries the list: a fleet older than
         // members answers without one, and "no members yet" would be a claim.
-        Fleet(settings).members().onSuccess { got ->
-            val list = got.members
-            if (got.ok != false && list != null) orgCount = list.size
-        }
+        // A REQUEST THAT FAILED, OR A REFUSAL IN A SENTENCE, IS NEITHER: the
+        // row then says it could not be loaded, and why. An answer with no
+        // list and no sentence is what a fleet from before members sends,
+        // and that fleet has no row.
+        Fleet(settings).members()
+            .onSuccess { got ->
+                val list = got.members
+                if (got.ok != false && list != null) {
+                    orgCount = list.size
+                    orgFailed = null
+                } else {
+                    orgFailed = got.text
+                }
+            }
+            .onFailure { if (it !is java.util.concurrent.CancellationException) orgFailed = it.message ?: "no answer" }
     }
     // The same rule for tasks: only an answer that carries the list. The
     // ones that came back are asked for alone, since they are the count this
     // row shows and a fleet keeps hundreds of the others.
     LaunchedEffect(signedIn, tasksAsked) {
         if (!signedIn) return@LaunchedEffect
-        Fleet(settings).tasks("returned").onSuccess { got ->
-            val list = got.tasks
-            if (got.ok != false && list != null) tasksBack = list.size
-        }
+        Fleet(settings).tasks("returned")
+            .onSuccess { got ->
+                val list = got.tasks
+                if (got.ok != false && list != null) {
+                    tasksBack = list.size
+                    tasksFailed = null
+                } else {
+                    tasksFailed = got.text
+                }
+            }
+            .onFailure { if (it !is java.util.concurrent.CancellationException) tasksFailed = it.message ?: "no answer" }
     }
     // A tapped notification about this person's vault lands on Credentials.
     LaunchedEffect(opening) {
@@ -319,12 +345,22 @@ fun YouScreen(
                 orgCount?.let { count ->
                     OpenRow("Organization", value = describeOrganization(count)) { open = "org" }
                 }
+                // COULD NOT BE LOADED IS NOT "THIS FLEET HAS NONE" (C-5).
+                // Both used to draw no row at all.
+                val orgWhy = orgFailed
+                if (orgCount == null && orgWhy != null) {
+                    CouldNotLoadRow("Could not load the organization.", orgWhy) { orgAsked++ }
+                }
                 // THE WORK HANDED TO THE ORGANIZATION, beside it: tasks, the
                 // ones that came back first (docs/tasks.md). Drawn only once
                 // the fleet answered with a list, and the row says how many
                 // are waiting on somebody, or nothing.
                 tasksBack?.let { back ->
                     OpenRow("Tasks", value = describeTasks(back)) { open = "tasks" }
+                }
+                val tasksWhy = tasksFailed
+                if (tasksBack == null && tasksWhy != null) {
+                    CouldNotLoadRow("Could not load the tasks.", tasksWhy) { tasksAsked++ }
                 }
             }
         }
@@ -795,6 +831,19 @@ private fun DevicesSheet(settings: Settings, admin: Boolean?, onDismiss: () -> U
         }
         if (result.isNotBlank()) Hint(result)
     }
+}
+
+/**
+ * A ROW THAT COULD NOT BE LOADED, said as that: what failed, the reason under
+ * it, there to be copied, and a way to ask again. Drawn in the row's place,
+ * so a request that failed is not mistaken for a fleet that has no
+ * organization or no tasks.
+ */
+@Composable
+private fun CouldNotLoadRow(what: String, why: String, again: () -> Unit) {
+    Hint(what, color = Design.Palette.bad.now)
+    SelectionContainer { Hint(why) }
+    OutlinedButton(onClick = again, modifier = Modifier.heightIn(min = 48.dp)) { Text("Try again") }
 }
 
 /**

@@ -170,6 +170,10 @@ test('loading, failed and empty are three states, and a list that did not come i
   // The Tasks row under You is drawn only from an answer that carried a list.
   has(IOS, /if let tasksBack \{\s*NavigationLink \{\s*TasksView/, 'iOS draws the Tasks row before the fleet answered');
   has(ANDROID, /tasksBack\?\.let \{ back ->\s*OpenRow\("Tasks"/, 'Android draws the Tasks row before the fleet answered');
+  // And where they could not be loaded, the row's place says so with the
+  // reason, which is not what a fleet with no tasks looks like (C-5).
+  has(IOS, /if let tasksBack \{\s*NavigationLink \{\s*TasksView[\s\S]{0,500}?\} else if let (\w+) \{\s*\w+\("Could not load the tasks\.", why: \1\)/, 'iOS draws nothing where the tasks could not be loaded');
+  has(ANDROID, /if \(tasksBack == null && (\w+) != null\) \{\s*\w+\("Could not load the tasks\.", \1\) \{/, 'Android draws nothing where the tasks could not be loaded');
 });
 
 test('every /api/tasks route has a caller on both phones', () => {
