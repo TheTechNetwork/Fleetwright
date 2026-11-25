@@ -13,7 +13,8 @@
 // change (more time is asked for), so that is in `machines.json` in the
 // hub's state. Either alone is enough to end a machine on time: a container
 // the file does not know ends when its labels say, and a name in the file
-// with no container is dropped.
+// with no container is dropped. A volume that is a machine's by its name
+// and has no container is one a making left behind, and is removed.
 //
 // And why a machine ended, when nobody ended it: one whose container had
 // stopped is removed with its volume, and its log would go with it, which is
@@ -49,6 +50,8 @@ import { usernsArgs } from './sandbox-userns.js';
 
 const TICKET_RE = /^fwt_([0-9a-f]{12})_[0-9a-f]{48}$/;
 const NAME_RE = /^vm-[0-9a-f]{12}$/;
+/** A machine's volume, by the name `machineNames` gives one. */
+const VOLUME_RE = /^fwm-(vm-[0-9a-f]{12})-state$/;
 /** The fewest and the most minutes a machine is made or extended for, as on a hypervisor. */
 export const MACHINE_MIN_MINUTES = 5;
 export const MACHINE_MAX_MINUTES = 350;
@@ -286,6 +289,8 @@ export class Machines {
     this.timer = null;
     /** What is being made or changed, one at a time. @type {Promise<unknown>} */
     this.turn = Promise.resolve();
+    /** The machines being made this moment, whose volume has no container yet. @type {Set<string>} */
+    this.making = new Set();
   }
 
   /**
@@ -559,6 +564,37 @@ export class Machines {
   }
 
   /**
+   * Remove the volumes that are a machine's by their name and that no
+   * container has.
+   *
+   * A MACHINE'S VOLUME IS MADE BEFORE ITS CONTAINER, with the ticket in it
+   * (`#make`). A hub that stopped between the two left a volume holding an
+   * unspent ticket, and nothing ever looked for one: every removal here
+   * starts from a container. So each look at the machines also lists the
+   * volumes.
+   *
+   * NOT FORCED, AND NOT ONE BEING MADE. Podman refuses to remove a volume a
+   * container has, which is the check that matters and is Podman's own: a
+   * machine started since the containers were listed keeps its volume. The
+   * moment between the two steps of a making is the one where a volume is
+   * rightly alone, and that making says so in `making`. A Podman that
+   * cannot list them is left for the next look.
+   *
+   * @param {Array<{ name: string }>} containers  every machine's container, in any state
+   */
+  async #clearStrays(containers) {
+    const listed = await podmanAsync(this.cfg, ['volume', 'ls', '--format', '{{.Name}}'], { timeout: 30_000 });
+    if (listed.status !== 0) return;
+    const has = new Set(containers.map((c) => c.name));
+    for (const volume of String(listed.stdout || '').split('\n').map((l) => l.trim())) {
+      const name = VOLUME_RE.exec(volume)?.[1];
+      if (!name || has.has(name) || this.making.has(name)) continue;
+      const gone = await podmanAsync(this.cfg, ['volume', 'rm', volume], { timeout: 60_000 });
+      if (gone.status === 0) log.warn(`machines: removed ${volume}, the volume of a machine that was never started`);
+    }
+  }
+
+  /**
    * What machines this box has, after ending any whose time is up. The
    * whole answer the sidecar reports from.
    *
@@ -603,6 +639,7 @@ export class Machines {
     // times as they were read at the top put back an end somebody had just
     // extended: they were told two more hours, and the machine went in ten
     // minutes with its disk.
+    await this.#clearStrays(all);
     const live = new Set(machines.map((m) => m.name));
     const fresh = this.#ends();
     const still = Object.fromEntries(Object.entries(fresh).filter(([n]) => live.has(n)));
@@ -651,6 +688,25 @@ export class Machines {
     // holding a request open. It is started, and they are told.
     const image = await this.prepare();
     if (!image.ready) return { ok: false, text: image.problem ?? 'This machine has no machine image yet. Ask again in a few minutes.' };
+    // FROM HERE ITS VOLUME EXISTS BEFORE ITS CONTAINER DOES, and a look at
+    // the machines must not take it for one left behind (`#clearStrays`).
+    this.making.add(name);
+    try {
+      return await this.#start({ name, who, ticket, coordinator, life });
+    } finally {
+      this.making.delete(name);
+    }
+  }
+
+  /**
+   * The two steps of a making: the ticket into the machine's volume, then
+   * the machine.
+   *
+   * @param {{ name: string, who: string, ticket: string, coordinator: string, life: number }} m
+   * @returns {Promise<{ ok: boolean, text: string, name?: string, minutes?: number, until?: number }>}
+   */
+  async #start({ name, who, ticket, coordinator, life }) {
+    const cfg = this.cfg;
     const now = this.now();
     const until = now + life * 60_000;
     const { container, volume } = machineNames(name);

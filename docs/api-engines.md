@@ -322,7 +322,13 @@ behind the hub's token like every route there.
   join file a VM has, by a container that lives just long enough to read it
   from standard input. So it is in no command line, where every user of
   the box could read it, and in no environment, which Podman keeps a record
-  of. The machine then starts with only the coordinator's address.
+  of. The machine then starts with only the coordinator's address. A hub
+  that stopped between those two steps leaves a volume with an unspent
+  ticket in it and no container, so each look at the machines also lists
+  the volumes and removes one that is a machine's by its name and that no
+  container has. It asks Podman without forcing, and Podman refuses a
+  volume a container has; the volume of a machine being made at that
+  moment is left alone.
 - **Extend** adds minutes to its end, as on a hypervisor, and never past
   the longest a machine lives counted from when it was made, so asking
   again and again does not keep one, and its place on the box, for ever. At
@@ -477,11 +483,11 @@ at the box's next look), the three new lines in `test/mcp.test.js` and
 For a machine on a box of your own: `test/machines.test.js` (the hub: the
 build from either shape of release, in the background and never waited
 for; the ticket into the volume from standard input, in no command line
-and no environment; the cap; the
-box's clock; more time and end; a machine that stopped by itself and how
-its log ended, with no ticket or token in what is kept; what is refused in
-words; the API with its token), `test/own-pools.test.js` (the driver over the real hub routes: off
-unless named, a place per approved person, the image offered once built,
+and no environment; the cap; the box's clock; more time and end; a volume
+a making left behind; a machine that stopped by itself and how its log
+ended, with no ticket or token in what is kept; what is refused in words;
+the API with its token), `test/own-pools.test.js` (the driver over the
+real hub routes: off unless named, a place per approved person, the image offered once built,
 the sign-in sealed to the machine's key and to no other, a stopped
 machine said on its owner's place and nobody else's, a hub that cannot be
 asked, and its place behind the one seam), `test/machine-image.test.js`

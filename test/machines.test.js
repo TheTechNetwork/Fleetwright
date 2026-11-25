@@ -153,7 +153,7 @@ test('a machine is refused in words where one cannot be made, and nothing is sta
   podman.set({ failRun: true });
   const r = await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET });
   assert.equal(r.text, `Podman did not start ${VM}: Error: crun: cannot set memory limit`);
-  assert.deepEqual(podman.calls().filter((a) => a[0] === 'rm' || a[0] === 'volume').map((a) => a.join(' ')), [`rm -f fwm-${VM}`, `volume rm -f fwm-${VM}-state`]);
+  assert.deepEqual(podman.calls().filter((a) => a[0] === 'rm' || (a[0] === 'volume' && a[1] === 'rm')).map((a) => a.join(' ')), [`rm -f fwm-${VM}`, `volume rm -f fwm-${VM}-state`]);
   assert.deepEqual(podman.state().volumes, [], 'the volume that held its ticket went with it');
   // AND REFUSING TO PREPARE IT, before any machine is started.
   podman.set({ failRun: false, failSeed: true });
@@ -373,6 +373,32 @@ test('a stopped machine whose log cannot be read, or is empty, is said as that a
   podman.set({ containers: again.containers, failLogs: false });
   const empty = await machines.list();
   assert.equal(empty.ok && empty.ended[1].text, 'This machine found vm-bbbbbbbbbbbb stopped just now and removed it with its disk. Its log was empty.');
+});
+
+test('a volume left by a making that never finished is removed at the next look, and no other volume is', async (t) => {
+  const { podman, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET });
+  const mine = machineNames(VM).volume;
+  // A HUB THAT STOPPED BETWEEN THE TWO STEPS OF A MAKING left the first:
+  // a volume with the ticket in it and no container. Beside it, a volume of
+  // somebody's own, and one whose name only looks like a machine's.
+  const left = machineNames('vm-cccccccccccc').volume;
+  podman.set({ volumes: [mine, left, 'my-own-data', 'fwm-vm-notamachine-state'] });
+  await machines.list();
+  assert.deepEqual(podman.state().volumes, [mine, 'my-own-data', 'fwm-vm-notamachine-state']);
+  // NEVER FORCED: Podman's own refusal is what keeps a running machine's volume.
+  assert.deepEqual(podman.calls().filter((a) => a[0] === 'volume' && a[1] === 'rm').map((a) => a.join(' ')), [`volume rm ${left}`]);
+  // AND NOT THE VOLUME OF A MACHINE BEING MADE THIS MOMENT, which has no
+  // container yet either: a look that fell between its two steps would
+  // have started it with an empty volume and no ticket to join with.
+  podman.set({ startMs: 400 });
+  const making = machines.make({ owner: SAM, ticket: ticket('b'.repeat(12)), coordinator: FLEET });
+  const B = machineNames('vm-bbbbbbbbbbbb').volume;
+  for (let i = 0; i < 100 && !podman.state().volumes.includes(B); i += 1) await new Promise((r) => setTimeout(r, 10));
+  await machines.list();
+  assert.equal((await making).ok, true);
+  assert.deepEqual(podman.state().volumes, [mine, 'my-own-data', 'fwm-vm-notamachine-state', B]);
+  assert.equal(podman.calls().some((a) => a[0] === 'volume' && a[1] === 'rm' && a.includes(B)), false);
 });
 
 test('a machine is its owner’s to end, and what needs a hypervisor is said', async (t) => {

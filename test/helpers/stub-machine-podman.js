@@ -87,10 +87,13 @@ const main = async () => {
       write(s);
       return done(0);
     }
+    // A START THAT TAKES A WHILE (startMs): how a test looks at the machines
+    // between the two steps of a making.
+    if (s.startMs) { await letGo(() => new Promise((r) => setTimeout(r, s.startMs))); s = read(); }
     if (s.failRun) return done(125, '', 'Error: crun: cannot set memory limit\\n');
     const labels = {};
     args.forEach((a, i) => { if (a === '--label') { const [k, ...v] = args[i + 1].split('='); labels[k] = v.join('='); } });
-    s.containers.push({ name: after('--name'), state: 'running', labels, stdin, image: args[args.length - 1] });
+    s.containers.push({ name: after('--name'), state: 'running', labels, stdin, image: args[args.length - 1], volume: after('-v').split(':')[0] });
     if (!s.volumes.includes(after('-v').split(':')[0])) s.volumes.push(after('-v').split(':')[0]);
     write(s);
     return done(0, 'c0ffee\\n');
@@ -113,7 +116,14 @@ const main = async () => {
     if (s.slowRmOnceMs) { const ms = s.slowRmOnceMs; s.slowRmOnceMs = 0; write(s); await letGo(() => new Promise((r) => setTimeout(r, ms))); s = read(); }
     s.containers = s.containers.filter((c) => c.name !== args[2]); write(s); return done(0);
   }
-  if (args[0] === 'volume' && args[1] === 'rm') { s.volumes = s.volumes.filter((v) => v !== args[3]); write(s); return done(0); }
+  if (args[0] === 'volume' && args[1] === 'ls') return done(0, s.volumes.join('\\n') + '\\n');
+  if (args[0] === 'volume' && args[1] === 'rm') {
+    // AS PODMAN DOES: one a container has is removed only when forced.
+    const volume = args[args.length - 1];
+    const held = s.containers.some((c) => c.volume === volume);
+    if (held && !args.includes('-f')) return done(2, '', 'Error: volume ' + volume + ' is being used by the following container(s): c0ffee: volume is being used\\n');
+    s.volumes = s.volumes.filter((v) => v !== volume); write(s); return done(0);
+  }
   return done(0);
 };
 main();
