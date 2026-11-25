@@ -471,7 +471,8 @@ image pins:
   uses no other app's client id.
 
 **Refused before anything is sent**, by the coordinator, where it can
-tell: no such member (`no_member`), an asker who may not act for it
+tell: no member named at all (`bad_params`, in words that say whose to
+name), no such member (`no_member`), an asker who may not act for it
 (`not_custodian`, `custody_unknown`, `not_signed_in`), a machine older than
 the verb (`host_outdated`: "update fleetwright on …"), and a machine that
 reported its engines and does not run this one (`no_engine`). The machine

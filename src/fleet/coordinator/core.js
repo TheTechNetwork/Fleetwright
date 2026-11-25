@@ -4153,6 +4153,18 @@ export class CoordinatorCore {
     // CHECKED HERE RATHER THAN IN `send` because the placement decision reads
     // `params.name`: a bad params object should be refused before a scheduler
     // makes any decision on the strength of it.
+    // WHOSE ENGINE, asked for in words where it is missing. The protocol's
+    // own refusal is `enginesignin requires "member"`, which says what is
+    // wrong with the request and not what a person does about it: engines
+    // are a member's, and somebody signing their own in names their own
+    // record (docs/engines.md, "Signing in on the machine").
+    if (spec.verb === 'enginesignin' && (spec.params?.member === undefined || spec.params?.member === null || spec.params?.member === '')) {
+      return {
+        ok: false,
+        error: { code: 'bad_params' },
+        text: 'Say whose engine this is: an engine is signed in for a member, by its id. To sign in your own, name your own member record. fleet_members lists them.',
+      };
+    }
     const shaped = checkParams(spec.verb, spec.params || {});
     if (shaped.ok === false) {
       return { ok: false, error: { code: shaped.code }, text: shaped.error };

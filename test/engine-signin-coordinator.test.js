@@ -67,6 +67,9 @@ test('no such member, somebody who may not act for it, and a fleet that cannot t
   assert.equal((await signin('ops-box', { member: 'eli' }, dana)).text, 'Only Eli, and managers Eli has let manage their credentials, can sign an engine in for them.');
   const ghost = await signin('ops-box', { member: 'ghost' });
   assert.deepEqual([ghost.error?.code, ghost.text], ['no_member', 'There is no member called ghost. fleet_members lists them.']);
+  // No member at all is nobody's engine, and the refusal says what to name.
+  const whose = await core.dispatch({ verb: 'enginesignin', params: { engine: 'codex', action: 'start' }, actor: eli.email, requester: eli, preferHost: 'ops-box' });
+  assert.deepEqual([whose.error?.code, whose.text], ['bad_params', 'Say whose engine this is: an engine is signed in for a member, by its id. To sign in your own, name your own member record. fleet_members lists them.']);
   // The break-glass token names nobody, and a sign-in is made by somebody.
   assert.equal((await core.dispatch({ verb: 'enginesignin', params: { member: 'debbie', engine: 'codex', action: 'start' }, preferHost: 'ops-box' })).error?.code, 'not_signed_in');
   assert.deepEqual(sent, []);
