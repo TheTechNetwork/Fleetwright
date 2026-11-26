@@ -233,8 +233,8 @@ jobs:
       # image is checked for the other half of the same claim: a box that
       # does not name the engines must not turn out to have them.
       #
-      # NO ENGINE IS ASKED ANYTHING and none is signed in: `--version` is the
-      # whole of it.
+      # NO ENGINE IS ASKED ANYTHING HERE and none is signed in: `--version` is
+      # the whole of this step. The two after it start them.
       - name: The engines variant has both engines, and each answers
         timeout-minutes: 15
         run: |
@@ -246,6 +246,8 @@ jobs:
             done
             codex --version
             opencode --version
+            # What Codex asks for at every start, and says so as an error when it is not there.
+            command -v bwrap >/dev/null || { echo "MISSING: bwrap"; exit 1; }
             echo "--- both engines answer ---"
           '
           docker run --rm --entrypoint sh fleetwright-session:smoke -euc '
@@ -255,6 +257,101 @@ jobs:
             done
             echo "--- the minimal image has neither ---"
           '
+
+      # THE ENGINES, STARTED, UNDER WHAT A BOX RUNS THEM UNDER. `--version` is a
+      # binary that loads. It is not the runner speaking to it, and for months
+      # nothing was: every test of the runner used a stand-in, and a sign-in
+      # that could not complete passed all of them (docs/engines.md, "What
+      # has and has not been run").
+      #
+      # ROOTLESS PODMAN, because a session and a sign-in run under it and the
+      # two questions below have different answers under docker: its seccomp
+      # profile and its user namespaces are not Podman's. The image is the
+      # one docker just built, handed over, not built twice.
+      - name: The engines image, handed to rootless Podman
+        timeout-minutes: 10
+        run: |
+          set -eu
+          command -v podman >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y podman; }
+          podman --version
+          loaded=$(docker save fleetwright-session:engines | podman load)
+          printf '%s\n' "$loaded"
+          image=$(printf '%s\n' "$loaded" | sed -n -E 's/^Loaded image(\(s\))?: //p' | head -1)
+          test -n "$image" || { echo "podman load did not say which image it loaded"; exit 1; }
+          # A name with its registry in it, so nothing is looked up anywhere.
+          podman tag "$image" localhost/fleetwright-session:engines-smoke
+          podman image exists localhost/fleetwright-session:engines-smoke
+
+      # WHAT A BOX RUNS TO SIGN AN ENGINE IN, AS IT RUNS IT: the image's own
+      # entrypoint, a volume at /engine-home, `fleetwright-engine --signin`.
+      # With no network at all, so no provider is asked anything and nobody
+      # is signed in. What is proved is everything before the provider: the
+      # runner starts the real engine on a home of its own, speaks to it,
+      # and turns what it says into the one line a box reads, and exits 0.
+      #
+      # THE LINES ARE THE ONES SEEN BY HAND with these versions and no
+      # network. Codex's is its own sentence, so only its beginning is held
+      # to; OpenCode's and the two sign outs are this repository's.
+      - name: The runner asks each real engine to sign in and out, with no network
+        timeout-minutes: 10
+        run: |
+          set -eu
+          image=localhost/fleetwright-session:engines-smoke
+          podman volume create fw-engine-smoke >/dev/null
+          ask() {
+            timeout 180 podman run --rm --network none -v fw-engine-smoke:/engine-home -e FLEETWRIGHT_ENGINE_HOME=/engine-home "$image" fleetwright-engine "$@"
+          }
+          # <what was asked> <the line it must print, as a pattern for the whole line>
+          expect() {
+            asked=$1; want=$2
+            set +e
+            out=$(ask $asked); rc=$?
+            set -e
+            printf '%s\n' "--- fleetwright-engine $asked (exit $rc)" "$out"
+            test "$rc" = 0 || { echo "fleetwright-engine $asked exited $rc: a box reads that as a container that failed"; exit 1; }
+            printf '%s\n' "$out" | grep -qxE "$want" || { echo "fleetwright-engine $asked did not print the line expected: $want"; exit 1; }
+          }
+          expect '--signin codex' '\{"engine":"codex","signin":"done","state":"failed","detail":"failed to request device code: .*"\}'
+          expect '--signin opencode' '\{"engine":"opencode","signin":"done","state":"failed","detail":"it could not ask GitHub for a code, and gave no reason\. This machine must be able to reach github\.com"\}'
+          expect '--signout codex' '\{"engine":"codex","signin":"done","state":"signed_out"\}'
+          expect '--signout opencode' '\{"engine":"opencode","signin":"done","state":"signed_out"\}'
+          # A sign-in that failed keeps nothing, and the engine was not started
+          # on the member's home: no file of either engine's is in it.
+          left=$(podman run --rm --network none -v fw-engine-smoke:/engine-home --entrypoint sh "$image" -euc 'find /engine-home -type f')
+          test -z "$left" || { echo "four failed or empty asks left files in the engine home:"; printf '%s\n' "$left"; exit 1; }
+          podman volume rm fw-engine-smoke >/dev/null
+          echo "--- both real engines were asked, and answered as the runner expects ---"
+
+      # CODEX'S OWN SANDBOX, INSIDE THE SESSION'S CONTAINER. A session that
+      # asks first starts Codex with `sandbox: workspace-write`, and Codex
+      # then runs every command inside bubblewrap. Whether bubblewrap can
+      # make its namespaces inside a rootless container was not known: no
+      # turn has been sent to a real Codex. This asks the question with no
+      # model in it: `codex sandbox` runs one command under the same policy
+      # (`codex sandbox --help` at the pinned version; there is no
+      # `debug landlock` in 0.171.0).
+      #
+      # BOTH USER NAMESPACES A BOX MAY BE SET TO (src/core/sandbox-userns.js).
+      # A failure here is a `safe` Codex session that can run nothing, and
+      # fails the job: that is the thing to know before a person finds it.
+      - name: Codex keeps its own sandbox inside the session container, with no model asked
+        timeout-minutes: 10
+        run: |
+          set -eu
+          image=localhost/fleetwright-session:engines-smoke
+          for userns in host nomap; do
+            set +e
+            out=$(timeout 120 podman run --rm --network none --userns="$userns" --entrypoint sh "$image" -euc '
+              cd /work
+              codex sandbox -c "sandbox_mode=\"workspace-write\"" -- sh -c "touch /work/sandbox-probe && echo wrote-the-workspace; touch /usr/sandbox-probe 2>/dev/null && echo WROTE-OUTSIDE-IT || echo refused-outside-it"
+            ' 2>&1); rc=$?
+            set -e
+            printf '%s\n' "--- codex sandbox, --userns=$userns (exit $rc)" "$out"
+            test "$rc" = 0 || { echo "under --userns=$userns Codex could not run a command in its sandbox: a session that asks first could run nothing on Codex"; exit 1; }
+            printf '%s\n' "$out" | grep -qx 'wrote-the-workspace' || { echo "under --userns=$userns the sandbox did not let the command write its workspace"; exit 1; }
+            printf '%s\n' "$out" | grep -qx 'refused-outside-it' || { echo "under --userns=$userns the sandbox let the command write outside its workspace"; exit 1; }
+          done
+          echo "--- Codex ran a command in its own sandbox, in both namespaces ---"
 
       # THE BUG THIS WHOLE JOB EXISTS FOR, and the shim is what makes it
       # testable without a credential. `gh` on PATH is /usr/local/bin/gh, the
