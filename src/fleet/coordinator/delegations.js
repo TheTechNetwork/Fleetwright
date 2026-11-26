@@ -30,10 +30,23 @@ export const MAX_DELEGATION_STORE_BYTES = 100_000;
 /** One that runs this long or less was signed for a moment, and gives way when a person's allowance is full. */
 export const SHORT_DELEGATION_MS = 60 * 60_000;
 
-/** @param {import('../protocol/intent-signature.js').Grant} a @param {import('../protocol/intent-signature.js').Grant} b */
+/**
+ * Do two grants cover the same thing: the same verbs, boxes, parameters and
+ * members?
+ *
+ * THE MEMBERS ARE PART OF IT. They were left out, so the grant a person made
+ * after picking a member took the place of the one that named none, and the
+ * one that named none was the only one a box from before the field could
+ * read (`cover`, below): every call to such a box then went with a grant it
+ * called badly signed. A grant with no list and one with an empty list are
+ * different grants too, because the list is in the bytes that were signed.
+ *
+ * @param {import('../protocol/intent-signature.js').Grant} a @param {import('../protocol/intent-signature.js').Grant} b
+ */
 function sameCover(a, b) {
   const key = (/** @type {import('../protocol/intent-signature.js').Grant} */ g) => JSON.stringify([
     [...g.verbs].sort(), [...g.hosts].sort(), Object.entries(g.match).sort(([x], [y]) => (x < y ? -1 : 1)),
+    g.members === undefined ? null : [...g.members].sort(),
   ]);
   return key(a) === key(b);
 }
@@ -140,15 +153,30 @@ export class Delegations {
    * runs out soonest, which is the narrowest a phone made for the moment
    * before a standing one.
    *
+   * NEVER ONE THAT NAMES MEMBERS, TO A BOX FROM BEFORE THE FIELD
+   * (`readsMembers` false). `members` is in the bytes a phone signs, and a
+   * box that has never heard of it rebuilds those bytes without it: it finds
+   * the signature does not hold, for every verb, and says the request "was
+   * changed after it was signed", which nobody did. Such a box is carried a
+   * grant with no list or none at all, and the caller says why when the only
+   * grant that covers is one it cannot read (core.js, `send`).
+   *
+   * AND FIRST ONE THAT NAMES THE MEMBER A SESSION RUNS AS (`asMember`), when
+   * the intent is about such a session: a box that takes only signed requests
+   * refuses a grant that does not name it (docs/members.md), and a person may
+   * hold one of each.
+   *
    * @param {{ actor?: string, verb: string, params?: Record<string, unknown> }} intent
    * @param {string} host
+   * @param {{ readsMembers?: boolean, asMember?: string|null }} [box]
    * @returns {Delegation|null}
    */
-  cover(intent, host) {
+  cover(intent, host, { readsMembers = true, asMember = null } = {}) {
     const who = actorEmail(intent.actor);
     if (!who) return null;
     const t = this.now();
-    return (this.byPerson.get(who) ?? []).find((d) => delegationGap(d.grant, intent, host, t) === null) ?? null;
+    const covering = (this.byPerson.get(who) ?? []).filter((d) => delegationGap(d.grant, intent, host, t) === null && (readsMembers || d.grant.members === undefined));
+    return (asMember ? covering.find((d) => (d.grant.members ?? []).includes(asMember)) : null) ?? covering[0] ?? null;
   }
 
   serialise() {

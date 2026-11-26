@@ -158,6 +158,14 @@ const TASK_PROTOCOL = 20;
  */
 const ENGINES_PROTOCOL = 21;
 /**
+ * The protocol a box must speak to read a delegation that names members
+ * (`members` on a grant, protocol/intent-signature.js). The field is in the
+ * bytes a phone signs, so a box from before it finds such a grant badly
+ * signed, whatever the grant is carried for. It came in with 22 and was not
+ * written down as a wire change then (intents.js says so now).
+ */
+const DELEGATION_MEMBERS_PROTOCOL = 22;
+/**
  * The protocol a box must speak to sign an engine in on itself
  * (`enginesignin`, intents.js, v22), to report who is signed in there and to
  * say when an attempt ends.
@@ -4068,15 +4076,40 @@ export class CoordinatorCore {
     // person signed earlier to let the fleet send exactly this kind of thing in
     // their name (delegations.js). The box checks it; carrying one that does not
     // cover the intent would only be refused there.
+    const enforcing = host?.health?.signatures?.enforcing;
     if (!intent.sig && needsSignature(intent.verb)) {
-      const covering = this.delegations.cover(intent, String(host?.hostId ?? ''));
+      const hostId = String(host?.hostId ?? '');
+      // ONE THIS BOX CAN READ (delegations.js, `cover`): a grant that names
+      // members is badly signed to a box from before the field.
+      const speaks = Number(host?.health?.protocol);
+      const readsMembers = Number.isInteger(speaks) && speaks >= DELEGATION_MEMBERS_PROTOCOL;
+      // AND, AT A SESSION THAT RUNS AS A MEMBER, ONE THAT NAMES IT WHEN THERE
+      // IS ONE. Which member a session is here is its box's word, and all it
+      // chooses is which of the person's own grants goes with the request.
+      const about = intent.verb !== 'start' && typeof intent.params?.name === 'string'
+        ? this.registry.findSessions(intent.params.name).find((c) => c.host?.hostId === hostId)
+        : null;
+      const asMember = typeof (/** @type {any} */ (about)?.member) === 'string' ? /** @type {any} */ (about).member : null;
+      const covering = this.delegations.cover(intent, hostId, { readsMembers, asMember });
       if (covering) intent = { ...intent, delegation: covering };
+      else if (!readsMembers && this.delegations.cover(intent, hostId)) {
+        // THE ONLY GRANT THAT COVERS THIS IS ONE THE BOX CANNOT READ. Said
+        // here, as a machine to update, where the box would refuse it: one
+        // that takes only signed requests, and any box for a start as a
+        // member, which is taken signed or delegated whatever the box's mode
+        // (docs/members.md). Sent, the box answered that the request "was
+        // changed after it was signed", or that nothing covered it, to a
+        // person who had just allowed exactly this on their phone. A box
+        // that takes unsigned work is sent the rest without a grant, as it
+        // takes it.
+        const asks = enforcing === true || enforcing === 'signers' || (intent.verb === 'start' && intent.params?.member !== undefined);
+        if (asks) return Promise.resolve(grantUnreadable(hostId, speaks, intent));
+      }
     }
     // `signers` (the box enforces for people it has seen a key for) is the
     // box's own to apply, from a list this side does not keep; what this side
     // can refuse first is a request with nobody named, which such a box always
     // refuses because it would run it as itself.
-    const enforcing = host?.health?.signatures?.enforcing;
     const bare = !intent.sig && !intent.delegation && needsSignature(intent.verb);
     if ((enforcing === true || (enforcing === 'signers' && !actorEmail(intent.actor))) && bare) {
       return Promise.resolve(signatureRequired(String(host.hostId), Boolean(signed), intent, spec.fromApp === true));
@@ -11162,6 +11195,26 @@ export function deviceText(r) {
   return r.error?.code === 'not_yours'
     ? 'That device is somebody else\u2019s. Removing other people\u2019s devices needs an admin credential on this fleet.'
     : 'That device was not registered.';
+}
+
+/**
+ * What a request is answered with when the one grant that covers it names
+ * members and its box is from before grants could (CoordinatorCore#send).
+ * The way on is the box's, not the person's: what they allowed is right.
+ *
+ * @param {string} hostId @param {number} speaks  NaN from a box that has not said
+ * @param {{ actor?: string, verb?: string }} intent
+ */
+function grantUnreadable(hostId, speaks, intent) {
+  return {
+    ok: false,
+    error: { code: 'host_outdated' },
+    text:
+      `${hostId} is too old to read what ${intent?.actor || 'you'} allowed for this ${intent?.verb ?? 'request'}: it speaks protocol ` +
+      `${Number.isInteger(speaks) ? speaks : 'an older version'}, and a delegation that names members needs ${DELEGATION_MEMBERS_PROTOCOL}. ` +
+      `It would answer that the delegation is badly signed, which it is not. Update ${hostId}, from its page in the app or with fleetwright-sidecar update on it, ` +
+      `or use a machine that is up to date. Nothing was sent.`,
+  };
 }
 
 /**
