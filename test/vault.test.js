@@ -3154,6 +3154,16 @@ test('an address is its first GitHub account’s for good, and changes hands onl
   assert.equal((await as(ELI, { op: 'put', name: 'secret:PROD', value: 'prod-key', for: 'debbie' })).ok, true);
   const hers = async () => JSON.stringify((await m.box(danasBox, { members: [ELI, DANA] })).answer.accounts);
   assert.match(await hers(), /danas-own/);
+  // As one of Debbie's custodians she approves her laptop for Debbie's
+  // vault, and on her own phone she takes back a delegation she had made.
+  const laptop = await generateKeyPair();
+  assert.equal((await as(DANA, { op: 'grant', hostKey: laptop.publicJwk, label: 'danas-laptop', for: 'debbie' })).ok, true);
+  const laptopPrint = (await boxKeyHash({ kty: 'EC', crv: 'P-256', x: laptop.publicJwk.x, y: laptop.publicJwk.y })).slice(0, 16);
+  const debbies = async () => JSON.stringify((await m.box(laptop, { members: [ELI, DANA], accepts: ['members'] })).answer.accounts);
+  const TAKEN_BACK = 'dlg-takenbackbydana-0001';
+  assert.equal((await as(DANA, { op: 'revokedelegation', id: TAKEN_BACK, until: Date.now() + 7 * 86_400_000 })).ok, true);
+  const revokedFor = async () => (await m.keys(danasBox, { members: [ELI, DANA] })).payload.people.find((/** @type {any} */ p) => p.email === DANA)?.revoked ?? [];
+  assert.deepEqual(await revokedFor(), [TAKEN_BACK]);
 
   // SHE LOSES HER PHONE and removes its key. The address used to be anybody's
   // from here: a coordinator vouches it for another GitHub account (Eli's
@@ -3177,6 +3187,18 @@ test('an address is its first GitHub account’s for good, and changes hands onl
   assert.equal(released.ok, true, released.text);
   assert.match(released.text, /Released dana@example\.com\. It was dana’s and is nobody’s now: its signing keys are gone.*written in the vault it may manage\. 1 machine approved under it is no longer approved/);
   assert.equal(released.changed, true, 'the boxes are told to ask again');
+  // WHAT STAYS IS SAID, BY NAME. The laptop she approved for Debbie is
+  // Debbie's approval, so it is still approved and still handed Debbie's
+  // secret. The answer used to say only that her machines stop, which an
+  // admin releasing a leaver's address read as all of them.
+  assert.match(await debbies(), /prod-key/);
+  assert.deepEqual(released.answer.machines, [{ member: 'debbie', label: 'danas-laptop', fingerprint: laptopPrint }]);
+  assert.ok(
+    released.text.endsWith(`One machine it approved for a member is still approved, because that approval is the member’s: danas-laptop (${laptopPrint}) for debbie. Remove any that should not hold that member’s credentials, from the member’s Credentials.`),
+    released.text,
+  );
+  // WHAT SHE REVOKED STAYS REVOKED while the address is nobody's.
+  assert.deepEqual(await revokedFor(), [TAKEN_BACK]);
   // Nobody's: no account, no keys for a box to take a signature with.
   assert.equal(m.rows.get(`dk:${DANA}`).github, undefined);
   assert.deepEqual((await m.keys(danasBox, { members: [ELI, DANA] })).payload.people.find((/** @type {any} */ p) => p.email === DANA)?.keys, []);
@@ -3198,6 +3220,10 @@ test('an address is its first GitHub account’s for good, and changes hands onl
   assert.equal((await as(DANA, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'x' }, another)).ok, true);
   assert.equal(m.rows.get(`dk:${DANA}`).github, '42');
   assert.doesNotMatch(await hers(), /danas-own/);
+  // AND WHEN A KEY IS LISTED UNDER IT AGAIN. The row used to be written with
+  // no revocations, and the phone that signed the delegation she took back,
+  // listed again, made it good: the signature held and no list said revoked.
+  assert.deepEqual(await revokedFor(), [TAKEN_BACK], 'a delegation its person revoked was live again after the release');
 });
 
 test('the log names what a custodian changed and not what they called it, keeps a hundred lines, and a machine says who approved it', async (t) => {

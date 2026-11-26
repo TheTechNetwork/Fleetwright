@@ -990,7 +990,7 @@ test('in a browser: a custodian opens a member’s vault from My team and keeps 
     await says(eli.signer, 'Release an address', /Type the address to release first\./);
     await eli.signer.getByLabel('The fleet address to release').fill(SAM);
     await eli.signer.keyboard.press('Enter');
-    await says(eli.signer, 'Release an address', /Release sam@example\.com\? Its signing keys go, and machines approved under it stop being given its credentials\. Whoever signs in under it next holds it/);
+    await says(eli.signer, 'Release an address', /Release sam@example\.com\? Its signing keys go, and machines approved under it stop being given its credentials\. A machine it approved for a member stays approved, and the answer names each one\. Whoever signs in under it next holds it/);
     assert.equal(m.rows.get(`dk:${SAM}`)?.github, '44', 'the first press only asks');
     const asked = await eli.signer.evaluate(() => ({
       sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth,

@@ -390,10 +390,10 @@ export async function membersForBoxes(store, listed) {
  *
  * @param {any} inside  the opened request
  * @param {{ store: Store, email: string, who: { userId: string, login: string }, at: number, fleetAdmin: boolean }} ctx
- * @returns {Promise<{ ok: true, answer?: any, text: string, empty?: string, released?: { address: string, account: string } } | { ok: false, error: { code: string }, text: string }>}
+ * @returns {Promise<{ ok: true, answer?: any, text: string, empty?: string, released?: { address: string, account: string, stays: string } } | { ok: false, error: { code: string }, text: string }>}
  *   `empty` names an agent member whose vault the caller empties; `released`
  *   an address and the account it was taken from, whose approvals under it
- *   the caller takes back
+ *   the caller takes back, and the sentence for the approvals that stay
  */
 export async function runOrgOp(inside, ctx) {
   const { store, email, who, at } = ctx;
@@ -609,8 +609,13 @@ export async function runOrgOp(inside, ctx) {
   // hands, and it is the step a coordinator that lies about who is signing
   // in used to take by itself.
   //
-  // WHAT IT LEAVES. The address is nobody's: no account, no keys, and the
-  // delegations it revoked gone with the keys that signed them. The tree is
+  // WHAT IT LEAVES. The address is nobody's: no account and no keys. THE
+  // DELEGATIONS ITS PERSON REVOKED STAY REVOKED, on the row, until each would
+  // have run out. They used to go with the keys that signed them, and a key
+  // can come back: the same phone listed under the address again, by the
+  // same person or as their new GitHub account, verified every delegation it
+  // had ever signed, the revoked ones too, and the coordinator is who holds
+  // those. The tree is
   // not changed, so whoever signs in under the address next holds what the
   // tree gives it, exactly as for an address nobody has signed in under yet
   // (docs/members.md, "What it does not stop"). That is why it is written in
@@ -637,13 +642,42 @@ export async function runOrgOp(inside, ctx) {
       const vaultId = node.kind === 'agent' ? `${MEMBER_PREFIX}${node.id}` : await accountOf(store, lower(node.email));
       if (vaultId) vaults.push(vaultId);
     }
-    await store.put(`dk:${address}`, { keys: [], released: { at, by: email } });
+    // THE MACHINES IT APPROVED FOR SOMEBODY ELSE'S VAULT, as a custodian.
+    // They are that member's approvals and not the address's, so they stay,
+    // and a release that said only "its machines stop" read as if they went:
+    // an admin releasing a leaver's address left the leaver's own box holding
+    // an agent's sign-ins and was told nothing of it. Named here, by the
+    // label and fingerprint the member's own list shows them under, for the
+    // admin to remove the ones that should go. Every member's vault is
+    // looked at, since an approval outlives the custody it was made with.
+    /** @type {Array<{ member: string, label: string, fingerprint: string }>} */
+    const machines = [];
+    for (const node of tree.values()) {
+      if (node.kind === 'person' && lower(node.email) === address) continue;
+      const vaultId = node.kind === 'agent' ? `${MEMBER_PREFIX}${node.id}` : await accountOf(store, lower(node.email));
+      const grants = vaultId ? (await store.get(`v:${vaultId}`))?.grants : null;
+      for (const [hash, grant] of Object.entries(grants && typeof grants === 'object' ? grants : {})) {
+        const g = /** @type {any} */ (grant);
+        if (g && !g.revoked && g.jwk && lower(g.by) === address) machines.push({ member: node.id, label: String(g.label || ''), fingerprint: hash.slice(0, 16) });
+      }
+    }
+    machines.sort((a, b) => (a.member + a.label < b.member + b.label ? -1 : 1));
+    const stillRevoked = (Array.isArray(row.revoked) ? row.revoked : []).filter((/** @type {any} */ r) => r && typeof r.id === 'string' && Number(r.until) >= at);
+    await store.put(`dk:${address}`, { keys: [], released: { at, by: email }, ...(stillRevoked.length ? { revoked: stillRevoked } : {}) });
     for (const vaultId of vaults) await logCustody(store, vaultId, { at, by: email, op: 'release', name: address });
     const was = String(row.login || 'a GitHub account');
+    const named = machines.slice(0, 8).map((m) => `${m.label || m.fingerprint} (${m.fingerprint}) for ${m.member}`).join(', ');
     return {
       ok: true,
-      released: { address, account: row.github },
-      answer: { address, vaults: vaults.length },
+      // `stays` is said last, after what the caller finds went (vault.js).
+      released: {
+        address,
+        account: row.github,
+        stays: machines.length
+          ? `${machines.length === 1 ? 'One machine' : `${machines.length} machines`} it approved for a member ${machines.length === 1 ? 'is' : 'are'} still approved, because ${machines.length === 1 ? 'that approval is' : 'those approvals are'} the member’s: ${named}${machines.length > 8 ? `, and ${machines.length - 8} more` : ''}. Remove any that should not hold that member’s credentials, from the member’s Credentials.`
+          : '',
+      },
+      answer: { address, vaults: vaults.length, machines },
       text: `Released ${address}. It was ${was}’s and is nobody’s now: its signing keys are gone, so machines stop taking them when they next ask. ` +
         `Whoever signs in under it next holds it, with whatever the organization gives that address` +
         `${vaults.length ? `, which is written in the ${vaults.length === 1 ? 'vault' : `${vaults.length} vaults`} it may manage` : ''}.`,

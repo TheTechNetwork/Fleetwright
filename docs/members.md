@@ -157,6 +157,19 @@ GitHub as a different account now, or an address handed on to somebody new.
   handed by the address, so otherwise the next person under it would start
   sessions on the last one's sign-ins. What the old account keeps stays in
   its own vault.
+- **A machine it approved for a member's vault stays approved.** A custodian
+  approves machines for an agent, or for a person who let them, and those
+  approvals are the member's and not the address's: releasing a leaver's
+  address does not take the leaver's own box away from an agent. The answer
+  to the release names each one, by the label and fingerprint the member's
+  list shows it under and the member it is for, and says to remove the ones
+  that should not hold that member's credentials, from the member's
+  Credentials. An admin does that; the release does not.
+- **What its person revoked stays revoked.** The delegations they took back
+  are kept with the released address until each would have run out. A key
+  can come back under the address, the same phone listed again by the same
+  person or as their new GitHub account, and it verifies everything it ever
+  signed.
 - It is written in the log of every vault the address may open, and of the
   old account's own, as `release` with the address and the admin who did it.
 - An org admin's own address is not released while it is one (`is_admin`):

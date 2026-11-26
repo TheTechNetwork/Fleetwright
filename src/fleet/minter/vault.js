@@ -619,11 +619,14 @@ export async function answerVaultDevice(ask, config) {
     // A box files what it is handed by the address, so without this whoever
     // signs in under the address next would start sessions on them.
     if (done.released) {
-      const { address, account } = done.released;
+      const { address, account, stays } = done.released;
       const machines = await withLock(`row:${account}`, () => unfileAddress(store, account, address, at));
       if (machines) {
         text += ` ${machines} machine${machines === 1 ? '' : 's'} approved under it ${machines === 1 ? 'is' : 'are'} no longer approved, and ${machines === 1 ? 'stops' : 'stop'} being given anything when ${machines === 1 ? 'it next asks' : 'they next ask'}. What that account keeps is still its own.`;
       }
+      // AND WHAT STAYS, last: the machines the address approved for a member
+      // as its custodian, which are the member's and are named (org.js).
+      if (stays) text += ` ${stays}`;
       await logCustody(store, account, { at, by: email, op: 'release', name: address });
     }
     return { ok: true, sealed: await seal({ to: reply, aad: VAULT_REPLY_AAD, payload: done.answer ?? {} }), text, ...(inside.op === 'org' ? {} : { changed: true }) };
@@ -796,7 +799,10 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       const dropped = new Set(tombstones.slice(0, Math.max(0, tombstones.length - MAX_DEVICE_TOMBSTONES)).map((k) => k.kid));
       await store.put(`${DEVICE_KEYS_PREFIX}${email}`, {
         github: who.userId, login: who.login, keys: next.filter((k) => !dropped.has(k.kid)),
-        ...(kept?.github === who.userId && Array.isArray(kept.revoked) ? { revoked: kept.revoked } : {}),
+        // WHAT WAS REVOKED STAYS REVOKED, across a release too (org.js,
+        // `releaseaddress`): the row is this account's or nobody's by here,
+        // and a key listed again verifies everything it ever signed.
+        ...(Array.isArray(kept?.revoked) ? { revoked: kept.revoked } : {}),
         ...(kept?.released ? { released: kept.released } : {}),
       });
       // THIS ACCOUNT'S FIRST KEY UNDER THIS ADDRESS, and it has a vault
