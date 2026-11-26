@@ -154,7 +154,14 @@ approval is given, the same start is sent again and goes through.
   with the same digest. A task whose title or brief was rewritten since, or
   other words on a start with no task, is another start: it is refused, in
   words that say the approval was for something else, and asks for a new
-  one. The words themselves are not kept. Whoever is asked reads the start
+  one. **A profile is approved on one machine.** A profile is a name, and
+  what it says is a file on the machine the start goes to, so the machine is
+  in the digest and in the sentence (*as ops-box holds it*); a start that
+  names a profile and needs approval names its machine, or is refused
+  (`ambiguous_host`) saying so. An approval for the name alone started that
+  name on the asker's own machine, where the file was theirs to write. **A
+  named secret is part of it too**, on any start: it is what the session may
+  fetch while it follows those words, and the sentence names it. The words themselves are not kept. Whoever is asked reads the start
   of them, after the last reason, in the list, on their phone and in the
   push. The digest is the coordinator's own check and is sent to nobody.
 - **A second ask for the same thing is the same approval**, so trying again

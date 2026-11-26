@@ -300,7 +300,34 @@ test('an approval is for what the session was to be told: a rewritten brief, or 
   const other = await g.start(sam, 'debbie', { mode: 'dangerous', task: 'rm -rf the release bucket.' });
   assert.deepEqual([other.error.code, other.approval.id], ['needs_approval', 'a2']);
   assert.match(other.text, /a1 was approved for what the session was to be told then, and this start says something else: it does not cover this\./);
+  // AND THE SECRET IT MAY FETCH while it follows them: the same words with a
+  // secret named are another start, and whoever is asked reads which.
+  const fetching = await g.start(sam, 'debbie', { mode: 'dangerous', task: 'Tidy the README.', secret: 'PROD_DEPLOY_KEY' });
+  assert.deepEqual([fetching.error.code, fetching.approval.id], ['needs_approval', 'a3']);
+  assert.match(fetching.approval.reasons[0].text, /The session is told: “Tidy the README\.” It may fetch the secret PROD_DEPLOY_KEY\.$/);
+  assert.match(fetching.text, /a1 was approved for what the session was to be told then, and this start says something else, or names another secret: it does not cover this\./);
   assert.equal((await g.start(sam, 'debbie', { mode: 'dangerous', task: 'Tidy the README.' })).ok, true);
+
+  // A PROFILE IS A NAME, and what it says is a file on the machine the start
+  // goes to. Approved by name alone, it started that name on the asker's own
+  // machine, where the file was theirs to write. So it is approved on one
+  // machine, and a start that names none is told to name it.
+  const h = fleet();
+  h.set({ dangerous: true });
+  h.core.registry.connect('sams-laptop', () => {});
+  await h.reports();
+  h.core.registry.recordHealth('sams-laptop', /** @type {any} */ (h.core.registry.get('deb132')).health);
+  const profile = (/** @type {string|undefined} */ preferHost) => /** @type {Promise<any>} */ (h.core.dispatch({ verb: 'start', params: { member: 'debbie', mode: 'dangerous', profile: 'tidy-readme' }, actor: sam.email, requester: sam, ...(preferHost ? { preferHost } : {}) }));
+  const unplaced = await profile(undefined);
+  assert.equal(unplaced.error.code, 'ambiguous_host');
+  assert.equal(unplaced.text, 'This session would not ask before it runs commands, on Debbie’s sign-ins. That needs approval, and an approval for a profile is for the machine that holds it, because the profile is that machine’s own file. Name the machine and start it again; nothing was sent.');
+  const asked = await profile('deb132');
+  assert.equal(asked.approval.reasons[0].text, 'This session would not ask before it runs commands, on Debbie’s sign-ins. The session is given the profile tidy-readme, as deb132 holds it.');
+  assert.equal(/** @type {any} */ (await h.core.answerApproval(dana, asked.approval.id, 'approve')).ok, true);
+  const elsewhere = await profile('sams-laptop');
+  assert.deepEqual([elsewhere.error.code, elsewhere.approval.id === asked.approval.id], ['needs_approval', false], 'an approval for the profile on one machine started it on another');
+  assert.equal(h.sent.length, 0);
+  assert.equal((await profile('deb132')).ok, true);
 });
 
 test('the kind of work on a task the fleet asks about is changed only by somebody who could approve it, and the change is written down', async () => {

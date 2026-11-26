@@ -4411,7 +4411,7 @@ export class CoordinatorCore {
       // manages that member (docs/budgets.md). Asked here, before a machine is
       // chosen, so the answer is about the member and not about a box.
       if (params.member !== undefined) {
-        const gate = await this.#gateStart(spec.requester, params);
+        const gate = await this.#gateStart(spec.requester, params, typeof spec.preferHost === 'string' ? spec.preferHost : '');
         if (!gate.ok) return gate;
         if (gate.approval) spec = { ...spec, approvalId: gate.approval };
       }
@@ -6208,11 +6208,17 @@ export class CoordinatorCore {
    * task whose brief has been rewritten since, lets nothing through, and the
    * refusal says that is why.
    *
+   * AND, FOR A PROFILE, FOR THE MACHINE THAT HOLDS IT, with the named secret
+   * the session may fetch on any start (startDigest). A start that names a
+   * profile and needs approval names its machine too, or it is not asked
+   * about: there is no saying what "the profile deploy" is without one.
+   *
    * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
    * @param {Record<string, any>} params  the start's, with `member` set
+   * @param {string} [host]  the machine the person named, or none
    * @returns {Promise<{ ok: true, approval?: string } | { ok: false, error: { code: string }, text: string, approval?: any }>}
    */
-  async #gateStart(requester, params) {
+  async #gateStart(requester, params, host = '') {
     const member = this.org.get(String(params.member));
     if (!member) return { ok: true };
     const task = typeof params.taskId === 'string' ? this.tasks.get(params.taskId) : null;
@@ -6236,8 +6242,16 @@ export class CoordinatorCore {
     if (!need.reasons.length) return { ok: true };
     const said = sees ? need.reasons : withoutFigures(need.reasons, name);
     const by = String(requester?.email || '').toLowerCase() || 'an admin';
-    const digest = await startDigest(params);
-    const told = toldWords(params);
+    if (typeof params.profile === 'string' && params.profile && !host) {
+      return {
+        ok: false,
+        error: { code: 'ambiguous_host' },
+        text: `${said.map((r) => r.text).join(' ')} That needs approval, and an approval for a profile is for the machine that holds it, because the profile is that machine’s own file. Name the machine and start it again; nothing was sent.`,
+      };
+    }
+    const start = { task: params.task, profile: params.profile, secret: params.secret, host };
+    const digest = await startDigest(start);
+    const told = toldWords(start);
     const about = { member: member.id, task: task?.id ?? null, kinds: need.reasons.map((r) => r.kind), by, digest };
     // GIVEN ALREADY: the start goes on, and takes the approval when it is
     // about to be sent and not before (dispatch).
@@ -6246,6 +6260,11 @@ export class CoordinatorCore {
     // GIVEN, FOR SOMETHING ELSE: said, so the person holding it is not left
     // to wonder why an approved start is asked about again.
     const other = this.budgets.givenForOtherWords(about);
+    // What else may differ, said only where this start or that approval has
+    // it: the digest says that two starts differ and not in what.
+    const fetches = Boolean(start.secret) || /It may fetch the secret /.test(other?.told ?? '');
+    const elseways = [start.profile ? 'machine' : '', fetches ? 'secret' : ''].filter(Boolean).join(' or ');
+    const elsewaysSaid = elseways ? `, or names another ${elseways}` : '';
     const { approval, fresh } = this.budgets.ask({ member: member.id, task: task?.id ?? null, reasons: need.reasons, digest, told, by });
     const own = !requester || Boolean(requester.admin) || this.org.mayManage(requester, member.id);
     const managers = this.#managersOf(member.id);
@@ -6267,7 +6286,7 @@ export class CoordinatorCore {
     return {
       ok: false,
       error: { code: 'needs_approval' },
-      text: `${said.map((r) => r.text).join(' ')}${other ? ` ${other.id} was approved for what the session was to be told then${task ? `, and ${task.id} has been changed since` : ', and this start says something else'}: it does not cover this.` : ''} ${own ? `That needs approval, which you may give yourself: ${approval.id}.` : `${who} must approve it first: ${approval.id}.`} Start it again once it is approved; nothing was sent.`,
+      text: `${said.map((r) => r.text).join(' ')}${other ? ` ${other.id} was approved for what the session was to be told then${task ? `, and ${task.id} has been changed since` : ', and this start says something else'}${elsewaysSaid}: it does not cover this.` : ''} ${own ? `That needs approval, which you may give yourself: ${approval.id}.` : `${who} must approve it first: ${approval.id}.`} Start it again once it is approved; nothing was sent.`,
       approval: { ...this.#approvalShown(approval, said), mayAnswer: own },
     };
   }

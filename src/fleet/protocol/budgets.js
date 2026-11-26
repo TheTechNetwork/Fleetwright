@@ -380,11 +380,25 @@ function note(/** @type {unknown} */ v) {
  * record's to hold. Their digest is enough to tell the same start from
  * another, and nobody can find other words that give the same one.
  *
- * @param {{ task?: unknown, profile?: unknown }} start
+ * AND THE TWO THINGS A START CARRIES THAT DECIDE WHAT ITS WORDS CAN DO.
+ * A profile is a name, and what it says is a file on the machine the start
+ * goes to: approved as "the profile tidy-readme", the same approval started
+ * that name on the asker's own machine, where the file said whatever they
+ * had written. So a profile is approved on one machine (`host`). And a
+ * named secret is what the session may fetch while it follows those words,
+ * so it is part of what was approved, on any start. A start with neither is
+ * the digest it always was, and an approval given before this still covers
+ * it.
+ *
+ * @param {{ task?: unknown, profile?: unknown, secret?: unknown, host?: unknown }} start
+ *   `host` is the machine the person named, read only beside a profile
  * @returns {Promise<string>} SHA-256, hex
  */
-export async function startDigest({ task, profile }) {
-  const said = JSON.stringify([typeof task === 'string' ? task : '', typeof profile === 'string' ? profile : '']);
+export async function startDigest({ task, profile, secret, host }) {
+  const words = [typeof task === 'string' ? task : '', typeof profile === 'string' ? profile : ''];
+  const fetches = typeof secret === 'string' ? secret : '';
+  const on = words[1] && typeof host === 'string' ? host : '';
+  const said = JSON.stringify(fetches || on ? [...words, fetches, on] : words);
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(said)));
   return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -393,13 +407,17 @@ export async function startDigest({ task, profile }) {
  * The same, as a sentence for the person asked to approve: the start of the
  * words on one line. They approve a start, and a start is what it says.
  *
- * @param {{ task?: unknown, profile?: unknown }} start
+ * @param {{ task?: unknown, profile?: unknown, secret?: unknown, host?: unknown }} start
  */
-export function toldWords({ task, profile }) {
+export function toldWords({ task, profile, secret, host }) {
   const words = typeof task === 'string' ? oneLine(task, MAX_TOLD_SHOWN + 1) : '';
-  if (words) return `The session is told: “${words.length > MAX_TOLD_SHOWN ? `${words.slice(0, MAX_TOLD_SHOWN - 1)}…` : words}”`;
-  if (typeof profile === 'string' && profile) return `The session is given the profile ${oneLine(profile, 40)}, as its machine holds it.`;
-  return 'The session is told nothing, and starts idle.';
+  // The secret by name, which is all anybody here knows of it.
+  const fetches = typeof secret === 'string' && secret ? ` It may fetch the secret ${oneLine(secret, 64)}.` : '';
+  if (words) return `The session is told: “${words.length > MAX_TOLD_SHOWN ? `${words.slice(0, MAX_TOLD_SHOWN - 1)}…` : words}”${fetches}`;
+  if (typeof profile === 'string' && profile) {
+    return `The session is given the profile ${oneLine(profile, 40)}, as ${typeof host === 'string' && host ? oneLine(host, 64) : 'its machine'} holds it.${fetches}`;
+  }
+  return `The session is told nothing, and starts idle.${fetches}`;
 }
 
 /**
@@ -504,7 +522,7 @@ export function readApproval(row) {
     task: typeof row.task === 'string' && TASK_ID_RE.test(row.task) ? row.task : null,
     reasons,
     ...(typeof row.digest === 'string' && /^[0-9a-f]{64}$/.test(row.digest) ? { digest: row.digest } : {}),
-    ...(typeof row.told === 'string' && row.told ? { told: oneLine(row.told, MAX_TOLD_SHOWN + 60) } : {}),
+    ...(typeof row.told === 'string' && row.told ? { told: oneLine(row.told, MAX_TOLD_SHOWN + 200) } : {}),
     askedBy: String(row.askedBy ?? '').slice(0, 200),
     askedAt: Number(row.askedAt) || 0,
     state: row.state,
