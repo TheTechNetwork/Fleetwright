@@ -522,6 +522,33 @@ while one waits answers with the one in flight (`already: true`) and
 starts nothing. A start that gets no code within 45 seconds is stopped and
 refused, with the engine's sentence when it gave one.
 
+**The page is the provider's own, or the code goes to nobody.** The box
+checks what the runner printed before it answers with any of it, against
+the one page each engine's code is entered at:
+
+| engine | the page | where it is from |
+|---|---|---|
+| `codex` | `https://auth.openai.com/codex/device` | what Codex builds from its own issuer (`login/src/server.rs` `DEFAULT_ISSUER`, `login/src/device_code_auth.rs`, at `rust-v0.171.0`) |
+| `opencode` | `https://github.com/login/device` | GitHub's own `verification_uri` for a device code asked of github.com, which OpenCode passes on as given |
+
+Exactly these, and nothing that only looks like them. The engine in a
+sign-in's container runs on the member's engine home, which that member's
+sessions write, and OpenCode loads settings and plugins named there: a
+plugin can answer for the sign-in. So what the container prints is not the
+machine's word until the machine has held it to something it knows. An
+attempt that names any other page is ended at once, its code is in no
+answer, no status and no file, and the start is refused (`wrong_page`)
+with what its operator looks at. The page it named is not repeated. An
+engine that moves its page is refused here until `SIGNIN_PAGES`
+(`src/core/engine-signin.js`) says the new one. A GitHub Enterprise
+deployment has another page and is not signed in this way.
+
+A first line that does not read as a page and a code at all is refused at
+once too (`unreadable_code`), in words that say which half the box could
+not read and that the fault is fleetwright's on that machine, not the
+provider's. It used to be skipped without a word, and the start then said
+45 seconds later that the engine gave no code.
+
 **`status`** says where it stands, and never more than the box knows:
 
 | `state` | what the box knows |
@@ -530,7 +557,7 @@ refused, with the engine's sentence when it gave one.
 | `waiting` | a code is out, with `url`, `code`, `expiresAt` and `expiresInMinutes` |
 | `signed_in` | the engine said the sign-in succeeded, at `at` |
 | `expired` | the 15 minutes passed with nobody approving it |
-| `failed` | the engine refused or failed; `detail` is its own sentence |
+| `failed` | the engine refused or failed, and `detail` is its own sentence; or this machine ended the attempt itself, and `detail` says why |
 | `cancelled` | somebody cancelled it |
 | `lost` | the hub restarted while a code was out, so that attempt is gone and its container was removed. Never reported as waiting |
 | `signed_out` | the engine was asked to sign out here, and did |
@@ -553,7 +580,19 @@ asked to remove its `github-copilot` entry (`DELETE /auth/github-copilot`).
 **What the box keeps** is in memory for an attempt that is waiting, and in
 `engine-signins.json` in its state directory for the rest: for each member
 and engine, how the last attempt ended, when, who is signed in and since
-when, and who asked. No token, no code and no page.
+when, who asked, and the name of the engine home it is in. No token, no
+code and no page.
+
+**A record that cannot be read, or does not read as one, is cannot tell.**
+The machine then reports no list at all (never an empty one, which would
+be it saying nobody is signed in), refuses every action with
+`state_unreadable`, and does not write over the file: its operator moves
+it aside. **A record that cannot be written** ends a start before anything
+is run (`state_unwritable`). What happens to an attempt that was already
+out is kept in memory, answered from there, and written the next time the
+machine is asked anything, so a full disk leaves nothing waiting and
+nothing wedged. A cancel, a sign out and the hub's own stop wait a bounded
+time for a container to end, and no longer.
 
 **When an attempt ends** the machine says so to the coordinator
 (`engine.signin`, with the member's id, the engine, the state and the
@@ -608,12 +647,15 @@ engine (`no_engine`, for every action); its session image is not fetched
 yet (`no_image`); Podman is missing (`no_podman`) or the member's way out
 behind an egress list could not be made (`no_egress`); the engine gave no
 code within 45 seconds (`no_code`) or the container ended before one
-(`signin_failed`); device code is off for the account (`device_code_off`);
+(`signin_failed`); what the container gave as the page and the code did
+not read as them (`unreadable_code`), or the page was not the provider's
+own (`wrong_page`); device code is off for the account (`device_code_off`);
 a sign out is under way (`busy`) or the engine would not sign out
 (`signout_failed`, which changes nothing the machine reports); the machine
 cannot read its own record (`state_unreadable`, which is cannot tell and
-is never answered as nobody signed in); its hub is older than its sidecar
-(`hub_outdated`).
+is never answered as nobody signed in) or cannot write to it
+(`state_unwritable`, with nothing begun); its hub is older than its
+sidecar (`hub_outdated`).
 
 ## What a machine reports
 
@@ -635,8 +677,9 @@ shows each entry only to somebody who may act for that member, and only
 from a machine that acts for them. It is what lets a screen say *Signed in
 on ops-box* and offer the sign-in only on a machine whose `engines` names
 the engine (C-2). **Absent is cannot tell**, never signed out: a machine
-older than protocol 22 sends no list. A sign-in pasted into the vault is
-not in it either, because no machine was told it works (C-5).
+older than protocol 22 sends no list, and so does one that cannot read
+its own record. A sign-in pasted into the vault is not in it either,
+because no machine was told it works (C-5).
 
 ### Turning them on, on a box
 

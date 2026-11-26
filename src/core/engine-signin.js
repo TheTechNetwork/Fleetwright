@@ -15,8 +15,15 @@
 //               says an attempt it cannot see is waiting.
 //   on disk     `engine-signins.json` in the state directory: for each member
 //               and engine, how the last attempt ended, who is signed in and
-//               since when, who asked, and a mark while an attempt is out.
+//               since when, who asked, a mark while an attempt is out, and
+//               the name of the volume the sign-in is in, which is what a
+//               removal finds it by.
 //               No token, no code and no page.
+//
+// A FILE THAT CANNOT BE READ, OR DOES NOT READ AS ONE, IS CANNOT TELL. It is
+// never nothing: a box that cannot say who is signed in does not say nobody
+// is. And one that cannot be written ends the attempt that needed it, in
+// words, and leaves nothing waiting on it.
 //
 // THE PAGE AND THE CODE ARE NOT SECRETS, AND THEY ARE NOBODY ELSE'S. They go
 // back in the answer to whoever asked, and into no file, no log line and
@@ -25,6 +32,13 @@
 //
 // ONE ATTEMPT A MEMBER AND ENGINE AT A TIME. A second start while one waits
 // is answered with the one in flight.
+//
+// THE PAGE IS THE PROVIDER'S OWN, OR THE CODE GOES TO NOBODY. What a person
+// is sent to open is checked here against the one page each engine's
+// sign-in is made at (SIGNIN_PAGES), whatever the runner or the engine in
+// the container said. That container reads a volume the member's sessions
+// write, so what it prints is not this box's word until this box has held it
+// to something it knows.
 //
 // NOT RUN ON A BOX. Everything here is driven in tests through a script that
 // stands in for Podman and runs the real runner (test/engine-signin-hub.test.js).
@@ -60,19 +74,63 @@ const SIGNOUT_MS = 45_000;
 /** How long a container told to stop is given before it is removed. */
 const STOP_MS = 5_000;
 
+/**
+ * The one page each engine's code is entered at, and whose it is in words.
+ *
+ * EXACTLY THESE, AND NOTHING THAT ONLY LOOKS LIKE THEM. A code typed at
+ * another page signs somebody else in, or signs this person in to something
+ * else: an attempt whose engine names another page is stopped and its code
+ * is given to nobody (#run).
+ *
+ *   codex     the page Codex builds from its own issuer:
+ *             `{issuer}/codex/device`, where the issuer is
+ *             `https://auth.openai.com` unless the app server's environment
+ *             says otherwise, which a sign-in's container never does
+ *             (codex-rs/login/src/server.rs DEFAULT_ISSUER,
+ *             login/src/device_code_auth.rs request_device_code, at
+ *             rust-v0.171.0)
+ *   opencode  GitHub's own `verification_uri` for a device code asked of
+ *             github.com, which OpenCode passes on as it was given
+ *             (packages/opencode/src/plugin/github-copilot/copilot.ts at
+ *             v1.19.6). The address is GitHub's and is not in OpenCode's
+ *             source: it is the one GitHub documents for its device flow.
+ *             A GitHub Enterprise deployment has another, and is not signed
+ *             in here (the runner asks for github.com).
+ *
+ * An engine that moves its page is refused here until this says the new one,
+ * which is the cost of the check and is said in the refusal.
+ */
+export const SIGNIN_PAGES = Object.freeze({
+  codex: Object.freeze({ page: 'https://auth.openai.com/codex/device', at: 'OpenAI' }),
+  opencode: Object.freeze({ page: 'https://github.com/login/device', at: 'GitHub' }),
+});
+
 const says = (/** @type {string} */ engine) => ENGINES[/** @type {keyof typeof ENGINES} */ (engine)]?.says ?? engine;
 /** One printable line, bounded: the runner's `detail` is the engine's own words. */
 const oneLine = (/** @type {unknown} */ v, max = 200) => (typeof v === 'string' ? v.split('\n')[0].replace(/[^\x20-\x7e]/g, '').trim().slice(0, max) : '') || null;
 const when = (/** @type {number} */ at) => `${new Date(at).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+/** Somebody else's sentence, to go inside one of ours: without the full stop it ended on, so ours does not end on two. */
+const inside = (/** @type {unknown} */ words) => String(words ?? '').replace(/[.\s]+$/, '');
+/** A promise that settles as `value` after `ms`, and the way to stop waiting on it. @param {number} ms @param {unknown} value */
+function after(ms, value) {
+  /** @type {any} */
+  let timer = null;
+  const done = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(value), ms);
+  });
+  return { done, clear: () => clearTimeout(timer) };
+}
 
 /**
  * @typedef {{ email: string|null, plan: string|null }} Who  the account, as the engine itself says
  * @typedef {{ since: number, who: Who|null, by: string|null }} SignedIn
  * @typedef {{ state: string, at: number, detail: string|null, by: string|null }} Last
- * @typedef {{ member: string, engine: string, signedIn: SignedIn|null, last: Last|null, attempt: { startedAt: number, by: string|null }|null }} Entry
- * @typedef {{ key: string, member: string, engine: string, by: string|null, box: string, startedAt: number, expiresAt: number,
- *   url: string|null, code: string|null, child: any, stopped: 'cancelled'|'lost'|null, over: boolean,
- *   first: Promise<Record<string, any>>, ended: Promise<void>, timers: any[] }} Attempt
+ * @typedef {{ member: string, engine: string, volume?: string, signedIn: SignedIn|null, last: Last|null, attempt: { startedAt: number, by: string|null }|null }} Entry
+ *   `volume` is the engine home the sign-in is in; an entry written before it was kept has none
+ * @typedef {{ key: string, member: string, engine: string, volume: string, by: string|null, box: string, startedAt: number, expiresAt: number,
+ *   url: string|null, code: string|null, child: any, stopped: 'cancelled'|'lost'|'removed'|null, over: boolean,
+ *   first: Promise<Record<string, any>>, ended: Promise<void>, end: (state: string) => void, timers: any[] }} Attempt
+ *   `end` writes down how it ended and lets go of everything it held, whatever state it is in (#run)
  */
 
 /** Who the runner says is signed in, held to an address and a plan's name. @param {any} who @returns {Who|null} */
@@ -102,6 +160,17 @@ export class EngineSignins {
     this.signingOut = new Set();
     /** The removal of each container's name that is under way, so the next one waits for it (#remove). @type {Map<string, Promise<void>>} */
     this.removing = new Map();
+    /**
+     * What happened and could not be written down, by member and engine, to
+     * be written the next time anything here is asked (#settle). Memory only:
+     * a hub that stops with one of these has lost it, and the mark the file
+     * still holds then says so (`lost`).
+     *
+     * @type {Map<string, (entry: Entry) => void>}
+     */
+    this.owed = new Map();
+    /** Whether the file has been said not to read as one. Once a process, not once a read: the state is asked for every few seconds. */
+    this.saidUnreadable = false;
   }
 
   // ── What is kept on disk ──────────────────────────────────────────────────
@@ -112,11 +181,18 @@ export class EngineSignins {
   }
 
   /**
-   * Everything kept, or NULL WHEN IT CANNOT BE READ AT ALL, which is cannot
-   * tell and never nothing: a box that cannot read what it was told must not
-   * say nobody is signed in. No file yet is nothing kept. A file that is not
-   * what this writes is nothing kept either, said once in the log: what it
-   * held is no longer known, and that is what is then reported.
+   * Everything kept, or NULL WHEN IT CANNOT BE TOLD, which is never nothing:
+   * a box that cannot read what it was told must not say nobody is signed
+   * in. No file yet is nothing kept.
+   *
+   * A FILE THAT IS NOT WHAT THIS WRITES IS CANNOT TELL TOO. It used to read
+   * as nothing kept, so a file cut short was reported as an empty list, and
+   * an empty list is this box saying nobody is signed in here: the one thing
+   * it did not know. The log line that says so was written on every read,
+   * and the state is read every few seconds; it is said once a process.
+   *
+   * Nothing here repairs such a file or writes over it (#write): what it held
+   * may be readable by a person, and is not this code's to throw away.
    *
    * @returns {Record<string, Entry>|null}
    */
@@ -132,22 +208,76 @@ export class EngineSignins {
       const signins = JSON.parse(text)?.signins;
       if (signins && typeof signins === 'object' && !Array.isArray(signins)) return signins;
     } catch { /* said below */ }
-    log.warn('engines: the record of engine sign-ins on this machine does not read as one, so nothing is known of them until one is made again');
-    return {};
+    if (!this.saidUnreadable) {
+      this.saidUnreadable = true;
+      log.warn(`engines: ${this.file} does not read as this machine’s record of engine sign-ins, so who is signed in here cannot be told and no sign-in is begun until somebody moves it aside`);
+    }
+    return null;
   }
 
-  /** One entry, changed and written. Beside the file and moved into place, so a reader never meets half of it. */
-  #write(/** @type {string} */ key, /** @type {(entry: Entry) => void} */ change) {
-    const all = this.#read() ?? {};
-    const [member, engine] = key.split('/');
-    const entry = all[key] ?? { member, engine, signedIn: null, last: null, attempt: null };
-    change(entry);
-    all[key] = entry;
+  /**
+   * Entries changed and written, all in one file. Beside the file and moved
+   * into place, so a reader never meets half of it.
+   *
+   * THROWS when the record cannot be read, or the file cannot be written.
+   * Every caller says what it does then: none may be left holding an attempt
+   * nothing will end (#run), and none writes over a record it could not read.
+   *
+   * @param {(all: Record<string, Entry>) => void} change
+   */
+  #writeAll(change) {
+    const all = this.#read();
+    if (!all) throw new Error('the record of engine sign-ins cannot be read, so it was not written over');
+    change(all);
     mkdirSync(path.dirname(this.file), { recursive: true });
     const next = `${this.file}.${process.pid}`;
     writeFileSync(next, `${JSON.stringify({ v: 1, signins: all }, null, 2)}\n`, { mode: 0o600 });
     renameSync(next, this.file);
-    return entry;
+  }
+
+  /** One entry, changed and written (#writeAll). `volume` is the engine home it is about, when the caller knows it. */
+  #write(/** @type {string} */ key, /** @type {(entry: Entry) => void} */ change, /** @type {string|null} */ volume = null) {
+    this.#writeAll((all) => {
+      const [member, engine] = key.split('/');
+      const entry = all[key] ?? { member, engine, signedIn: null, last: null, attempt: null };
+      if (volume) entry.volume = volume;
+      change(entry);
+      all[key] = entry;
+    });
+  }
+
+  /**
+   * Write an entry, or OWE IT when the file cannot be written: what happened
+   * is kept in memory and written the next time anything is asked (#settle).
+   * Never throws. For what has already happened and must not be lost to a
+   * full disk: how an attempt ended, a sign out the engine made, a sign-in a
+   * session found ended.
+   *
+   * @param {string} key @param {(entry: Entry) => void} change @param {string|null} [volume]
+   * @returns {boolean} whether it is on disk now
+   */
+  #record(key, change, volume = null) {
+    const before = this.owed.get(key);
+    const both = before ? (/** @type {Entry} */ e) => (before(e), change(e)) : change;
+    try {
+      this.#write(key, both, volume);
+      this.owed.delete(key);
+      return true;
+    } catch (e) {
+      this.owed.set(key, both);
+      log.warn(`engines: what became of the ${key.split('/')[1]} sign-in for ${key.split('/')[0]} could not be written down, and is kept in memory until it can be: ${oneLine(/** @type {Error} */ (e).message) ?? 'no reason given'}`);
+      return false;
+    }
+  }
+
+  /** Write down whatever is owed (#record), now that it may be possible. Never throws. */
+  #settle() {
+    for (const [key, change] of [...this.owed]) {
+      try {
+        this.#write(key, change);
+        this.owed.delete(key);
+      } catch { /* still not possible: asked again the next time */ }
+    }
   }
 
   // ── What is asked ─────────────────────────────────────────────────────────
@@ -207,10 +337,16 @@ export class EngineSignins {
         text: `${box} does not run ${says(engine)}, so it cannot be signed in here. Its operator adds ${says(engine)} to the session image and names it in FLEETWRIGHT_ENGINES, or the sign-in is made on a machine that runs it.`,
       };
     }
+    // What happened while the record could not be written, now that it may be (#record).
+    this.#settle();
     // WHAT THIS BOX KNOWS CANNOT BE READ: it cannot say where a sign-in
-    // stands, and it does not begin one it could not write down.
+    // stands, and it does not begin one it could not write down. That is a
+    // file it cannot open, and one that opens and is not a record.
     if (this.#read() === null) {
-      return { ok: false, error: { code: 'state_unreadable' }, member, engine, text: `${box} cannot read its own record of engine sign-ins, so it cannot say where this one stands or begin another. Whoever runs ${box} looks at its state directory.` };
+      return {
+        ok: false, error: { code: 'state_unreadable' }, member, engine,
+        text: `${box} cannot read its own record of engine sign-ins, so it cannot say where this one stands or begin another. Whoever runs ${box} looks at engine-signins.json in its state directory: moved aside, the record starts again, and a sign-in made before is not known here until it is made again.`,
+      };
     }
     const key = `${member}/${engine}`;
     if (action === 'start') return this.#start({ key, member, engine, account, volume, by, box });
@@ -229,7 +365,7 @@ export class EngineSignins {
    */
   #view(key, box, extra = {}) {
     const [member, engine] = key.split('/');
-    const entry = this.#read()?.[key] ?? null;
+    const entry = this.#entry(key);
     const signedIn = entry?.signedIn ? { since: entry.signedIn.since, who: entry.signedIn.who ?? null } : null;
     // The account, in words, and the same sentence without it (ask).
     const named = signedIn?.who?.email ? ` as ${signedIn.who.email}` : '';
@@ -254,7 +390,7 @@ export class EngineSignins {
         none: `${box} knows of no ${says(engine)} sign-in for ${member}.`,
         signed_in: `${says(engine)} is signed in for ${member} on ${box}${as}, since ${when(signedIn?.since ?? last?.at ?? 0)}.`,
         expired: `The code ran out before anybody approved it, so ${says(engine)} was not signed in for ${member} on ${box}. Start again for a new code.`,
-        failed: `${says(engine)} was not signed in for ${member} on ${box}: ${last?.detail ?? 'the engine gave no reason'}.`,
+        failed: `${says(engine)} was not signed in for ${member} on ${box}: ${inside(last?.detail ?? 'the engine gave no reason')}.`,
         cancelled: `The ${says(engine)} sign-in for ${member} on ${box} was cancelled.`,
         lost: `${box} restarted while a ${says(engine)} sign-in for ${member} was waiting, so that attempt is gone. Start again for a new code.`,
         signed_out: `${says(engine)} is signed out for ${member} on ${box}.`,
@@ -269,6 +405,24 @@ export class EngineSignins {
       signedIn, ...extra,
       text: sentence(named), quietText: sentence(''),
     };
+  }
+
+  /**
+   * One entry as it stands: what the file holds, with whatever happened
+   * since and could not be written (#record) laid over it, so an answer is
+   * true while the disk is not.
+   *
+   * @param {string} key
+   * @returns {Entry|null}
+   */
+  #entry(key) {
+    const kept = this.#read()?.[key] ?? null;
+    const owed = this.owed.get(key);
+    if (!owed) return kept;
+    const [member, engine] = key.split('/');
+    const entry = /** @type {Entry} */ (structuredClone(kept ?? { member, engine, signedIn: null, last: null, attempt: null }));
+    owed(entry);
+    return entry;
   }
 
   /** @param {string} key @param {string} box */
@@ -290,13 +444,21 @@ export class EngineSignins {
    * @param {string} key
    */
   #lostIfOrphan(key) {
-    if (this.attempts.has(key)) return;
+    // One this process held, whose ending is owed to the file (#record), is
+    // not one a restart lost: its mark is still on disk only because the
+    // ending could not be written.
+    if (this.attempts.has(key) || this.owed.has(key)) return;
     const entry = this.#read()?.[key];
     if (!entry?.attempt) return;
-    this.#write(key, (e) => {
-      e.last = { state: 'lost', at: this.now(), detail: null, by: e.attempt?.by ?? null };
-      e.attempt = null;
-    });
+    try {
+      this.#write(key, (e) => {
+        e.last = { state: 'lost', at: this.now(), detail: null, by: e.attempt?.by ?? null };
+        e.attempt = null;
+      });
+    } catch {
+      // Not written, so not said: it is found again the next time anybody asks.
+      return;
+    }
     log.warn(`engines: the ${entry.engine} sign-in that was waiting for ${entry.member} did not outlive a restart of this hub, and is recorded as lost`);
     void this.#remove(containerFor(entry.member, entry.engine));
   }
@@ -383,9 +545,9 @@ export class EngineSignins {
     const startedAt = this.now();
     /** @type {Attempt} */
     const attempt = {
-      key: a.key, member: a.member, engine: a.engine, by: a.by, box: a.box, startedAt, expiresAt: startedAt + this.capMs,
+      key: a.key, member: a.member, engine: a.engine, volume: a.volume, by: a.by, box: a.box, startedAt, expiresAt: startedAt + this.capMs,
       url: null, code: null, child: null, stopped: null, over: false,
-      first: /** @type {any} */ (null), ended: /** @type {any} */ (null), timers: [],
+      first: /** @type {any} */ (null), ended: /** @type {any} */ (null), end: () => {}, timers: [],
     };
     // In the map before anything is awaited, so a second start arriving now finds it.
     this.attempts.set(a.key, attempt);
@@ -407,18 +569,34 @@ export class EngineSignins {
     attempt.ended = new Promise((resolve) => {
       finished = resolve;
     });
-    /** How it ended, written down once, and the attempt forgotten. @param {string} state @param {{ detail?: string|null, who?: Who|null }} [said] */
+    /**
+     * How it ended, written down once, and the attempt forgotten.
+     *
+     * NEVER THROWS, AND ALWAYS LETS GO. The write was not guarded, so a disk
+     * that was full when an attempt ended left its container running and
+     * `ended` unsettled, and everything that waits on that (a cancel, a sign
+     * out, this hub stopping) waited for ever. What happened is now kept in
+     * memory until it can be written (#record), and the rest runs whatever
+     * became of the write.
+     *
+     * `removed` is whoever it was for being forgotten here: its entry is
+     * dropped by what removes it, so nothing is written of how it ended.
+     *
+     * @param {string} state @param {{ detail?: string|null, who?: Who|null }} [said]
+     */
     const end = (state, said = {}) => {
       if (attempt.over) return;
       attempt.over = true;
       for (const t of attempt.timers) clearTimeout(t);
       if (this.attempts.get(a.key) === attempt) this.attempts.delete(a.key);
       const at = this.now();
-      this.#write(a.key, (e) => {
-        e.last = { state, at, detail: state === 'failed' ? (said.detail ?? null) : null, by: a.by };
-        e.attempt = null;
-        if (state === 'signed_in') e.signedIn = { since: at, who: said.who ?? null, by: a.by };
-      });
+      if (state !== 'removed') {
+        this.#record(a.key, (e) => {
+          e.last = { state, at, detail: state === 'failed' ? (said.detail ?? null) : null, by: a.by };
+          e.attempt = null;
+          if (state === 'signed_in') e.signedIn = { since: at, who: said.who ?? null, by: a.by };
+        }, a.volume);
+      }
       // A member, an engine and a state: nothing the engine said.
       log.info(`engines: ${a.engine} sign-in for ${a.member}, asked by ${a.by ?? 'nobody named'}: ${state}`);
       try {
@@ -427,25 +605,45 @@ export class EngineSignins {
       void this.#remove(containerFor(a.member, a.engine));
       finished();
     };
+    attempt.end = end;
     const refusal = (/** @type {string} */ code, /** @type {string} */ text, /** @type {Record<string, any>} */ extra = {}) => ({ ok: false, error: { code }, member: a.member, engine: a.engine, ...extra, text });
     /** A refusal in the words of where the sign-in now stands, said both ways as a view is (#view). @param {string} code @param {Record<string, any>} view @param {string} [more] @param {Record<string, any>} [extra] */
     const refused = (code, view, more = '', extra = {}) => ({ ...refusal(code, `${view.text}${more}`, { state: 'failed', ...extra }), quietText: `${view.quietText}${more}` });
+    /** Nothing was run, so nothing ended: the attempt is let go of, and the last attempt's word stands. */
+    const neverBegan = () => {
+      attempt.over = true;
+      if (this.attempts.get(a.key) === attempt) this.attempts.delete(a.key);
+      finished();
+    };
 
     const ready = await this.#ready(a, a.box);
+    // GIVEN UP ON WHILE THAT WAS ASKED (#stop, which does not wait for ever):
+    // it is written down as over already, and must not go on to run.
+    if (attempt.over) return this.#view(a.key, a.box);
     if (!ready.ok) {
-      // Nothing was run, so nothing ended: the last attempt's word stands.
-      attempt.over = true;
-      this.attempts.delete(a.key);
-      finished();
+      neverBegan();
       return ready;
     }
     // A MARK THAT AN ATTEMPT IS OUT, so a hub that restarts under it knows
     // one was, and says it is gone (#lostIfOrphan).
-    this.#write(a.key, (e) => {
-      e.attempt = { startedAt: attempt.startedAt, by: a.by };
-    });
+    //
+    // NOT WRITTEN IS NOT BEGUN. This write was not guarded either, and it is
+    // made with the attempt already in the map: a disk that was full for one
+    // moment left an attempt there that nothing would ever end, and every
+    // start and status for that member and engine failed until the hub was
+    // restarted, long after the disk was fine.
+    try {
+      this.#write(a.key, (e) => {
+        e.attempt = { startedAt: attempt.startedAt, by: a.by };
+      }, a.volume);
+    } catch (e) {
+      neverBegan();
+      log.warn(`engines: ${a.engine} sign-in for ${a.member} was not begun, because this machine could not write down that one was: ${oneLine(/** @type {Error} */ (e).message) ?? 'no reason given'}`);
+      return refusal('state_unwritable', `${a.box} could not write to its own record of engine sign-ins (${oneLine(/** @type {any} */ (e)?.code, 20) ?? 'no reason given'}), so it began no ${says(a.engine)} sign-in for ${a.member} and nothing is waiting. Whoever runs ${a.box} looks at its state directory and the room on its disk. Then start again.`);
+    }
     // Whatever an attempt this hub lost track of left under the name.
     await this.#remove(containerFor(a.member, a.engine));
+    if (attempt.over) return this.#view(a.key, a.box);
     if (attempt.stopped) {
       end(attempt.stopped);
       return this.#view(a.key, a.box);
@@ -502,7 +700,43 @@ export class EngineSignins {
           if (said.signin === 'code' && !attempt.code) {
             const url = oneLine(said.url, 300);
             const code = oneLine(said.code, 40);
-            if (!url || !/^https:\/\/[^\s]+$/.test(url) || !code || !/^[A-Za-z0-9-]{4,40}$/.test(code)) continue;
+            const own = SIGNIN_PAGES[/** @type {keyof typeof SIGNIN_PAGES} */ (a.engine)];
+            // A FIRST LINE THAT IS NOT A PAGE AND A CODE ENDS THE ATTEMPT, IN
+            // WORDS. It was skipped without a word, and the start then waited
+            // out its 45 seconds and said the engine gave no code. The engine
+            // had: the runner took a piece of the page for a secret and cut
+            // it out, on every machine whose engine home already held a Codex
+            // sign-in, so nobody there could be signed in a second time and
+            // the refusal sent them to look at the wrong thing. What this box
+            // could not read is its own fault or its runner's, and it says
+            // which half it could not read. Neither half is repeated: what
+            // was given is not known to be anybody's page.
+            const unread = !url || !/^https:\/\/[^\s]+$/.test(url)
+              ? 'what it was given as the page does not begin https://'
+              : !code || !/^[A-Za-z0-9-]{4,40}$/.test(code)
+                ? 'what it was given as the code is not letters, digits and hyphens'
+                : null;
+            if (unread) {
+              log.warn(`engines: ${a.engine} sign-in for ${a.member}: the runner’s first line did not read as a page and a code (${unread}), so the attempt was ended`);
+              end('failed', { detail: `${a.box} could not read the page and the code ${says(a.engine)} gave it (${unread})` });
+              answer(refused('unreadable_code', this.#view(a.key, a.box), ` Nothing is waiting. That is a fault in fleetwright on ${a.box} and not at ${own.at}: update fleetwright on ${a.box} and start again, or paste a sign-in instead.`));
+              continue;
+            }
+            // THE PAGE IS THE PROVIDER'S OWN, OR THE CODE GOES TO NOBODY
+            // (SIGNIN_PAGES). Any https page was passed on as this machine's
+            // word, signed by the sidecar and opened from a phone. The engine
+            // that names the page runs on the member's engine home, which
+            // that member's sessions write; OpenCode loads settings and
+            // plugins named there, and a plugin can answer for the sign-in.
+            // So a session could choose the page and the code a custodian was
+            // sent, under this box's name. The attempt is ended before
+            // anybody is answered with either.
+            if (url !== own.page) {
+              log.warn(`engines: ${a.engine} sign-in for ${a.member}: the page it named is not ${own.at}’s own, so the attempt was ended and its code given to nobody`);
+              end('failed', { detail: `its sign-in named a page that is not ${own.at}’s own, so ${a.box} stopped it and gave nobody the code` });
+              answer(refused('wrong_page', this.#view(a.key, a.box), ` Nothing is waiting. Whoever runs ${a.box} looks at what its session image runs as ${says(a.engine)} and at what is in ${a.member}’s engine home there (${a.volume}), before anybody starts again.`));
+              continue;
+            }
             attempt.url = url;
             attempt.code = code;
             complaint = '';
@@ -520,7 +754,7 @@ export class EngineSignins {
               answer(view.state !== 'failed'
                 ? view
                 : off
-                  ? refusal('device_code_off', `${says(a.engine)} says device code sign-in is not turned on for this account or its workspace, in its words: ${view.detail}. Turn it on there, or paste a sign-in instead.`, { state: 'failed', detail: view.detail })
+                  ? refusal('device_code_off', `${says(a.engine)} says device code sign-in is not turned on for this account or its workspace, in its words: ${inside(view.detail)}. Turn it on there, or paste a sign-in instead.`, { state: 'failed', detail: view.detail })
                   : refused('signin_failed', view, '', { detail: view.detail }));
             }
           }
@@ -557,7 +791,15 @@ export class EngineSignins {
    * Stop an attempt that is out, and wait until it is written down as over:
    * as cancelled when somebody asked, as lost when it is this hub going away.
    *
-   * @param {Attempt} live @param {'cancelled'|'lost'} [as]
+   * IT DOES NOT WAIT FOR EVER. After the removal it waited on the attempt
+   * with no bound, and an attempt that had not yet run anything (still
+   * asking for its way out), or whose process never reported its end, held a
+   * cancel, a sign out and this hub's own stop open for good: systemd then
+   * killed a hub that could not exit. Nothing runs under the name once it is
+   * removed, so an attempt that has not ended a little after that is ended
+   * here, by what ends one (#run, `end`).
+   *
+   * @param {Attempt} live @param {'cancelled'|'lost'|'removed'} [as]
    */
   async #stop(live, as = 'cancelled') {
     live.stopped = live.stopped ?? as;
@@ -567,28 +809,27 @@ export class EngineSignins {
     try {
       live.child?.kill?.('SIGTERM');
     } catch { /* gone already */ }
-    /** @type {any} */
-    let timer = null;
-    const gone = await Promise.race([live.ended.then(() => true), new Promise((resolve) => {
-      timer = setTimeout(() => resolve(false), this.stopMs);
-    })]);
-    clearTimeout(timer);
+    const soon = after(this.stopMs, false);
+    const gone = await Promise.race([live.ended.then(() => true), soon.done]);
+    soon.clear();
     // REMOVED BY NAME EITHER WAY, and waited for, so that when this answers
     // nothing is running under the name: a container that said it stopped and
     // one that said nothing are both gone.
     await this.#remove(containerFor(live.member, live.engine));
-    if (!gone) {
-      try {
-        live.child?.kill?.('SIGKILL');
-      } catch { /* gone already */ }
-      await live.ended;
-    }
+    if (gone) return;
+    try {
+      live.child?.kill?.('SIGKILL');
+    } catch { /* gone already */ }
+    const last = after(this.stopMs, false);
+    const ended = await Promise.race([live.ended.then(() => true), last.done]);
+    last.clear();
+    if (!ended) live.end(live.stopped);
   }
 
   /** @param {{ key: string, member: string, engine: string, account: string, volume: string, by: string|null, box: string }} a */
   async #signout(a) {
     const refusal = (/** @type {string} */ code, /** @type {string} */ text) => ({ ok: false, error: { code }, member: a.member, engine: a.engine, text });
-    if (this.signingOut.has(a.key)) return refusal('busy', `${says(a.engine)} is already being signed out for ${a.member} on ${a.box}.`);
+    if (this.signingOut.has(a.key)) return refusal('busy', `${says(a.engine)} is already being signed out for ${a.member} on ${a.box}, so this asked for nothing more. Ask where it stands in a moment.`);
     this.signingOut.add(a.key);
     try {
       const live = this.attempts.get(a.key);
@@ -611,11 +852,13 @@ export class EngineSignins {
         return refusal('signout_failed', `${says(a.engine)} was not signed out for ${a.member} on ${a.box}: ${oneLine(said?.detail) ?? `the container that asks it ended with no answer (exit ${ran.status})`}. What ${a.box} knows of the sign-in is unchanged.`);
       }
       const at = this.now();
-      this.#write(a.key, (e) => {
+      // The engine has signed out whether or not this can be written: kept
+      // in memory until it can (#record), and the answer below is true either way.
+      this.#record(a.key, (e) => {
         e.signedIn = null;
         e.attempt = null;
         e.last = { state: 'signed_out', at, detail: null, by: a.by };
-      });
+      }, a.volume);
       log.info(`engines: ${a.engine} signed out for ${a.member}, asked by ${a.by ?? 'nobody named'}`);
       return this.#view(a.key, a.box);
     } finally {
@@ -635,10 +878,13 @@ export class EngineSignins {
    */
   ended(member, engine) {
     const key = `${String(member ?? '')}/${String(engine ?? '')}`;
-    if (!this.#read()?.[key]?.signedIn) return false;
-    this.#write(key, (e) => {
+    if (!this.#entry(key)?.signedIn) return false;
+    // Never thrown into the session's event that told it (sessions.js): a
+    // record that cannot be written is owed, not a reason to drop the event.
+    const at = this.now();
+    this.#record(key, (e) => {
       e.signedIn = null;
-      e.last = { state: 'ended', at: this.now(), detail: null, by: null };
+      e.last = { state: 'ended', at, detail: null, by: null };
     });
     log.info(`engines: a session found ${key.split('/')[1]} no longer signed in for ${key.split('/')[0]}`);
     return true;
@@ -650,15 +896,19 @@ export class EngineSignins {
    * signed in. Member ids, engine names, states and times. No account, no
    * code, no page and nothing an engine said.
    *
-   * NULL WHEN IT CANNOT TELL: a record this hub cannot read is not an empty
-   * one, and the frame a sidecar builds from this then carries no list.
+   * NULL WHEN IT CANNOT TELL: a record this hub cannot read, or one that does
+   * not read as a record, is not an empty one, and the frame a sidecar builds
+   * from this then carries no list.
    *
    * @returns {Array<{ member: string, engine: string, state: string|null, at: number|null, since: number|null }>|null}
    */
   report() {
+    this.#settle();
     const kept = this.#read();
     if (!kept) return null;
-    return Object.values(kept)
+    // What is on disk, and what happened since that could not be put there.
+    return [...new Set([...Object.keys(kept), ...this.owed.keys()])]
+      .map((key) => /** @type {Entry} */ (this.#entry(key)))
       .filter((e) => e && MEMBER_ID_RE.test(String(e.member)) && SIGNIN_ENGINES.includes(String(e.engine)))
       .map((e) => ({ member: e.member, engine: e.engine, state: e.last?.state ?? null, at: e.last?.at ?? null, since: e.signedIn?.since ?? null }));
   }
