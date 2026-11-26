@@ -262,7 +262,7 @@ export const LIMIT_WORDS = /rate.?limit|usage.?limit|quota|too many requests|\b4
  * The last two are Codex's own for a sign-in it could not renew (the
  * runner's copy quotes where from).
  */
-export const AUTH_WORDS = /not (?:logged|signed) in|unauthori[sz]ed|authentication|\b401\b|invalid (?:api key|token|credentials)|(?:token|credentials|session) (?:has |have )?expired|log ?in required|please (?:log|sign) in|access token could not be refreshed|log out and sign in again/i;
+export const AUTH_WORDS = /not (?:logged|signed) in|unauthori[sz]ed|authentication|\b401\b|invalid (?:api key|token|credentials)|(?:token|credentials|session) (?:has |have )?expired|log ?in required|please (?:log|sign) in|access token could not be refreshed|log out and sign in again|user not found|bad credentials|no (?:cookie )?auth credentials/i;
 
 /**
  * Claude Code's own names for why a turn failed, as reasons: the `error`

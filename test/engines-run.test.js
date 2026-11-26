@@ -369,10 +369,38 @@ test('ACP: a provider out of money is a limit, in each provider’s own words, a
   // hand nothing on.
   assert.equal(await reason(openCodeFailed('Invalid API key')), 'auth');
   assert.equal(await reason(openCodeFailed('Provider is overloaded')), 'error');
-  assert.equal(await reason(openCodeFailed('User not found.')), 'error');
   // The error's name, where OpenCode gives one that says more than the words.
   assert.equal(await reason(openCodeFailed('prompt is too long', 'ContextOverflowError')), 'cut');
   assert.equal(await reason({ error: { code: -32000, message: 'provider authentication required', data: { providerId: 'openrouter' } } }), 'auth');
+});
+
+test('ACP: a key or a token its provider no longer knows is the sign-in, in each provider’s own words, as OpenCode passes them on', async () => {
+  const session = { configOptions: modelOption(ASKED) };
+  const reason = async (/** @type {string} */ words) => {
+    const { adapter } = acpOn(acpServer({ session, prompt: (send, m) => send({ jsonrpc: '2.0', id: m.id, ...openCodeFailed(words) }) }));
+    await adapter.open();
+    return (await adapter.turn('go')).reason;
+  };
+  // OPENCODE PASSES ON THE PROVIDER'S SENTENCE AND NOTHING ELSE of a failed
+  // prompt, so a 401 arrives with no number in it. The limit's words were
+  // widened and these were not: a key deleted at OpenRouter read as an
+  // `error`, the member's next engine was never started, and the person was
+  // told "User not found." about a session.
+  for (const words of [
+    // OpenRouter, for a key that was deleted or disabled, in its two wordings
+    // (its authentication page, "Troubleshooting 401 errors"), and for a
+    // request that reached it with no key at all, in its two.
+    'User not found.',
+    'Invalid API key',
+    'No cookie auth credentials found',
+    'No auth credentials found',
+    'Missing Authentication header',
+    // GitHub, for a token it no longer knows, which is what a Copilot sign-in is.
+    'Bad credentials',
+    'Unauthorized',
+  ]) assert.equal(await reason(words), 'auth', words);
+  // WHAT IS NOT ONE: something else that was not found, and a key named in passing.
+  for (const words of ['File not found: src/user.js', 'Model not found', 'The credentials file was read']) assert.equal(await reason(words), 'error', words);
 });
 
 test('ACP: a permission request is answered with the agent’s own option, to reject in a session that asks first and to allow in one that does not', async () => {
@@ -478,6 +506,24 @@ test('the runner starts no engine without a sign-in, says so in the pane, and re
   // The machine's words, and then where a sign-in is made: on a machine, from the member's Credentials.
   assert.deepEqual(posts.at(-1)?.body.turn, { engine: 'codex', reason: 'auth', detail: "this machine holds no codex sign-in for this member. To sign it in: this member's Credentials in the Fleetwright app, Sign in on a machine.", model: null, usage: null, resetsAt: null });
   assert.match(out.join(''), /\[fleetwright\] codex did not start a turn: auth \(this machine holds no codex sign-in for this member\)\./);
+});
+
+test('Codex’s own sentence for an ended sign-in is said in whole sentences before where to sign in again, never cut inside a word', async (t) => {
+  const ADVICE = "To sign it in: this member's Credentials in the Fleetwright app, Sign in on a machine.";
+  // A turn's detail is 200 characters, and the advice is the part that must
+  // fit. Codex's sentence was cut at a fixed length to make room, which for
+  // three of its five fell inside a word: "...Please log out and sig. To
+  // sign it in: ...". What does not fit now goes a whole sentence at a time.
+  for (const [said, kept] of [
+    [COULD_NOT_RENEW[0], 'Your access token could not be refreshed because your refresh token has expired.'],
+    [COULD_NOT_RENEW[1], 'Your access token could not be refreshed because your refresh token was already used.'],
+    [COULD_NOT_RENEW[3], 'Your access token could not be refreshed. Please log out and sign in again.'],
+    [COULD_NOT_RENEW[4], 'Your access token could not be refreshed because you have since logged out or signed in to another account.'],
+  ]) {
+    const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: codexSignIn({ refresh: 'rt-0123456789abcdef', lastRefresh: '2026-11-24T10:00:00Z' }) }));
+    await run({ engine: 'codex', model: 'gpt-5.1-codex', mode: 'safe', prompt: 'Go.' }, { socket, home, cwd: '/work', env: {}, out: () => {}, stdin: typed(), spawnEngine: () => codexRefusing(said).child });
+    assert.equal(posts.at(-1)?.body.turn.detail, `${kept} ${ADVICE}`, said);
+  }
 });
 
 test('a line typed in the pane is the next turn, on the same thread, and an idle start asks nothing', async (t) => {

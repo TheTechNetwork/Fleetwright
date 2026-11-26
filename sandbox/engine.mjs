@@ -83,8 +83,16 @@ export const LIMIT_WORDS = /rate.?limit|usage.?limit|quota|too many requests|\b4
  * as an `error`, so nothing was handed on, the box went on saying the
  * engine was signed in, and nobody was told to sign it in again. "Already
  * used" is what a sign-in becomes when a second copy of it renews.
+ *
+ * AND A PROVIDER'S, FOR A KEY OR A TOKEN IT NO LONGER KNOWS. OpenCode passes
+ * on the provider's sentence for a failed prompt and nothing else, so a 401
+ * arrives with no number in it. OpenRouter says "User not found." of a key
+ * that was deleted or disabled, and "No cookie auth credentials found" of a
+ * request with none (https://openrouter.ai/docs/api_reference/authentication,
+ * "Troubleshooting 401 errors"); GitHub says "Bad credentials" of a token,
+ * which is what a Copilot sign-in is. Each read as an `error`.
  */
-export const AUTH_WORDS = /not (?:logged|signed) in|unauthori[sz]ed|authentication|\b401\b|invalid (?:api key|token|credentials)|(?:token|credentials|session) (?:has |have )?expired|log ?in required|please (?:log|sign) in|access token could not be refreshed|log out and sign in again/i;
+export const AUTH_WORDS = /not (?:logged|signed) in|unauthori[sz]ed|authentication|\b401\b|invalid (?:api key|token|credentials)|(?:token|credentials|session) (?:has |have )?expired|log ?in required|please (?:log|sign) in|access token could not be refreshed|log out and sign in again|user not found|bad credentials|no (?:cookie )?auth credentials/i;
 
 /** What each engine is started with, and the vault item it runs on. */
 export const RUNS = Object.freeze({
@@ -974,6 +982,34 @@ export function askFirst(engine, mode, dir) {
  */
 export const SIGN_IN_AGAIN = "To sign it in: this member's Credentials in the Fleetwright app, Sign in on a machine.";
 
+/** How much of a turn's detail is kept: what `line` keeps unless told. */
+const DETAIL_MAX = 200;
+
+/**
+ * As much of an engine's own words as fits in `room`, ended where a
+ * sentence ends, with no full stop after it.
+ *
+ * NEVER CUT INSIDE A WORD. These words go before where to sign in again, in
+ * a detail of 200 characters, and were cut at a fixed length to leave room:
+ * Codex's "…was already used. Please log out and sign in again." became
+ * "…Please log out and sig. To sign it in: …". What does not fit goes a
+ * whole sentence at a time, and where the first sentence alone is too long,
+ * a whole word at a time.
+ *
+ * @param {string} said @param {number} room
+ */
+export function wholeSentences(said, room) {
+  const all = said.trim();
+  const bare = (/** @type {string} */ text) => text.replace(/[.\s]+$/, '');
+  if (all.length <= room) return bare(all);
+  const cut = all.slice(0, room + 1);
+  // The last place inside the room where a sentence ends and another begins.
+  const ends = [...cut.matchAll(/[.!?](?=\s)/g)].map((m) => Number(m.index));
+  if (ends.length) return bare(cut.slice(0, ends[ends.length - 1]));
+  const space = cut.lastIndexOf(' ');
+  return bare(space > 0 ? cut.slice(0, space) : cut.slice(0, room));
+}
+
 /** `--engine codex --model gpt --mode safe -- <prompt>`, as an object. The prompt is the last argument, whole. */
 export function parseArgs(argv) {
   const out = { engine: '', model: null, mode: 'safe', prompt: '' };
@@ -1016,7 +1052,7 @@ export async function run(args, io = {}) {
   // own words first, cut to leave room for it. Not for an engine on a key:
   // a key is kept or turned on, and nothing signs it in.
   const report = (/** @type {any} */ turn) => {
-    const told = turn.reason === 'auth' && !providerOf(args.engine, args.model) ? { ...turn, detail: line(`${turn.detail ? `${String(turn.detail).slice(0, 108).replace(/[.\s]+$/, '')}. ` : ''}${SIGN_IN_AGAIN}`) } : turn;
+    const told = turn.reason === 'auth' && !providerOf(args.engine, args.model) ? { ...turn, detail: line(`${turn.detail ? `${wholeSentences(String(turn.detail), DETAIL_MAX - SIGN_IN_AGAIN.length - 2)}. ` : ''}${SIGN_IN_AGAIN}`) } : turn;
     return post(socket, '/internal/session-event', { event: 'TurnEnded', detail: told.reason, turn: told });
   };
   const spec = RUNS[args.engine];

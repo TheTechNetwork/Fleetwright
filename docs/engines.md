@@ -131,12 +131,22 @@ TurnEnded { engine, reason, detail, model, usage, resetsAt }
 |---|---|---|---|---|
 | `done` | the turn ended | the `Stop` hook | `turn/completed`, status `completed` | `stopReason: end_turn` |
 | `limit` | the account's limit, or its money | `StopFailure` with `rate_limit` or `billing_error` | `usageLimitExceeded`, or a failed turn while a rate-limit window stands at 100% | an error naming a rate limit, a quota, or credits that ran out |
-| `auth` | not signed in, or the sign-in ended | `StopFailure` with `authentication_failed`, `oauth_org_not_allowed`, `account_on_hold` or `cloud_credential_error` | `account/read` with no account, or `unauthorized` | error `-32000`, Authentication required |
+| `auth` | not signed in, or the sign-in ended | `StopFailure` with `authentication_failed`, `oauth_org_not_allowed`, `account_on_hold` or `cloud_credential_error` | `account/read` with no account, or `unauthorized` | error `-32000`, Authentication required, or an error whose words say the provider does not know the key or the token |
 | `model` | not the model that was asked for | `StopFailure` with `model_not_found` | `thread/start` answers another model, `model/rerouted`, `modelNotFound` | the session reports another model, or none, or the agent says it has no such model |
 | `refused` | the provider declined the work | | a policy error | `stopReason: refusal` |
 | `cut` | the turn ran out of room | `StopFailure` with `max_output_tokens` | `contextWindowExceeded` | `max_tokens`, `max_turn_requests`, a context that overflowed |
 | `cancelled` | somebody stopped it | | status `interrupted` | `stopReason: cancelled` |
 | `error` | anything else, with the engine's first line as `detail` | `StopFailure` otherwise | status `failed` otherwise | any other error |
+
+**A key or a token the provider no longer knows is the sign-in.** OpenCode
+passes on its provider's sentence for a failed prompt and nothing else, so a
+401 arrives as words. OpenRouter's for a key that was deleted or disabled
+("User not found.", "Invalid API key"), its two for a request with no key,
+and GitHub's for a token it no longer knows ("Bad credentials"), which is
+what a Copilot sign-in is, are each read as `auth`, and the member's next
+engine takes over. Codex's own sentence for a sign-in it could not renew is
+said before where to sign in again, in whole sentences: what does not fit
+in a turn's detail is left off a sentence at a time, never inside a word.
 
 **Running out of money is a limit.** A metered key does not usually stop at a
 rate limit, it stops when its credits are gone: OpenRouter answers 402, "Your
@@ -1164,8 +1174,9 @@ the engines this machine does not run.
   the session that finds it ended is what marks it, and the machine's
   `engine.signin` reaches the custodians' phones.
 - **Limit detection for an ACP agent reads the error's words**, because the
-  protocol has no field for it. A limit worded in a way nobody has seen is an
-  `error`, and hands nothing on. Claude Code names the error in its
+  protocol has no field for it, and so does a key or a token its provider
+  refuses. One worded in a way nobody has seen is an `error`, and hands
+  nothing on. Claude Code names the error in its
   `StopFailure` hook (`rate_limit`, `billing_error` and the rest) and is read
   by that name; its words are read only where a version sends no name.
 
