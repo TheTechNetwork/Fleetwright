@@ -133,6 +133,9 @@ function reasonsAfter(list) {
 /** How many sign-ins one frame carries. A fleet has at most 200 members, and each has two such engines. */
 const SIGNINS_MAX = 400;
 
+/** The protocol a coordinator speaks once it shows each person only the sign-ins they may see (core.js, signinsSeenBy). */
+const ENGINE_SIGNINS_SINCE = 22;
+
 /**
  * Which members are signed in to which engine on this box, out of what its
  * hub says of every sign-in it knows: only the ones signed in now, each as
@@ -206,7 +209,7 @@ export function factsFrom(state) {
 // mutating intent carries an idempotency key and its result is remembered.
 export const REPLAY_TTL_MS = 10 * 60_000;
 const REPLAY_MAX = 512;
-/** What is remembered of a reply that carried an engine sign-in's page and code: that its id was answered, and nothing of it (handle). */
+/** What is remembered of an engine sign-in's reply, whatever it said: that its id was answered, and nothing of it (handle). */
 const CODE_NOT_KEPT = Object.freeze({ codeNotKept: true });
 
 /**
@@ -891,6 +894,41 @@ export class Sidecar {
   }
 
   /**
+   * The protocol the coordinator on this socket has shown it speaks, or null
+   * while it has shown none.
+   *
+   * WHAT IT IS FOR: a list this box volunteers that only a newer coordinator
+   * knows to filter. Which members are signed in to which engine here
+   * (`engineSignins`) is shown by a coordinator on 22 to who may act for
+   * each member, and a coordinator from before it passed every health key it
+   * did not know to every member. Boxes update ahead of the coordinator in
+   * half a deploy, so for that window a box on 22 told the whole fleet who
+   * was signed in where. The list now waits for a frame that says the
+   * coordinator has it (health).
+   *
+   * HOW IT IS HEARD. The coordinator stamps its own number on every frame
+   * it writes that is not an intent: a config frame, the answer to a vault
+   * or key-list request (`minted`), `decided`, `vault-changed`, a relay's.
+   * A box with a key asks for its key list seconds after it starts, so one
+   * arrives early. The LATEST such frame is believed, so a coordinator
+   * rolled back under a box that stays up is heard too. An intent is
+   * spoken in the older of the two parties' versions (buildIntent), so it
+   * can only show the number is at least its own.
+   *
+   * @type {number|null}
+   */
+  coordinatorSpeaks = null;
+
+  /** @param {unknown} msg  a frame from the coordinator (coordinatorSpeaks) */
+  #heardCoordinator(msg) {
+    const frame = /** @type {any} */ (msg);
+    const v = frame?.v;
+    if (!Number.isInteger(v) || v < 1) return;
+    if (frame.kind !== 'intent') this.coordinatorSpeaks = v;
+    else if (v > (this.coordinatorSpeaks ?? 0)) this.coordinatorSpeaks = v;
+  }
+
+  /**
    * Turn one inbound envelope into a reply. Exposed rather than private so a
    * test can drive it with no transport at all.
    *
@@ -901,6 +939,7 @@ export class Sidecar {
    * @returns {Promise<Record<string, any>>}
    */
   async handle(msg) {
+    this.#heardCoordinator(msg);
     // BYTES THROUGH A PHONE, before anything that awaits: a relay's frames
     // must reach its streams in the order they arrived, and they are not
     // intents and get no reply (xo-relay.js checks each).
@@ -1083,29 +1122,44 @@ export class Sidecar {
     const cached = this.#recall(intent.id);
     if (cached) {
       const was = await cached;
-      // AN ENGINE SIGN-IN'S PAGE AND CODE WERE NOT KEPT (below), so there is
+      // NOTHING OF AN ENGINE SIGN-IN'S ANSWER WAS KEPT (below), so there is
       // no first reply to replay. The retry is answered with where the
-      // sign-in stands now, which never starts anything: the attempt in
-      // flight while there is one, with its code, signed over this same id.
-      if (was === CODE_NOT_KEPT) {
-        this.log.info(`sidecar: enginesignin ${intent.id} already answered; its page and code are not kept, so it is answered with where the sign-in stands now`);
+      // sign-in stands now, FOR THE MEMBER AND ENGINE THIS REQUEST NAMES,
+      // which never starts anything: the attempt in flight while there is
+      // one, with its code, signed over this same id.
+      if (was === CODE_NOT_KEPT && intent.verb === 'enginesignin') {
+        this.log.info(`sidecar: enginesignin ${intent.id} already answered; nothing of its answer is kept, so it is answered with where the sign-in stands now`);
         return { ...(await this.#run({ ...intent, params: { ...intent.params, action: 'status' } }, verdict)), replayed: true };
+      }
+      // AN ID THAT ANSWERED A SIGN-IN, OR ANOTHER KIND OF REQUEST, IS NOT RUN
+      // AS THIS ONE. An id is one request's. This ran whatever verb arrived
+      // under a sign-in's id as if it were new, a stop among them, and
+      // answered a sign-in under another request's id with that request's
+      // reply. Neither is a retry, so neither is answered as one.
+      if (was === CODE_NOT_KEPT || intent.verb === 'enginesignin') {
+        this.log.warn(`sidecar: refused ${intent.verb} ${intent.id}: that id already answered another kind of request`);
+        return {
+          v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'id_reused' },
+          text: `${this.hostId} already answered another request under this id, so it does not run this one. Send it again under an id of its own. Nothing was done.`,
+        };
       }
       this.log.info(`sidecar: ${intent.verb} ${intent.id} already handled — replaying the original reply`);
       return { ...was, replayed: true };
     }
     const pending = this.#run(intent, verdict);
-    // WHAT IS REMEMBERED IS THE REPLY, EXCEPT A CODE. The page and the code
-    // of an engine sign-in are for whoever asked, for as long as they are of
-    // use, and ten minutes in this map is neither: of such a reply only the
-    // id is remembered, as answered. The id still cannot be run twice. A
-    // sealed reply is not kept either: it is the same page and code, and a
-    // retry is sealed to its own `reply`, which need not be the first one's.
+    // WHAT IS REMEMBERED IS THE REPLY, EXCEPT AN ENGINE SIGN-IN'S, OF WHICH
+    // NOTHING IS. The page and the code are for whoever asked, for as long as
+    // they are of use, and ten minutes in this map is neither. And the rest
+    // of an answer is one member's: this kept every answer that carried no
+    // code, the account a sign-in is on among it, under the id alone, and a
+    // second outside review asked after another member under the same id
+    // and was handed the first member's account. So of every such reply
+    // only the id is remembered, as answered: it still cannot be run twice,
+    // and a retry is answered afresh, for what it asks, sealed to its own
+    // `reply`, which need not be the first one's.
     if (intent.verb === 'enginesignin') {
-      const kept = pending.then((r) => (typeof r?.code === 'string' || typeof r?.url === 'string' || typeof r?.signature === 'string' || r?.sealed ? CODE_NOT_KEPT : r));
       // Whoever asked is told of a failure by `pending` itself; this copy of it is only for a retry.
-      kept.catch(() => {});
-      this.#remember(intent.id, kept);
+      this.#remember(intent.id, pending.then(() => CODE_NOT_KEPT, () => CODE_NOT_KEPT));
     } else {
       this.#remember(intent.id, pending);
     }
@@ -1408,10 +1462,27 @@ export class Sidecar {
       if (!key) throw new Error('it has no key of its own');
       const hostKey = { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y };
       const who = said.signedIn?.who ? { email: said.signedIn.who.email ?? null, plan: said.signedIn.who.plan ?? null } : null;
+      // WHERE IT STANDS, WHY IT FAILED AND WHEN THE CODE RUNS OUT, signed and
+      // sealed with the rest. They were only in the clear part, where the
+      // coordinator carries them, and a phone wrote its sentence from them:
+      // a genuine sealed answer came back beside `state: "failed"` and a
+      // `detail` naming a code of the coordinator's own, and the sentence a
+      // person read was that. In a sealed answer only, so a clear one's
+      // bytes are what they were. The clear copies stay beside the seal.
+      //
+      //   state      a code that is out is `waiting`, whatever else was said.
+      //   detail     the engine's sentence or null, held to one line of
+      //              printable ASCII: the phones' encoders and this one
+      //              must write the same bytes, and that is the range in
+      //              which no two JSON encoders differ.
+      //   expiresAt  a whole number, and only while a code is out.
+      const state = typeof said.state === 'string' ? said.state : 'waiting';
+      const detail = typeof said.detail === 'string' ? said.detail.replace(/[^\x20-\x7e]/g, '').slice(0, 200) : null;
+      const expiresAt = coded && said.expiresAt !== null && Number.isFinite(Number(said.expiresAt)) ? Math.round(Number(said.expiresAt)) : null;
       const signed = {
         id: intent.id, host: await keyId(hostKey), member: String(intent.params.member), engine: String(intent.params.engine),
         ...(coded ? { url: said.url, code: said.code } : {}), at,
-        ...(sealTo ? { signedIn: said.signedIn ? { since: Number(said.signedIn.since), who } : null } : {}),
+        ...(sealTo ? { signedIn: said.signedIn ? { since: Number(said.signedIn.since), who } : null, state, detail, ...(expiresAt === null ? {} : { expiresAt }) } : {}),
       };
       const signature = await key.sign(signinAnswerInput(signed));
       if (!sealTo) return { ...said, signedAt: at, hostKey, signature };
@@ -1421,12 +1492,21 @@ export class Sidecar {
       this.log.warn(`sidecar: could not sign the answer to enginesignin ${intent.id}: ${/** @type {Error} */ (e).message}`);
       delete clear.url;
       delete clear.code;
+      // WHAT TO DO NEXT, BY WHO IS READING. A phone's sheet has no button
+      // that asks again: while a code is out it asks by itself every few
+      // seconds, and otherwise when the screen is opened. Told to "ask
+      // where it stands again", a person on a phone was told to do
+      // something the screen does not offer. An agent, which sends no
+      // `reply`, has the tool to ask with, and is still told to.
+      const next = sealTo
+        ? (coded ? 'This screen asks again by itself in a few seconds: wait for that, or cancel it.' : 'This screen asks again the next time it is opened.')
+        : (coded ? 'Ask where it stands again, or cancel it.' : 'Ask where it stands again.');
       return {
         ...clear, ok: false, error: { code: 'answer_unsigned' },
         text: coded
           ? `${this.hostId} could not sign its answer, so the page and the code are not passed on: a code this machine has not signed is one nobody can tell is its own. ` +
-            'The sign-in is still waiting there. Ask where it stands again, or cancel it.'
-          : `${this.hostId} could not sign its answer, so what it says of this sign-in is not passed on. Ask where it stands again.`,
+            `The sign-in is still waiting there. ${next}`
+          : `${this.hostId} could not sign its answer, so what it says of this sign-in is not passed on. ${next}`,
       };
     }
   }
@@ -2965,7 +3045,12 @@ export class Sidecar {
         // engine and since when. Only the ones signed in now, and no account.
         // A hub from before sign-ins says nothing, and the frame then has no
         // list, which is cannot tell and never nobody.
-        ...(Array.isArray(state.engineSignins) ? { engineSignins: signedInOn(state.engineSignins) } : {}),
+        //
+        // AND ONLY TO A COORDINATOR THAT HAS SHOWN IT KNOWS THE LIST
+        // (coordinatorSpeaks): one from before it hands every member every
+        // entry. Held back, the frame has no list, which that coordinator
+        // and every screen already read as cannot tell.
+        ...(Array.isArray(state.engineSignins) && (this.coordinatorSpeaks ?? 0) >= ENGINE_SIGNINS_SINCE ? { engineSignins: signedInOn(state.engineSignins) } : {}),
         // The metered API providers an engine here may bill to, when its
         // operator named any (docs/api-engines.md). Kept, because it is also
         // what decides whether this box asks a vault for keys (#askVault).

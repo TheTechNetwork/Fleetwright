@@ -392,10 +392,31 @@ export function actorEmail(actor) {
  *           answer that is sealed. LEFT OUT of a clear one, whose bytes are
  *           what they were before answers were sealed. signingInput drops
  *           what is undefined and keeps a null.
+ *   state, detail    where the sign-in stands, and for one that failed the
+ *           engine's own sentence (else null), in an answer that is sealed.
+ *   expiresAt        when the code runs out, epoch ms as a whole number, in a
+ *           sealed answer while a code is out.
+ *
+ * WHY THE LAST THREE ARE SIGNED. They were only beside the seal, in the
+ * clear, where the coordinator carries them, and a phone drew its sentence
+ * from them: a second outside review answered a genuine sealed `signed_in`
+ * with `state: "failed"` and a `detail` of its own that named a code. What
+ * a person reads in the sheet is now the box's signed word or the phone's
+ * own. The clear copies stay, for a caller that has no key to seal to.
+ *
+ * NO NEW VERSION, AND NONE NEEDED. A phone checks the signature over
+ * everything it opens but the key and the signature (EngineSignIn.swift,
+ * EngineSignIn.kt, `verified`), so a payload with three more keys verifies
+ * on a phone built before them, which then ignores them. LEFT OUT of a
+ * clear answer, as `signedIn` is, so its bytes are still what they were.
+ * And nothing here is a boolean or a fraction: the phones' encoders write
+ * whole numbers, strings and null as JSON.stringify does, and `detail` is
+ * held to printable ASCII by whoever signs (sidecar.js, #signAnswer).
  *
  * @param {{ id: string, host: string, member: string, engine: string, url?: string, code?: string, at: number,
- *   signedIn?: { since: number, who: { email: string|null, plan: string|null }|null }|null }} answer
+ *   signedIn?: { since: number, who: { email: string|null, plan: string|null }|null }|null,
+ *   state?: string, detail?: string|null, expiresAt?: number }} answer
  */
-export function signinAnswerInput({ id, host, member, engine, url, code, at, signedIn }) {
-  return signingInput('engine-signin-answer', { v: 1, id, host, member, engine, url, code, at, signedIn });
+export function signinAnswerInput({ id, host, member, engine, url, code, at, signedIn, state, detail, expiresAt }) {
+  return signingInput('engine-signin-answer', { v: 1, id, host, member, engine, url, code, at, signedIn, state, detail, expiresAt });
 }

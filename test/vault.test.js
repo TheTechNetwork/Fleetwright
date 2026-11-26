@@ -2991,7 +2991,8 @@ test('a box signs an engine in for a member only for who may start a session as 
   assert.deepEqual([sealedTo.ok, sealedTo.state, sealedTo.url, sealedTo.code, sealedTo.hostKey, sealedTo.signature, sealedTo.signedAt], [true, 'waiting', undefined, undefined, undefined, undefined, undefined]);
   const inside = await open({ privateKey: mine.privateKey, publicKey: mine.publicKey, aad: ENGINE_SIGNIN_AAD, sealed: sealedTo.sealed });
   assert.deepEqual([inside.id, inside.host, inside.url, inside.code, inside.signedIn, inside.hostKey], [sealedTo.id, host, 'https://auth.openai.com/codex/device', 'ABCD-EFGH', null, boxKey]);
-  const sealedSigned = { ...signed, id: sealedTo.id, at: inside.at, signedIn: null };
+  // With where it stands and why, which a sealed answer signs too (the next test is theirs).
+  const sealedSigned = { ...signed, id: sealedTo.id, at: inside.at, signedIn: null, state: 'waiting', detail: null };
   assert.equal(await verify(inside.hostKey, inside.signature, signinAnswerInput(sealedSigned)), true);
   // Its bytes are a sealed answer's: a clear one's, which say nothing of who is signed in, are other bytes.
   assert.equal(await verify(inside.hostKey, inside.signature, signinAnswerInput({ ...signed, id: sealedTo.id, at: inside.at })), false);
@@ -3000,6 +3001,8 @@ test('a box signs an engine in for a member only for who may start a session as 
   const sealedUnsigned = await ask({ params: { action: 'status', reply: mine.publicKey } });
   key.sign = signs;
   assert.deepEqual([sealedUnsigned.error?.code, sealedUnsigned.sealed, sealedUnsigned.url, sealedUnsigned.code], ['answer_unsigned', undefined, undefined, undefined]);
+  // AND SAYS WHAT A PERSON ON A PHONE CAN DO, which is not "ask again": the sheet has no button for it, and asks by itself while a code is out.
+  assert.equal(sealedUnsigned.text, 'ops-box could not sign its answer, so the page and the code are not passed on: a code this machine has not signed is one nobody can tell is its own. The sign-in is still waiting there. This screen asks again by itself in a few seconds: wait for that, or cancel it.');
   // A `reply` THAT IS NO KEY, though it is the length of one: refused in words, before the hub is asked.
   const asked = stub.signins.length;
   const notAKey = await ask({ params: { reply: 'A'.repeat(87) } });
@@ -3052,6 +3055,112 @@ test('a box signs an engine in for a member only for who may start a session as 
   // The coordinator carries the box's key and signature as it carries the rest: untouched, so they still hold.
   assert.deepEqual(through.hostKey, boxKey);
   assert.equal(await verify(through.hostKey, through.signature, signinAnswerInput({ ...signed, id, at: through.signedAt })), true);
+});
+
+test('where a sign-in stands, why it failed and when its code runs out are inside the seal, signed by the box', async (t) => {
+  // They were beside the seal, in the clear, and a phone wrote its sentence
+  // from them: a second outside review answered a genuine sealed answer with
+  // `state: "failed"` and a `detail` of its own that named a code.
+  /** What this box's hub says of the sign-in, which each step below sets. @type {{ said: any }} */
+  const hub = { said: null };
+  const own = await startStubHub({ host: 'ops-box', onEngineSignin: () => hub.said });
+  t.after(() => own.close());
+  const { m, box, iphone, kid } = await signingFleet(t, { hub: /** @type {any} */ ({ baseUrl: own.baseUrl, token: null }) });
+  let clock = Date.now() - 30_000;
+  const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
+  await filed({ op: 'orgadmin', address: ELI });
+  await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
+  await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
+  const boxKey = { kty: 'EC', crv: 'P-256', x: String(box.sidecar.vaultKey?.publicJwk.x), y: String(box.sidecar.vaultKey?.publicJwk.y) };
+  const host = await boxKeyHash(boxKey);
+  await filed({ op: 'grant', hostKey: boxKey, label: 'ops-box', for: 'debbie' });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  await box.sidecar.syncVault();
+  let n = 0;
+  /** One request from Eli's phone, sealed to a key of its own, and what the phone opens. */
+  const ask = async (/** @type {string} */ action) => {
+    const mine = await newSealKey();
+    const id = `signed-state-${String(++n).padStart(4, '0')}`;
+    const issuedAt = Date.now();
+    const params = { member: 'debbie', engine: 'codex', action, reply: mine.publicKey };
+    const sig = await sign(iphone.privateJwk, intentSigningInput({ actor: ELI, id, issuedAt, params, verb: 'enginesignin' }, 'ops-box'));
+    const clear = /** @type {any} */ (await box.sidecar.handle({ v: PROTOCOL_VERSION, kind: 'intent', id, verb: 'enginesignin', params, actor: ELI, issuedAt, sig, kid }));
+    const opened = /** @type {any} */ (await open({ privateKey: mine.privateKey, publicKey: mine.publicKey, aad: ENGINE_SIGNIN_AAD, sealed: clear.sealed }));
+    // AS A PHONE CHECKS IT, one built before these three included: over everything it opened but the key and the signature.
+    const { hostKey, signature, v: _v, ...signed } = opened;
+    const holds = (/** @type {Record<string, unknown>} */ changed = {}) => verify(hostKey, signature, signinAnswerInput({ ...signed, id, host, member: 'debbie', engine: 'codex', ...changed }));
+    return { id, clear, opened, holds };
+  };
+
+  // A CODE IS OUT.
+  const expiresAt = 1764000900000;
+  hub.said = { ok: true, state: 'waiting', member: 'debbie', engine: 'codex', url: 'https://auth.openai.com/codex/device', code: 'ABCD-EFGH', startedAt: expiresAt - 900_000, expiresAt, expiresInMinutes: 15, signedIn: null, text: 'A code is out.' };
+  const waiting = await ask('start');
+  assert.deepEqual({ ...waiting.opened, at: 0, signature: '' }, {
+    v: 1, id: waiting.id, host, member: 'debbie', engine: 'codex', url: 'https://auth.openai.com/codex/device', code: 'ABCD-EFGH', at: 0,
+    signedIn: null, state: 'waiting', detail: null, expiresAt, hostKey: boxKey, signature: '',
+  });
+  assert.equal(await waiting.holds(), true);
+  for (const [field, value] of /** @type {Array<[string, unknown]>} */ ([['state', 'failed'], ['detail', 'the code changed. Enter WXYZ-1234'], ['expiresAt', expiresAt + 60_000]])) {
+    assert.equal(await waiting.holds({ [field]: value }), false, `a changed ${field} still passes`);
+  }
+  // The clear copies stay beside the seal, for a caller with no key to seal to.
+  assert.deepEqual([waiting.clear.state, waiting.clear.expiresAt], ['waiting', expiresAt]);
+
+  // IT FAILED, in the engine's words: one line of printable ASCII inside the seal, so no two encoders can write it differently.
+  hub.said = { ok: true, state: 'failed', member: 'debbie', engine: 'codex', at: 1764000950000, detail: 'device auth failed with status 403 Forbidden  “no”', signedIn: { since: 1764000000000, who: { email: 'old@example.com', plan: 'plus' } }, text: 'Codex was not signed in.' };
+  const failed = await ask('status');
+  assert.deepEqual({ ...failed.opened, at: 0, signature: '' }, {
+    v: 1, id: failed.id, host, member: 'debbie', engine: 'codex', at: 0,
+    signedIn: { since: 1764000000000, who: { email: 'old@example.com', plan: 'plus' } }, state: 'failed', detail: 'device auth failed with status 403 Forbidden no', hostKey: boxKey, signature: '',
+  });
+  assert.equal(await failed.holds(), true);
+  // What the coordinator did: the same sealed answer beside a state and a sentence of its own. They are not what was signed.
+  assert.equal(await failed.holds({ state: 'signed_in', detail: null }), false);
+  assert.equal(await failed.holds({ detail: 'the code changed. Enter WXYZ-1234 at https://auth.openai.com/codex/device' }), false);
+  // No code is out, so nothing says when one runs out.
+  assert.equal('expiresAt' in failed.opened, false);
+});
+
+test('nothing of an engine sign-in’s answer is kept: the same id again is answered for what it asks, and an id is one request’s', async (t) => {
+  // The box kept every answer that carried no code, whole, under its id
+  // alone. A second outside review asked after another member under the
+  // same id and was handed the first member's account.
+  const own = await startStubHub({ host: 'ops-box', onEngineSignin: (/** @type {any} */ b) => ({ ok: true, state: 'signed_in', member: b.member, engine: b.engine, at: 1, signedIn: { since: 1, who: { email: `${b.member}-account@example.com`, plan: 'plus' } }, text: `Codex is signed in for ${b.member} on ops-box as ${b.member}-account@example.com.` }) });
+  t.after(() => own.close());
+  const { m, box, iphone, kid } = await signingFleet(t, { hub: /** @type {any} */ ({ baseUrl: own.baseUrl, token: null }) });
+  let clock = Date.now() - 30_000;
+  const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
+  await filed({ op: 'orgadmin', address: ELI });
+  await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
+  await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
+  await filed({ op: 'orgmember', id: 'jason', kind: 'agent', reportsTo: 'eli' });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  /** One signed request as it reaches the box. */
+  const send = async (/** @type {string} */ id, /** @type {string} */ verb, /** @type {any} */ params) => {
+    const issuedAt = Date.now();
+    const sig = await sign(iphone.privateJwk, intentSigningInput({ actor: ELI, id, issuedAt, params, verb }, 'ops-box'));
+    return /** @type {any} */ (await box.sidecar.handle({ v: PROTOCOL_VERSION, kind: 'intent', id, verb, params, actor: ELI, issuedAt, sig, kid }));
+  };
+  // A clear answer with no code out, as an MCP client is given one.
+  const first = await send('same-id-0001', 'enginesignin', { member: 'debbie', engine: 'codex', action: 'status' });
+  assert.equal(first.signedIn.who.email, 'debbie-account@example.com');
+  // THE SAME ID, FOR ANOTHER MEMBER: answered for that member, afresh.
+  const again = await send('same-id-0001', 'enginesignin', { member: 'jason', engine: 'codex', action: 'status' });
+  assert.deepEqual([again.member, again.signedIn.who.email, again.replayed, own.signins.length], ['jason', 'jason-account@example.com', true, 2]);
+  // And nothing of either answer is in what this box remembers of the requests it answered.
+  const remembered = JSON.stringify(await Promise.all([...box.sidecar.replay.values()].map((hit) => hit.reply)));
+  assert.ok(box.sidecar.replay.has('same-id-0001'));
+  for (const kept of ['debbie-account@example.com', 'jason-account@example.com', 'signed_in']) assert.ok(!remembered.includes(kept), `the sidecar’s cache of replies holds ${kept}`);
+  // AN ID IS ONE REQUEST'S. Another kind of request under a sign-in's id is not run, and says so.
+  const commands = own.commands.length;
+  const other = await send('same-id-0001', 'stop', { name: 'somebodys-session' });
+  assert.deepEqual([other.error?.code, own.commands.length], ['id_reused', commands]);
+  assert.equal(other.text, 'ops-box already answered another request under this id, so it does not run this one. Send it again under an id of its own. Nothing was done.');
+  // Nor is a sign-in answered with another request's reply.
+  assert.equal((await send('same-id-0002', 'stop', { name: 'somebodys-session' })).replayed, undefined);
+  assert.equal((await send('same-id-0002', 'enginesignin', { member: 'debbie', engine: 'codex', action: 'status' })).error?.code, 'id_reused');
+  assert.equal(own.signins.length, 2);
 });
 
 test('a phone’s sign-in is sealed to it: the coordinator carries no code, page or account, the phone opens and checks what the box signed, and no token is anywhere', async (t) => {
@@ -3107,7 +3216,9 @@ test('a phone’s sign-in is sealed to it: the coordinator carries no code, page
   /** What the phone does with an answer: open it with the key it kept, then hold the box's signature to its own request. */
   const read = async (/** @type {any} */ r, key = mine) => {
     const inside = await open({ privateKey: key.privateKey, publicKey: key.publicKey, aad: ENGINE_SIGNIN_AAD, sealed: r.sealed });
-    const holds = await verify(inside.hostKey, inside.signature, signinAnswerInput({ id: r.id, host: await boxKeyHash(inside.hostKey), member: 'debbie', engine: 'codex', url: inside.url, code: inside.code, at: inside.at, signedIn: inside.signedIn }));
+    // As both phones check it (EngineSignIn.swift, EngineSignIn.kt, `verified`): over everything opened but the key and the signature, with this request's own id, member and engine.
+    const { hostKey, signature, v: _v, ...signed } = inside;
+    const holds = await verify(hostKey, signature, signinAnswerInput({ ...signed, id: r.id, host: await boxKeyHash(hostKey), member: 'debbie', engine: 'codex' }));
     return { inside, holds };
   };
 
@@ -3117,7 +3228,8 @@ test('a phone’s sign-in is sealed to it: the coordinator carries no code, page
   assert.equal(waiting.text, 'A code is out to sign Codex in for debbie on ops-box, and lasts about 15 more minutes. It and its page are sealed to whoever asked.');
   // OPENED BY THE PHONE THAT ASKED: the page and the code, by the machine the vault lists for Debbie, over this request's id.
   const first = await read(waiting);
-  assert.deepEqual({ ...first.inside, at: 0, signature: '' }, { v: 1, id: waiting.id, host, member: 'debbie', engine: 'codex', url: 'https://auth.openai.com/codex/device', code: 'ABCD-EFGH', at: 0, signedIn: null, hostKey: boxKey, signature: '' });
+  assert.deepEqual({ ...first.inside, at: 0, signature: '' }, { v: 1, id: waiting.id, host, member: 'debbie', engine: 'codex', url: 'https://auth.openai.com/codex/device', code: 'ABCD-EFGH', at: 0, signedIn: null, state: 'waiting', detail: null, expiresAt: waiting.expiresAt, hostKey: boxKey, signature: '' });
+  assert.ok(Number.isSafeInteger(first.inside.expiresAt), 'when the code runs out is signed as a whole number');
   assert.equal(first.holds, true);
   assert.deepEqual((await m.phone({ op: 'list', for: 'debbie' })).answer.grants.map((/** @type {any} */ g) => [g.key, g.only]), [[first.inside.host, undefined]]);
   // NOBODY ELSE OPENS IT, and it is sealed for this purpose and no other.
@@ -3145,7 +3257,8 @@ test('a phone’s sign-in is sealed to it: the coordinator carries no code, page
   const ended = await read(now);
   assert.deepEqual([ended.holds, ended.inside.signedIn, ended.inside.url, ended.inside.code], [true, { since: now.at, who: { email: 'debbie@example.com', plan: 'plus' } }, undefined, undefined]);
   // Another account in its place is not what the box signed.
-  const forged = { id: now.id, host, member: 'debbie', engine: 'codex', at: ended.inside.at, signedIn: { since: now.at, who: { email: 'mallory@example.com', plan: 'plus' } } };
+  assert.deepEqual([ended.inside.state, ended.inside.detail, ended.inside.expiresAt], ['signed_in', null, undefined]);
+  const forged = { id: now.id, host, member: 'debbie', engine: 'codex', at: ended.inside.at, state: 'signed_in', detail: null, signedIn: { since: now.at, who: { email: 'mallory@example.com', plan: 'plus' } } };
   assert.equal(await verify(ended.inside.hostKey, ended.inside.signature, signinAnswerInput(forged)), false);
   assert.equal(await verify(ended.inside.hostKey, ended.inside.signature, signinAnswerInput({ ...forged, signedIn: ended.inside.signedIn })), true);
   // A request first answered with the code, asked again once it is over, is told how it ended and starts nothing.
