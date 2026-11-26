@@ -133,7 +133,8 @@ test('the same id again while the machine is still answering the first is told t
   await new Promise((r) => setTimeout(r, 20));
   const retry = await ask('app-0000-same-id');
   assert.deepEqual([retry.ok, retry.error?.code], [false, 'in_flight']);
-  assert.equal(retry.text, 'ops-box is still answering the request sent under this id. Wait for that answer: asking again does not start a second sign-in.');
+  // With a next step for a caller whose first request was given up on, who has no answer to wait for.
+  assert.equal(retry.text, 'ops-box is still answering the request sent under this id, so nothing new was sent. If that request is still open, its answer is the one to wait for. If it was given up on, ask again in a few seconds: once ops-box has answered, the same id is answered with where the sign-in stands. Asking again does not start a second sign-in.');
   assert.equal(frames.length, 1);
   // The first is answered as it would have been, and the id is then free for the box's own cache to answer a retry.
   await core.onHostMessage('ops-box', { v: PROTOCOL_VERSION, kind: 'reply', id: 'app-0000-same-id', ok: true, state: 'waiting', text: 'A code is out.' });

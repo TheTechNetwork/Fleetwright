@@ -599,9 +599,10 @@ the refusal lists the ones that run the engine (`ambiguous_host`), and a
 temporary machine or a box somebody else enrolled is refused
 (`host_unavailable`), because a sign-in is kept where it is made; both say
 which machines would take it. The same id sent again while the machine is
-still answering the first is told to wait (`in_flight`): a start can take
-45 seconds to get its code, and a second copy of it is not a second
-sign-in. The coordinator passes the machine's answer through, leaves
+still answering the first is refused (`in_flight`) with what to do: wait
+for the first answer where that request is still open, or ask again in a
+few seconds where it was given up on. A start can take 45 seconds to get
+its code, and a second copy of it is not a second sign-in. The coordinator passes the machine's answer through, leaves
 `status` out of its audit ring, and keeps nothing of a sign-in but what
 machines report.
 

@@ -4442,13 +4442,16 @@ export class CoordinatorCore {
       // words about an intent. The docs promised a retry is answered with
       // where the sign-in stands, which is true only once the first has been
       // answered (the box's own cache, sidecar.js). So this says what is
-      // happening and what to do: wait for the first.
+      // happening and what to do. Not only "wait for that answer", which
+      // is all it said: whoever retries has usually given the first request
+      // up and has no answer to wait for, so it also says to ask again
+      // shortly, and what that will be answered with.
       const waiting = typeof spec.id === 'string' ? this.pending.get(spec.id) : undefined;
       if (waiting) {
         return {
           ok: false,
           error: { code: 'in_flight' },
-          text: `${waiting.hostId} is still answering the request sent under this id. Wait for that answer: asking again does not start a second sign-in.`,
+          text: `${waiting.hostId} is still answering the request sent under this id, so nothing new was sent. If that request is still open, its answer is the one to wait for. If it was given up on, ask again in a few seconds: once ${waiting.hostId} has answered, the same id is answered with where the sign-in stands. Asking again does not start a second sign-in.`,
         };
       }
     }
