@@ -19,28 +19,61 @@ step 7. **A machine runs only the engines it reports**, and none reports
 and names them (`FLEETWRIGHT_ENGINES`), so a fleet that changes nothing runs
 exactly as it did.
 
-**What has and has not been run.** The two adapters are tested against
-stand-in servers that speak each engine's published protocol, and the Codex
-adapter's opening was checked against the real `codex app-server`, signed
-out. No turn has been sent to a real Codex or OpenCode. The move from one
-engine to the next is run in a test through the real launch, a real tmux pane
-and the real runner, with a script standing in for podman and for each
-engine (`test/engines-launch.test.js`). It has not been run on a box, in a
-container, with a real engine. The image with the engines in it is built and
-run in CI (`.github/workflows/sandbox.yml`), which this change added and
-which has not run yet: nothing here could build a container.
+**What has and has not been run.** Four different things, and which one a
+claim on this page rests on matters.
 
-**Signing in on the machine has not been run against anything real.** The
-runner's sign-in mode is tested against stand-ins that answer as each
-engine's source reads at the version the image pins (`codex app-server`
-0.171.0, `account/login/start` with `chatgptDeviceCode`; `opencode serve`
-1.19.6, `/provider/github-copilot/oauth/authorize` and `/callback`), and the
-box's side of it with a script standing in for Podman. No device code has
-been asked of OpenAI or GitHub, no real Codex or OpenCode has been started
-for it, no account has been signed in, and no container has been run: that
-the volume mounts as described under rootless Podman, that the pinned
-engines answer as their sources read, and that a code can be approved for a
-real account are each still to be seen on a box.
+*Against stand-ins, in every test run.* The two adapters, the runner's
+sign-in mode and the box's side of it are tested against stand-ins that
+speak each engine's protocol (`test/engines-run.test.js`,
+`test/engine-signin-run.test.js`, and a script standing in for Podman in
+`test/engine-signin-hub.test.js`). The move from one engine to the next
+runs through the real launch, a real tmux pane and the real runner
+(`test/engines-launch.test.js`). The stand-ins now answer, and write the
+files, that the real engines were seen to (`test/helpers/engine-files.js`).
+Before that they wrote files neither engine writes, and nothing in a test
+ever waited five seconds, which is how a sign-in that could not complete
+passed every one of them.
+
+*The real engines with no network, by hand and now in CI.* Codex 0.171.0
+and OpenCode 1.19.6, as the image installs them, were run with no network
+at all and made-up values: each handshake the runner performs before a
+prompt (`initialize`, `account/read`, `thread/start` for Codex;
+`initialize`, `session/new`, `session/set_config_option` for
+`opencode acp`), `--signin` and `--signout` for both, what each says of a
+sign-in file of every shape the tests now plant, a key handed over in the
+environment alone, and which hosts each asks a proxy for. No prompt was
+sent. `.github/workflows/sandbox.yml` now runs the four sign-in and
+sign-out commands in the built image under rootless Podman with
+`--network none`, and Codex's own sandbox on one command with no model
+involved.
+
+*The real engines against a stand-in for the provider on loopback, by
+hand.* Still with no network: Codex pointed at a made-up issuer and backend
+through its own overrides, and OpenCode reaching a made-up GitHub through a
+loopback proxy. That is how a whole sign-in was seen: a code, an approval,
+a refusal, a cancel, the file each engine writes, Codex's workspace check
+failing after the file is written, its sentences for a sign-in it cannot
+renew, a sign out telling the issuer, a second sign-in over a first, and
+OpenCode loading a plugin from a home a session had written. What OpenAI
+and GitHub really answer is not known from this; what each engine does
+with an answer is.
+
+*Not run at all.* No device code has been asked of OpenAI or GitHub and no
+account has been signed in. No turn has been sent to a real Codex or
+OpenCode, so none of this has been seen: an approval answered, OpenCode
+asking before it acts, a limit, a renewal in the middle of a session, the
+move to the next engine. Nor has a box done any of it under rootless
+Podman: the volume, the signals a cancel sends, a container removed.
+
+Two checks before a turn are weaker than this page used to say, and both
+want a real account to settle. Codex's `thread/start` was seen to answer
+with whatever model name it was given, a made-up one included, so "on the
+model that was asked for" proves nothing for Codex with no network; whether
+it refuses a wrong name when it can fetch its list is not known, and a
+wrong model is found by the turn. And OpenCode's `session/new` succeeds
+with a Copilot token that works nowhere, because it falls back to the
+model list it shipped with: an ended Copilot sign-in is found by the first
+prompt, not before it.
 
 ## The engines
 
@@ -301,6 +334,21 @@ nowhere else. Codex is started with `CODEX_HOME` as `codex/` inside it and
 OpenCode with `XDG_DATA_HOME` as the home itself, so its files are
 `opencode/` beside that. Both are set for the engine's own process and
 nothing else in the session.
+
+**It holds more than a sign-in**, because each engine treats it as its
+home. Seen with the real engines: Codex keeps five SQLite databases there
+(its logs and state among them), its bundled skills, an installation id,
+and a file for every thread a session starts
+(`codex/sessions/<year>/<month>/<day>/rollout-….jsonl`); OpenCode keeps
+`opencode/opencode.db`, where its sessions and messages are, `log/` and
+`repos/`. So what a member's sessions said on a machine stays in that
+member's volume there after each session's container is gone. A sign-in
+or sign out leaves none of this behind: it runs on a directory of its own
+(below). OpenCode also writes outside the home, where the runner points
+nothing: settings under `~/.config/opencode`, locks under
+`~/.local/state/opencode`, a cache under `~/.cache/opencode`, and
+`/tmp/opencode`, all inside the session's container. Codex writes nowhere
+but its home.
 
 **Engines renew their own sign-ins there**, as they do on a person's
 computer. A member's sessions on one machine share the one home, so nothing
@@ -766,22 +814,35 @@ as below.
 [security.md](./security.md)) no engine but Claude Code reaches its provider
 until the provider's hosts are added to `FLEETWRIGHT_SANDBOX_EGRESS_ALLOW`:
 
-| engine | hosts |
+| engine, and what it is doing | hosts to add |
 |---|---|
-| `codex`, on a ChatGPT sign-in | `chatgpt.com`, `auth.openai.com` |
-| `opencode`, on Copilot | `api.githubcopilot.com` (`api.github.com` is already allowed), `models.dev` |
-| `opencode`, on OpenRouter | `openrouter.ai`, `models.dev` |
-| `opencode`, on Vercel AI Gateway | `ai-gateway.vercel.sh`, `models.dev` |
-| signing `codex` in on the machine | `auth.openai.com` |
-| signing `opencode` in to Copilot on the machine | `github.com` |
+| signing `codex` in on the machine | `auth.openai.com` for the code and the tokens, **and `chatgpt.com`**: Codex asks it about the account's workspace before it calls the sign-in done, and without it the sign-in is reported failed and not kept |
+| `codex`, a session on a ChatGPT sign-in | `chatgpt.com` (asked before every turn, and for the turn), `auth.openai.com` (to renew) |
+| signing `opencode` in to Copilot on the machine | none: `github.com` is already allowed |
+| `opencode`, a session on Copilot | `api.githubcopilot.com` |
+| `opencode`, on OpenRouter | `openrouter.ai` |
+| `opencode`, on Vercel AI Gateway | `ai-gateway.vercel.sh` |
+
+Optional, and each engine carries on without them:
+
+| engine | host | for |
+|---|---|---|
+| `codex`, at every start | `github.com`, `api.github.com` (both already allowed) | its list of plugins (`git ls-remote https://github.com/openai/plugins.git`) |
+| `opencode`, at every start | `models.opencode.ai` | a newer list of models than the one it shipped with. This was written here as `models.dev`, which 1.19.6 does not ask for |
+| `opencode`, at every start | `registry.npmjs.org` (already allowed) | what its plugins depend on |
 
 The container a sign-in runs in joins the member's own network behind the
-list, as that member's sessions do, so the two sign-in rows are needed
-before a code can be asked for at all.
+list, as that member's sessions do, so the sign-in rows are needed before a
+code can be asked for at all.
 
-These are read from each engine's documentation and source and have not been
-measured on a box behind a list. An engine that cannot reach its provider
-ends its turn as `error`, with the engine's own words, and hands nothing on.
+The rows for signing in and for the start of a session are measured: the
+real engines were given a proxy that refuses everything, set as a box sets
+its own, and these are the hosts they asked it for. Both engines go through
+the proxy. The hosts a turn itself reaches were not measured, because no
+turn was sent, and the two metered providers' rows are from OpenCode's
+documentation. An engine that cannot reach its provider ends its turn as
+`error` and hands nothing on; for Codex's `chatgpt.com` the detail names
+the host.
 
 ## Starting
 
@@ -914,7 +975,11 @@ note, and three engines in turn), `test/engines-run.test.js` (each adapter and t
 stand-in server speaking the published protocol: sign-in, the model check,
 a turn, a limit, a refusal, a permission request, the sign-in staged and
 handed back when it changes and as the session stops, OpenCode told to ask,
-the tokens in a sign-in withheld, a line and a message bounded),
+the tokens in a sign-in withheld and the issuer beside them not, a line
+and a message bounded, Codex's five sentences for a sign-in it could not
+renew, a key kept out of the engine home, a home's ended sign-in giving way
+to a pasted one, and a pasted one handed back by every session that renews
+it),
 `test/engines-hub.test.js` (TurnEnded and the sign-in on a
 session's socket, the launch command, what the watcher says as a session
 moves), `test/engines-coordinator.test.js` (the list a start carries, the
@@ -924,8 +989,12 @@ that takes them), and `test/engines-in-apps.test.js`. Signing in on the
 machine: `test/engine-signin-run.test.js` (the runner's sign-in mode
 against stand-ins for `codex app-server` and `opencode serve`: a code, a
 sign-in, a failure in the engine's words, the 15 minutes, device code not
-enabled, a cancel, a sign out, the home used before the vault, and no token
-in anything printed), `test/engine-signin-hub.test.js` (the box, through a
+enabled, a cancel, a sign out, no token in anything printed; an approval
+that comes after a kept connection would have been cut; the engine started
+on a home of the run's own and only its sign-in copied out; a page that is
+not the engine's own refused; a sign-in Codex wrote and then called failed
+not kept; a home that already holds a real sign-in still given its page;
+and what counts as a sign-in, row by row as the real engines answered), `test/engine-signin-hub.test.js` (the box, through a
 stand-in Podman and the real runner: the volume and its name, one attempt
 at a time, what is kept and what a restart loses, who may and who may not,
 a delegation that does not name the member, and no token in any answer,
