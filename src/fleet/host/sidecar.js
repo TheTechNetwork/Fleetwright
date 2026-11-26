@@ -58,7 +58,8 @@ import { emailFromActor } from '../../core/accounts.js';
 import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
 import { verifyRunnerJob } from '../coordinator/oidc.js';
 import { newSealKey, bindingFor, claudeBindingFor, seal, open, canSealTo, VAULT_BOX_AAD, ENGINE_SIGNIN_AAD } from '../seal.js';
-import { signingInput, fingerprint } from '../crypto.js';
+import { signingInput, fingerprint, verify } from '../crypto.js';
+import { vaultBoxAnswerInput } from '../protocol/vault-answer.js';
 import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
 import { ConsoleTunnels } from './console-tunnel.js';
@@ -69,7 +70,7 @@ import { SandboxPools } from './sandbox-pools.js';
 import { OwnPools, OWN_PROVIDER } from './own-pools.js';
 import { Pools } from './pools.js';
 import { EdgeWatch } from './edge-watch.js';
-import { IntentKeys } from './intent-keys.js';
+import { IntentKeys, MINTER_KEY_FILE } from './intent-keys.js';
 import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
 import { actorEmail, needsSignature, keyId, signinAnswerInput } from '../protocol/intent-signature.js';
 import { accountOfMember, memberOfAccount, composeFirstMessage, MEMBER_ID_RE } from '../protocol/members.js';
@@ -1334,6 +1335,13 @@ export class Sidecar {
     // asked after, on a machine whose approval has since been removed.
     if (intent.params.action === 'start') {
       const held = this.approvedFor;
+      // AND WHY, when the vault did answer and this box could not take the
+      // answer for the vault's: "try again in a few minutes" would send a
+      // person round a loop that only a deploy, or a file on this box, ends.
+      if (!held && this.vaultUnchecked) {
+        return refuse('approval_unknown',
+          `${this.hostId} cannot tell whether it is approved to hold ${name}’s credentials, because ${this.vaultUnchecked.why}. ${this.vaultUnchecked.todo}`);
+      }
       if (!held) {
         const asks = this.vaultKey && this.vaultIntervalMs > 0 && !this.jobToken;
         return refuse('approval_unknown',
@@ -2246,6 +2254,9 @@ export class Sidecar {
     // socket, and the minter answers both.
     void this.intentKeys?.refresh();
     const said = await this.#askVault();
+    // WHY THE LAST ANSWER COULD NOT BE CHECKED, kept for whoever is refused a
+    // sign-in for want of an approval this box cannot now hear (#signInAs).
+    this.vaultUnchecked = said.ok ? null : (said.unchecked ?? null);
     if (said.ok) {
       this.approvedFor = approvalsIn(said.accounts);
       // POOLS OUT, before the hub sees the answer: kept in this process and
@@ -2271,7 +2282,10 @@ export class Sidecar {
       this.pools?.adopt([]);
       await this.hub.vault({ accounts: [] }).catch(() => {});
     }
-    this.log.info(`sidecar: vault: ${said.text}`);
+    // AN ANSWER THIS BOX COULD NOT CHECK is somebody's to fix, and is said as
+    // a warning; every other refusal is said as it always was.
+    if (this.vaultUnchecked) this.log.warn(`sidecar: vault: ${said.text}`);
+    else this.log.info(`sidecar: vault: ${said.text}`);
     return this.vaultIntervalMs;
   }
 
@@ -2415,6 +2429,15 @@ export class Sidecar {
    */
   approvedFor = null;
 
+  /**
+   * Why this box took nothing from the vault's last answer, when the reason
+   * was that it could not tell the answer was the vault's
+   * (#vaultAnswerUnchecked), else null.
+   *
+   * @type {{ why: string, todo: string }|null}
+   */
+  vaultUnchecked = null;
+
   /** The API providers this box's hub last said it may bill to. @type {string[]} */
   apiProviders = [];
   /** Whether the last vault request asked for API keys, or null before any and once a change has been acted on. @type {boolean|null} */
@@ -2460,7 +2483,9 @@ export class Sidecar {
   }
 
   /**
-   * @returns {Promise<{ ok: true, accounts: Array<{ email: string, items: Array<{ name: string, expiresAt: number|null }>, problems?: string[] }> } | { ok: false, forget: boolean, text: string }>}
+   * @returns {Promise<{ ok: true, accounts: Array<{ email: string, items: Array<{ name: string, expiresAt: number|null }>, problems?: string[] }> }
+   *   | { ok: false, forget: boolean, text: string, unchecked?: { why: string, todo: string } }>}
+   *   `unchecked`, when the refusal is that this box could not tell the answer was the vault's (#vaultAnswerUnchecked)
    */
   async #askVault() {
     const key = /** @type {NonNullable<typeof this.vaultKey>} */ (this.vaultKey);
@@ -2536,12 +2561,68 @@ export class Sidecar {
         : `the vault did not answer for this box (${said})`;
       return { ok: false, forget: false, text: `${why}. Nothing this box holds was forgotten, and it asks again in ${Math.round(this.vaultIntervalMs / 60_000)} minutes.` };
     }
+    // THE VAULT'S OWN ANSWER, OR NOTHING IS TAKEN FROM IT (#vaultAnswerUnchecked).
+    // Before it is opened, and so before anything below reads a word of it.
+    const unchecked = await this.#vaultAnswerUnchecked(request, answer.sealed);
+    if (unchecked) return { ok: false, forget: false, unchecked, text: `${unchecked.why}. ${unchecked.todo} Nothing this box holds was changed, and it asks again in ${Math.round(this.vaultIntervalMs / 60_000)} minutes.` };
     try {
       const inside = /** @type {any} */ (await open({ privateKey, publicKey, aad: VAULT_BOX_AAD, sealed: answer.sealed }));
       return { ok: true, accounts: Array.isArray(inside?.accounts) ? inside.accounts : [] };
     } catch {
       return { ok: false, forget: false, text: 'the answer did not open with this request’s key, so it was not used' };
     }
+  }
+
+  /**
+   * Why an answer to this box's vault request is not the vault's own, as far
+   * as this box can tell, or null when it is.
+   *
+   * SEALED WAS NEVER ENOUGH. This box's request is signed and not sealed, so
+   * the key its answer is sealed to goes through the coordinator in the
+   * clear, and anybody can seal to a public key. A second outside review
+   * answered a box in the vault's place: the box set itself approved for a
+   * member's vault nobody had approved it for, and handed its hub a Codex
+   * sign-in for a member that no custodian had kept. So the answer carries
+   * the minter's signature, inside `sealed` beside its three strings, by the
+   * key this box pins from the fleet's own address for the key list
+   * (intent-keys.js), over this box, this request and this sealed part
+   * (protocol/vault-answer.js), and it is checked HERE, before the answer is
+   * opened: nothing is set approved, handed to the hub, or forgotten on an
+   * answer that does not pass.
+   *
+   * EVERY WAY OF NOT PASSING IS CANNOT TELL, and keeps what is held, as
+   * silence does (syncVault): a coordinator that could make a box forget by
+   * sending it an answer it cannot check would be given the one thing this
+   * check takes from it. The reason is said in words that say what to do,
+   * because two of the three are somebody's to fix: a minter older than
+   * this box, which signs nothing, and a minter given a new signing key.
+   *
+   * @param {{ hostKey: { kty: string, crv: string, x: string, y: string }, at: number, reply: string }} request  what this box signed and sent
+   * @param {any} sealed  what came back as the sealed part
+   * @returns {Promise<{ why: string, todo: string }|null>}
+   */
+  async #vaultAnswerUnchecked(request, sealed) {
+    const signature = typeof sealed?.signature === 'string' ? sealed.signature : '';
+    if (!signature) {
+      return {
+        why: 'the vault’s answer is not signed, which is what a minter older than this box sends, and one whose signing key does not load',
+        todo: 'Whoever runs the fleet deploys its minting Worker again, and this box takes its vault at its next ask.',
+      };
+    }
+    const pinned = this.intentKeys ? await this.intentKeys.minterKey() : null;
+    if (!pinned) {
+      const problem = this.intentKeys?.problem;
+      return {
+        why: `this box keeps no signing key of the minter’s to check the vault’s answer with${problem ? ` (${problem})` : ''}`,
+        todo: 'It keeps one the first time it reaches the fleet’s own address, so look at whether this box can reach it.',
+      };
+    }
+    const signed = await vaultBoxAnswerInput({ host: await keyId(request.hostKey), at: request.at, reply: request.reply, sealed });
+    if (await verify(pinned, signature, signed)) return null;
+    return {
+      why: 'the vault’s answer is not signed by the minter’s key this box keeps, so it was changed on its way here, or the minter has a new signing key',
+      todo: `If the minter was given a new key, delete ${this.intentKeys?.file ?? MINTER_KEY_FILE} on this box to accept it. If it was not, something between this box and the vault is answering in its place.`,
+    };
   }
 
   /**
