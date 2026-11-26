@@ -602,14 +602,22 @@ person's allowance is full. A standing one is never dropped to make room. `send`
 carries, with an intent that would go unsigned, the delegation that covers it
 and runs out soonest, and nothing when none does.
 
-**The members a grant names are part of what it covers.** A grant that names
-Debbie and one that names nobody are two grants, kept side by side, and a new
-one replaces an old one only when it names the same members. So a person who
-allows an MCP client again with other members picked has both rows under You →
-Delegations until they revoke one, which is also true of what a box would
-take: the older grant was always good until it ran out or was revoked, and it
-used to vanish from the list. Where both cover a request about a session that
-runs as a member, the one that names the member is carried.
+**Whether a grant names members is part of what it covers; which ones is
+not.** A grant that names members and one that names nobody are two grants,
+kept side by side, because the second is the only one a box from before the
+field can read. Among grants that name members, a newer one for the same
+verbs, boxes and parameters takes the older one's place, whoever each names.
+So a person who allows an MCP client again with fewer members picked has
+narrowed what the coordinator carries: the older, wider grant is gone from
+You → Delegations and from every request. For a while the lists themselves
+were compared, and both were kept: a start as a member the person had just
+turned off was still carried under the first grant, and the ninth different
+selection was refused `too_many`. Replacing a grant here stops the
+coordinator carrying it and no more. A box still takes the older one, from
+anybody who holds its bytes, until it runs out or the minter lists it as
+revoked. Where a grant with a list and one without both cover a request
+about a session that runs as a member, the one that names the member is
+carried.
 
 **A grant that names members goes only to a box that can read one**, which is
 a box that speaks protocol 22. The list is in the bytes the phone signed, so

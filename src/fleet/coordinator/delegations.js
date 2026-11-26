@@ -31,22 +31,31 @@ export const MAX_DELEGATION_STORE_BYTES = 100_000;
 export const SHORT_DELEGATION_MS = 60 * 60_000;
 
 /**
- * Do two grants cover the same thing: the same verbs, boxes, parameters and
- * members?
+ * Do two grants cover the same thing: the same verbs, boxes and parameters,
+ * and both with a list of members or both with none?
  *
- * THE MEMBERS ARE PART OF IT. They were left out, so the grant a person made
- * after picking a member took the place of the one that named none, and the
- * one that named none was the only one a box from before the field could
- * read (`cover`, below): every call to such a box then went with a grant it
- * called badly signed. A grant with no list and one with an empty list are
- * different grants too, because the list is in the bytes that were signed.
+ * WHETHER IT NAMES MEMBERS IS PART OF IT. That was left out, so the grant a
+ * person made after picking a member took the place of the one that named
+ * none, and the one that named none was the only one a box from before the
+ * field could read (`cover`, below): every call to such a box then went with
+ * a grant it called badly signed. A grant with no list and one with an empty
+ * list are different grants too, because the list is in the bytes that were
+ * signed.
+ *
+ * WHICH MEMBERS IT NAMES IS NOT. For a while it was, and allowing again with
+ * fewer members stopped narrowing anything: a person who allowed Debbie and
+ * Loose, turned Loose off and allowed again kept both grants, and a start
+ * as Loose was still carried under the first. Every different selection was
+ * also one more of the eight a person may keep, so the ninth was refused. A
+ * newer list is the person saying who it is now, and takes the older one's
+ * place, as it did before the field was compared at all.
  *
  * @param {import('../protocol/intent-signature.js').Grant} a @param {import('../protocol/intent-signature.js').Grant} b
  */
 function sameCover(a, b) {
   const key = (/** @type {import('../protocol/intent-signature.js').Grant} */ g) => JSON.stringify([
     [...g.verbs].sort(), [...g.hosts].sort(), Object.entries(g.match).sort(([x], [y]) => (x < y ? -1 : 1)),
-    g.members === undefined ? null : [...g.members].sort(),
+    g.members !== undefined,
   ]);
   return key(a) === key(b);
 }
@@ -90,7 +99,8 @@ export class Delegations {
     if (d.grant.expires < this.now()) return { ok: false, error: { code: 'stale' }, text: 'That delegation has already run out.' };
     // A RENEWAL REPLACES WHAT IT RENEWS: one covering exactly the same verbs,
     // boxes and parameters as one kept already is the same permission for
-    // longer, and keeping both would only fill the person's allowance.
+    // longer, and keeping both would only fill the person's allowance. So
+    // does one that names other members than the one it follows (sameCover).
     let others = (this.byPerson.get(who) ?? []).filter((x) => x.grant.id !== d.grant.id && !sameCover(x.grant, d.grant));
     if (others.length >= MAX_DELEGATIONS_PER_PERSON) {
       // A SHORT ONE GIVES WAY: a phone signs one for each request the fleet

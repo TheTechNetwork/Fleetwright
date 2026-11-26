@@ -311,6 +311,34 @@ test('a renewal replaces what it renews, and a person’s short delegations give
   assert.equal(full.put(NINA, await make({ match: { template: 'one-more' } })).error?.code, 'too_many');
 });
 
+test('allowing an MCP client again with fewer members narrows it: the newer list takes the older one’s place, and the grant that names nobody is kept beside it', async () => {
+  // The third review's finding. The lists themselves were compared, so a
+  // person who allowed Debbie and Loose, turned Loose off and allowed again
+  // kept both grants, and a start as Loose was still carried under the
+  // first. Before the lists were compared at all, the new grant replaced it.
+  const { Delegations, MAX_DELEGATIONS_PER_PERSON } = await import('../src/fleet/coordinator/delegations.js');
+  const store = new Delegations();
+  const { privateJwk, publicJwk } = await generateKeyPair();
+  const kid = await keyId({ kty: 'EC', crv: 'P-256', x: String(publicJwk.x), y: String(publicJwk.y) });
+  let n = 0;
+  const allow = async (/** @type {string[]|undefined} */ members) => {
+    const grant = { v: 1, id: `mcp-grant-${String(++n).padStart(8, '0')}`, actor: NINA, verbs: ['start', 'stop', 'peek'], hosts: ['*'], match: {}, issuedAt: Date.now(), expires: Date.now() + 5 * 86_400_000 + n, ...(members ? { members } : {}) };
+    return { grant, sig: await sign(privateJwk, delegationSigningInput(grant)), kid };
+  };
+  const asLoose = () => store.cover({ actor: NINA, verb: 'start', params: { member: 'loose', task: 'x' } }, 'box-a', { asMember: 'loose' })?.grant.members ?? null;
+  assert.equal(store.put(NINA, await allow(['debbie', 'loose'])).ok, true);
+  assert.deepEqual(asLoose(), ['debbie', 'loose']);
+  assert.equal(store.put(NINA, await allow(['debbie'])).ok, true);
+  assert.deepEqual(store.listFor(NINA).map((g) => g.members), [['debbie']], 'the grant that named Loose is still kept');
+  assert.equal(asLoose(), null, 'a start as Loose is still carried under a grant');
+  // One that names nobody is another cover, for a box from before the field.
+  assert.equal(store.put(NINA, await allow(undefined)).ok, true);
+  assert.deepEqual(store.listFor(NINA).map((g) => g.members ?? null).sort(), [['debbie'], null].sort());
+  // And a different selection is not one more of the eight a person keeps.
+  for (let i = 0; i < MAX_DELEGATIONS_PER_PERSON + 2; i++) assert.equal(store.put(NINA, await allow([`m${i}`])).ok, true, `selection ${i}`);
+  assert.equal(store.listFor(NINA).length, 2);
+});
+
 test('a delegation that names members goes only to a box that can read one, and an older box is named as the thing to update', async () => {
   // `members` is in the bytes a phone signs. A box from before the field
   // rebuilds them without it and finds the grant badly signed, for every
@@ -332,8 +360,7 @@ test('a delegation that names members goes only to a box that can read one, and 
 
   // SHE PICKS A MEMBER and allows it again. The two are different grants,
   // so the one the old box can read is still there to carry.
-  const naming = await delegation({ members: ['debbie'] });
-  assert.equal(core.keepDelegation(NINA, naming).ok, true);
+  assert.equal(core.keepDelegation(NINA, await delegation({ members: ['debbie'] })).ok, true);
   assert.deepEqual(core.delegationsFor({ email: NINA }).map((g) => g.members ?? null), [null, ['debbie']]);
   assert.deepEqual((await ask('start', { name: 'job' }, 'box-strict', { unsigned: true })).frames.map((f) => f.delegation?.grant.id), [wide.grant.id]);
   // A box that speaks 22 is carried either; one with an empty list is a grant with a list.
@@ -354,6 +381,10 @@ test('a delegation that names members goes only to a box that can read one, and 
   assert.equal(sent['box-strict'].length, before, 'a grant the box cannot read was sent to it');
   assert.equal(core.keepDelegation(NINA, await delegation({ members: [] })).ok, true);
   assert.equal((await ask('start', { name: 'job' }, 'box-strict', { unsigned: true })).r.error?.code, 'host_outdated', 'an empty list is signed as a list');
+  // A list took the place of a list, so Debbie is allowed again to go on.
+  assert.deepEqual(core.delegationsFor({ email: NINA }).map((g) => g.members ?? null), [[]]);
+  const naming = await delegation({ members: ['debbie'] });
+  assert.equal(core.keepDelegation(NINA, naming).ok, true);
 
   // A BOX THAT TAKES UNSIGNED WORK is sent the request without the grant,
   // which is how it takes it, and never with one it would call forged.
