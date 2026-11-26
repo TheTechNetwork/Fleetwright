@@ -242,7 +242,17 @@ says which, and it is what a screen draws.
 - **A box says what its sessions cost.** A box a member enrolled could
   under-report. It can do that only for sessions on itself. A box could
   over-report too, for a session somebody the minter lists started on it,
-  at most $100 a report.
+  at most $100 a report. That bounds a report and nothing longer: a box
+  reports every half minute, and a figure that falls is counted again from
+  nothing, so a box that means to can still take a member past any budget,
+  $100 at a time.
+- **`risky-work` is a label, and whoever makes a task puts it on.** The
+  fleet asks about a start on a task that carries a kind of work it names.
+  Taking the label off such a task needs the standing that could approve
+  it. Leaving it off needs nothing: the same words on a task made without
+  it, or on a start with no task, are not asked about. It is a way for a
+  team to mark its own risky work, not a way to stop somebody who may start
+  as the member from doing that work unasked.
 - **An approval is as strong as the credential that gives it.** The
   coordinator checks who is answering, not what they are holding. A program
   with a manager's credential that calls the route directly has approved.
