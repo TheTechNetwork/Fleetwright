@@ -271,6 +271,32 @@ test('more time given while another machine is being cleared away is kept, and t
   assert.deepEqual(after.ok && after.machines.map((m) => [m.name, m.until]), [[B, more.until]]);
 });
 
+test('a machine made and given more time while another is being cleared away keeps that time too', async (t) => {
+  const { podman, cfg, clock, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 5 });
+  // Eli's is over, and the minute's look is held in the middle of removing
+  // it. That look listed the containers before Sam's machine existed.
+  clock.now += 6 * 60_000;
+  podman.set({ holdRm: 'next' });
+  const look = machines.list();
+  for (let i = 0; i < 500 && podman.state().holdRm !== 'held'; i += 1) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(podman.state().holdRm, 'held', 'the look is removing Eli’s machine');
+  const B = 'vm-bbbbbbbbbbbb';
+  assert.equal((await machines.make({ owner: SAM, ticket: ticket('b'.repeat(12)), coordinator: FLEET, minutes: 10 })).ok, true);
+  const more = await machines.control({ owner: SAM, name: B, action: 'extend', minutes: 120 });
+  assert.equal(more.ok, true, more.text);
+  podman.set({ holdRm: '' });
+  await look;
+  // The look took a machine it had not listed for one that was gone, and
+  // wrote the file without it: Sam was told two hours and it went at the
+  // ten minutes its label said, with its disk.
+  assert.deepEqual(JSON.parse(readFileSync(path.join(cfg.stateDir, 'machines.json'), 'utf8')), { [B]: { until: more.until } });
+  clock.now += 11 * 60_000;
+  const after = await machines.list();
+  assert.deepEqual(after.ok && after.machines.map((m) => [m.name, m.until]), [[B, more.until]]);
+  assert.deepEqual(podman.state().volumes, [machineNames(B).volume]);
+});
+
 test('a box behind an egress allowlist neither builds the machine image nor offers it', async (t) => {
   // It refuses every machine (above), so an image there is a button for
   // something that does not exist: built, offered, and then refused.

@@ -353,7 +353,10 @@ behind the hub's token like every route there.
   hub's state, because more time changes it. A hub that lost that state
   ends a machine by its labels, and a machine whose container stopped by
   itself (its sidecar ended, or the box restarted) is cleared away with
-  its volume.
+  its volume. A look takes an end out of that state only for a machine it
+  removed itself, or one that had no container when the look began. An
+  end written while a look is under way, for a machine made or given more
+  time in that moment, is left for the next look.
 - **Why one stopped is kept, for an hour.** A machine's log goes with its
   container, and it is the one place the machine said why. So before the
   hub removes one that stopped by itself it reads the last twenty lines of

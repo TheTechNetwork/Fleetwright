@@ -617,6 +617,8 @@ export class Machines {
     const ends = this.#ends();
     const now = this.now();
     const machines = [];
+    /** The machines this look removed. @type {Set<string>} */
+    const removed = new Set();
     for (const c of all) {
       // WHEN IT ENDS: what this box last wrote, or what it was made with.
       const until = ends[c.name]?.until ?? c.labelled;
@@ -628,6 +630,7 @@ export class Machines {
         // it stopped. Read first, for a machine nobody ended.
         if (c.state === 'over') await this.#noteEnded(c);
         await this.#remove(c.name);
+        removed.add(c.name);
         log.info(`machines: ended ${c.name} (${until !== null && until <= now ? 'its time was up' : 'its container had stopped'})`);
         continue;
       }
@@ -639,10 +642,20 @@ export class Machines {
     // times as they were read at the top put back an end somebody had just
     // extended: they were told two more hours, and the machine went in ten
     // minutes with its disk.
+    //
+    // AND GONE IS WHAT THIS LOOK SAW GO, never "not among the containers it
+    // listed". That list is from before the removals too, so a machine made
+    // while one was being cleared away was not on it, and its end was taken
+    // out of the file as one that had gone: made for ten minutes and given
+    // two hours in the same breath, its owner was told two hours and it went
+    // at the ten its label said. So an end is dropped only when it was in
+    // the file as this look began and is the same now, and its machine was
+    // removed here or had no container then. An end written since is
+    // somebody's newer word and stays for the next look to judge.
     await this.#clearStrays(all);
-    const live = new Set(machines.map((m) => m.name));
+    const listed = new Set(all.map((c) => c.name));
     const fresh = this.#ends();
-    const still = Object.fromEntries(Object.entries(fresh).filter(([n]) => live.has(n)));
+    const still = Object.fromEntries(Object.entries(fresh).filter(([n, e]) => !(ends[n]?.until === e.until && (removed.has(n) || !listed.has(n)))));
     if (Object.keys(still).length !== Object.keys(fresh).length) this.#keep(still);
     const image = await (prepare ? this.prepare() : this.imageState());
     const ended = this.#ended().map((e) => ({ name: e.name, owner: e.owner, at: e.at, text: endedText(e, now) }));

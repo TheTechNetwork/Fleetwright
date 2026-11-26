@@ -114,6 +114,15 @@ const main = async () => {
     // ONE SLOW REMOVAL, once (slowRmOnceMs): how a test holds a look at the
     // machines open while something else changes one.
     if (s.slowRmOnceMs) { const ms = s.slowRmOnceMs; s.slowRmOnceMs = 0; write(s); await letGo(() => new Promise((r) => setTimeout(r, ms))); s = read(); }
+    // ONE REMOVAL HELD UNTIL THE TEST LETS IT GO (holdRm: 'next', then the
+    // test sets it to ''): for what must happen while a look is clearing a
+    // machine away, however long that takes on the day. A wait of so many
+    // milliseconds is a guess at how slow the things beside it are.
+    if (s.holdRm === 'next') {
+      s.holdRm = 'held'; write(s);
+      await letGo(async () => { for (let i = 0; i < 3000; i++) { await new Promise((r) => setTimeout(r, 10)); try { if (read().holdRm !== 'held') return; } catch {} } });
+      s = read();
+    }
     s.containers = s.containers.filter((c) => c.name !== args[2]); write(s); return done(0);
   }
   if (args[0] === 'volume' && args[1] === 'ls') return done(0, s.volumes.join('\\n') + '\\n');
