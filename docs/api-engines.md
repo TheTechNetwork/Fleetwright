@@ -450,15 +450,33 @@ included. It built from a checkout only, and ran only when the image's own
 directory changed, which is how a path that was wrong only in a release
 (the SessionStart hook's) was never seen here.
 
-That run has no memory, processor or process limit on the machine, because
-a CI job's user has no cgroup controllers of its own; that Podman honours
-the limits a box passes is not checked anywhere, and neither is the hub
-inside refusing a session at its container's limit, which the tests read
-from a stand-in for the cgroup's files (`test/cgroup-memory.test.js`).
+**A session is started in the machine, in both legs.** The release leg was
+added for the hook's path and then started no session, so it never looked
+at it. A plain program stands where Claude Code would be, with no engine
+and nothing signed in: it runs the SessionStart hook the session's settings
+name, as Claude Code does, and the hub inside is asked whether it heard.
+A hook that names a file the machine does not have fails there. That part
+was run before CI, against the hub of a packed release on loopback with no
+network, both as it is and with the hook's file taken away.
 
-**The release leg, the stopped machine and the stray volume in that run
-were written without a Podman to run them on, and have not run until CI
-runs them.**
+**The three limits are applied where the runner will grant them.** A limit
+needs the user's own cgroup controllers, which a CI job's shell does not
+have, so the workflow asks for them (a manager of the user's own that
+outlives a login, told to hand it memory, processors and processes) and the
+smoke asks Podman before it leans on them (`--limits-if-granted`). With
+them, each limit is read back out of the machine's own cgroup as the number
+it was made with, and the hub inside is asked how many sessions it would
+take: no more than its 4 GB leaves room for, on a runner with several times
+that free. Where Podman still refuses, the run goes on without limits and
+says so, as a warning on the run and a heading in the job's summary. A run
+that says the limits were not applied shows nothing about them, and until
+one says they were, that Podman honours them and that the hub inside counts
+against one are still only read from a stand-in
+(`test/cgroup-memory.test.js`).
+
+**The limits, the step that asks for the controllers, and the session inside
+a real container were written without a Podman to run them on, and have not
+run until CI runs them.**
 
 **No machine has been made on a real box, and none has joined a fleet.**
 What is left unproven is the last step: a machine enrolling with a real
