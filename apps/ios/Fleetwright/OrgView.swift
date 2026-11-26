@@ -925,11 +925,30 @@ struct MemberView: View {
     /// (`checkTeam`). On a fleet that keeps a vault it removes nothing and
     /// says where to sign in; quietly asking the fleet alone is the fault
     /// again. OrgScreen.kt does the same, in the same order.
+    ///
+    /// WHAT THE FLEET WOULD REFUSE IS REFUSED HERE FIRST, BEFORE THE VAULT
+    /// IS TOLD. The two keep separate trees and each checks its own. An
+    /// agent with a report the vault had not been told about was taken out
+    /// of the vault, which empties an agent's vault for good, and then kept
+    /// by the fleet with "Jason reports to Debbie. Move them first." under
+    /// the button, as if nothing had happened. This page holds the fleet's
+    /// own list, so the one refusal that list can show is made from it, in
+    /// the fleet's sentence, and nothing is sent (`removalRefusedByRoster`).
+    ///
+    /// AND WHEN THE FLEET STILL SAYS NO after the vault said yes (a list
+    /// that had gone stale, a fleet that was not reached), the line says
+    /// both halves: what the vault has already done, and the fleet's own
+    /// sentence (`removalHalfDone`). The fleet's sentence alone read as
+    /// "nothing was removed".
     @MainActor
     private func remove() async {
         busy = true
         defer { busy = false }
         removeResult = ""
+        if let refused = removalRefusedByRoster(shown, roster: roster) {
+            removeResult = refused
+            return
+        }
         var toldVault = false
         if PhoneGitHub(settings: settings).signedIn {
             do {
@@ -958,9 +977,13 @@ struct MemberView: View {
         } catch {
             removeResult = error.localizedDescription
         }
-        // THE FLEET KEPT A MEMBER THE VAULT HAS FORGOTTEN. Custody is asked
-        // again so the page says so and offers File it.
-        if toldVault { await askVault() }
+        // THE FLEET KEPT A MEMBER THE VAULT HAS FORGOTTEN. The line says
+        // so, with the fleet's sentence after it, and custody is asked
+        // again so the page offers File it.
+        if toldVault {
+            removeResult = removalHalfDone(shown.name, kind: shown.kind, fleetSaid: removeResult)
+            await askVault()
+        }
     }
 
     /// Send the start New session described, as this member. The sheet has
@@ -1328,6 +1351,35 @@ func removalCost(_ name: String, kind: String) -> String {
     kind == "agent"
         ? "Removes \(name) from the organization. The vault forgets what it kept and the machines approved for it, and that cannot be undone."
         : "Removes \(name) from the organization. What they keep in the vault is their own and stays theirs."
+}
+
+/// Why the fleet would refuse to remove this member, as far as the fleet's
+/// own list on this phone shows, in the fleet's own sentence
+/// (`remove`, src/fleet/coordinator/org-members.js), or nil when the list
+/// shows no reason. Asked before the vault is told anything, because the
+/// vault's half is not given back. The fleet has two more refusals and
+/// neither can be read off the list: a member that is not there, which is
+/// a page that would not be open, and somebody who may not remove it, for
+/// whom Remove member is not drawn. The same sentences as Android.
+func removalRefusedByRoster(_ member: Fleet.Member, roster: [Fleet.Member]) -> String? {
+    let reports = roster.filter { $0.reportsTo == member.id }.map(\.name)
+    guard !reports.isEmpty else { return nil }
+    let names = reports.joined(separator: ", ")
+    return reports.count == 1
+        ? "\(names) reports to \(member.name). Move them first."
+        : "\(names) report to \(member.name). Move each of them first."
+}
+
+/// What to say when the vault took a member out and the fleet then kept
+/// it: what is already done and cannot be read off the page, then the
+/// fleet's own sentence, said as the fleet's. An agent's vault is emptied
+/// when the vault is told it is gone, so that is said; a person's is their
+/// own and was not touched. The same sentences as Android.
+func removalHalfDone(_ name: String, kind: String, fleetSaid: String) -> String {
+    let done = kind == "agent"
+        ? "The vault has already forgotten what it kept for \(name) and the machines approved for it, and the fleet still lists \(name)."
+        : "The vault has already taken \(name) out of its organization, and the fleet still lists them. What they keep is untouched."
+    return "\(done) File it, under Custody, puts the member back in the vault. Your fleet said: \(fleetSaid)"
 }
 
 /// Why Remove member did nothing on a phone with no GitHub sign-in, where

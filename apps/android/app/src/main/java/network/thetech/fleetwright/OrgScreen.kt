@@ -628,10 +628,29 @@ private fun MemberPage(
      * that keeps a vault it removes nothing and says where to sign in;
      * quietly asking the fleet alone is the fault again. OrgView.swift does
      * the same, in the same order.
+     *
+     * WHAT THE FLEET WOULD REFUSE IS REFUSED HERE FIRST, BEFORE THE VAULT IS
+     * TOLD. The two keep separate trees and each checks its own. An agent
+     * with a report the vault had not been told about was taken out of the
+     * vault, which empties an agent's vault for good, and then kept by the
+     * fleet with "Jason reports to Debbie. Move them first." under the
+     * button, as if nothing had happened. This page holds the fleet's own
+     * list, so the one refusal that list can show is made from it, in the
+     * fleet's sentence, and nothing is sent ([removalRefusedByRoster]).
+     *
+     * AND WHEN THE FLEET STILL SAYS NO after the vault said yes (a list that
+     * had gone stale, a fleet that was not reached), the line says both
+     * halves: what the vault has already done, and the fleet's own sentence
+     * ([removalHalfDone]). The fleet's sentence alone read as "nothing was
+     * removed".
      */
     suspend fun remove() {
         val fleet = Fleet(settings)
         removeResult = ""
+        removalRefusedByRoster(member, roster)?.let {
+            removeResult = it
+            return
+        }
         var toldVault = false
         if (PhoneGitHub(settings).signedIn) {
             val told = vault.fileOrgMember(fleet, member.id, member.kind, member.email, member.reportsTo, remove = true)
@@ -652,9 +671,13 @@ private fun MemberPage(
             return
         }
         removeResult = reply.fold({ it.text ?: "Your fleet refused that." }, { it.message ?: "that did not work" })
-        // THE FLEET KEPT A MEMBER THE VAULT HAS FORGOTTEN. Custody is asked
-        // again so the page says so and offers File it.
-        if (toldVault) askVault()
+        // THE FLEET KEPT A MEMBER THE VAULT HAS FORGOTTEN. The line says so,
+        // with the fleet's sentence after it, and custody is asked again so
+        // the page offers File it.
+        if (toldVault) {
+            removeResult = removalHalfDone(member.name, member.kind, removeResult)
+            askVault()
+        }
     }
 
     LaunchedEffect(member.id, asked) { askVault() }
@@ -1263,6 +1286,40 @@ fun removalCost(name: String, kind: String): String =
  * fleet keeps a vault: what to do, then why it is asked. The same sentence
  * as iOS.
  */
+/**
+ * Why the fleet would refuse to remove this member, as far as the fleet's own
+ * list on this phone shows, in the fleet's own sentence (`remove`,
+ * src/fleet/coordinator/org-members.js), or null when the list shows no
+ * reason. Asked before the vault is told anything, because the vault's half
+ * is not given back. The fleet has two more refusals and neither can be read
+ * off the list: a member that is not there, which is a page that would not be
+ * open, and somebody who may not remove it, for whom Remove member is not
+ * drawn. The same sentences as iOS.
+ */
+internal fun removalRefusedByRoster(member: Fleet.Member, roster: List<Fleet.Member>): String? {
+    val reports = roster.filter { it.reportsTo == member.id }.map { it.name }
+    if (reports.isEmpty()) return null
+    val names = reports.joinToString(", ")
+    return if (reports.size == 1) "$names reports to ${member.name}. Move them first."
+    else "$names report to ${member.name}. Move each of them first."
+}
+
+/**
+ * What to say when the vault took a member out and the fleet then kept it:
+ * what is already done and cannot be read off the page, then the fleet's own
+ * sentence, said as the fleet's. An agent's vault is emptied when the vault
+ * is told it is gone, so that is said; a person's is their own and was not
+ * touched. The same sentences as iOS.
+ */
+fun removalHalfDone(name: String, kind: String, fleetSaid: String): String {
+    val done = if (kind == "agent") {
+        "The vault has already forgotten what it kept for $name and the machines approved for it, and the fleet still lists $name."
+    } else {
+        "The vault has already taken $name out of its organization, and the fleet still lists them. What they keep is untouched."
+    }
+    return "$done File it, under Custody, puts the member back in the vault. Your fleet said: $fleetSaid"
+}
+
 const val REMOVAL_NEEDS_GITHUB = "Sign in to GitHub under Runners first. Removing a member also tells the vault, which keeps who may use its credentials."
 
 /**
