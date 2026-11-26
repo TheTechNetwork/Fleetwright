@@ -4789,6 +4789,17 @@ export class CoordinatorCore {
     const onTask = spec.verb === 'start' && typeof spec.params?.taskId === 'string' ? String(spec.params.taskId) : '';
     const lockedOn = String(placement.host?.hostId || '');
     if (onTask) {
+      // THE TASK AS IT IS NOW, asked again in the same breath as the lock.
+      // The first asking (#startOn, above) is before a machine is chosen,
+      // and choosing one can wait: for an approval's digest, and in the
+      // seconds after a deploy for a box's first report. No lock is held in
+      // that wait, so the task could be rewritten in it and was: a session
+      // told "Tidy the docs" was locked onto a record that read "Reset the
+      // production database", with a `words` line in its history dated
+      // before its own start. Nothing between here and the lock waits, so
+      // what this compares is what the lock is taken on.
+      const still = this.#startOn(spec.requester, spec.params ?? {});
+      if (!still.ok) return still;
       const locked = this.tasks.lock(this.#who(spec.requester), onTask, { member: String(spec.params?.member ?? ''), branch: String(spec.params?.taskBranch ?? ''), hostId: lockedOn });
       if (!locked.ok) return locked;
       this.onStateChanged?.();

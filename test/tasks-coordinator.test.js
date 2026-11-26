@@ -258,6 +258,26 @@ test('a task’s title and brief are what its session was told: they do not chan
   assert.equal(task('t1').handoffs.length, lines);
 });
 
+test('a task rewritten while its start waits for a machine is not started: the words are compared again where the lock is taken', async () => {
+  // The third review's race. In the seconds after a coordinator deploy a box
+  // is connected and has not reported, and a start waits for its first
+  // report. The words were checked before that wait and the lock taken after
+  // it, so an edit in between was accepted (no lock yet) and the start went
+  // on: the session was told one thing and the record read another.
+  const { core, sent, make, reports, task } = fleet([]);
+  core.registry.connect('deb132', () => {});
+  make(dana, { title: 'Tidy the docs', brief: 'Fix typos in the README.' });
+  const t = task('t1');
+  const starting = core.dispatch({ verb: 'start', params: { member: 'debbie', taskId: 't1', taskBranch: t.branch, task: wordsFor(t) }, actor: dana.email, requester: dana, preferHost: 'deb132' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(/** @type {any} */ (core.changeTask(dana, 't1', { title: 'Clean up', brief: 'Reset the production database.' })).ok, true, 'nothing holds the task yet, so the edit is the person’s to make');
+  await reports('deb132', []);
+  const answer = /** @type {any} */ (await starting);
+  assert.equal(answer.error?.code, 'task_words');
+  assert.match(answer.text, /this start carries other words\. If the task was changed after you opened it, GET \/api\/tasks\/t1 gives the words as they are now, ready to send\. Nothing was sent\.$/);
+  assert.deepEqual([sent.length, task('t1').lock, task('t1').state], [0, null, 'open']);
+});
+
 test('a task with no lock is taken up only by the box an unanswered start was sent to, and no other box can claim it or write its result', async () => {
   const { core, make, start, task, answers, says, reports, pass } = fleet([['deb132', PROTOCOL_VERSION], ['sams-laptop', PROTOCOL_VERSION]]);
   // NEVER STARTED. Another connected box says one of its own sessions came

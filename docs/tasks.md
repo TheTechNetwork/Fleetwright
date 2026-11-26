@@ -158,6 +158,14 @@ that carries anything else is refused before a machine is chosen. A task
 changed after somebody opened it is refused the same way, and the refusal
 says where the words as they are now can be read.
 
+**And compares them again where the lock is taken.** Choosing a machine can
+wait: for an approval, and in the seconds after a coordinator deploy for a
+box's first report. Nothing holds the task in that wait, so it could be
+rewritten in it, and a start that had passed the first comparison went on to
+lock a record that no longer said what its session was told. Every one of
+those refusals is made a second time in the same step as the lock, and a
+start that no longer matches is refused `task_words` with nothing sent.
+
 **The box composes the first message** (`composeTaskMessage`,
 `src/fleet/protocol/tasks.js`):
 
