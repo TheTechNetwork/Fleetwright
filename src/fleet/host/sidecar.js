@@ -71,7 +71,7 @@ import { Pools } from './pools.js';
 import { EdgeWatch } from './edge-watch.js';
 import { IntentKeys } from './intent-keys.js';
 import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
-import { actorEmail, needsSignature, keyId, signinAnswerInput } from '../protocol/intent-signature.js';
+import { actorEmail, needsSignature, keyId, signinAnswerInput, delegationShape, SESSION_VERBS } from '../protocol/intent-signature.js';
 import { accountOfMember, memberOfAccount, composeFirstMessage, MEMBER_ID_RE } from '../protocol/members.js';
 import { ENGINE_IDS, DEFAULT_ENGINE, SIGNIN_ENGINES } from '../protocol/engines.js';
 import { composeTaskMessage, TASK_BRANCH_RE } from '../protocol/tasks.js';
@@ -1039,6 +1039,28 @@ export class Sidecar {
       };
     }
 
+    // A DELEGATION AT A SESSION THAT RUNS AS A MEMBER (docs/members.md, "A
+    // delegation covers a member only by naming it"). The rule above stopped
+    // a grant that names no member from starting a session as one, and
+    // nothing after the start asked it: the same grant wrote files into a
+    // member's running session, answered its prompts, resumed it and read
+    // it. So a delegated verb that names a session is held to the grant's
+    // `members` when that session is a member's.
+    //
+    // ONLY WHERE THIS BOX TAKES NOTHING UNSIGNED. A box that takes unsigned
+    // work takes the coordinator's word for these verbs with or without a
+    // grant, so refusing the grant there would stop an honest coordinator
+    // and nobody else (docs/members.md, "What it does not stop").
+    if (verdict === 'delegated' && this.#enforces(intent) && SESSION_VERBS.includes(intent.verb) && typeof intent.params?.name === 'string') {
+      // The grant as it was just checked: `delegated` is a signature that
+      // held over exactly this shape, `members` in it or left out.
+      const refused = await this.#heldToMembers(intent, delegationShape(intent.delegation)?.grant.members ?? []);
+      if (refused) {
+        this.log.warn(`sidecar: refused ${intent.verb} ${intent.id} at ${intent.params.name} from ${intent.actor ?? 'nobody'}: ${refused.why}`);
+        return { v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: refused.code }, text: refused.text };
+      }
+    }
+
     // AS A MEMBER (docs/members.md, "Starting as a member"): checked here,
     // against the list the minter signed, whatever this box's mode. From
     // here on the intent is the member's own start, with who asked beside it.
@@ -1192,6 +1214,60 @@ export class Sidecar {
     const who = actorEmail(intent.actor);
     if (!owner || !who) return null;
     return owner === who;
+  }
+
+  /**
+   * Why a delegated verb at a session is not covered by the members its
+   * grant names, or null when it is.
+   *
+   * WHOSE THE SESSION IS COMES FROM THIS BOX'S OWN HUB, and from nothing the
+   * request says. The hub wrote `member` on the session's record when it
+   * started it, and this box sent that start only after it had checked it
+   * against the minter's list (#startAs), so the record is this box's own
+   * word. The coordinator's list of sessions is not asked: it is the party
+   * the grant is checked against.
+   *
+   *  - A session the hub records no member for is its starter's, and the
+   *    grant covers it as it always did.
+   *  - A name the hub does not have is passed on, and the hub says so.
+   *  - A HUB THAT DOES NOT ANSWER IS CANNOT TELL, and that refuses: a check
+   *    that lapsed while the hub was busy would be one a coordinator could
+   *    wait for.
+   *
+   * Running, stopped and binned alike: a resume runs on the member's
+   * sign-ins again, and a restore brings the session back to do so.
+   *
+   * @param {any} intent @param {string[]} names  the members the grant names
+   * @returns {Promise<{ code: string, text: string, why: string }|null>}
+   */
+  async #heldToMembers(intent, names) {
+    const session = String(intent.params.name);
+    /** @type {any} */
+    let state = null;
+    try {
+      state = await this.hub.state();
+    } catch {
+      state = null;
+    }
+    if (!state || !Array.isArray(state.sessions)) {
+      return {
+        code: 'member_unchecked',
+        why: 'the hub did not say whose session it is',
+        text: `${this.hostId} could not read from its own session manager whose session ${session} is, so it cannot tell whether what ${intent.actor} granted this connection covers it. Nothing was done. Try again in a moment.`,
+      };
+    }
+    const rows = [...state.sessions, ...(Array.isArray(state.bin) ? state.bin : [])].filter((/** @type {any} */ r) => r && r.name === session);
+    const row = rows.find((/** @type {any} */ r) => typeof r.member === 'string' && r.member && !names.includes(r.member));
+    if (!row) return null;
+    const name = typeof row.memberName === 'string' && row.memberName ? row.memberName : row.member;
+    const named = names.length ? names.join(', ') : 'no member';
+    return {
+      code: 'member_not_delegated',
+      why: `it runs as ${row.member} and the delegation it carries names ${named}`,
+      text:
+        `What ${intent.actor} granted this connection does not cover ${session}, which runs as ${name}: it names ${named}. ` +
+        `Grant it again from the Fleetwright app on a phone, under You \u2192 Delegations, with ${name} among the members it may start as. Nothing was done.`,
+    };
   }
 
   /**

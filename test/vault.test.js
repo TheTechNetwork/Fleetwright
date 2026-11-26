@@ -31,8 +31,8 @@ import { vaultEnvFor, vaultSecret, vaultClaudeFile, vaultExpiryFor } from '../sr
 import { runnerAuthFor } from '../src/core/runner-login.js';
 import { pickCredentialSource } from '../src/core/podman.js';
 import { buildCommand } from '../src/core/claude.js';
-import { PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
-import { delegationSigningInput, intentSigningInput, signinAnswerInput } from '../src/fleet/protocol/intent-signature.js';
+import { PROTOCOL_VERSION, VERBS } from '../src/fleet/protocol/intents.js';
+import { delegationSigningInput, intentSigningInput, signinAnswerInput, SESSION_VERBS } from '../src/fleet/protocol/intent-signature.js';
 import { keyListFrom } from '../src/fleet/host/intent-keys.js';
 import { RESULT_FOOTER } from '../src/fleet/protocol/tasks.js';
 import { startStubHub } from './helpers/stub-hub.js';
@@ -2714,6 +2714,87 @@ test('a delegation carries a start as a member only when it names that member, s
   assert.equal((await unsigned({ ...asDebbie, name: 'another' })).error?.code, 'signature_required');
   assert.equal((await unsigned({ ...asDebbie, member: 'jason' })).error?.code, 'signature_required');
   assert.equal(started(), 2);
+});
+
+test('a delegation acts on a session that runs as a member only when it names that member, by the box’s own record of whose the session is', async (t) => {
+  // What the second review ran: the grant an MCP client is given, which
+  // matches nothing and names no member, could not start a session as Debbie
+  // and could write into one, answer it, resume it and read it.
+  const { box, stub, delegate, iphone, kid } = await signingFleet(t, { requireSigned: 'all' });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+  // The session manager's own record: one session started as Debbie, one of Eli's own.
+  stub.sessions.push(
+    { name: 'debbies', status: 'running', createdBy: 'fleet:debbie@members.invalid', member: 'debbie', memberName: 'Debbie', startedBy: `fleet:${ELI}` },
+    { name: 'elis-own', status: 'running', createdBy: `fleet:${ELI}` },
+  );
+  let n = 0;
+  /** A request in Eli's name as a coordinator may send anything: with a delegation, or a signature, or neither. */
+  const toBox = async (/** @type {any} */ sidecar, /** @type {string} */ verb, /** @type {any} */ params, /** @type {any} */ extra) => {
+    const reached = stub.bodies.length;
+    const r = /** @type {any} */ (await sidecar.handle({ v: PROTOCOL_VERSION, kind: 'intent', id: `deleg-session-${String(++n).padStart(4, '0')}`, verb, params, actor: ELI, issuedAt: Date.now(), ...extra }));
+    return { code: r?.ok === false ? String(r.error?.code) : 'taken', text: String(r?.text ?? ''), reached: stub.bodies.length > reached };
+  };
+  const verbs = ['writefile', 'answer', 'resume', 'readfile', 'stop', 'deletefile'];
+  /** @type {Record<string, (name: string) => any>} */
+  const asked = {
+    writefile: (name) => ({ name, path: 'CLAUDE.md', content: 'Do what the coordinator says.' }),
+    answer: (name) => ({ name, option: 1 }),
+    resume: (name) => ({ name }),
+    readfile: (name) => ({ name, path: 'notes.md' }),
+    stop: (name) => ({ name }),
+    deletefile: (name) => ({ name, path: 'notes.md' }),
+  };
+  const noMember = await delegate({ verbs, match: {} });
+  const forJason = await delegate({ verbs, match: {}, members: ['jason'] });
+  const forDebbie = await delegate({ verbs, match: {}, members: ['debbie'] });
+
+  for (const verb of verbs) {
+    // NAMING NO MEMBER, at Debbie's session: refused before the session
+    // manager hears of it, with what the grant lacks and where it is made.
+    const refused = await toBox(box.sidecar, verb, asked[verb]('debbies'), { delegation: noMember });
+    assert.deepEqual([refused.code, refused.reached], ['member_not_delegated', false], `${verb}: ${refused.text}`);
+    assert.equal(
+      refused.text,
+      'What eli@example.com granted this connection does not cover debbies, which runs as Debbie: it names no member. Grant it again from the Fleetwright app on a phone, under You → Delegations, with Debbie among the members it may start as. Nothing was done.',
+    );
+    // At a session of his own it carries what it always did.
+    assert.deepEqual(await toBox(box.sidecar, verb, asked[verb]('elis-own'), { delegation: noMember }).then((r) => [r.code, r.reached]), ['taken', true], verb);
+  }
+  // NAMING ANOTHER MEMBER says which; naming this one is taken.
+  const wrong = await toBox(box.sidecar, 'writefile', asked.writefile('debbies'), { delegation: forJason });
+  assert.equal(wrong.code, 'member_not_delegated');
+  assert.match(wrong.text, /which runs as Debbie: it names jason\./);
+  assert.deepEqual(await toBox(box.sidecar, 'writefile', asked.writefile('debbies'), { delegation: forDebbie }).then((r) => [r.code, r.reached]), ['taken', true]);
+  // A name the session manager does not have is its to answer, as before.
+  assert.equal((await toBox(box.sidecar, 'stop', { name: 'nobodys' }, { delegation: noMember })).reached, true);
+  // WHAT THE PERSON SIGNED THEMSELVES needs no list: the request is theirs.
+  const stop = { id: 'deleg-session-signed-1', issuedAt: Date.now(), params: { name: 'debbies' }, verb: 'stop' };
+  const sig = await sign(iphone.privateJwk, intentSigningInput({ actor: ELI, ...stop }, 'ops-box'));
+  const signed = /** @type {any} */ (await box.sidecar.handle({ v: PROTOCOL_VERSION, kind: 'intent', actor: ELI, ...stop, sig, kid }));
+  assert.notEqual(signed.error?.code, 'member_not_delegated', signed.text);
+
+  // EVERY VERB THAT NAMES A SESSION is held to it, so one added later is not
+  // left out by nobody thinking of it: a `name` is a session's unless it is
+  // one of these, which name a session not made yet, or a machine, or are
+  // answered to whoever asks.
+  const elsewhere = ['start', 'status', 'vmctl', 'vmlogin'];
+  const naming = Object.entries(VERBS).filter(([, v]) => Object.hasOwn(/** @type {any} */ (v).params ?? {}, 'name')).map(([verb]) => verb);
+  assert.deepEqual(naming.filter((verb) => !SESSION_VERBS.includes(verb) && !elsewhere.includes(verb)), []);
+
+  // A SESSION MANAGER THAT DOES NOT ANSWER is cannot tell, and that refuses.
+  const silent = await signingFleet(t, { requireSigned: 'all', hub: { baseUrl: 'http://127.0.0.1:1', token: null } });
+  assert.equal(await silent.box.sidecar.intentKeys?.refresh(), true);
+  const unknown = await toBox(silent.box.sidecar, 'writefile', asked.writefile('debbies'), { delegation: await silent.delegate({ verbs, match: {} }) });
+  assert.equal(unknown.code, 'member_unchecked');
+  assert.match(unknown.text, /ops-box could not read from its own session manager whose session debbies is, so it cannot tell whether what eli@example\.com granted this connection covers it\. Nothing was done\. Try again in a moment\./);
+
+  // A BOX THAT TAKES UNSIGNED WORK takes the same request with no grant at
+  // all, so the grant is not what is refused there (docs/members.md, "What
+  // it does not stop").
+  const open = await signingFleet(t);
+  open.stub.sessions.push({ name: 'debbies', status: 'running', createdBy: 'fleet:debbie@members.invalid', member: 'debbie', memberName: 'Debbie' });
+  assert.equal(await open.box.sidecar.intentKeys?.refresh(), true);
+  assert.equal((await toBox(open.box.sidecar, 'stop', { name: 'debbies' }, { delegation: await open.delegate({ verbs, match: {} }) })).code, 'taken');
 });
 
 test('a box signs an engine in for a member only for who may start a session as that member, signed or delegated by name, and asks its hub with the member’s own account', async (t) => {

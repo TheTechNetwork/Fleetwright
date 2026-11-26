@@ -115,6 +115,17 @@ export function intentSigningInput(intent, host) {
 // sessions run on it, and its answer carries the code a person types, so a
 // grant that names no member carries it for nobody.
 //
+// AND THE MEMBERS WHOSE SESSIONS IT MAY ACT ON, by the same list. A session
+// started as a member runs on that member's sign-ins for as long as it runs,
+// and the rule above was asked of a start and of nothing after it: a grant
+// that named no member could not start a session as Debbie, and could write
+// files into one that was running, answer its prompts, resume it and read
+// it. So a verb that names a session (SESSION_VERBS) is covered, at a
+// session its box's own hub records as a member's, only by a grant that
+// names that member. Which sessions those are is the box's to know and
+// nobody's to tell it, so that half is checked there (host/sidecar.js) and
+// not in delegationGap, which a coordinator also asks.
+//
 // WHAT A COORDINATOR CAN STILL DO WITH ONE is exactly that, as many times as it
 // likes inside the window: it is a standing permission, not a single request,
 // and that is the whole reason a phone keeps them short and narrow. `id` is what
@@ -229,6 +240,18 @@ export function delegationSigningInput(grant) {
 
 /** The verbs that act as a member, which a grant covers only by naming that member. */
 const MEMBER_VERBS = Object.freeze(['start', 'enginesignin']);
+
+/**
+ * The verbs whose `name` is a session on the box they are sent to: what a
+ * delegation carries at a member's session only when it names the member
+ * (above). `status` names one too, and a box answers it to whoever asks
+ * (UNSIGNED_VERBS). `start` names a session that does not exist yet, and
+ * `vmctl` and `vmlogin` name a machine.
+ */
+export const SESSION_VERBS = Object.freeze([
+  'resume', 'stop', 'answer', 'peek', 'logs', 'forget', 'restore', 'purge',
+  'files', 'readfile', 'writefile', 'copyfile', 'deletefile',
+]);
 
 /**
  * Why a grant does not cover the member a start or an engine sign-in names,
