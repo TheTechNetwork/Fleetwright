@@ -233,6 +233,34 @@ class EngineSignInTest {
     }
 
     @Test
+    fun aMachineThatCannotTellYetTakesNothingAwayAndIsAskedAgain() {
+        // It did not hear how the last sign-in ended. That is not "nobody is
+        // signed in" and not a fault: whatever asked, what was checked
+        // stays, the sentence says it is asked again, and it is.
+        val before = EngineSigninShown(signedIn = EngineSignedIn(1L, "debbie@example.com", null), code = "WXYZ-1234", page = codexPage, minutes = 9)
+        for (poll in listOf(true, false)) {
+            val got = shown(first, refused("cannot_tell"), before, poll)
+            assertEquals(before.signedIn, got.signedIn)
+            assertEquals(listOf<String?>("WXYZ-1234", codexPage), listOf(got.code, got.page))
+            assertEquals(9, got.minutes)
+            assertTrue("a machine that cannot tell yet is not asked again", got.unsure)
+            assertFalse(got.bad)
+            assertEquals(
+                "It is not known yet whether Codex is signed in on ops-box: ops-box did not hear how the last sign-in ended. It is asked again in a moment, by itself.",
+                got.says,
+            )
+        }
+        // With nothing checked before, it is still asked again, and still
+        // says only that it cannot tell.
+        val fresh = shown(first, refused("cannot_tell"), poll = true)
+        assertTrue(fresh.unsure)
+        assertNull(fresh.signedIn)
+        assertTrue(fresh.says.isNotEmpty())
+        // Any other refused ask keeps what was checked and is not that.
+        assertFalse(shown(first, refused("host_timeout"), before, poll = true).unsure)
+    }
+
+    @Test
     fun aCodeIsDrawnOnlyFromACheckedAnswerAndOnlyBesideTheEnginesOwnPage() {
         // The machine's own page: the code and its page, and nothing of the
         // lies beside the seal.

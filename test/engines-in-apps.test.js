@@ -648,7 +648,7 @@ test('nothing the fleet wrote is drawn in the sign-in block: a refusal is the ph
     // Settled after the table was first written, by the machine's and the
     // fleet's own lanes. Named here so the table is held to them before the
     // machine's code on this branch has them, and after.
-    'unreadable_code', 'wrong_page', 'state_unwritable', 'state_unreadable', 'id_reused', 'in_flight', 'member_not_delegated']) {
+    'unreadable_code', 'wrong_page', 'state_unwritable', 'state_unreadable', 'id_reused', 'in_flight', 'member_not_delegated', 'cannot_tell']) {
     assert.ok(ios.includes(code), `the phones have no sentence for ${code}`);
   }
 });

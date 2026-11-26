@@ -235,6 +235,31 @@ final class EngineSignInTests: XCTestCase {
         XCTAssertEqual(still.code, "WXYZ-1234")
     }
 
+    func testAMachineThatCannotTellYetTakesNothingAwayAndIsAskedAgain() throws {
+        // It did not hear how the last sign-in ended. That is not "nobody is
+        // signed in" and not a fault: whatever asked, what was checked
+        // stays, the sentence says it is asked again, and it is.
+        let v = try vector()
+        let before = EngineSigninShown(signedIn: EngineSignedIn(since: 1, email: "debbie@example.com", plan: nil), code: "WXYZ-1234", page: codexPage, minutes: 9)
+        for poll in [true, false] {
+            let got = try shown(v, ["ok": false, "error": ["code": "cannot_tell"], "text": lie], before: before, poll: poll)
+            XCTAssertEqual(got.signedIn, before.signedIn)
+            XCTAssertEqual([got.code, got.page], ["WXYZ-1234", codexPage])
+            XCTAssertEqual(got.minutes, 9)
+            XCTAssertTrue(got.unsure, "a machine that cannot tell yet is not asked again")
+            XCTAssertFalse(got.bad)
+            XCTAssertEqual(got.says, "It is not known yet whether Codex is signed in on ops-box: ops-box did not hear how the last sign-in ended. It is asked again in a moment, by itself.")
+        }
+        // With nothing checked before, it is still asked again, and still
+        // says only that it cannot tell.
+        let fresh = try shown(v, ["ok": false, "error": ["code": "cannot_tell"]], poll: true)
+        XCTAssertTrue(fresh.unsure)
+        XCTAssertNil(fresh.signedIn)
+        XCTAssertFalse(fresh.says.isEmpty)
+        // Any other refused ask keeps what was checked and is not that.
+        XCTAssertFalse(try shown(v, ["ok": false, "error": ["code": "host_timeout"]], before: before, poll: true).unsure)
+    }
+
     func testACodeIsDrawnOnlyFromACheckedAnswerAndOnlyBesideTheEnginesOwnPage() throws {
         // The machine's own page: the code and its page, and nothing of the
         // lies beside the seal.

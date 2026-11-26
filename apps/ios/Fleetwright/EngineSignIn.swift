@@ -99,6 +99,10 @@ struct EngineSigninShown: Equatable {
     /// The machine did not say when the code runs out: one from before it
     /// signed that. Then the sentence says how long a code lasts and no more.
     var fixedLife: Bool = false
+    /// The machine said it cannot tell yet how the last sign-in ended
+    /// (`cannot_tell`). Nothing that was checked is taken away for that,
+    /// and the machine goes on being asked, code or no code, until it can.
+    var unsure: Bool = false
     /// Where the last attempt stands, or a refusal as it came.
     var says: String = ""
     var bad: Bool = false
@@ -300,6 +304,7 @@ enum EngineSigninWords {
         case "state_unwritable": return "\(box) could not write its own record of sign-ins, so it began nothing. Whoever runs \(box) looks at its disk. Then start again."
         case "unreadable_code": return "\(box) could not read the page and code \(engine) gave it, and nothing is waiting. That is a fault in fleetwright on \(box): update it and start again, or paste a sign-in instead."
         case "wrong_page": return "\(engine) on \(box) named a sign-in page that is not \(provider)’s own, so \(box) stopped it and gave nobody the code. Nothing is waiting. Whoever runs \(box) looks at it before anybody starts again."
+        case "cannot_tell": return "It is not known yet whether \(engine) is signed in on \(box): \(box) did not hear how the last sign-in ended. It is asked again in a moment, by itself."
         case "id_reused": return "\(box) refused a repeated request. Try again."
         case "in_flight": return "The same request is still on its way to \(box). Wait for its answer."
         case "member_not_delegated": return "\(box) takes this only under a delegation that names \(named). Allow one under You, Delegations, with that member turned on."
@@ -555,10 +560,18 @@ enum EngineSignin {
             }
             let says = EngineSigninWords.refusal(code, box: host, engine: engineName(engine), provider: EngineSigninWords.provider(engine),
                                                   member: memberName)
-            if poll {
+            // A MACHINE THAT CANNOT TELL YET has said nothing about the
+            // sign-in: it did not hear how the last one ended, and looks
+            // again when asked. So whatever asked, a button included,
+            // everything that was checked stays, nobody is said to be
+            // signed out, it is not drawn as a fault, and the asking goes
+            // on by itself until the machine can say.
+            let unsure = code == "cannot_tell"
+            if poll || unsure {
                 var kept = before
                 kept.says = says
-                kept.bad = true
+                kept.bad = !unsure
+                kept.unsure = unsure
                 return kept
             }
             var next = EngineSigninShown(signedIn: before.signedIn, says: says, bad: true)
@@ -667,8 +680,15 @@ struct EngineMachineSignIn: View {
         EngineSignin.places(engine: engine, hosts: hosts, keys: keys, grants: grants, member: memberName)
     }
 
-    /// The machine a code is out on, which is the one asked every few seconds.
+    /// The machine that is asked every few seconds: one a code is out on,
+    /// or one that said it cannot tell yet how the last sign-in ended.
     private var waitingOn: String? {
+        shown.keys.sorted().first { shown[$0]?.code != nil || shown[$0]?.unsure == true }
+    }
+
+    /// The machine a code is out on. While there is one, the next step is
+    /// that code, and a second start is not offered beside it.
+    private var codeOutOn: String? {
         shown.keys.sorted().first { shown[$0]?.code != nil }
     }
 
@@ -696,7 +716,7 @@ struct EngineMachineSignIn: View {
             }
             // ONE THING AT A TIME: while a code is out, the next step is
             // that code, and a second start is not offered beside it.
-            if waitingOn == nil {
+            if codeOutOn == nil {
                 if !places.offered.isEmpty {
                     offer(places.offered)
                     // THE SAME BUTTON CHANGES THE ACCOUNT on a machine that

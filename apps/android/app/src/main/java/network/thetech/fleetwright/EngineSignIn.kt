@@ -145,6 +145,12 @@ internal data class EngineSigninShown(
     val page: String? = null,
     val minutes: Int? = null,
     val fixedLife: Boolean = false,
+    /**
+     * The machine said it cannot tell yet how the last sign-in ended
+     * (`cannot_tell`). Nothing that was checked is taken away for that, and
+     * the machine goes on being asked, code or no code, until it can.
+     */
+    val unsure: Boolean = false,
     val says: String = "",
     val bad: Boolean = false,
     val cancel: Boolean = false,
@@ -358,6 +364,7 @@ internal object EngineSigninWords {
             "state_unwritable" -> "$box could not write its own record of sign-ins, so it began nothing. Whoever runs $box looks at its disk. Then start again."
             "unreadable_code" -> "$box could not read the page and code $engine gave it, and nothing is waiting. That is a fault in fleetwright on $box: update it and start again, or paste a sign-in instead."
             "wrong_page" -> "$engine on $box named a sign-in page that is not ${provider}’s own, so $box stopped it and gave nobody the code. Nothing is waiting. Whoever runs $box looks at it before anybody starts again."
+            "cannot_tell" -> "It is not known yet whether $engine is signed in on $box: $box did not hear how the last sign-in ended. It is asked again in a moment, by itself."
             "id_reused" -> "$box refused a repeated request. Try again."
             "in_flight" -> "The same request is still on its way to $box. Wait for its answer."
             "member_not_delegated" -> "$box takes this only under a delegation that names $named. Allow one under You, Delegations, with that member turned on."
@@ -639,7 +646,14 @@ internal object EngineSignin {
         if (!reply.ok) {
             val code = reply.code ?: return before.copy(says = EngineSigninWords.NOT_REACHED, bad = true)
             val says = EngineSigninWords.refusal(code, host, engineName(engine), EngineSigninWords.provider(engine), memberName)
-            if (poll) return before.copy(says = says, bad = true)
+            // A MACHINE THAT CANNOT TELL YET has said nothing about the
+            // sign-in: it did not hear how the last one ended, and looks
+            // again when asked. So whatever asked, a button included,
+            // everything that was checked stays, nobody is said to be signed
+            // out, it is not drawn as a fault, and the asking goes on by
+            // itself until the machine can say.
+            val unsure = code == "cannot_tell"
+            if (poll || unsure) return before.copy(says = says, bad = !unsure, unsure = unsure)
             val next = EngineSigninShown(signedIn = before.signedIn, says = says, bad = true)
             return if (state == "waiting") {
                 next.copy(code = before.code, page = before.page, minutes = before.minutes, fixedLife = before.fixedLife, cancel = before.code == null)
@@ -742,8 +756,12 @@ internal fun EngineMachineSignIn(
     // The code Copy was last pressed for.
     var copiedCode by remember { mutableStateOf("") }
     val places = EngineSignin.places(engine, hosts, keys, grants, memberName)
-    // The machine a code is out on, which is the one asked every few seconds.
-    val waitingOn = shown.keys.sorted().firstOrNull { shown[it]?.code != null }
+    // The machine that is asked every few seconds: one a code is out on, or
+    // one that said it cannot tell yet how the last sign-in ended.
+    val waitingOn = shown.keys.sorted().firstOrNull { shown[it]?.code != null || shown[it]?.unsure == true }
+    // The machine a code is out on. While there is one, the next step is
+    // that code, and a second start is not offered beside it.
+    val codeOutOn = shown.keys.sorted().firstOrNull { shown[it]?.code != null }
 
     /**
      * Ask one machine one thing, and show what its answer may show.
@@ -930,7 +948,7 @@ internal fun EngineMachineSignIn(
         }
         // ONE THING AT A TIME: while a code is out, the next step is that
         // code, and a second start is not offered beside it.
-        if (waitingOn == null) {
+        if (codeOutOn == null) {
             if (places.offered.isNotEmpty()) {
                 OutlinedButton(
                     enabled = busy.isEmpty(),
