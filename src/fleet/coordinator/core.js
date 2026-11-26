@@ -6328,7 +6328,14 @@ export class CoordinatorCore {
     // it: the digest says that two starts differ and not in what.
     const fetches = Boolean(start.secret) || /It may fetch the secret /.test(other?.told ?? '');
     const elseways = [start.profile ? 'machine' : '', fetches ? 'secret' : ''].filter(Boolean).join(' or ');
-    const elsewaysSaid = elseways ? `, or names another ${elseways}` : '';
+    // AND THE THIRD WAY TWO DIGESTS DIFFER, which neither of those says:
+    // the approval is from before the machine and the secret were part of
+    // one. Given for this very start, it stopped matching when this
+    // coordinator was updated, and its holder was told the start "says
+    // something else, or names another machine", which it did not. The
+    // digest cannot tell the three apart, so the sentence names all three;
+    // what to do is the same for each, and is the sentence after it.
+    const elsewaysSaid = elseways && other ? `, or names another ${elseways}, or ${other.id} is from before this fleet’s coordinator was updated, when an approval did not name its ${elseways}` : '';
     const { approval, fresh } = this.budgets.ask({ member: member.id, task: task?.id ?? null, reasons: need.reasons, digest, told, by });
     const own = !requester || Boolean(requester.admin) || this.org.mayManage(requester, member.id);
     const managers = this.#managersOf(member.id);

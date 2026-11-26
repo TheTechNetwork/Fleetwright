@@ -340,7 +340,10 @@ test('an approval is for what the session was to be told: a rewritten brief, or 
   const fetching = await g.start(sam, 'debbie', { mode: 'dangerous', task: 'Tidy the README.', secret: 'PROD_DEPLOY_KEY' });
   assert.deepEqual([fetching.error.code, fetching.approval.id], ['needs_approval', 'a3']);
   assert.match(fetching.approval.reasons[0].text, /The session is told: “Tidy the README\.” It may fetch the secret PROD_DEPLOY_KEY\.$/);
-  assert.match(fetching.text, /a1 was approved for what the session was to be told then, and this start says something else, or names another secret: it does not cover this\./);
+  // The sentence is true of all three ways the two can differ, the third
+  // being an approval given for this very start before the secret was part
+  // of one: that one's holder was told it "names another secret".
+  assert.match(fetching.text, /a1 was approved for what the session was to be told then, and this start says something else, or names another secret, or a1 is from before this fleet’s coordinator was updated, when an approval did not name its secret: it does not cover this\. dana@example\.com or eli@example\.com, or a fleet admin, must approve it first: a3\. Start it again once it is approved; nothing was sent\.$/);
   assert.equal((await g.start(sam, 'debbie', { mode: 'dangerous', task: 'Tidy the README.' })).ok, true);
 
   // A PROFILE IS A NAME, and what it says is a file on the machine the start
