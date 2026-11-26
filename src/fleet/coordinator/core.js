@@ -6042,7 +6042,10 @@ export class CoordinatorCore {
   setMember(requester, id, input) {
     const saved = this.org.set(requester, id, input);
     if (!saved.ok) return saved;
-    const made = this.#madeAgain(requester, saved);
+    // `budgetUsdMonth: null` names a budget, the one that is none: the
+    // record has the same shape with the key left out, so it is read here.
+    const named = Boolean(input) && typeof input === 'object' && Object.hasOwn(/** @type {object} */ (input), 'budgetUsdMonth');
+    const made = this.#madeAgain(requester, saved, named);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
     this.record({ event: 'member.saved', actor: by, text: `${by} ${made.created ? 'added' : 'changed'} the member ${made.member.id} (${oneLine(made.member.role, 60)})` });
@@ -6060,14 +6063,22 @@ export class CoordinatorCore {
    * the answer, and a person who wants it gone takes it off the record
    * afterwards.
    *
+   * AN EXPLICIT `null` NAMES ONE: no budget, asked for in so many words
+   * (`named`). It was read as naming none, because the saved record looks
+   * the same either way, and the member was handed the old budget back by
+   * a request that had just said it should have none. The tools an agent
+   * holds cannot send the field at all (mcp/server.js), so this is still
+   * only a person's to say.
+   *
    * @template {{ ok: true, created?: boolean, member: import('../protocol/members.js').Member, text: string }} S
    * @param {{ email?: string|null, admin?: boolean }|null} requester @param {S} saved
+   * @param {boolean} [named]  whether the request had a `budgetUsdMonth` at all, `null` included
    * @returns {S}
    */
-  #madeAgain(requester, saved) {
+  #madeAgain(requester, saved, named = false) {
     if (!saved.created) return saved;
     const kept = this.budgets.back(saved.member.id);
-    if (typeof kept !== 'number' || typeof saved.member.budgetUsdMonth === 'number') return saved;
+    if (typeof kept !== 'number' || named || typeof saved.member.budgetUsdMonth === 'number') return saved;
     const again = this.org.set(requester, saved.member.id, { ...saved.member, budgetUsdMonth: kept });
     if (!again.ok) return saved;
     return { ...saved, member: again.member, text: `${saved.text} ${saved.member.name} was removed with a budget of ${dollars(kept)} a month, and has it again: a budget is changed by a person, in the app.` };

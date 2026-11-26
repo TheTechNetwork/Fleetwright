@@ -193,7 +193,9 @@ approval is given, the same start is sent again and goes through.
   removed and made again with none, by the one tool an agent holds for a
   member's record, and nothing is past no budget. The answer says the
   budget came back. A person who wants it gone takes it off the record
-  afterwards, in the app.
+  afterwards, in the app, or makes the member with `budgetUsdMonth: null`:
+  an explicit null names a budget, the one that is none, and is taken as
+  sent. It used to be read as naming none and handed the old one back.
 - **The figure is for whoever may see it.** What a member has spent is read
   by an admin, its managers and the person it is. Somebody else whose start
   is refused is told that the member is past its budget and who can approve,

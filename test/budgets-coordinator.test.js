@@ -568,6 +568,15 @@ test('a resumed session counts from the first figure heard, and removing a membe
   assert.match(again.text, /Debbie was removed with a budget of \$50\.00 a month, and has it again: a budget is changed by a person, in the app\.$/);
   assert.deepEqual([again.member.budgetUsdMonth, f.core.org.get('debbie').budgetUsdMonth, f.spendOf('debbie').over], [50, 50, true]);
   assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
+  // NAMED AS NONE, she has none: an explicit null is a person saying so,
+  // and it was read as a request that named no budget and handed the old
+  // one back.
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  const none = /** @type {any} */ (f.core.setMember(dana, 'debbie', { ...bare, budgetUsdMonth: null }));
+  assert.equal(none.ok, true, none.text);
+  assert.doesNotMatch(none.text, /has it again/);
+  assert.deepEqual([f.core.org.get('debbie').budgetUsdMonth ?? null, f.spendOf('debbie').over], [null, false]);
+  assert.equal(/** @type {any} */ (f.core.setMember(dana, 'debbie', record)).ok, true);
   // From a file too, which is the other way that tool makes one.
   assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
   const file = /** @type {any} */ (f.core.importMember(dana, '---\nid: debbie\nname: Debbie\nkind: agent\nrole: software engineer\nreportsTo: dana\n---\n'));
