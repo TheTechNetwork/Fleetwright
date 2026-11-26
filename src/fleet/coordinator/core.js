@@ -4399,6 +4399,22 @@ export class CoordinatorCore {
       const as = this.#mayActAs(spec.requester, shaped.params.member, 'signin');
       if (!as.ok) return as;
       spec = { ...spec, memberSays: as.member.name };
+      // THE SAME ID AGAIN WHILE THE FIRST IS STILL AT THE MACHINE. A start
+      // waits up to 45 seconds for the engine's code, which is longer than a
+      // caller's patience, and its retry was answered `host_timeout`, "an
+      // intent with id … is already in flight": a timeout that was none, in
+      // words about an intent. The docs promised a retry is answered with
+      // where the sign-in stands, which is true only once the first has been
+      // answered (the box's own cache, sidecar.js). So this says what is
+      // happening and what to do: wait for the first.
+      const waiting = typeof spec.id === 'string' ? this.pending.get(spec.id) : undefined;
+      if (waiting) {
+        return {
+          ok: false,
+          error: { code: 'in_flight' },
+          text: `${waiting.hostId} is still answering the request sent under this id. Wait for that answer: asking again does not start a second sign-in.`,
+        };
+      }
     }
     if (spec.verb === 'provision' && (shaped.params.platform === 'vm' || shaped.params.platform === 'lab')) return this.#provisionVm(spec, shaped.params);
     if (spec.verb === 'vmctl') return this.#vmctl(spec, shaped.params);
@@ -7305,7 +7321,7 @@ export class CoordinatorCore {
     }
     // SIGNING AN ENGINE IN, which an older box would answer `unknown_verb`
     // to: true, and said here as which machine and what to do about it. All
-    // three of its parameters are newer than such a box, so nothing of it
+    // four of its parameters are newer than such a box, so nothing of it
     // could be built for one either (intents.js, buildIntent).
     if (spec.verb === 'enginesignin') {
       const speaks = Number(host?.health?.protocol);

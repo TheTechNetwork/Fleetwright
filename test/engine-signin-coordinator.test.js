@@ -112,7 +112,36 @@ test('the machine is named, never chosen: several say which run the engine, and 
   assert.match(String(temporary.text), /^gha-runner is a temporary machine\. A sign-in is kept on the machine it is made on, and that one is gone within hours\./);
   const theirs = await signin('danas-box');
   assert.deepEqual([theirs.error?.code, theirs.error?.why], ['host_unavailable', 'enrolled_by_other']);
+  // With where it can be done, as the other refusals here say: whose machine it is names the problem and not the way on.
+  assert.equal(theirs.text, 'danas-box acts for the person who enrolled it, and keeps nobody else’s sign-ins. Sign in on a machine that acts for you: ops-a, ops-b, ops-c.');
   assert.deepEqual(sent, []);
+});
+
+test('the same id again while the machine is still answering the first is told to wait, in those words, and nothing is sent twice', async () => {
+  // A start waits up to 45 seconds for the engine's code. Its retry was
+  // answered `host_timeout`, "an intent with id … is already in flight": a
+  // timeout that was none, and nothing to do about it.
+  const core = new CoordinatorCore({ intentTimeoutMs: 2_000 });
+  core.setMember(eli, 'eli', { name: 'Eli', kind: 'person', email: eli.email, role: 'owner' });
+  core.setMember(eli, 'debbie', { name: 'Debbie', kind: 'agent', role: 'software engineer', reportsTo: 'eli' });
+  /** Every frame the box was sent. @type {any[]} */
+  const frames = [];
+  core.registry.connect('ops-box', (/** @type {any} */ frame) => { frames.push(frame); });
+  core.registry.recordHealth('ops-box', { hub: { reachable: true }, protocol: PROTOCOL_VERSION, maxSessions: 5, running: 0, free: 5, labels: [], sandboxed: true, sessions: [], engines: ['claude-code', 'codex'] });
+  const ask = (/** @type {string} */ id) => core.dispatch({ verb: 'enginesignin', params: { member: 'debbie', engine: 'codex', action: 'start' }, id, actor: eli.email, requester: eli, preferHost: 'ops-box' });
+  const first = ask('app-0000-same-id');
+  await new Promise((r) => setTimeout(r, 20));
+  const retry = await ask('app-0000-same-id');
+  assert.deepEqual([retry.ok, retry.error?.code], [false, 'in_flight']);
+  assert.equal(retry.text, 'ops-box is still answering the request sent under this id. Wait for that answer: asking again does not start a second sign-in.');
+  assert.equal(frames.length, 1);
+  // The first is answered as it would have been, and the id is then free for the box's own cache to answer a retry.
+  await core.onHostMessage('ops-box', { v: PROTOCOL_VERSION, kind: 'reply', id: 'app-0000-same-id', ok: true, state: 'waiting', text: 'A code is out.' });
+  assert.deepEqual([(await first).ok, (await first).state], [true, 'waiting']);
+  void ask('app-0000-same-id').catch(() => {});
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(frames.length, 2);
+  await core.onHostMessage('ops-box', { v: PROTOCOL_VERSION, kind: 'reply', id: 'app-0000-same-id', ok: true, state: 'waiting', replayed: true, text: 'A code is out.' });
 });
 
 test('asking where a sign-in stands is not written to the fleet’s record, and the other three are, by what was asked for whom', async () => {
