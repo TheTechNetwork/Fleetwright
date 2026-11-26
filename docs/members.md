@@ -196,7 +196,16 @@ sign-ins were kept, renewed, and handed to whoever filed the same id next. A
 new agent filed under an id something was left under starts empty too. A
 request made for the member that was removed is not taken by the one filed
 under its id afterwards: the vault keeps when it was emptied, and refuses
-anything asked at or before then (`stale`). A
+anything asked at or before then (`stale`). That time is the latest of the
+removal's own, the minter's clock, and every change the vault held, because
+two phones' clocks differ: an approval stamped by a phone running ahead of
+the one that removed the member is otherwise "asked after" a removal that
+followed it. The cost is that a phone behind the minter's clock is refused
+for that member until its clock passes the emptying, and is told to ask
+again. What a time cannot settle is a request that was never delivered,
+stamped by a clock ahead of the minter's, and held back until the id was
+filed again: only a request naming which member it was made for could, and
+none does yet. A
 person's vault is their own and a removal does not touch it.
 
 **Custodians of a person member.** A person's vault holds their own

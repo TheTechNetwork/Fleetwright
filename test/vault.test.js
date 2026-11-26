@@ -341,9 +341,12 @@ test('the vault signs each answer it makes to a box, over that box, that request
   const none = /** @type {any} */ (await answerVaultBox(signed, bare));
   assert.deepEqual([none.ok, none.sealed.signature], [true, undefined]);
   assert.equal(none.text, 'Nobody has approved this box to hold their credentials. This answer is not signed, because this minter holds no signing key. A box that checks the vault’s signature will not use it.');
-  const broken = /** @type {any} */ (await answerVaultBox(signed, { ...bare, signingKey: async () => { throw new Error('the row is not a key'); } }));
+  const broken = /** @type {any} */ (await answerVaultBox(signed, { ...bare, signingKey: async () => { throw new Error('Unexpected token \'Z\', "Zm9vYmFyc2"... is not valid JSON'); } }));
   assert.deepEqual([broken.ok, broken.sealed.signature], [true, undefined]);
-  assert.match(String(broken.text), /This answer is not signed, because its signing key does not load: the row is not a key\. /);
+  // WHY IT DOES NOT LOAD stays in the minter's log: this sentence goes to the
+  // coordinator and a box's log, and an error from reading a key can quote
+  // the start of the key (`JSON.parse` names the first ten characters).
+  assert.equal(broken.text, 'Nobody has approved this box to hold their credentials. This answer is not signed, because its signing key does not load (the minting Worker’s log says why). A box that checks the vault’s signature will not use it.');
 });
 
 test('only the person changes their vault, and not by replaying what they sent', async (t) => {
@@ -2056,8 +2059,12 @@ test('a refusal after the refresh token ran out by its own lifetime is this flee
 async function orgMinter(/** @type {import('node:test').TestContext} */ t) {
   const m = await minter();
   t.after(m.restore);
+  // EVERY PHONE'S CLOCK HERE RUNS A MINUTE BEHIND THE MINTER'S, ten
+  // milliseconds a request. `wait` is those phones' clocks moving on, for
+  // the one rule that reads the minter's own (vault.js, emptyMemberVault).
   let clock = Date.now() - 60_000;
   const at = () => (clock += 10);
+  const wait = (/** @type {number} */ ms) => { clock += ms; };
   /** @param {string} person @param {Record<string, unknown>} body @param {Record<string, unknown>} [o] */
   const as = (person, body, o = {}) => m.phone(body, { person, at: at(), ...o });
   for (const person of [ELI, DANA]) {
@@ -2070,7 +2077,7 @@ async function orgMinter(/** @type {import('node:test').TestContext} */ t) {
     assert.equal((await as(ELI, { op: 'orgmember', id: 'dana', kind: 'person', address: DANA, reportsTo: 'eli' })).ok, true);
     assert.equal((await as(ELI, { op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'dana' })).ok, true);
   };
-  return { m, as, tree };
+  return { m, as, tree, wait };
 }
 
 test('the first org admin files themselves, only with the fleet’s word and a key of their own, and the last one stays', async (t) => {
@@ -3337,7 +3344,7 @@ test('the log names what a custodian changed and not what they called it, keeps 
 });
 
 test('removing an agent empties its vault, and whoever files the id again is handed nothing of it', async (t) => {
-  const { m, as, tree } = await orgMinter(t);
+  const { m, as, tree, wait } = await orgMinter(t);
   await tree();
   assert.equal((await as(DANA, { op: 'put', name: 'claude', value: `sk-ant-oat01-${'d'.repeat(40)}`, for: 'debbie' })).ok, true);
   assert.equal((await as(DANA, { op: 'put', name: 'secret:DEPLOY_KEY', value: 'debbie-deploy', for: 'debbie' })).ok, true);
@@ -3360,6 +3367,17 @@ test('removing an agent empties its vault, and whoever files the id again is han
   // The box that held it is given nothing the next time it asks.
   const after = await m.box(oldBox, { members: [ELI, DANA], accepts: ['members'] });
   assert.ok(!/debbie-deploy|sk-ant-oat01-d/.test(JSON.stringify(after.answer ?? after)), 'a removed member’s sign-ins were still handed to its box');
+
+  // EMPTIED BY THE MINTER'S CLOCK AS WELL AS THE PHONE'S, and these phones
+  // run a minute behind it: until theirs pass the emptying, a change to that
+  // member is one that could have been made before it, and is refused as
+  // one. Looking is not a change.
+  assert.equal((await as(ELI, { op: 'list', for: 'debbie' })).error?.code, 'no_member');
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' })).ok, true);
+  const early = await as(ELI, { op: 'put', name: 'secret:TOO_SOON', value: 'x', for: 'debbie' });
+  assert.equal(early.error?.code, 'stale', early.text);
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'debbie', remove: true })).ok, true);
+  wait(61_000);
 
   // THE ID AGAIN, by somebody else. Eli files it under himself and is its
   // first custodian, of a vault that starts empty.
@@ -3392,6 +3410,37 @@ test('removing an agent empties its vault, and whoever files the id again is han
   // Only what there was is counted: no "0 things".
   const second = await as(ELI, { op: 'orgmember', id: 'debbie', remove: true });
   assert.match(second.text, /Its vault went with it: 1 approved machine is forgotten/);
+});
+
+test('an approval stamped later than the removal that followed it is not the new member’s', async (t) => {
+  // TWO PHONES, TWO CLOCKS. The time a vault was emptied was the removing
+  // phone's own, and what it was compared with is another phone's. Eli's
+  // runs half a minute ahead of Dana's: his approval for Debbie is stamped
+  // later than the removal Dana makes after it, so sent again once the id
+  // was filed again it was "asked after the emptying", and his box was
+  // handed what the new Debbie keeps.
+  const { m, as, tree } = await orgMinter(t);
+  await tree();
+  assert.equal((await as(DANA, { op: 'put', name: 'secret:DEPLOY_KEY', value: 'the-old-debbies', for: 'debbie' })).ok, true);
+  const elisBox = await generateKeyPair();
+  const elisApproval = { op: 'grant', hostKey: elisBox.publicJwk, label: 'elis-box', for: 'debbie' };
+  const ahead = Date.now() + 30_000;
+  assert.equal((await as(ELI, elisApproval, { at: ahead })).ok, true);
+  const gone = await as(DANA, { op: 'orgmember', id: 'debbie', remove: true });
+  assert.equal(gone.ok, true, gone.text);
+  // NO EARLIER THAN ANYTHING THE VAULT HELD, nor than the minter's own clock.
+  assert.ok(m.rows.get('v:member:debbie').emptied >= ahead, 'the vault was emptied "before" an approval it held');
+
+  // Filed again by Dana, a different agent with a secret of its own, once
+  // her phone's clock has passed what the old vault held.
+  const later = (/** @type {number} */ n) => ({ at: ahead + n });
+  assert.equal((await as(DANA, { op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'dana' }, later(10))).ok, true);
+  assert.equal((await as(DANA, { op: 'put', name: 'secret:DEPLOY_KEY', value: 'the-new-debbies', for: 'debbie' }, later(20))).ok, true);
+  // The coordinator sends Eli's approval again, byte for byte.
+  const replayed = await as(ELI, elisApproval, { at: ahead });
+  assert.equal(replayed.error?.code, 'stale', replayed.text);
+  const handed = await m.box(elisBox, { members: [ELI, DANA], accepts: ['members'] });
+  assert.ok(!/the-new-debbies/.test(JSON.stringify(handed.answer ?? handed)), 'the old member’s box was handed the new member’s secret');
 });
 
 test('a vault left under an id from before removals emptied one is emptied when the id is filed again', async (t) => {

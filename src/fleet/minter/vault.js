@@ -486,17 +486,40 @@ async function loadKey(config) {
  * item, because a request the coordinator held back and never delivered
  * names an item the vault never had.
  *
- * @param {VaultStore} store @param {string} vaultId  `member:<id>` @param {number} at
+ * THAT TIME IS NOT THE REMOVING PHONE'S ALONE. It was: the removal's own
+ * `at`, which is one phone's clock, compared afterwards with every other
+ * phone's. A custodian whose phone ran half a minute ahead of the remover's
+ * had an approval stamped LATER than the removal that followed it, so sent
+ * again once the id was filed again it was "asked after the emptying" and
+ * was taken. So the time kept is the latest of three: the removal's own,
+ * this minter's clock, and every change the vault held, tombstones and
+ * taken-back approvals included. Nothing already applied can then be
+ * applied again, whatever clock stamped it, and nothing an honest clock
+ * stamped before the removal reached here is taken after it.
+ *
+ * WHAT THAT COSTS, AND WHAT IT LEAVES. A phone behind this minter's clock
+ * is refused `stale` for that member until its clock passes the emptying,
+ * and so is everybody for as long as the vault held something stamped
+ * ahead; the refusal says to ask again. A request never delivered, stamped
+ * by a clock ahead of this minter's, and held back until after the id was
+ * filed again is still taken: a time cannot tell it from one made for the
+ * new member, and only a request that named which member it was made for
+ * could.
+ *
+ * @param {VaultStore} store @param {string} vaultId  `member:<id>` @param {number} at  when the removal says it was asked
+ * @param {number} now  this minter's clock
  * @param {{ always?: boolean }} [o]  `always` writes the row though the vault never had one: a removal, which a held-back request must not outlive
  * @returns {Promise<{ items: number, grants: number }>} how much there was
  */
-async function emptyMemberVault(store, vaultId, at, { always = false } = {}) {
+async function emptyMemberVault(store, vaultId, at, now, { always = false } = {}) {
   const kept = await store.get(`v:${vaultId}`);
   const claude = await store.get(`gh:${vaultId}`);
   const items = Object.values(kept?.items ?? {}).filter((v) => v && !v.forgotten && v.sealed).length + (claude?.sealed && !claude.forgotten ? 1 : 0);
   const grants = Object.values(kept?.grants ?? {}).filter((g) => g && !g.revoked && g.jwk).length;
-  if (kept || always) await store.put(`v:${vaultId}`, { login: vaultId, items: {}, grants: {}, emptied: Math.max(at, Number(kept?.emptied) || 0) });
-  if (claude) await store.put(`gh:${vaultId}`, { at: Math.max(at, Number(claude.at) || 0), login: vaultId, forgotten: true });
+  const held = [...Object.values(kept?.items ?? {}), ...Object.values(kept?.grants ?? {}), kept?.custody, claude].map((v) => Number(v?.at) || 0);
+  const emptied = Math.max(at, now, Number(kept?.emptied) || 0, ...held);
+  if (kept || always) await store.put(`v:${vaultId}`, { login: vaultId, items: {}, grants: {}, emptied });
+  if (claude) await store.put(`gh:${vaultId}`, { at: emptied, login: vaultId, forgotten: true });
   return { items, grants };
 }
 
@@ -609,7 +632,7 @@ export async function answerVaultDevice(ask, config) {
     let text = done.text;
     if (done.empty) {
       const memberVault = `${MEMBER_PREFIX}${done.empty}`;
-      const gone = await withLock(`row:${memberVault}`, () => emptyMemberVault(store, memberVault, at, { always: inside.remove === true }));
+      const gone = await withLock(`row:${memberVault}`, () => emptyMemberVault(store, memberVault, at, now(), { always: inside.remove === true }));
       if (inside.remove === true) {
         // IN NUMBERS, since it cannot be undone and nobody can look after.
         const what = [
@@ -1349,7 +1372,13 @@ export async function answerVaultBox(ask, config) {
       const signing = await config.signingKey();
       signed = await sign(signing.privateJwk, await vaultBoxAnswerInput({ host: hash, at, reply: String(req.reply), sealed }));
     } catch (e) {
-      unsigned = `its signing key does not load: ${/** @type {Error} */ (e).message}`;
+      // WHY is for this minter's own log and nobody else's. The sentence
+      // below is passed on to the coordinator and written to a box's log,
+      // and an error from reading a key can quote the start of what it
+      // read: `JSON.parse` on a value that is not JSON names its first ten
+      // characters, which for a key kept as anything else are the key's.
+      console.warn(`minter: the signing key does not load, so a vault answer went unsigned: ${/** @type {Error} */ (e)?.message || e}`);
+      unsigned = 'its signing key does not load (the minting Worker’s log says why)';
     }
   }
   if (!signed) return { ok: true, sealed, text: `${said} This answer is not signed, because ${unsigned}. A box that checks the vault’s signature will not use it.` };

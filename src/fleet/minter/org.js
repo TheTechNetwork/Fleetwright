@@ -466,9 +466,13 @@ export async function runOrgOp(inside, ctx) {
       if (reports.length) return refuse('has_reports', `${reports.join(', ')} still ${reports.length === 1 ? 'reports' : 'report'} to ${id}. Move ${reports.length === 1 ? 'it' : 'them'} first.`);
       // WHAT THE TOMBSTONE REMEMBERS. Whose address a person was, so filing
       // them again is not adding somebody new (below, `again`).
-      await store.put(`${ORG_MEMBER_PREFIX}${id}`, { id, at, removed: true, kind: prior.kind, ...(prior.kind === 'person' ? { email: lower(prior.email) } : {}) });
-      // AND THE ADDRESS REMEMBERS IT, apart from the id (addressLeft).
+      // THE ADDRESS REMEMBERS IT FIRST, apart from the id (addressLeft),
+      // and first so that a write that fails between the two leaves an
+      // address marked as left that has not, which only withholds custody
+      // nobody was owed, and never a record gone with nothing to say whose
+      // address it was once its tombstone is filed over.
       if (prior.kind === 'person') await store.put(`${ORG_LEFT_PREFIX}${lower(prior.email)}`, { at });
+      await store.put(`${ORG_MEMBER_PREFIX}${id}`, { id, at, removed: true, kind: prior.kind, ...(prior.kind === 'person' ? { email: lower(prior.email) } : {}) });
       // AN AGENT'S VAULT GOES WITH IT (`empty`, done by vault.js under the
       // vault's own lock). It used to stay "until a custodian forgets it",
       // and that could not happen: nobody is the custodian of a member that
@@ -537,10 +541,13 @@ export async function runOrgOp(inside, ctx) {
     if (!prior && live.size >= MAX_MEMBERS) return refuse('too_many', `The organization holds ${MAX_MEMBERS} members already.`);
     const fits = checkTree(live, next);
     if (!fits.ok) return refuse('bad_params', fits.text);
-    await store.put(`${ORG_MEMBER_PREFIX}${id}`, next);
     // A RECORD POINTED AT ANOTHER ADDRESS has left the one it had, as a
-    // removed one has (addressLeft).
+    // removed one has (addressLeft). Written BEFORE the record: were the
+    // record written first and this write lost, the request sent again
+    // would find the record already at its new address, see nothing to
+    // mark, and no row anywhere would remember the old one.
     if (prior?.kind === 'person' && lower(prior.email) !== address) await store.put(`${ORG_LEFT_PREFIX}${lower(prior.email)}`, { at });
+    await store.put(`${ORG_MEMBER_PREFIX}${id}`, next);
     const after = new Map(tree).set(id, next);
     return {
       ok: true,
