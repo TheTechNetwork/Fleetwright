@@ -278,8 +278,10 @@ holds custody of it. It reads custody from the last key list the minter
 signed, which it relays to boxes and can read but not write. It keeps that
 list across a restart. A fleet whose minter has never been asked has none,
 and the coordinator then cannot tell: it refuses a start as a member by
-anybody but an admin, `custody_unknown`, in words that say when to try again,
-and passes an admin's on for the box to decide. What a member is seen to
+anybody but an admin, `custody_unknown`, in words that say when it will be
+known as far as the coordinator can tell: a few minutes, where a machine
+that can ask the vault is connected, and after one connects, where none is.
+It passes an admin's on for the box to decide. What a member is seen to
 spend is counted from a start the coordinator let through
 ([budgets.md](./budgets.md)), so it lets through nobody it cannot place.
 

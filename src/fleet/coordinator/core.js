@@ -7018,12 +7018,24 @@ export class CoordinatorCore {
     // What is being asked for, as each sentence below needs it.
     const may = signin ? `sign an engine in for ${member.name}` : `start a session as ${member.name}`;
     if (!this.memberCustody && !requester?.admin) {
+      // WHEN IT WILL BE KNOWN, said only as far as this coordinator knows.
+      // The list is read off the vault's answer to a machine, so it comes
+      // when a machine that can ask is connected: one enrolled with a key,
+      // which is what the vault takes a request from. "Try again in a few
+      // minutes" was said to every fleet with a vault, and on one where no
+      // such machine was connected it was true of no number of minutes.
+      const asking = this.registry.reachable().filter((h) => {
+        const enrolled = this.hostIds?.get(h.hostId);
+        return Boolean(enrolled?.publicJwk) && !enrolled?.revokedAt;
+      }).map((h) => h.hostId);
       return {
         ok: false,
         error: { code: 'custody_unknown' },
-        text: this.minter?.vault
-          ? `The fleet has not heard yet who may ${may}, so it cannot tell whether you may. The vault says when a machine asks it, and a connected machine asks every ten minutes: try again in a few minutes. Nothing was sent.`
-          : `This fleet has no vault to say who may ${may}, so it cannot tell whether you may, and no machine would ${signin ? 'do' : 'run'} it. Nothing was sent.`,
+        text: !this.minter?.vault
+          ? `This fleet has no vault to say who may ${may}, so it cannot tell whether you may, and no machine would ${signin ? 'do' : 'run'} it. Nothing was sent.`
+          : asking.length
+            ? `The fleet has not heard yet who may ${may}, so it cannot tell whether you may. The vault says when a machine asks it, and ${asking.length === 1 ? `${asking[0]} is connected and asks` : `${asking.length} connected machines ask`} every ten minutes: try again in a few minutes. If this is still the answer after that, ${asking.length === 1 ? 'that machine is' : 'those machines are'} not asking, and ${asking.length === 1 ? 'its log says' : 'their logs say'} why. Nothing was sent.`
+            : `The fleet has not heard yet who may ${may}, so it cannot tell whether you may. The vault says when a machine asks it, and no machine that can ask is connected now. It will be known a few minutes after one connects. Nothing was sent.`,
       };
     }
     const listed = this.memberCustody?.get(member.id);
