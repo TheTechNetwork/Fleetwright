@@ -13,6 +13,13 @@
 //   in memory   an attempt that is waiting: its page, its code, its process.
 //               A hub that restarts loses it, and says so (`lost`); it never
 //               says an attempt it cannot see is waiting.
+//
+// AN ENDING THIS BOX DID NOT HEAR FROM THE RUNNER IS NOT "NOT SIGNED IN". A
+// hub that restarted under a code, a container that died after one was out,
+// a code this box's own clock ended: the code may have been approved, and
+// the sign-in may be in the home. So the box asks, with a short container
+// that looks in the home and starts no engine (#ask), and records what it
+// learns. Until it has asked it says it cannot tell (`cannot_tell`).
 //   on disk     `engine-signins.json` in the state directory: for each member
 //               and engine, how the last attempt ended, who is signed in and
 //               since when, who asked, a mark while an attempt is out, and
@@ -78,6 +85,8 @@ const GRACE_MS = 30_000;
 const SIGNOUT_MS = 45_000;
 /** How long a container told to stop is given before it is removed. */
 const STOP_MS = 5_000;
+/** How long the container that looks in a home for a sign-in may take (#ask). It starts no engine. */
+const ASK_MS = 30_000;
 
 /**
  * The one page each engine's code is entered at, and whose it is in words.
@@ -140,8 +149,10 @@ function after(ms, value) {
  * @typedef {{ email: string|null, plan: string|null }} Who  the account, as the engine itself says
  * @typedef {{ since: number, who: Who|null, by: string|null }} SignedIn
  * @typedef {{ state: string, at: number, detail: string|null, by: string|null }} Last
- * @typedef {{ member: string, engine: string, volume?: string, signedIn: SignedIn|null, last: Last|null, attempt: { startedAt: number, by: string|null }|null }} Entry
- *   `volume` is the engine home the sign-in is in; an entry written before it was kept has none
+ * @typedef {{ member: string, engine: string, volume?: string, signedIn: SignedIn|null, last: Last|null, attempt: { startedAt: number, by: string|null }|null,
+ *   unheard?: { startedAt: number } }} Entry
+ *   `volume` is the engine home the sign-in is in; an entry written before it was kept has none.
+ *   `unheard` is an attempt, begun then, whose ending the runner did not say and the home has not yet been asked about (#ask)
  * @typedef {{ key: string, member: string, engine: string, volume: string, by: string|null, box: string, startedAt: number, expiresAt: number,
  *   url: string|null, code: string|null, child: any, stopped: 'cancelled'|'lost'|'removed'|null, over: boolean,
  *   first: Promise<Record<string, any>>, ended: Promise<void>, end: (state: string) => void, timers: any[] }} Attempt
@@ -160,15 +171,18 @@ function cleanWho(who) {
 export class EngineSignins {
   /**
    * @param {import('../config.js').Config} cfg
-   * @param {{ now?: () => number, capMs?: number, codeMs?: number, graceMs?: number, stopMs?: number }} [opts]  the waits, for a test that cannot take fifteen minutes
+   * @param {{ now?: () => number, capMs?: number, codeMs?: number, graceMs?: number, stopMs?: number, askMs?: number }} [opts]  the waits, for a test that cannot take fifteen minutes
    */
-  constructor(cfg, { now = Date.now, capMs = SIGNIN_MINUTES * 60_000, codeMs = CODE_MS, graceMs = GRACE_MS, stopMs = STOP_MS } = {}) {
+  constructor(cfg, { now = Date.now, capMs = SIGNIN_MINUTES * 60_000, codeMs = CODE_MS, graceMs = GRACE_MS, stopMs = STOP_MS, askMs = ASK_MS } = {}) {
     this.cfg = cfg;
     this.now = now;
     this.capMs = capMs;
     this.codeMs = codeMs;
     this.graceMs = graceMs;
     this.stopMs = stopMs;
+    this.askMs = askMs;
+    /** The homes being asked about right now, by member and engine: one asking each, and whoever needs the answer waits on it (#ask). @type {Map<string, Promise<void>>} */
+    this.asking = new Map();
     /** Attempts that are out, by member and engine. Memory only. @type {Map<string, Attempt>} */
     this.attempts = new Map();
     /** Members and engines being signed out right now. @type {Set<string>} */
@@ -365,9 +379,9 @@ export class EngineSignins {
     }
     const key = `${member}/${engine}`;
     if (action === 'start') return this.#start({ key, member, engine, account, volume, by, box });
-    if (action === 'cancel') return this.#cancel(key, box);
+    if (action === 'cancel') return this.#cancel(key, box, volume);
     if (action === 'signout') return this.#signout({ key, member, engine, account, volume, by, box });
-    return this.#status(key, box);
+    return this.#status(key, box, volume);
   }
 
   /**
@@ -395,6 +409,16 @@ export class EngineSignins {
         text: `Open ${live.url} and enter ${live.code} to sign ${says(engine)} in for ${member} on ${box}. The code lasts ${lasts}.${stays(named)}`,
         quietText: `A code is out to sign ${says(engine)} in for ${member} on ${box}, and lasts ${lasts}. It and its page are sealed to whoever asked.${stays('')}`,
       };
+    }
+    // NOT HEARD, AND NOT YET ASKED: this box cannot say how the last attempt
+    // ended, so it says that, as a refusal with what to do, and gives no
+    // state for a screen to put its own words to. A phone words `expired` as
+    // "the code ran out", which is exactly what is not known here.
+    if (entry?.unheard) {
+      const how = { lost: 'it restarted while the code was out', expired: 'its own clock ended the code', failed: 'the container stopped without saying', cancelled: 'it was stopped as it was ending' };
+      const why = how[/** @type {keyof typeof how} */ (entry.last?.state ?? '')] ?? 'the container stopped without saying';
+      const text = `${box} did not hear how the last ${says(engine)} sign-in for ${member} ended (${why}), and has not been able to ask whether the code was approved first. So it cannot tell whether ${says(engine)} is signed in for ${member} there. Ask again in a moment, and it looks again.`;
+      return { ok: false, error: { code: 'cannot_tell' }, member, engine, ...extra, text, quietText: text };
     }
     const last = entry?.last ?? null;
     const state = last?.state ?? 'none';
@@ -440,47 +464,187 @@ export class EngineSignins {
     return entry;
   }
 
-  /** @param {string} key @param {string} box */
-  async #status(key, box) {
+  /** @param {string} key @param {string} box @param {string|null} [volume]  the member's engine home, as whoever asked named it */
+  async #status(key, box, volume = null) {
     const live = this.attempts.get(key);
     // An attempt that has not given its code yet is about to: its start's own
     // answer is this one's too.
     if (live && !live.code && !live.over) await live.first;
-    this.#lostIfOrphan(key);
+    await this.#heard(key, volume);
     return this.#view(key, box);
   }
 
   /**
-   * An attempt the file says is out and this process does not hold: the hub
-   * restarted under it. Written down as lost, and its container removed so
-   * that what is said stays true: an attempt nobody can see does not go on
-   * to sign in.
+   * Make sure this box has heard how the last attempt ended, or has asked:
+   * for an attempt a restart left behind, and for one whose ending was not
+   * said and could not be asked about at the time. Waits for an asking that
+   * is under way. Does nothing while an attempt is out, and nothing for one
+   * that ended in the runner's own words.
    *
    * @param {string} key
+   * @param {string|null} [volume]  the engine home, when whoever asked named it; else the one the entry keeps
    */
-  #lostIfOrphan(key) {
+  async #heard(key, volume = null) {
+    if (this.attempts.has(key)) return;
+    const under = this.asking.get(key);
+    if (under) return under;
+    const entry = this.#entry(key);
+    if (!entry) return;
     // One this process held, whose ending is owed to the file (#record), is
     // not one a restart lost: its mark is still on disk only because the
     // ending could not be written.
-    if (this.attempts.has(key) || this.owed.has(key)) return;
-    const entry = this.#read()?.[key];
-    if (!entry?.attempt) return;
-    try {
-      this.#write(key, (e) => {
-        e.last = { state: 'lost', at: this.now(), detail: null, by: e.attempt?.by ?? null };
-        e.attempt = null;
-      });
-    } catch {
-      // Not written, so not said: it is found again the next time anybody asks.
-      return;
-    }
-    log.warn(`engines: the ${entry.engine} sign-in that was waiting for ${entry.member} did not outlive a restart of this hub, and is recorded as lost`);
-    void this.#remove(containerFor(entry.member, entry.engine));
+    const orphan = Boolean(entry.attempt) && !this.owed.has(key);
+    if (!orphan && !entry.unheard) return;
+    const startedAt = orphan ? Number(entry.attempt?.startedAt) : Number(entry.unheard?.startedAt);
+    return this.#ask(key, { member: entry.member, engine: entry.engine, volume: volume ?? homeOf(entry), startedAt, orphan });
   }
 
-  /** Every attempt a restart left behind, found as this hub comes up. */
+  /**
+   * Ask a member's engine home whether it holds a sign-in made on this
+   * machine, and write down what is learned.
+   *
+   * WHEN: this box did not hear from the runner how an attempt ended, and a
+   * code was out, so it may have been approved.
+   *
+   *  - the hub restarted under it (`orphan`): the file says an attempt is
+   *    out and this process holds none. It was written down as lost at once
+   *    and the container removed, "so that what nobody could see does not go
+   *    on to sign in". But a container outlives the hub that started it
+   *    (KillMode=process), and a code approved while the hub was down had
+   *    already signed the member in: the box then said the attempt was gone
+   *    and reported nobody, with the member's sessions running on the
+   *    sign-in and no screen offering to sign it out;
+   *  - the container stopped, or was removed, after the code was out and
+   *    before the runner's second line: a cancel that lost a race with the
+   *    approval, a container killed as it finished, this box's own clock
+   *    ending a code at its last moment (#run, `end`).
+   *
+   * HOW: the attempt's container is removed first, so nothing is still
+   * writing, then a short container from the session image looks in the
+   * home (`fleetwright-engine --signedin`, sandbox/engine.mjs). It starts no
+   * engine and has no network. It says whether a sign-in the engine would
+   * start on is there, whether that is the box's copy of a pasted one, and
+   * when the file was last written.
+   *
+   * WHAT IS RECORDED, once it has answered:
+   *  - a sign-in made here, written since the attempt began: the attempt
+   *    signed in. `signed_in`, since when it was written. WHO is not known:
+   *    the engine was not asked, and the account the record had is no longer
+   *    this sign-in's, so it is not said;
+   *  - one written before the attempt began: the attempt changed nothing,
+   *    and what the record said of who is signed in stands (or is now known,
+   *    for a sign-in this box had not been told of);
+   *  - none, or only a pasted copy: nobody is signed in on this machine, and
+   *    the record stops saying somebody is.
+   * UNTIL THEN, AND WHEN IT CANNOT ASK (no Podman, no image, no home it can
+   * name, a container that would not run), the entry is marked `unheard`
+   * and every answer about it is cannot tell (#view). Asked again, it looks
+   * again.
+   *
+   * One asking a member and engine at a time; whoever needs the answer waits
+   * on it (#heard), and a start and a sign out wait for it before they run.
+   * Never throws.
+   *
+   * @param {string} key
+   * @param {{ member: string, engine: string, volume: string|null, startedAt: number, orphan?: boolean }} t
+   * @returns {Promise<void>}
+   */
+  #ask(key, t) {
+    const under = this.asking.get(key);
+    if (under) return under;
+    const asking = (async () => {
+      // Nothing of the attempt is left running, and so nothing is still writing the home.
+      await this.#remove(containerFor(t.member, t.engine));
+      /** @type {{ signedIn: boolean, pasted: boolean, writtenAt: number|null }|null} */
+      let learned = null;
+      try {
+        if (t.volume && podmanAvailable(this.cfg) && sandboxImageExists(this.cfg)) {
+          const ran = await podmanAsync(this.cfg, this.#askArgv(t.member, t.engine, t.volume), { timeout: this.askMs });
+          for (const text of ran.stdout.split('\n')) {
+            try {
+              const line = JSON.parse(text);
+              if (line?.signin === 'is' && typeof line.signedIn === 'boolean') {
+                learned = { signedIn: line.signedIn, pasted: line.pasted === true, writtenAt: Number.isFinite(line.writtenAt) && line.writtenAt > 0 ? Math.round(line.writtenAt) : null };
+              }
+            } catch { /* not the runner's line */ }
+          }
+        }
+      } catch { /* could not ask: said below as that */ }
+      // A new attempt begun meanwhile says how it ends itself; this one's answer is no longer the last word.
+      if (this.attempts.has(key)) return;
+      const at = this.now();
+      let said = t.orphan ? 'lost' : 'not heard';
+      this.#record(key, (e) => {
+        if (t.orphan && e.attempt) {
+          e.last = { state: 'lost', at, detail: null, by: e.attempt.by ?? null };
+          e.attempt = null;
+        }
+        if (!learned) {
+          e.unheard = { startedAt: t.startedAt };
+          said += ', and whether it had signed in could not be asked';
+          return;
+        }
+        delete e.unheard;
+        const here = learned.signedIn && !learned.pasted;
+        // Written since the attempt began, by the one clock this machine
+        // has. No grace either way: a code is approved by a person, seconds
+        // at the least after the attempt began, and a sign-in from before it
+        // may have been written only moments before. A time that could not
+        // be read counts as since: the account the record held is then not
+        // said of a sign-in it may not be, which is the safer mistake.
+        const anew = here && (learned.writtenAt === null || learned.writtenAt >= t.startedAt);
+        if (anew) {
+          e.signedIn = { since: learned.writtenAt ?? at, who: null, by: e.last?.by ?? null };
+          e.last = { state: 'signed_in', at, detail: null, by: e.last?.by ?? null };
+          said += ', and the code had been approved: signed in';
+        } else if (here) {
+          if (!e.signedIn) e.signedIn = { since: learned.writtenAt ?? at, who: null, by: null };
+          said += ', and the sign-in from before it is as it was';
+        } else {
+          e.signedIn = null;
+          said += ', and no sign-in made here is in the home';
+        }
+      }, t.volume);
+      // A member, an engine and what was learned: nothing of the home.
+      log.info(`engines: ${t.engine} sign-in for ${t.member}: ${said}`);
+    })().catch(() => {}).finally(() => {
+      if (this.asking.get(key) === asking) this.asking.delete(key);
+    });
+    this.asking.set(key, asking);
+    return asking;
+  }
+
+  /**
+   * The `podman run` that looks in one engine home (#ask). The home and
+   * nothing else: no network, because it reads a file, and a name of its
+   * own, so that removing an attempt's container never removes this one.
+   *
+   * @param {string} member @param {string} engine @param {string} volume
+   */
+  #askArgv(member, engine, volume) {
+    const cfg = this.cfg;
+    return [
+      'run', '--rm', '--name', `${containerFor(member, engine)}-asked`,
+      ...usernsArgs(cfg),
+      '-v', `${volume}:${ENGINE_HOME}`,
+      '-e', `FLEETWRIGHT_ENGINE_HOME=${ENGINE_HOME}`,
+      '--network=none',
+      ...(cfg.sandboxMemory ? [`--memory=${cfg.sandboxMemory}`] : []),
+      ...(cfg.sandboxPidsLimit ? [`--pids-limit=${cfg.sandboxPidsLimit}`] : []),
+      ...(cfg.sandboxExtraArgs ?? []),
+      sessionImage(cfg),
+      'fleetwright-engine', '--signedin', engine,
+    ];
+  }
+
+  /**
+   * Every attempt a restart left behind, found as this hub comes up, and
+   * asked about (#ask). Not waited for: each is written down when its home
+   * has answered, and until then the file's mark stands, which no answer
+   * reads as waiting.
+   */
   recover() {
-    for (const key of Object.keys(this.#read() ?? {})) this.#lostIfOrphan(key);
+    for (const key of Object.keys(this.#read() ?? {})) void this.#heard(key);
   }
 
   /**
@@ -548,6 +712,9 @@ export class EngineSignins {
 
   /** @param {{ key: string, member: string, engine: string, account: string, volume: string, by: string|null, box: string }} a */
   async #start(a) {
+    // What became of the last attempt is asked first, when it was not heard
+    // (#heard): the new one runs under the same name and writes the same home.
+    await this.#heard(a.key, a.volume);
     // THE ONE IN FLIGHT, when there is one: its answer, marked as that.
     const live = this.attempts.get(a.key);
     if (live && !live.over) {
@@ -598,7 +765,14 @@ export class EngineSignins {
      * keepMembers): its entry is dropped by what removes it, so nothing is
      * written of how it ended.
      *
-     * @param {string} state @param {{ detail?: string|null, who?: Who|null }} [said]
+     * NOT HEARD FROM THE RUNNER, WITH A CODE OUT, IS ASKED ABOUT (#ask).
+     * Every ending but the runner's own second line is this box deciding:
+     * the container stopped, its clock ran out, it was stopped and did not
+     * answer. Once a code is out the person may have approved it, so the
+     * ending is marked `unheard` and the home is asked. Before any code
+     * there was nothing to approve, and the ending is what it is.
+     *
+     * @param {string} state @param {{ detail?: string|null, who?: Who|null, heard?: boolean }} [said]  `heard` is the runner's own word for how it ended
      */
     const end = (state, said = {}) => {
       if (attempt.over) return;
@@ -606,10 +780,13 @@ export class EngineSignins {
       for (const t of attempt.timers) clearTimeout(t);
       if (this.attempts.get(a.key) === attempt) this.attempts.delete(a.key);
       const at = this.now();
+      const unheard = state !== 'removed' && said.heard !== true && Boolean(attempt.code);
       if (state !== 'removed') {
         this.#record(a.key, (e) => {
           e.last = { state, at, detail: state === 'failed' ? (said.detail ?? null) : null, by: a.by };
           e.attempt = null;
+          if (unheard) e.unheard = { startedAt: attempt.startedAt };
+          else delete e.unheard;
           if (state === 'signed_in') e.signedIn = { since: at, who: said.who ?? null, by: a.by };
         }, a.volume);
       }
@@ -619,6 +796,7 @@ export class EngineSignins {
         attempt.child?.kill?.('SIGTERM');
       } catch { /* gone already */ }
       void this.#remove(containerFor(a.member, a.engine));
+      if (unheard) void this.#ask(a.key, { member: a.member, engine: a.engine, volume: a.volume, startedAt: attempt.startedAt });
       finished();
     };
     attempt.end = end;
@@ -641,7 +819,7 @@ export class EngineSignins {
       return ready;
     }
     // A MARK THAT AN ATTEMPT IS OUT, so a hub that restarts under it knows
-    // one was, and says it is gone (#lostIfOrphan).
+    // one was, and asks its home what became of it (#heard).
     //
     // NOT WRITTEN IS NOT BEGUN. This write was not guarded either, and it is
     // made with the attempt already in the map: a disk that was full for one
@@ -764,7 +942,7 @@ export class EngineSignins {
             const had = Boolean(attempt.code);
             const detail = state === 'failed' ? (oneLine(said.detail) ?? 'the engine gave no reason') : null;
             // A sign-in the runner reports with no code ever given is not one.
-            end(state === 'signed_in' && !had ? 'failed' : attempt.stopped && state !== 'signed_in' ? attempt.stopped : state, { detail: state === 'signed_in' && !had ? 'the runner reported a sign-in it gave no code for' : detail, who: cleanWho(said.who) });
+            end(state === 'signed_in' && !had ? 'failed' : attempt.stopped && state !== 'signed_in' ? attempt.stopped : state, { detail: state === 'signed_in' && !had ? 'the runner reported a sign-in it gave no code for' : detail, who: cleanWho(said.who), heard: true });
             if (!had) {
               // It ended before any code: that is the start's answer.
               const off = said.why === 'device_code_off';
@@ -791,17 +969,21 @@ export class EngineSignins {
     });
   }
 
-  /** @param {string} key @param {string} box */
-  async #cancel(key, box) {
+  /** @param {string} key @param {string} box @param {string|null} [volume] */
+  async #cancel(key, box, volume = null) {
     const live = this.attempts.get(key);
     if (!live || live.over) {
-      this.#lostIfOrphan(key);
+      await this.#heard(key, volume);
       const view = this.#view(key, box);
+      // Cannot tell is its own answer, and is not improved by "none was waiting".
+      if (!view.ok) return view;
       const [member, engine] = key.split('/');
       const none = `No ${says(engine)} sign-in was waiting for ${member} on ${box}. `;
       return { ...view, text: `${none}${view.text}`, quietText: `${none}${view.quietText}` };
     }
     await this.#stop(live);
+    // Stopped without the runner saying so, with a code out: asked about before this answers (#ask).
+    await this.asking.get(key);
     return this.#view(key, box);
   }
 
@@ -852,6 +1034,8 @@ export class EngineSignins {
     try {
       const live = this.attempts.get(a.key);
       if (live && !live.over) await this.#stop(live);
+      // A home being asked about is left alone until it has answered (#ask).
+      await this.asking.get(a.key);
       const ready = await this.#ready(a, a.box);
       if (!ready.ok) return ready;
       await this.#remove(containerFor(a.member, a.engine));
@@ -875,6 +1059,8 @@ export class EngineSignins {
       this.#record(a.key, (e) => {
         e.signedIn = null;
         e.attempt = null;
+        // Whatever was not heard before, this is known: the engine signed out.
+        delete e.unheard;
         e.last = { state: 'signed_out', at, detail: null, by: a.by };
       }, a.volume);
       log.info(`engines: ${a.engine} signed out for ${a.member}, asked by ${a.by ?? 'nobody named'}`);
@@ -902,6 +1088,7 @@ export class EngineSignins {
     const at = this.now();
     this.#record(key, (e) => {
       e.signedIn = null;
+      delete e.unheard;
       e.last = { state: 'ended', at, detail: null, by: null };
     });
     log.info(`engines: a session found ${key.split('/')[1]} no longer signed in for ${key.split('/')[0]}`);
@@ -1114,6 +1301,20 @@ export class EngineSignins {
   async close() {
     await Promise.all([...this.attempts.values()].map((live) => this.#stop(live, 'lost')));
   }
+}
+
+/**
+ * The engine home an entry's sign-in is in, or null for an entry from the
+ * one release before homes were kept beside it. Such an entry does not say
+ * whether it is an agent's or a person's, and a person's home is named by
+ * an address it does not hold: it is not known until somebody who may ask
+ * about the member does, which names it (#heard).
+ *
+ * @param {{ volume?: string }} entry
+ * @returns {string|null}
+ */
+function homeOf(entry) {
+  return typeof entry.volume === 'string' && entry.volume ? entry.volume : null;
 }
 
 /** The container one member's sign-in to one engine runs in. A member's id is letters, digits and hyphens. */

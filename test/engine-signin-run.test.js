@@ -28,7 +28,7 @@ import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, mkdirSyn
 import os from 'node:os';
 import path from 'node:path';
 
-import { signin, signedInAt, homePaths, SIGNIN_MINUTES, SIGNIN_PAGES } from '../sandbox/engine.mjs';
+import { signin, signedIn, signedInAt, stage, homePaths, PASTED, SIGNIN_MINUTES, SIGNIN_PAGES } from '../sandbox/engine.mjs';
 import { codexSignIn, copilotEntry, fakeJwt } from './helpers/engine-files.js';
 
 /** A token as an engine would write it into its sign-in file: found anywhere else, it leaked. */
@@ -589,4 +589,47 @@ test('where each engine keeps its sign-in in an engine home, and what counts as 
     writeFileSync(path.join(home, engine, 'auth.json'), text);
     assert.equal(Boolean(signedInAt(engine, home)), counts, `${engine}: ${what}`);
   }
+});
+
+// ── Whether a home holds a sign-in made on the machine ──────────────────────
+
+test('asked whether a home holds a sign-in, the runner says so in one line from the file alone: made here or pasted, and when it was written, with no token and no engine', (t) => {
+  // What a box asks when it did not hear how a sign-in ended (src/core/engine-signin.js, #ask).
+  const home = engineHome(t);
+  const ask = (/** @type {string} */ engine, env = { FLEETWRIGHT_ENGINE_HOME: home }) => {
+    /** @type {string[]} */
+    const raw = [];
+    assert.equal(signedIn({ engine }, { env, out: (s) => void raw.push(s) }), 0);
+    const said = raw.join('');
+    assert.ok(said.endsWith('\n') && said.trim().split('\n').length === 1, 'not one line');
+    assert.ok(!/rt-made-up|gho_made_up|eyJ/.test(said), `something of the file is in the line: ${said}`);
+    return JSON.parse(said);
+  };
+  // NOTHING THERE.
+  assert.deepEqual(ask('codex'), { engine: 'codex', signin: 'is', signedIn: false, pasted: false, writtenAt: null });
+  assert.deepEqual(ask('opencode'), { engine: 'opencode', signin: 'is', signedIn: false, pasted: false, writtenAt: null });
+  // A SIGN-IN CODEX WROTE, as a sign-in on this machine leaves it: there, not pasted, and when.
+  const before = Date.now() - 2000;
+  mkdirSync(path.join(home, 'codex'), { recursive: true });
+  writeFileSync(path.join(home, 'codex', 'auth.json'), codexSignIn());
+  const made = ask('codex');
+  assert.deepEqual({ ...made, writtenAt: 0 }, { engine: 'codex', signin: 'is', signedIn: true, pasted: false, writtenAt: 0 });
+  assert.ok(made.writtenAt >= before && made.writtenAt <= Date.now() + 2000, `not when the file was written: ${made.writtenAt}`);
+  // THE BOX'S COPY OF A PASTED ONE, as `stage` leaves it: there, and not a sign-in made here.
+  assert.equal(stage('codex', codexSignIn(), home, null, home).ok, true);
+  assert.equal(existsSync(path.join(home, 'codex', PASTED)), true);
+  assert.deepEqual([ask('codex').signedIn, ask('codex').pasted], [true, true]);
+  // A file Codex would not start on is no sign-in, whatever is beside it.
+  writeFileSync(path.join(home, 'codex', 'auth.json'), '{"tokens":{"refresh_token":"rt-made-up-0123456789"}}');
+  assert.deepEqual([ask('codex').signedIn, ask('codex').pasted, ask('codex').writtenAt], [false, false, null]);
+  // OPENCODE: the entry its own sign-in writes, and the one `stage` writes for a pasted token.
+  mkdirSync(path.join(home, 'opencode'), { recursive: true });
+  writeFileSync(path.join(home, 'opencode', 'auth.json'), JSON.stringify({ 'github-copilot': copilotEntry('gho_made_up_0123456789') }));
+  assert.deepEqual([ask('opencode').signedIn, ask('opencode').pasted], [true, false]);
+  rmSync(path.join(home, 'opencode', 'auth.json'));
+  assert.equal(stage('opencode', 'gho_made_up_0123456789', home, null, home).ok, true);
+  assert.deepEqual([ask('opencode').signedIn, ask('opencode').pasted], [true, true]);
+  // NOT ASKED IS NOT "NO": no home to look in, or an engine this runner does not sign in, is null.
+  assert.equal(ask('codex', {}).signedIn, null);
+  assert.equal(ask('claude-code').signedIn, null);
 });

@@ -63,7 +63,10 @@ account has been signed in. No turn has been sent to a real Codex or
 OpenCode, so none of this has been seen: an approval answered, OpenCode
 asking before it acts, a limit, a renewal in the middle of a session, the
 move to the next engine. Nor has a box done any of it under rootless
-Podman: the volume, the signals a cancel sends, a container removed.
+Podman: the volume, the signals a cancel sends, a container removed, the
+container that asks a home whether it holds a sign-in
+(`--signedin`, which reads the file and has only been run in the tests,
+against files of the shapes the engines were seen to write).
 
 Two checks before a turn are weaker than this page used to say, and both
 want a real account to settle. Codex's `thread/start` was seen to answer
@@ -674,7 +677,7 @@ refused, with the engine's sentence when it gave one.
 | `expired` | the 15 minutes passed with nobody approving it |
 | `failed` | the engine refused or failed, and `detail` is its own sentence; or this machine ended the attempt itself, and `detail` says why |
 | `cancelled` | somebody cancelled it |
-| `lost` | the hub restarted while a code was out, so that attempt is gone and its container was removed. Never reported as waiting |
+| `lost` | the hub restarted while a code was out, the container was removed, and the home, asked, holds no sign-in the attempt made. Never reported as waiting |
 | `signed_out` | the engine was asked to sign out here, and did |
 | `ended` | a session of this member found the sign-in no longer works |
 
@@ -700,6 +703,37 @@ out is exactly that, and tells GitHub nothing.
 and engine, how the last attempt ended, when, who is signed in and since
 when, who asked, and the name of the engine home it is in. No token, no
 code and no page.
+
+**An ending the machine did not hear is asked about before it is said.**
+The runner's second line is the only word for how an attempt ended. Every
+other ending is the machine deciding: its hub restarted under a code, the
+container stopped or was removed after a code was out, its own clock ended
+the code. The person may have approved the code first, and the sign-in may
+be in the home. A hub that restarted used to say the attempt was gone and
+report nobody signed in, with the member's sessions running on the sign-in
+and no screen offering to sign it out. So the machine asks. It removes the
+attempt's container, then runs a short one from the session image with the
+home mounted and no network (`fleetwright-engine --signedin <engine>`),
+which starts no engine: it reads the file as the runner does before every
+turn, and says whether a sign-in the engine would start on is there,
+whether that is the box's copy of a pasted one, and when the file was last
+written. What the machine then records:
+
+- a sign-in made there and written since the attempt began: `signed_in`,
+  `since` when it was written, and `who` is `null`, because no engine was
+  asked and the account the record held is not known to be this one's;
+- one written before the attempt began: the attempt changed nothing, and
+  the ending stands (`lost`, `expired`, `failed`, `cancelled`) beside who
+  was signed in before;
+- none, or only a pasted copy: the ending stands and nobody is signed in
+  on the machine, whatever the record said.
+
+A `status`, a `cancel` and a `start` wait for that answer. **When the
+machine cannot ask** (no Podman, no image, a container that would not run,
+an entry from before the home's name was kept), it refuses with
+`cannot_tell`, gives no `state` for a screen to put its own words to, and
+looks again each time it is asked. Before any code was out there was
+nothing to approve, and nothing is asked.
 
 **A record that cannot be read, or does not read as one, is cannot tell.**
 The machine then reports no list at all (never an empty one, which would
@@ -840,7 +874,9 @@ out, each with when to ask again) or the engine would not sign out
 (`signout_failed`, which changes nothing the machine reports); the machine
 cannot read its own record (`state_unreadable`, which is cannot tell and
 is never answered as nobody signed in) or cannot write to it
-(`state_unwritable`, with nothing begun); its hub is older than its
+(`state_unwritable`, with nothing begun); it did not hear how the last
+attempt ended and could not ask the home (`cannot_tell`, which carries no
+state and is asked again by asking again); its hub is older than its
 sidecar (`hub_outdated`, which names the machine and says to update
 fleetwright there and restart it). On a `start`, a machine that could not
 take the vault's last answer for the vault's own says why and what ends it
@@ -1033,9 +1069,15 @@ the engines this machine does not run.
   made there and exists nowhere else.
 - **A machine says what it was told, not what is true now.** `engineSignins`
   and `status` report a sign-in from the moment the engine said it
-  succeeded until somebody signs it out or a session of that member finds
-  it ended. A sign-in revoked at the provider and not yet used by a session
-  is still reported as signed in.
+  succeeded, or the home was found to hold one after an ending the machine
+  did not hear, until somebody signs it out or a session of that member
+  finds it ended. A sign-in revoked at the provider and not yet used by a
+  session is still reported as signed in: asking the home says a sign-in
+  is there, never that it still works, which only the engine can say and
+  only before a turn. And `engineSignins` has no way to say cannot tell
+  about one member: while an ending is unheard and unasked, the list
+  carries that entry as it was recorded, and `status` is where the
+  machine says it cannot tell.
 - **Two processes can spend one Codex refresh token.** Codex serializes its
   writes to a shared `CODEX_HOME` with lock files, and two sessions of one
   member renewing in the same moment can still both present the old token.
@@ -1142,7 +1184,9 @@ not the engine's own refused; a sign-in Codex wrote and then called failed
 not kept; a home that already holds a real sign-in still given its page;
 and what counts as a sign-in, row by row as the real engines answered), `test/engine-signin-hub.test.js` (the box, through a
 stand-in Podman and the real runner: the volume and its name, one attempt
-at a time, what is kept and what a restart loses, who may and who may not,
+at a time, what is kept, a restart or a dead container asking the home
+what became of a code and saying cannot tell until it could, who may and
+who may not,
 a delegation that does not name the member, and no token in any answer,
 file, event or log line), `test/engine-signin-answer.test.js` (the vectors
 both phones check an answer against: a signed one with every field of it

@@ -41,7 +41,9 @@
 // of JSON, waits for the engine to say how it ended, and prints that as a
 // second. `--signout <engine>` removes the sign-in. The engine itself is
 // started on an empty home of that run's own, never on the member's, which
-// the member's sessions write. See "Signing in on the machine", below and in
+// the member's sessions write. `--signedin <engine>` says whether the home
+// holds a sign-in made there, for a box that did not hear how one ended, and
+// starts no engine at all. See "Signing in on the machine", below and in
 // docs/engines.md.
 
 import { spawn } from 'node:child_process';
@@ -1702,9 +1704,81 @@ export async function signin(args, io = {}) {
   }
 }
 
+// ── Whether a home holds a sign-in made on the machine ──────────────────────
+//
+// `fleetwright-engine --signedin <engine>`: what a box runs when it did not
+// hear from this runner how a sign-in ended. Its hub restarted while a code
+// was out, or the container was ended as the code was being approved. The
+// box must not say "not signed in" of something it did not hear, so it asks
+// (src/core/engine-signin.js, #ask). One line of JSON:
+//
+//   {"signin":"is","engine":"codex","signedIn":true,"pasted":false,"writtenAt":1764000001000}
+//
+// NO ENGINE IS STARTED, AND NOTHING IS WRITTEN. A sign-in is made on an
+// empty home of the run's own because nothing in a member's home can be
+// trusted to leave a login alone, and that holds for asking after one. What
+// is asked is what this runner already answers before every turn: is there
+// a sign-in here the engine itself would start on (`signedInAt`, each rule
+// of which was held against the real engine). Whether it still works is the
+// engine's to say, in a session's check before a turn, as it always was.
+//
+// WHAT IT SAYS, AND WHAT IT CANNOT:
+//
+//   signedIn   a sign-in is in the home that the engine would start on
+//   pasted     it is the box's copy of a pasted one, which `stage` put there
+//              and no sign-in on this machine made: for Codex the mark
+//              beside the file (PASTED), for OpenCode the shape `stage`
+//              writes, a token with no access token beside it
+//   writtenAt  when the file was last written, by this machine's clock, so a
+//              box can tell a sign-in an attempt just made from one that was
+//              there before it. A session that renews rewrites the file too,
+//              so "written since" is "may be another sign-in", not "is"
+//
+// WHO is not said. The file names nobody this runner would repeat without
+// the engine saying it, and the engine is not started here.
+
+/**
+ * Say whether this container's engine home holds a sign-in for one engine.
+ *
+ * @param {{ engine: string }} args
+ * @param {{ env?: Record<string, string|undefined>, out?: (text: string) => void }} [io]
+ * @returns {number} the exit code: 0 when it said
+ */
+export function signedIn(args, io = {}) {
+  const env = io.env ?? process.env;
+  const write = io.out ?? ((text) => process.stdout.write(text));
+  const engine = String(args.engine ?? '');
+  const engineHome = typeof env.FLEETWRIGHT_ENGINE_HOME === 'string' && env.FLEETWRIGHT_ENGINE_HOME ? env.FLEETWRIGHT_ENGINE_HOME : null;
+  const at = engineHome && RUNS[engine] ? homePaths(engine, engineHome) : null;
+  // NOT ASKED IS NOT "NO": an engine this runner does not sign in, or a
+  // container with no home, says nothing of whether anybody is signed in.
+  if (!at || !engineHome) {
+    write(`${JSON.stringify({ engine: line(engine, 40) ?? '', signin: 'is', signedIn: null, detail: at ? 'this container was given no engine home to look in' : 'not an engine this runner signs in, or no engine home to look in' })}\n`);
+    return 0;
+  }
+  const held = signedInAt(engine, engineHome);
+  let pasted = false;
+  /** @type {number|null} */
+  let writtenAt = null;
+  if (held) {
+    try {
+      pasted = engine === 'codex' ? existsSync(path.join(at.dir, PASTED)) : JSON.parse(held.text)?.[OPENCODE_SIGNIN_PROVIDER]?.access === '';
+      writtenAt = Math.round(statSync(held.file).mtimeMs);
+    } catch { /* read a moment ago and gone now: said as it was read, with no time */ }
+  }
+  // Nothing of the file is in the line, so nothing is withheld from it.
+  write(`${JSON.stringify({ engine, signin: 'is', signedIn: Boolean(held), pasted, writtenAt })}\n`);
+  return 0;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const argv = process.argv.slice(2);
-  if (argv[0] === '--signin' || argv[0] === '--signout') {
+  if (argv[0] === '--signedin') {
+    // A question about a home, answered from a file: no engine, no socket,
+    // one line. Left to end by itself: an exit asked for here can come
+    // before a line written to a pipe has gone, and the line is the answer.
+    process.exitCode = signedIn({ engine: String(argv[1] ?? '') });
+  } else if (argv[0] === '--signin' || argv[0] === '--signout') {
     // A sign-in, not a session: no socket, no pane, two lines of JSON. A
     // signal is the box cancelling it, and is `signin`'s to hear.
     signin({ engine: String(argv[1] ?? ''), out: argv[0] === '--signout' }, { signals: process }).then((code) => process.exit(code), (e) => {
