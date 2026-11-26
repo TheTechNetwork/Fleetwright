@@ -66,7 +66,8 @@ move to the next engine. Nor has a box done any of it under rootless
 Podman: the volume, the signals a cancel sends, a container removed, the
 container that asks a home whether it holds a sign-in
 (`--signedin`, which reads the file and has only been run in the tests,
-against files of the shapes the engines were seen to write).
+against files of the shapes the engines were seen to write), an attempt's
+word reaching its container through `-e` and no other container.
 
 Two checks before a turn are weaker than this page used to say, and both
 want a real account to settle. Codex's `thread/start` was seen to answer
@@ -249,6 +250,19 @@ but two kinds that are nobody's secret: a date, and a bare origin. The file
 Codex writes names who issued its tokens (`https://auth.openai.com`) beside
 them, and with that withheld the page for a second sign-in was printed as
 `[withheld]/codex/device`, which no box would pass on.
+
+**A sign-in's two lines are the runner's own, and the member's home has no
+say in them.** The file in an engine home is one that member's sessions
+write. It used to be withheld from a sign-in's lines like any other, each
+string cut out of the finished line, and a session that left a piece of
+that line in its own file as one more string (`done","state":"cancelled`)
+had the runner cut it out of its own answer, which the box could then not
+read. So the line that says how a sign-in ended is built from the runner's
+own words, and only the free text in it (`detail`, and who is signed in) has
+anything taken out, before it goes in as a value. What is taken out there is
+what the run itself made: the file the engine wrote in the run's own home,
+the password for OpenCode's server, and for a Codex sign out the copy it
+hands Codex. Nothing a session can write decides what a sign-in says.
 
 **In pieces as much as whole.** An agent's words reach the pane a few
 characters at a time. A value was looked for inside each piece, so one that
@@ -718,6 +732,14 @@ refused, with the engine's sentence when it gave one.
 | `signed_out` | the engine was asked to sign out here, and did |
 | `ended` | a session of this member found the sign-in no longer works |
 
+`waiting` is by the clock on the wall. The attempt is ended by a timer, and
+a timer does not count time the machine was not running: a box suspended
+with a code out woke still saying "about 1 more minute" for a code its
+provider had ended an hour before. So every time it is asked, the machine
+looks at the clock, and a code past `expiresAt` and the half minute the
+runner is given to say so itself is ended as `expired` there and then, and
+the home asked what became of it (below).
+
 Beside `state`, every answer carries `signedIn`: `{ since, who }` when this
 machine holds a sign-in it was told of, else `null`. They are two facts. A
 new attempt that expires leaves the sign-in before it in place, and the
@@ -738,8 +760,9 @@ out is exactly that, and tells GitHub nothing.
 **What the box keeps** is in memory for an attempt that is waiting, and in
 `engine-signins.json` in its state directory for the rest: for each member
 and engine, how the last attempt ended, when, who is signed in and since
-when, who asked, and the name of the engine home it is in. No token, no
-code and no page.
+when, who asked, a mark while an attempt is out with that attempt's own
+word (below), and the name of the engine home it is in. No token, no code
+and no page.
 
 **An ending the machine did not hear is asked about before it is said.**
 The runner's second line is the only word for how an attempt ended. Every
@@ -753,24 +776,44 @@ attempt's container, then runs a short one from the session image with the
 home mounted and no network (`fleetwright-engine --signedin <engine>`),
 which starts no engine: it reads the file as the runner does before every
 turn, and says whether a sign-in the engine would start on is there,
-whether that is the box's copy of a pasted one, and when the file was last
-written. What the machine then records:
+whether that is the box's copy of a pasted one, when the file was last
+written, and the attempt's word it found beside it.
 
-- a sign-in made there and written since the attempt began: `signed_in`,
+**A sign-in is an attempt's by that attempt's word, and by nothing else.**
+The home is one the member's sessions write, so a file in it proves
+nothing by being there or by when it was written. The machine makes up a
+word for each attempt (sixteen random bytes), keeps it in its record, and
+gives it to that attempt's container and to nothing else
+(`FLEETWRIGHT_SIGNIN_ATTEMPT`). The runner leaves it beside the sign-in, in
+a file of its own (`auth.json.attempt`), only once the engine has said the
+code was approved, and `--signedin` repeats what it finds there. What the
+machine then records:
+
+- a sign-in made there with this attempt's word beside it: `signed_in`,
   `since` when it was written, and `who` is `null`, because no engine was
   asked and the account the record held is not known to be this one's;
-- one written before the attempt began: the attempt changed nothing, and
-  the ending stands (`lost`, `expired`, `failed`, `cancelled`) beside who
-  was signed in before;
+- a sign-in with another word beside it, or none: the attempt changed
+  nothing. The ending stands (`lost`, `expired`, `failed`, `cancelled`) and
+  the record of who is signed in is left exactly as it was, somebody with
+  their account still said, or nobody;
 - none, or only a pasted copy: the ending stands and nobody is signed in
   on the machine, whatever the record said.
 
+It was "written since the attempt began", and that said three things that
+were not so: a file a session left there was recorded as a code approved
+that nobody had approved; an older sign-in a session renewed while a code
+was out was recorded as the new code approved, with whose it was dropped;
+and a sign-in a session had found ended, whose file was still in the home,
+was reported again as "one this machine had not been told of".
+
 A `status`, a `cancel` and a `start` wait for that answer. **When the
 machine cannot ask** (no Podman, no image, a container that would not run,
-an entry from before the home's name was kept), it refuses with
-`cannot_tell`, gives no `state` for a screen to put its own words to, and
-looks again each time it is asked. Before any code was out there was
-nothing to approve, and nothing is asked.
+an entry from before the home's name was kept), **or the runner could not
+read the home** (`signedIn: null`: what should be the file is there and
+would not read, or does not read as a whole file, which is not the same as
+no file), it refuses with `cannot_tell`, gives no `state` for a screen to
+put its own words to, and looks again each time it is asked. Before any
+code was out there was nothing to approve, and nothing is asked.
 
 **A record that cannot be read, or does not read as one, is cannot tell.**
 The machine then reports no list at all (never an empty one, which would
@@ -1104,11 +1147,24 @@ the engines this machine does not run.
   the original on their own computer, and the first of the two to renew ends
   the other. Signing in on the machine does not have this: the sign-in is
   made there and exists nowhere else.
+- **A member's sessions can write that member's engine home, and the
+  attempt's word is in it.** A session can read it, copy it and remove it,
+  like any file there. Removing it, or the sign-in, makes a machine that
+  did not hear an ending record that the attempt signed nobody in, and
+  somebody starts again. After a code was approved a session can put
+  another file where the sign-in was and leave the word: the machine then
+  says the attempt signed in, which it did, says nothing of who, and
+  whether what is there works is the engine's to say before a turn. What
+  a session cannot do is know an attempt's word before the runner writes
+  it, so it cannot make a code nobody approved look approved. A session
+  image from before the word, and a mark an earlier release left in the
+  record, never match: an approval the machine did not hear is then
+  recorded as `lost`, once, and signing in again mends it.
 - **A machine says what it was told, not what is true now.** `engineSignins`
   and `status` report a sign-in from the moment the engine said it
-  succeeded, or the home was found to hold one after an ending the machine
-  did not hear, until somebody signs it out or a session of that member
-  finds it ended. A sign-in revoked at the provider and not yet used by a
+  succeeded, or the home was found to hold the one an attempt made after an
+  ending the machine did not hear, until somebody signs it out or a session
+  of that member finds it ended. A sign-in revoked at the provider and not yet used by a
   session is still reported as signed in: asking the home says a sign-in
   is there, never that it still works, which only the engine can say and
   only before a turn. And `engineSignins` has no way to say cannot tell
@@ -1220,10 +1276,18 @@ that comes after a kept connection would have been cut; the engine started
 on a home of the run's own and only its sign-in copied out; a page that is
 not the engine's own refused; a sign-in Codex wrote and then called failed
 not kept; a home that already holds a real sign-in still given its page;
-and what counts as a sign-in, row by row as the real engines answered), `test/engine-signin-hub.test.js` (the box, through a
+a string a session left in the home's file taking nothing out of what the
+runner says; an attempt's word left beside the sign-in it made and by no
+other; a home that would not read said as cannot tell; and what counts as a
+sign-in, row by row as the real engines answered. Every test there has a
+bound of its own and ends the sign-ins it began, so a fix taken out fails
+a test by name in seconds, where the file used to sit until it was
+killed), `test/engine-signin-hub.test.js` (the box, through a
 stand-in Podman and the real runner: the volume and its name, one attempt
 at a time, what is kept, a restart or a dead container asking the home
-what became of a code and saying cannot tell until it could, who may and
+what became of a code and saying cannot tell until it could, a file in the
+home that the attempt did not make never recorded as its sign-in, a code
+past its life by the clock not said to be waiting, who may and
 who may not,
 a delegation that does not name the member, and no token in any answer,
 file, event or log line), `test/engine-signin-answer.test.js` (the vectors
