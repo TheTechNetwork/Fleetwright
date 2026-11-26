@@ -685,10 +685,11 @@ image pins:
   could be typed), and answers `true` or
   `ProviderAuthOauthCallbackFailed`. That failure does not say why, so it
   is reported as `failed`, "GitHub declined the code or it ran out, and
-  OpenCode does not say which", and only the runner's own 15 minutes are
-  reported as `expired`. The runner's clock starts before OpenCode asks
-  GitHub for the code, so it runs out a second or so before GitHub's does
-  and a code that ran out is `expired`. When OpenCode cannot reach GitHub
+  OpenCode does not say which". A code that ran out is `expired` all the
+  same: the runner's own 15 minutes start before OpenCode asks GitHub for
+  the code, so they end first, and a failure that OpenCode passes on in
+  the code's last ten seconds (one of its polls of GitHub) is read as the
+  code running out. When OpenCode cannot reach GitHub
   at all it answers the request for a code with `UnknownError` and no
   reason; the detail then says that this machine must be able to reach
   `github.com`. This is OpenCode's own login in its own binary. Fleetwright

@@ -1305,6 +1305,16 @@ export const SIGNIN_PAGES = Object.freeze({
 const OPENCODE_SIGNIN_PROVIDER = 'github-copilot';
 
 /**
+ * How near the end of a code's life a failure from OpenCode is the code
+ * running out. OpenCode asks GitHub about a code every eight seconds
+ * (GitHub's five and three of its own, plugin/github-copilot/copilot.ts),
+ * and passes on a code that ran out as the same failure as one that was
+ * declined. So what it says in a code's last poll, with two seconds for the
+ * answer to arrive, is read as the end of the code and not as a refusal.
+ */
+export const LAST_POLL_MS = 10_000;
+
+/**
  * One request to OpenCode's own server on loopback, as JSON.
  *
  * @param {string} base  `http://127.0.0.1:<port>`
@@ -1423,6 +1433,8 @@ export async function signin(args, io = {}) {
   });
   /** @type {any} */
   let capTimer = null;
+  /** When this run's clock for the code started: the code is made a moment later, so it never outlives the clock. */
+  const began = Date.now();
   /** @type {Promise<'cap'>} */
   const cap = new Promise((resolve) => {
     capTimer = setTimeout(() => resolve('cap'), capMs);
@@ -1678,7 +1690,14 @@ export async function signin(args, io = {}) {
     // OpenCode says only that it failed: GitHub's reason, a code that ran out
     // or a request somebody declined, does not reach its answer.
     const name = line(how.body?.name, 60);
-    if (name === 'ProviderAuthOauthCallbackFailed') return failed(`GitHub declined the code or it ran out, and OpenCode does not say which (${name})`);
+    if (name === 'ProviderAuthOauthCallbackFailed') {
+      // AT THE END OF THE CODE'S LIFE IT RAN OUT. This runner's own clock
+      // says `expired` when nothing has come by then; when OpenCode's
+      // failure comes first, in the code's last poll, it is the same thing
+      // and was said as `failed`.
+      if (Date.now() - began >= capMs - LAST_POLL_MS) return done('expired');
+      return failed(`GitHub declined the code or it ran out, and OpenCode does not say which (${name})`);
+    }
     return failed(name ? `it did not complete the sign-in (${name})` : `its answer was lost (${/** @type {any} */ (how).lost ?? `HTTP ${how.status}`})`);
   }
 }

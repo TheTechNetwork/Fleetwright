@@ -472,6 +472,22 @@ test('OpenCode: a callback that fails is failed in OpenCode’s word for it, whi
   });
 });
 
+test('OpenCode: a failure that comes as the code’s life ends is the code running out, and one that comes before is not', async (t) => {
+  // OpenCode passes on a code that ran out exactly as it passes on one that was declined.
+  // A code with four seconds to live is in its last poll from the start; one with fifteen minutes is not.
+  for (const [capMs, state] of /** @type {const} */ ([[4000, 'expired'], [SIGNIN_MINUTES * 60_000, 'failed']])) {
+    const home = engineHome(t);
+    const server = await openCodeServe(t);
+    const p = printed();
+    const done = signin({ engine: 'opencode' }, { env: { FLEETWRIGHT_ENGINE_HOME: home }, out: p.out, spawnEngine: server.spawn, capMs });
+    await until(() => p.lines().length === 1 && server.seen.length === 2, 'the code out and the callback held');
+    server.github('failed');
+    assert.equal(await done, 0);
+    assert.equal(p.lines()[1].state, state, `a code that lasts ${capMs} ms`);
+    assert.equal(signedInAt('opencode', home), null);
+  }
+});
+
 test('OpenCode: the runner’s own 15 minutes is expired, a cancel is cancelled, and neither leaves a sign-in', async (t) => {
   for (const [how, state] of /** @type {const} */ ([['cap', 'expired'], ['signal', 'cancelled']])) {
     const home = engineHome(t);
