@@ -196,6 +196,15 @@ const SETTLED_MS = 2000;
 const tags = new Map();
 
 /**
+ * The major of the Node this hub runs on: what the image is built with
+ * (sandbox/machine/Containerfile, `NODE_MAJOR`), and so part of which image
+ * it is (releaseTag).
+ */
+function nodeMajor() {
+  return process.versions.node.split('.')[0];
+}
+
+/**
  * What identifies the release this box runs, as a short tag: THE BYTES of
  * every file a host runs from, by its path. A checkout that pulled and a
  * release that was replaced both change it, and the image is built again.
@@ -216,7 +225,20 @@ const tags = new Map();
  *
  * `node_modules` is not walked. What npm installed there is listed in its
  * own `.package-lock.json`, and that file's bytes stand for the directory; a
- * release has no `node_modules`, since everything is in its bundle.
+ * release has no `node_modules`, since everything is in its bundle. ONE WITH
+ * NO SUCH FILE STANDS FOR NOTHING: its name is in the tag and nothing of
+ * what is in it, so a dependency changed there by another installer, or by
+ * hand, is the same image. That entry has no file to read, and it was read
+ * all the same when `node_modules` was a link, as it is in a second
+ * worktree of a checkout: the link's own target was asked of an empty path,
+ * which threw, and a box could neither list its machines nor make one.
+ *
+ * TWO THINGS THAT ARE NOT BYTES ARE IN IT TOO, because the image differs by
+ * them. The major of the Node this hub runs on, which the build installs
+ * (`NODE_MAJOR`, below): a box whose Node moved a major kept the image with
+ * the old one inside. And whether each file may be run: a release that only
+ * made `bin/fleetwright-sidecar` executable, or stopped it being, has the
+ * same bytes and is not the same host.
  *
  * @param {string} installDir
  */
@@ -249,15 +271,17 @@ export function releaseTag(installDir) {
   };
   for (const part of RELEASE_PARTS) walk(part);
   walk(path.join('sandbox', 'machine'));
-  const seen = files.map((f) => `${f.rel}\0${f.st.size}\0${f.st.mtimeMs}\0${f.st.ctimeMs}\0${f.st.ino}`).join('\n');
+  const seen = [`node ${nodeMajor()}`, ...files.map((f) => `${f.rel}\0${f.st.size}\0${f.st.mtimeMs}\0${f.st.ctimeMs}\0${f.st.ino}\0${f.st.mode}`)].join('\n');
   const kept = tags.get(installDir);
   if (kept?.seen === seen) return kept.tag;
   const h = createHash('sha256');
+  h.update(`node\0${nodeMajor()}\0`);
   for (const f of files) {
     // A link is where it points, and anything else that is not a file is
-    // only its name: neither is read through.
-    const bytes = f.st.isSymbolicLink() ? Buffer.from(readlinkSync(f.at)) : f.st.isFile() ? readFileSync(f.at) : Buffer.alloc(0);
-    h.update(`${f.rel}\0${bytes.length}\0`);
+    // only its name: neither is read through. Nor is an entry with nowhere
+    // to read from, which is a `node_modules` that has no lock file.
+    const bytes = !f.at ? Buffer.alloc(0) : f.st.isSymbolicLink() ? Buffer.from(readlinkSync(f.at)) : f.st.isFile() ? readFileSync(f.at) : Buffer.alloc(0);
+    h.update(`${f.rel}\0${bytes.length}\0${f.at && f.st.isFile() && f.st.mode & 0o100 ? 'x' : '-'}\0`);
     h.update(bytes);
   }
   const tag = h.digest('hex').slice(0, 12);
@@ -552,7 +576,7 @@ export class Machines {
         '--label', `${IMAGE_LABEL}=1`,
         // THE NODE THIS HUB RUNS ON, so the host inside runs on what the host
         // outside does (sandbox/machine/Containerfile).
-        '--build-arg', `NODE_MAJOR=${process.versions.node.split('.')[0]}`,
+        '--build-arg', `NODE_MAJOR=${nodeMajor()}`,
         '-f', path.join(cfg.installDir, 'sandbox', 'machine', 'Containerfile'),
         stage,
       ],

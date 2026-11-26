@@ -11,7 +11,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Machines, machineImage, machineNames, releaseTag, stageMachineContext, MACHINE_MAX_MINUTES } from '../src/core/machines.js';
@@ -77,9 +77,51 @@ test('a release that changed is another image, so a machine runs what its box ru
   writeFileSync(bundle, 'y\n');
   utimesSync(bundle, packed, packed);
   assert.deepEqual([statSync(bundle).size, statSync(bundle).mtimeMs], [was.size, was.mtimeMs]);
-  assert.notEqual(releaseTag(root), before.split(':')[1]);
+  const changed = releaseTag(root);
+  assert.notEqual(changed, before.split(':')[1]);
+  // A FILE THAT MAY NOW BE RUN, with the bytes it had. The image copies a
+  // release as it is, so one in which the sidecar could not be started and
+  // one in which it can are two hosts, and were one tag.
+  chmodSync(path.join(root, 'bin', 'fleetwright-sidecar'), 0o755);
+  const runnable = releaseTag(root);
+  assert.notEqual(runnable, changed);
+  // THE NODE THE HUB RUNS ON is what the build installs in the image. A box
+  // whose Node moved a major kept the image with the old one inside.
+  const versions = process.versions;
+  Object.defineProperty(process, 'versions', { value: { ...versions, node: `${Number(versions.node.split('.')[0]) + 2}.0.0` }, configurable: true });
+  t.after(() => Object.defineProperty(process, 'versions', { value: versions, configurable: true }));
+  assert.notEqual(releaseTag(root), runnable);
+  Object.defineProperty(process, 'versions', { value: versions, configurable: true });
+  assert.equal(releaseTag(root), runnable);
   // The operator's own image is used as named, whatever the release is.
   assert.equal(machineImage({ installDir: root, machineImage: 'registry.example/ours:1' }), 'registry.example/ours:1');
+});
+
+test('a checkout whose node_modules is a link has a tag, with or without npm’s list of what is in it', (t) => {
+  const podman = stubMachinePodman(t);
+  const root = podman.release('checkout');
+  // A SECOND WORKTREE OF A CHECKOUT shares the first one's dependencies
+  // through a link. This one has no `.package-lock.json` behind it (another
+  // installer's, or a directory somebody filled by hand). The tag read the
+  // link's target from an empty path and threw, and every look at the
+  // machines went with it.
+  const shared = path.join(podman.dir, 'shared-node-modules');
+  renameSync(path.join(root, 'node_modules'), shared);
+  symlinkSync(shared, path.join(root, 'node_modules'));
+  const bare = releaseTag(root);
+  assert.match(bare, /^[0-9a-f]{12}$/);
+  // WITH NPM'S LIST, that file stands for the directory: a dependency that
+  // moved is another image.
+  writeFileSync(path.join(shared, '.package-lock.json'), '{"packages":{"node_modules/jose":{"version":"6.0.0"}}}\n');
+  const listed = releaseTag(root);
+  assert.notEqual(listed, bare);
+  writeFileSync(path.join(shared, '.package-lock.json'), '{"packages":{"node_modules/jose":{"version":"6.0.1"}}}\n');
+  assert.notEqual(releaseTag(root), listed);
+  // And the image is still built from what the link points at.
+  const out = mkdtempSync(path.join(os.tmpdir(), 'fw-stage-'));
+  t.after(() => rmSync(out, { recursive: true, force: true }));
+  assert.equal(stageMachineContext({ installDir: root }, out).ok, true);
+  assert.equal(existsSync(path.join(out, 'release', 'node_modules', 'jose', 'index.js')), true);
 });
 
 test('making a machine puts its ticket in the machine’s own volume from standard input, and in no command line or environment', async (t) => {

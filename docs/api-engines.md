@@ -287,6 +287,16 @@ stamps every file 2020, and a fix that kept a file's length would have kept
 the tag, and the old host in every machine. The same bytes unpacked again
 are the same image, and nothing is rebuilt.
 
+Two things that are not bytes are in the tag too, because the image differs
+by them: the major of the Node the hub runs on, which is the Node the build
+installs, and whether each file may be run. **A checkout's `node_modules`
+is not read.** What npm installed is listed in `node_modules/.package-lock.json`,
+and that one file stands for the directory, through a link when
+`node_modules` is one (a second worktree's). A `node_modules` with no such
+file stands for nothing: a dependency changed there, by another installer
+or by hand, is the same tag and the image is not built again. A release has
+no `node_modules`.
+
 ### The same image is the template a provider needs
 
 Part two says a provider's template has to enrol itself and that building
