@@ -210,7 +210,7 @@ test('Codex: a sign out is Codex’s own, and removes what it kept', async (t) =
  * process holding what is pending, behind the password it was started with.
  * `github` is how GitHub answers the code OpenCode is asking about.
  */
-async function openCodeServe(/** @type {import('node:test').TestContext} */ t) {
+async function openCodeServe(/** @type {import('node:test').TestContext} */ t, { keepAliveSeconds = 5 } = {}) {
   /** @type {{ cmd?: string, argv?: string[], env?: Record<string, string> }} */
   const started = {};
   /** @type {Array<{ method: string, url: string, body: any }>} */
@@ -254,6 +254,12 @@ async function openCodeServe(/** @type {import('node:test').TestContext} */ t) {
       return json(404, { name: 'NotFound' });
     });
   });
+  // WHAT THE REAL SERVER SAYS OF A CONNECTION IT KEEPS: `Connection:
+  // keep-alive` and `Keep-Alive: timeout=5` on every answer (seen from
+  // `opencode serve` 1.19.6). Node's client takes a second off that and cuts
+  // a kept connection that sits idle for the rest, which is what a held
+  // request looks like.
+  server.keepAliveTimeout = keepAliveSeconds * 1000;
   await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
   t.after(() => {
     server.closeAllConnections?.();
@@ -298,6 +304,20 @@ test('OpenCode: its own server is asked for a code and held until GitHub answers
   assert.equal(statSync(server.authFile()).mode & 0o777, 0o600);
   const said = p.raw.join('');
   assert.ok(!said.includes('LEAKCANARY') && !said.includes(String(server.started.env?.OPENCODE_SERVER_PASSWORD)), 'a token or the server’s password was printed');
+});
+
+test('OpenCode: an approval that comes after a kept connection would have been cut still signs in', async (t) => {
+  const home = engineHome(t);
+  // `timeout=2` is one idle second to Node's client, so this takes a second and a half and not five.
+  const server = await openCodeServe(t, { keepAliveSeconds: 2 });
+  const p = printed();
+  const done = signin({ engine: 'opencode' }, { env: { FLEETWRIGHT_ENGINE_HOME: home }, out: p.out, spawnEngine: server.spawn });
+  await until(() => p.lines().length === 1 && server.seen.length === 2, 'the code out and the callback held');
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal(p.lines().length, 1, 'the sign-in ended while GitHub had not answered');
+  server.github('approved');
+  assert.equal(await done, 0);
+  assert.deepEqual(p.lines()[1], { engine: 'opencode', signin: 'done', state: 'signed_in', who: null });
 });
 
 test('OpenCode: a callback that fails is failed in OpenCode’s word for it, which does not say why', async (t) => {

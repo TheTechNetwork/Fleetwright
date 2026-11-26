@@ -106,6 +106,8 @@ const server = createServer((req, res) => {
     return json(404, { name: 'NotFound' });
   });
 });
+// What the real server says of a connection it keeps: \`Keep-Alive: timeout=5\` (opencode serve 1.19.6).
+server.keepAliveTimeout = 5000;
 server.listen(0, '127.0.0.1', () => console.log('opencode server listening on http://127.0.0.1:' + server.address().port));
 `;
 

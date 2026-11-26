@@ -578,7 +578,9 @@ image pins:
   command-line login needs a terminal):
   `POST /provider/github-copilot/oauth/authorize` answers the page and
   "Enter code: XXXX-XXXX"; `POST …/oauth/callback` is held open while
-  OpenCode asks GitHub, and answers `true` or
+  OpenCode asks GitHub, on a connection of its own (a kept one is cut
+  after four idle seconds, which ended every sign-in before the code
+  could be typed), and answers `true` or
   `ProviderAuthOauthCallbackFailed`. That failure does not say why, so it
   is reported as `failed` in those words, and only the runner's own 15
   minutes are reported as `expired`. This is OpenCode's own login in its

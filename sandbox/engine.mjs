@@ -1075,6 +1075,16 @@ export function askServer(base, method, pathname, body, authorization, timeoutMs
     const url = new URL(pathname, base);
     req = request({
       host: url.hostname, port: url.port, path: url.pathname, method,
+      // A CONNECTION OF ITS OWN FOR EACH REQUEST. Node's default agent keeps
+      // a connection for the next request and gives it five idle seconds,
+      // four once OpenCode has answered `Keep-Alive: timeout=5`, which its
+      // server does. The request that waits for GitHub was sent on the
+      // connection the one before it had used, nothing moves on it while
+      // OpenCode asks, and so it was cut four seconds after the code was
+      // shown: every OpenCode sign-in ended `failed` before anybody could
+      // have typed the code. With no agent there is no kept connection and
+      // no timeout but the one asked for below.
+      agent: false,
       headers: { authorization, accept: 'application/json', ...(data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } : {}) },
       ...(timeoutMs ? { timeout: timeoutMs } : {}),
     }, (res) => {
