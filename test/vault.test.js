@@ -948,6 +948,17 @@ test('a box keeps what it holds through a blip, and forgets it on an answer that
   none = sidecar((f) => { queueMicrotask(() => void none.handle({ kind: 'minted', id: f.id, ok: false, error: { code: 'no_minter' }, text: 'This fleet has no minting Worker to keep a vault.' })); return true; });
   await none.syncVault();
   assert.deepEqual(handed, []);
+  // A FLEET WHOSE MINTER HAS NO ROUTE at the fleet's own address: the box
+  // reaches the address, is given a 404, and so has no key to check the
+  // vault's signed answer with. Nothing is taken, and what it is told to do
+  // is not "look at whether this box can reach it", which it can.
+  /** @type {Sidecar} */
+  let unrouted;
+  unrouted = sidecar((f) => { void vault.answer(f, { accounts: [] }).then((minted) => unrouted.handle(minted)); return true; });
+  /** @type {any} */ (unrouted.intentKeys).fetchImpl = async () => new Response('Not found', { status: 404 });
+  assert.equal(await unrouted.syncVault(), 600_000);
+  assert.deepEqual(handed, []);
+  assert.match(logged.join('\n'), /this box keeps no signing key of the minter’s to check the vault’s answer with \(https:\/\/fleet\.test\/\.well-known\/fleetwright-minter answers with HTTP 404, which is a fleet whose minter has no route at the fleet’s own address, so this box has nothing to check signatures with\)\. Whoever runs the fleet gives its minting Worker a route there, or puts the public half of the minter’s signing key in minter-signing\.json on this box \(docs\/vault\.md says how\)\. Nothing this box holds was changed/);
   // NOR IS AN ANSWER THAT NAMES NOBODY, UNLESS IT IS THE VAULT'S. Whoever
   // carries a box's request holds the key its answer is sealed to, so "you
   // are approved for nothing" sealed to it is anybody's to write: unsigned,
@@ -3250,7 +3261,7 @@ test('where a sign-in stands, why it failed and when its code runs out are insid
   const failed = await ask('status');
   assert.deepEqual({ ...failed.opened, at: 0, signature: '' }, {
     v: 1, id: failed.id, host, member: 'debbie', engine: 'codex', at: 0,
-    signedIn: { since: 1764000000000, who: { email: 'old@example.com', plan: 'plus' } }, state: 'failed', detail: 'device auth failed with status 403 Forbidden no', hostKey: boxKey, signature: '',
+    signedIn: { since: 1764000000000, who: { email: 'old@example.com', plan: 'plus' } }, state: 'failed', detail: 'device auth failed with status 403 Forbidden "no"', hostKey: boxKey, signature: '',
   });
   assert.equal(await failed.holds(), true);
   // What the coordinator did: the same sealed answer beside a state and a sentence of its own. They are not what was signed.

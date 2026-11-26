@@ -1606,7 +1606,12 @@ export class Sidecar {
       //              which no two JSON encoders differ.
       //   expiresAt  a whole number, and only while a code is out.
       const state = typeof said.state === 'string' ? said.state : 'waiting';
-      const detail = typeof said.detail === 'string' ? said.detail.replace(/[^\x20-\x7e]/g, '').slice(0, 200) : null;
+      // Its curled quotes and dashes written straight first, and only then
+      // what is left outside the range dropped: the hub's own sentences use
+      // them, and with the apostrophe simply removed a phone read "not
+      // OpenAIs own page" under a sign-in it had just verified.
+      const plain = (/** @type {string} */ t) => t.replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[\u2013\u2014]/g, '-').replace(/\u2026/g, '...');
+      const detail = typeof said.detail === 'string' ? plain(said.detail).replace(/[^\x20-\x7e]/g, '').slice(0, 200) : null;
       const expiresAt = coded && said.expiresAt !== null && Number.isFinite(Number(said.expiresAt)) ? Math.round(Number(said.expiresAt)) : null;
       const signed = {
         id: intent.id, host: await keyId(hostKey), member: String(intent.params.member), engine: String(intent.params.engine),
@@ -2802,7 +2807,12 @@ export class Sidecar {
    * EVERY WAY OF NOT PASSING IS CANNOT TELL, and keeps what is held, as
    * silence does (syncVault): a coordinator that could make a box forget by
    * sending it an answer it cannot check would be given the one thing this
-   * check takes from it. The reason is said in words that say what to do,
+   * check takes from it. (One refusal of the coordinator's own still does
+   * make a box forget, and is not an answer in the vault's name: that the
+   * request is not signed by the key this box enrolled with. It is the
+   * coordinator's word, said as such in docs/vault.md, and it can only
+   * take away from a box that is no longer the one enrolled.) The reason is
+   * said in words that say what to do,
    * because two of the three are somebody's to fix: a minter older than
    * this box, which signs nothing, and a minter given a new signing key.
    *
@@ -2823,7 +2833,15 @@ export class Sidecar {
       const problem = this.intentKeys?.problem;
       return {
         why: `this box keeps no signing key of the minter’s to check the vault’s answer with${problem ? ` (${problem})` : ''}`,
-        todo: 'It keeps one the first time it reaches the fleet’s own address, so look at whether this box can reach it.',
+        // TWO DIFFERENT THINGS TO DO. A box that could not reach the
+        // address looks at its own network. A box that reached it and was
+        // given something else is on a fleet whose minter has no route
+        // there, which no amount of waiting mends: whoever runs the fleet
+        // gives the minter its route, or this box is given the key by hand
+        // (docs/vault.md, "A fleet whose minter has no route").
+        todo: this.intentKeys?.unrouted
+          ? `Whoever runs the fleet gives its minting Worker a route there, or puts the public half of the minter’s signing key in ${this.intentKeys?.file ?? MINTER_KEY_FILE} on this box (docs/vault.md says how).`
+          : 'It keeps one the first time it reaches the fleet’s own address, so look at whether this box can reach it.',
       };
     }
     const signed = await vaultBoxAnswerInput({ host: await keyId(request.hostKey), at: request.at, reply: request.reply, sealed });

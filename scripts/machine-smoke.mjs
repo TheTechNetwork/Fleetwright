@@ -361,6 +361,10 @@ try {
     const hub = await inside(container, 'capacity');
     const most = Math.floor((bytesOf(cfg.sandboxMemory) / 2 ** 20 - cfg.memoryFloorMb) / cfg.sessionMemoryMb);
     if (hub.failed || !Number.isInteger(hub.maxSessions)) die('the hub inside did not say how many sessions it would take', JSON.stringify(hub));
+    // AT LEAST ONE, or the bound below is passed by a hub that would take
+    // none: what it would take is what is running plus what is free, and a
+    // loaded runner leaves nothing free. "0, within the 3" read as a pass.
+    if (hub.maxSessions < 1) die(`the hub inside would take no session at all, of the ${most} its machine’s ${cfg.sandboxMemory} leaves room for: this runner is too loaded to say anything about the limit`, JSON.stringify(hub));
     if (hub.maxSessions > most) die(`the hub inside would take ${hub.maxSessions} sessions, and its machine’s ${cfg.sandboxMemory} leaves room for ${most} at most: it is counting against the box and not its own limit`, JSON.stringify(hub));
     ok(`the hub inside would take ${hub.maxSessions} session${hub.maxSessions === 1 ? '' : 's'}, within the ${most} its ${cfg.sandboxMemory} leaves room for`);
     summary('The three limits a box gives a machine were applied', `Memory \`${cfg.sandboxMemory}\`, processors \`${cfg.sandboxCpus}\`, processes \`${cfg.sandboxPidsLimit}\`, each read back out of the machine's own cgroup. The hub inside would take ${hub.maxSessions} session(s); its limit leaves room for ${most} at most.`);
