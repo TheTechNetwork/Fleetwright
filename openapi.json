@@ -3113,7 +3113,7 @@
                       "number",
                       "null"
                     ],
-                    "description": "Stored. Nothing enforces it yet."
+                    "description": "The member’s budget for a UTC month, in dollars at API prices, or `null` for none. What its sessions cost is counted against it whatever the fleet’s settings (`GET /api/budgets`). What a start past it meets is the fleet’s `budgets` setting (`PUT /api/budgets/settings`): `off`, the default, stops nothing; `ask` has the start wait for an approval; `refuse` refuses it until the month turns or the budget is raised. No session already running is stopped by it. A member made under an id one was removed from has what that id spent this month, and the budget the removed one had when this field is left out, which `text` then says; `null` sent here means none (docs/budgets.md)."
                   }
                 }
               }
@@ -3718,7 +3718,7 @@
           "identity"
         ],
         "summary": "Approve or decline a start",
-        "description": "Somebody who manages the member, or a fleet admin. An approval given is for one start by the person who asked, as that member, on that task, within the hour, whose session is told what it was to be told when the approval was asked for: the same start, sent again, goes through. Other words, or a task whose brief was changed since, need a new approval. Nothing is held or queued.",
+        "description": "Somebody who manages the member, or a fleet admin. An approval given is for one start by the person who asked, as that member, on that task, within the hour, whose session is told what it was to be told when the approval was asked for: the same start, sent again, goes through. Other words, or a task whose brief was changed since, need a new approval. So does another machine for a start that names a profile, which is approved on the one machine that holds it, and another named secret, or one where there was none, on any start: the reasons say the machine and the secret an approval is for. An approval given before those two were part of one does not cover a start that names either, and the refusal says so. Nothing is held or queued.",
         "parameters": [
           {
             "name": "id",
