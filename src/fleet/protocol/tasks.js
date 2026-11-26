@@ -264,6 +264,17 @@ export function lockWords(/** @type {Task} */ task) {
  * is refused while a session holds the lock: the work in flight comes back,
  * or is released, first.
  *
+ * SO IS A CHANGE TO ITS WORDS, the title and the brief. A start carries the
+ * task's own words and no others (the coordinator compares them), and that
+ * held for the moment of the start only: a task whose brief said one thing
+ * was started, rewritten while its session worked, and came back with a
+ * result under words the session was never told, with nothing in its
+ * history to say they had changed. While a lock is held, and until what
+ * came back is accepted or reopened, the words are the ones the session was
+ * told. At any other time a change to them is a line in `handoffs`
+ * (`words`, with which of the two changed), as a change of the kind of work
+ * is.
+ *
  * @param {Task} task
  * @param {{ title?: string, brief?: string, workType?: string, repo?: string, assignee?: string|null, routing?: 'off'|'manual'|'auto'|null }} fields  already through checkTask
  * @param {{ by: string, at: number, note?: string }} who
@@ -274,8 +285,18 @@ export function changeTask(task, fields, { by, at, note = '' }) {
     return refuse('task_closed', `${task.id} is ${task.state}. Reopen it to change it.`);
   }
   const next = { ...task, updatedAt: at };
+  // Only a value that differs: a screen sends the whole form back, and one
+  // that changed the repository must not be told it rewrote the brief.
+  const reworded = [
+    ...(fields.title !== undefined && fields.title !== task.title ? ['title'] : []),
+    ...(fields.brief !== undefined && fields.brief !== task.brief ? ['brief'] : []),
+  ];
+  if (reworded.length && task.lock) {
+    return refuse('task_locked', `${task.id}’s ${reworded.join(' and ')} cannot change while it is being worked on, because ${reworded.length === 1 ? 'it is' : 'they are'} what its session was told: ${lockWords(task)}. ${task.state === 'returned' ? 'Accept what came back, or reopen it, and change it then.' : 'Release it, or wait for it to come back.'}`);
+  }
   if (fields.title !== undefined) next.title = fields.title;
   if (fields.brief !== undefined) next.brief = fields.brief;
+  if (reworded.length) next.handoffs = handed(next, { at, by, kind: 'words', note: reworded.join(' and ') });
   if (fields.workType !== undefined && (fields.workType || '') !== (task.workType ?? '')) {
     if (fields.workType) next.workType = fields.workType;
     else delete next.workType;

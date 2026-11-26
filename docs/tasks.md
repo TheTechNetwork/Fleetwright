@@ -37,7 +37,7 @@ Nothing here runs unless somebody makes a task.
 | `result` | what came back: `{ outcome, summary, session, hostId, member, at, truncated }` | the summary is at most 4000 bytes |
 | `routing` | this task's own routing mode, `auto`, `manual` or `off` ([routing.md](./routing.md)) | optional; absent follows the fleet's |
 | `route` | the last routing decision about it: how, who, among whom, and why | set by the coordinator |
-| `handoffs` | every change of hands, oldest first, and every change of the kind of work (`work-type`, where `from` and `to` are kinds of work) | the last 50 |
+| `handoffs` | every change of hands, oldest first, every change of the kind of work (`work-type`, where `from` and `to` are kinds of work), and every change of the title or brief (`words`, where `note` says which) | the last 50 |
 | `createdBy`, `createdAt`, `updatedAt` | who made it, and when | set by the coordinator |
 
 **No credential is ever in a task.** A brief and a result are words a person
@@ -67,6 +67,14 @@ and `test/tasks.test.js` measures that they do.
   standing over the member, because an assignment is the step before a start.
 - **Changes, reassigns, releases, accepts, reopens or cancels it**: the same
   people who see it.
+- **Its title and brief do not change while it is being worked on**
+  (`task_locked`), from the start until what came back is accepted or
+  reopened: they are what its session was told. A start carries the task's
+  own words, and that was true at the start only. A brief was started,
+  rewritten while its session worked, and the result came back under words
+  the session had never seen, with nothing in the history to say so. At any
+  other time a change to them is a line in `handoffs` (`words`, with which
+  of the two changed).
 - **Changes its kind of work, where the fleet asks about that kind**
   ([budgets.md](./budgets.md), `risky-work`): somebody who manages its
   assignee, or a fleet admin, which is who could approve a start on it. With
@@ -87,8 +95,15 @@ once the second is refused, in words that name the session, the box and since
 when. The lock is confirmed with the session's name when the box answers, and
 dropped if the box refuses. A box that does not answer in time leaves it held
 for five minutes past the time its answer was waited for: its session is
-taken up the moment the box speaks of it, and otherwise the start is taken
-not to have happened and the task can be started again.
+taken up the moment the box speaks of it. When the hold runs out the
+coordinator looks at that box's own list of sessions, the one in every report
+it sends. A session running there on this task, begun since the start was
+sent, is the start's, and the lock becomes that session's. Only when the box
+lists none, or is away and cannot be asked, is the start taken not to have
+happened, and the task can be started again. The list used not to be looked
+at: a task was offered again while its box listed the session working on it,
+a second session was started on the same branch, and the first one's result
+was dropped when it came back.
 
 **Only the box a start was sent to is heard about a task.** After that hold
 the coordinator still keeps which box the unanswered start went to, for a

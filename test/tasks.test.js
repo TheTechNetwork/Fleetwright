@@ -119,9 +119,10 @@ test('a task changes hands only while nobody is working on it, and the handoff s
   const refused = /** @type {any} */ (changeTask(working(), { assignee: 'jason' }, { by: eli, at: 3000 }));
   assert.equal(refused.code, 'task_locked');
   assert.match(refused.text, /cannot change hands while it is being worked on: cc-a on deb132/);
-  // The brief can still be corrected while it is worked on; that is not a handoff.
-  const edited = /** @type {any} */ (changeTask(working(), { brief: 'A better brief.' }, { by: eli, at: 3000 })).task;
-  assert.equal(edited.handoffs.length, working().handoffs.length);
+  // Nor are its words corrected while it is worked on. They could be, and a
+  // brief rewritten under a working session was a record of words that
+  // session was never told (test/tasks-coordinator.test.js has the whole of it).
+  assert.equal(/** @type {any} */ (changeTask(working(), { brief: 'A better brief.' }, { by: eli, at: 3000 })).code, 'task_locked');
 });
 
 test('reopening needs a note, the next session is told it, and accepting clears it', () => {

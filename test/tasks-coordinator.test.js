@@ -72,6 +72,7 @@ function fleet(/** @type {Array<[string, number]>} */ boxes = [['deb132', PROTOC
     core, sent, make, start, says, reports,
     task: (/** @type {string} */ id) => /** @type {any} */ (core.tasks.get(id)),
     pass: (/** @type {number} */ ms) => void (clock += ms),
+    now,
     answers: (/** @type {(spec: any) => any} */ fn) => void (answer = fn),
   };
 }
@@ -175,6 +176,86 @@ test('a start the box refuses leaves the task open and unmarked; one the box nev
   await reports('deb132', []);
   assert.deepEqual([task('t2').state, task('t2').lock, task('t2').handoffs.length], ['open', null, 1]);
   assert.equal(sent.length, 3, 'the start refused for the lock reached no box');
+});
+
+test('a start nobody answered is its session’s once the hold runs out, when its box lists one on the task, and the task is not offered again', async () => {
+  // What the second review ran: the start's answer was lost, the box listed
+  // the session with the task's id in every report, and at 10 minutes 20 the
+  // task was open again. A second session was started on the same branch,
+  // and the first one's result was dropped because the lock was the second's.
+  const { core, make, start, task, answers, says, pass, now } = fleet([['deb132', PROTOCOL_VERSION], ['other-box', PROTOCOL_VERSION]]);
+  /** deb132's report, with what it says it holds. @param {any[]} sessions */
+  const lists = (sessions) => core.onHostMessage('deb132', { kind: 'health', health: { hub: { reachable: true }, protocol: PROTOCOL_VERSION, maxSessions: 5, running: sessions.length, free: 5, labels: [], sandboxed: true, sessions } });
+  make(dana);
+  answers(() => { throw new Error('deb132 did not answer in time'); });
+  assert.equal((await start(dana, 't1')).error?.code, 'host_timeout');
+  const sentAt = now();
+  const working = { name: 'cc-slow', status: 'running', createdBy: 'fleet:debbie@members.invalid', member: 'debbie', taskId: 't1', startedAt: sentAt + 40_000 };
+  for (let minute = 1; minute <= 11; minute += 1) {
+    pass(60_000);
+    await lists([working]);
+  }
+  assert.deepEqual([task('t1').state, task('t1').lock?.session, Boolean(core.taskFor(dana, 't1').start)], ['working', 'cc-slow', false]);
+  assert.deepEqual(task('t1').handoffs.map((/** @type {any} */ h) => [h.kind, h.session ?? null]), [['created', null], ['started', 'cc-slow']]);
+  // A second start is refused for the lock, and the first one's result is the task's.
+  answers(() => ({ ok: true, text: 'Started.', sessions: [{ name: 'cc-second', status: 'running' }] }));
+  assert.equal((await start(admin, 't1')).error?.code, 'task_locked');
+  await says('deb132', { event: 'session.ready', name: 'cc-slow', taskId: 't1', result: { text: 'DONE\nFixed in three commits.' } });
+  assert.deepEqual([task('t1').state, task('t1').result?.session], ['returned', 'cc-slow']);
+
+  // ONLY A SESSION THIS START COULD HAVE MADE. One from an earlier go at the
+  // task is still listed, stopped; one that began before the start was sent,
+  // one that runs as somebody else, and one with no start time are not it.
+  // The start is then taken not to have happened, as before.
+  make(dana, { title: 'Second' });
+  answers(() => { throw new Error('deb132 did not answer in time'); });
+  assert.equal((await start(dana, 't2')).error?.code, 'host_timeout');
+  const second = now();
+  pass(11 * 60_000);
+  await lists([
+    { name: 'earlier', status: 'stopped', member: 'debbie', taskId: 't2', startedAt: second + 1 },
+    { name: 'older', status: 'running', member: 'debbie', taskId: 't2', startedAt: second - 3_600_000 },
+    { name: 'another-members', status: 'running', member: 'loose', taskId: 't2', startedAt: second + 1 },
+    { name: 'no-time', status: 'running', member: 'debbie', taskId: 't2' },
+    { name: 'another-task', status: 'running', member: 'debbie', taskId: 't9', startedAt: second + 1 },
+  ]);
+  assert.deepEqual([task('t2').state, task('t2').lock], ['open', null]);
+});
+
+test('a task’s title and brief are what its session was told: they do not change while it is held, and a change at any other time is written down', async () => {
+  // The other order of the first review's finding. A start carries the
+  // task's own words; rewritten while the session worked, the record and
+  // its history showed words the session was never told.
+  const { core, make, start, task, says } = fleet();
+  make(dana, { title: 'Clean up', brief: 'Reset the staging database.' });
+  assert.equal((await start(dana, 't1')).ok, true);
+  const rewrite = { title: 'Tidy the docs', brief: 'Fix typos in the README.' };
+  const held = /** @type {any} */ (core.changeTask(dana, 't1', rewrite));
+  assert.equal(held.error?.code, 'task_locked');
+  assert.match(held.text, /^t1’s title and brief cannot change while it is being worked on, because they are what its session was told: cc-1 on deb132 has been working on it since .* Release it, or wait for it to come back\.$/);
+  assert.match(/** @type {any} */ (core.changeTask(dana, 't1', { brief: rewrite.brief })).text, /^t1’s brief cannot change while it is being worked on, because it is what its session was told/);
+  // A form sent back whole, with the words as they are, changes what it changed.
+  assert.equal(/** @type {any} */ (core.changeTask(dana, 't1', { title: 'Clean up', brief: 'Reset the staging database.', repo: 'acme/app' })).ok, true);
+  assert.equal(task('t1').repo, 'acme/app');
+
+  // BACK WITH A RESULT, the words are still the ones that result is for.
+  await says('deb132', { event: 'session.ready', name: 'cc-1', taskId: 't1', result: { text: 'DONE\nDone as asked.' } });
+  const returned = /** @type {any} */ (core.changeTask(dana, 't1', rewrite));
+  assert.equal(returned.error?.code, 'task_locked');
+  assert.match(returned.text, /Accept what came back, or reopen it, and change it then\.$/);
+  assert.deepEqual([task('t1').title, task('t1').brief], ['Clean up', 'Reset the staging database.']);
+
+  // REOPENED, they change, and the history says that they did and who did it.
+  assert.equal(core.actOnTask(dana, 't1', 'reopen', 'Do the docs instead.').ok, true);
+  assert.equal(/** @type {any} */ (core.changeTask(dana, 't1', rewrite)).ok, true);
+  assert.deepEqual([task('t1').title, task('t1').brief], [rewrite.title, rewrite.brief]);
+  assert.deepEqual(task('t1').handoffs.slice(-1).map((/** @type {any} */ h) => [h.kind, h.by, h.note]), [['words', dana.email, 'title and brief']]);
+  assert.equal(/** @type {any} */ (core.changeTask(dana, 't1', { title: 'Tidy the docs again' })).ok, true);
+  assert.equal(task('t1').handoffs.at(-1).note, 'title');
+  // Sent the same words again, nothing is written.
+  const lines = task('t1').handoffs.length;
+  assert.equal(/** @type {any} */ (core.changeTask(dana, 't1', { title: 'Tidy the docs again', brief: rewrite.brief })).ok, true);
+  assert.equal(task('t1').handoffs.length, lines);
 });
 
 test('a task with no lock is taken up only by the box an unanswered start was sent to, and no other box can claim it or write its result', async () => {

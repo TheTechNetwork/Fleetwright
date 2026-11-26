@@ -388,7 +388,8 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
     description:
       'Make a task, change one, hand it to another member, or act on one. With no `id` it makes a task from ' +
       '`title` and `brief`. With `id` and fields it changes them; a new `assignee` is a handoff and is ' +
-      'refused while a session is working on the task. With `id` and `action` it releases the lock, accepts ' +
+      'refused while a session is working on the task, and so is a new `title` or `brief`, until what came ' +
+      'back is accepted or reopened: they are what the session was told. With `id` and `action` it releases the lock, accepts ' +
       'a result that came back, reopens the task with a `note` the next session is told, or cancels it. ' +
       '`action: "route"` asks the fleet which member an unassigned task should go to (fleet_routing says ' +
       'how it decides); with `assignee` as well it is your answer to that question. ' +

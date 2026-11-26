@@ -43,7 +43,7 @@ import { OrgTasks } from './org-tasks.js';
 import { OrgRouting } from './org-routing.js';
 import { OrgBudgets } from './org-budgets.js';
 import { OrgCustody } from './org-custody.js';
-import { approvalNeeded, approvalWords, spendWords, overBudget, uncounted, dollars, withoutFigures, refusedWithoutFigures, startDigest, toldWords, withTold } from '../protocol/budgets.js';
+import { approvalNeeded, approvalWords, spendWords, overBudget, uncounted, dollars, withoutFigures, refusedWithoutFigures, startDigest, toldWords, withTold, UNANSWERED_SKEW_MS } from '../protocol/budgets.js';
 import { manages } from '../protocol/members.js';
 import { modeFor, decide as decideRoute, candidatesFor, routeWords, routeQuestion, readRouteAnswer, MAX_MODEL_CHOICES } from '../protocol/routing.js';
 import { GATE_PATTERNS } from '../../core/mask-pane.js';
@@ -6794,7 +6794,17 @@ export class CoordinatorCore {
     for (const task of this.tasks.all()) {
       const lock = task.lock;
       if (lock && !lock.session && now - lock.at > this.intentTimeoutMs + TASK_START_GRACE_MS) {
-        this.tasks.expire(task.id, lock.hostId);
+        // ITS BOX LISTS A SESSION ON IT: the start happened, and the lock is
+        // that session's. The lock used to be dropped here whatever the box
+        // had been saying, so a task whose start was never answered was
+        // offered again ten minutes on while its box listed the session
+        // working on it in every report; a second session was started on
+        // the same branch, and when the first came back its result was
+        // dropped because the lock was the second's by then. The list is
+        // the one a lock is ended by below, believed for the same reason.
+        const held = this.#sessionOn(task.id, lock);
+        if (held) this.tasks.confirm(task.id, { session: held, hostId: lock.hostId });
+        else this.tasks.expire(task.id, lock.hostId);
         changed = true;
       }
     }
@@ -6809,6 +6819,31 @@ export class CoordinatorCore {
       this.record({ event: 'task.released', actor: task.createdBy, text: `${task.id} “${oneLine(task.title, 80)}” is open again: its box no longer lists the session that held it` });
     }
     if (changed || released.length) this.onStateChanged?.();
+  }
+
+  /**
+   * The session a box lists for a task whose start it never answered, by
+   * name, or null when it lists none or cannot be asked.
+   *
+   * ONLY ONE THIS START COULD HAVE MADE: running, on this task, as the
+   * lock's member when the box says as whom, and begun no earlier than the
+   * start was sent, by the box's own clock with the leeway two clocks need.
+   * A session from an earlier go at the same task is still in the list,
+   * stopped, with the task's id on it, and the lock is not that one's. A
+   * session with no start time says nothing either way, which is cannot
+   * tell and so not a session.
+   *
+   * @param {string} taskId @param {{ hostId: string, member: string, at: number }} lock
+   * @returns {string|null}
+   */
+  #sessionOn(taskId, lock) {
+    const host = this.registry.get(lock.hostId);
+    if (!host?.connected || !Array.isArray(host.health?.sessions) || !(Number(host.healthAt) >= lock.at)) return null;
+    const found = host.health.sessions.find((/** @type {any} */ s) =>
+      s && s.taskId === taskId && s.status === 'running' && typeof s.name === 'string' && s.name
+      && (s.member === undefined || s.member === lock.member)
+      && typeof s.startedAt === 'number' && s.startedAt >= lock.at - UNANSWERED_SKEW_MS);
+    return found ? String(found.name) : null;
   }
 
   /**
