@@ -163,6 +163,12 @@ if [ -e "$D/fail-run" ]; then echo 'Error: crun: cannot set memory limit' >&2; e
 # finds at /engine-home.
 mkdir -p "$D/volumes/$vol"
 echo $$ > "$D/ctr-$name.pid"
+# A CONTAINER HAS A /tmp OF ITS OWN, WHICH GOES WITH IT. The runner makes the
+# engine's throwaway home there, and a container that is removed is killed
+# where it stands, with nothing tidied up. Here that would be this machine's
+# own /tmp, filling with one directory a cancelled sign-in.
+mkdir -p "$D/tmp/$name"
+export TMPDIR="$D/tmp/$name"
 export FLEETWRIGHT_ENGINE_HOME="$D/volumes/$vol" FLEETWRIGHT_CODEX_BIN="$D/codex" FLEETWRIGHT_OPENCODE_BIN="$D/opencode" STANDIN_DIR="$D"
 case "$1" in
   fleetwright-engine) shift; exec ${q(node)} ${q(RUNNER)} "$@" ;;
