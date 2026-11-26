@@ -307,6 +307,22 @@ Delegations, with the member among them. The task and the session's name are
 held to the grant's `match` as before. A request the person signs on their own
 phone needs none of this: the member is in what they signed.
 
+**And a member's session, once it runs, by the same list.** The rule was
+asked of the start and of nothing after it. A grant that named no member
+could not start a session as Debbie, and could write files into one that was
+running, answer its prompts, resume it and read it: `writefile`, `answer`,
+`resume`, `readfile` and every other verb that names a session. So on a box
+that takes only signed requests, a delegated verb that names a session is
+covered, when that session runs as a member, only by a grant that names the
+member, and is otherwise refused `member_not_delegated` with the same way
+on. Whose a session is, the box reads from its own session manager, which
+wrote the member on the session's record when the box started it, checked;
+the coordinator's list of sessions is not asked, since it is the party a
+grant is checked against. A session of the person's own is covered as it
+always was. If the session manager does not answer, the box cannot tell and
+refuses (`member_unchecked`). What this leaves is under "What it does not
+stop".
+
 **Signing an engine in for a member is held to the same rule.**
 `enginesignin` ([engines.md](./engines.md), "Signing in on the machine")
 puts a sign-in where that member's sessions run on it, so a box takes it
@@ -466,8 +482,22 @@ minter the coordinator is asked alone.
   admin sees somebody else listed as the org's admin.
 - **A member's instructions are the coordinator's word.** A compromised
   coordinator can change what a member's session is told at its start. It
-  cannot start one, or change the task, without a custodian's signature, or
-  a delegation of theirs that names that member.
+  cannot start one, or change the task of a start, without a custodian's
+  signature, or a delegation of theirs that names that member.
+- **On a box that takes unsigned requests, a member's running session is
+  the coordinator's to drive.** Such a box takes the coordinator's word for
+  who is asking, for every verb but a start as a member and an engine
+  sign-in. So there a compromised coordinator needs no grant at all to write
+  files into a session that runs as a member, answer its prompts, resume it,
+  read it or stop it. On a box set to take only signed requests
+  (`FLEETWRIGHT_REQUIRE_SIGNED`) it needs a person's signature on that
+  request, or a delegation that names the member. Either way the box does
+  not ask whether the person who signed is one of the member's custodians:
+  a signed `stop` or `writefile` at a member's session is taken from anybody
+  whose key the minter lists, and which sessions a person may act on is the
+  coordinator's rule ([signed-intents.md](./signed-intents.md)). A session
+  that should be out of the coordinator's reach runs on a box that takes
+  only signed requests, under grants that name members sparingly.
 - **A delegation that names a member is a standing start as it.** While it
   lasts, the coordinator can start that member as often as it likes, with
   any task the grant's `match` leaves open. An MCP client's grant matches

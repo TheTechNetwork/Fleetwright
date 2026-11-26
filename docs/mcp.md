@@ -66,7 +66,11 @@ it there. **It starts sessions as no member unless the person chose one.**
 Above the two buttons is a switch for each member the fleet lets them start
 as (*Start sessions as Debbie*), all off; the ones turned on go into the
 delegation as `members`, signed with the rest, and a box refuses a start as
-any other member. A box from before the field refuses a delegation that names
+any other member. The same switch is what lets the connection act on a
+session that already runs as that member, on a box that takes only signed
+requests: stopping it, reading it, answering it, writing to its workspace.
+Without it such a call is refused `member_not_delegated`, with where to turn
+the switch on. A box from before the field refuses a delegation that names
 members as badly signed, and the phone says under the switches to update a
 machine that refuses a start as a member. A delegation that names members
 says so on its row (*starts sessions as Debbie*). Without one, a call to such a box is refused

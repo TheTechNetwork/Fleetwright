@@ -24,6 +24,7 @@ import { createServer } from 'node:http';
  *   host?: string,
  *   onCommand?: (line: string) => any,
  *   onEngineSignin?: (ask: any) => any,
+ *   onEngineMembers?: (told: any) => any,
  * }} [opts]
  */
 export async function startStubHub({
@@ -35,6 +36,7 @@ export async function startStubHub({
   host = 'unabandoned',
   onCommand,
   onEngineSignin,
+  onEngineMembers,
   facts = {},
   onTrial = false,
   renewResults = [],
@@ -63,6 +65,8 @@ export async function startStubHub({
   const forgotten = [];
   /** What the sidecar asked of an engine sign-in, whole. @type {any[]} */
   const signins = [];
+  /** Each list of member ids the sidecar said the vault lists now. @type {string[][]} */
+  const memberLists = [];
   // What the hub says about the box: labels, channel, sandbox, house rules.
   // Mutable so a test can change a label and see the next frame say so.
   let hostFacts = facts;
@@ -132,6 +136,14 @@ export async function startStubHub({
       return json(200, onEngineSignin ? await onEngineSignin(body) : { ok: true, state: 'waiting', member: body.member, engine: body.engine, url: 'https://auth.openai.com/codex/device', code: 'ABCD-EFGH', expiresInMinutes: 15, signedIn: null, text: 'Open the page and enter the code.' });
     }
 
+    // Who the vault lists as a member now (src/core/engine-signin.js,
+    // keepMembers). Recorded; `onEngineMembers` answers for a hub that could
+    // not finish, and without one everybody listed is still held.
+    if (p === '/api/engine-members' && req.method === 'POST') {
+      memberLists.push(body.members);
+      return json(200, onEngineMembers ? await onEngineMembers(body) : { ok: true, gone: [], text: 'Every member this machine holds an engine sign-in for is still listed.' });
+    }
+
     if (p === '/api/command' && req.method === 'POST') {
       const line = String(body.command || '');
       commands.push(line);
@@ -181,6 +193,7 @@ export async function startStubHub({
     renewals,
     forgotten,
     signins,
+    memberLists,
     sessions,
     panes,
     // Drop idle keep-alive sockets first. A test that made more than one

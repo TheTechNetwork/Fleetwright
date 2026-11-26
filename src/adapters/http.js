@@ -549,7 +549,7 @@ export class HttpAdapter {
     // store involved are this process's. A route of its own rather than a
     // command, so no surface that types commands can reach it.
     if (p === '/api/forget-person' && method === 'POST') {
-      const r = forgetPerson(this.cfg, this.sessions, (await readJson(req)).email, this.login);
+      const r = await forgetPerson(this.cfg, this.sessions, (await readJson(req)).email, this.login, this.engineSignins);
       return json(res, r.ok ? 200 : 400, r);
     }
 
@@ -564,6 +564,17 @@ export class HttpAdapter {
     // the sidecar passes it on as it is.
     if (p === '/api/engine-signin' && method === 'POST') {
       return json(res, 200, await this.engineSignins.ask(await readJson(req)));
+    }
+
+    // WHO THE VAULT LISTS AS A MEMBER NOW, so that a member who has left the
+    // list stops being reported as signed in here and its engine home goes
+    // (engine-signin.js, keepMembers). From the sidecar, which holds the
+    // list the minter signed and checks it; this process holds neither the
+    // list nor the key it is checked with, so it is told the ids and nothing
+    // else. A route of its own for the reason the two above have one. 200
+    // whatever the answer, which says what went and what could not.
+    if (p === '/api/engine-members' && method === 'POST') {
+      return json(res, 200, await this.engineSignins.keepMembers((await readJson(req))?.members));
     }
 
     // One command endpoint rather than a REST verb per action: the web UI and

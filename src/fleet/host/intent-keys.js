@@ -142,11 +142,14 @@ export async function keyListFrom({ payload, signature, pinned, host, now }) {
 export class IntentKeys {
   /**
    * @param {{ origin: string, dir: string|null, hostKey: { publicJwk: { x: string, y: string }, sign: (message: string) => Promise<string> },
-   *   ask: (request: any, signature: string) => Promise<any>, fetchImpl?: typeof fetch, now?: () => number, log?: { info: (s: string) => void, warn: (s: string) => void } }} opts
-   *   `ask` sends the box's request to the coordinator and resolves with what came back
+   *   ask: (request: any, signature: string) => Promise<any>, onList?: (() => void)|null, fetchImpl?: typeof fetch, now?: () => number, log?: { info: (s: string) => void, warn: (s: string) => void } }} opts
+   *   `ask` sends the box's request to the coordinator and resolves with what came back;
+   *   `onList` is called each time a list is taken
    */
-  constructor({ origin, dir, hostKey, ask, fetchImpl = (...a) => fetch(...a), now = () => Date.now(), log = { info() {}, warn() {} } }) {
+  constructor({ origin, dir, hostKey, ask, onList = null, fetchImpl = (...a) => fetch(...a), now = () => Date.now(), log = { info() {}, warn() {} } }) {
     this.origin = new URL(origin).origin;
+    /** Told each time a list is taken, after it is in place: whoever holds this may act on who it names now (sidecar.js, #tellHubWhoIsListed). @type {(() => void)|null} */
+    this.onList = onList;
     this.file = dir ? path.join(dir, MINTER_KEY_FILE) : null;
     this.signersFile = dir ? path.join(dir, SIGNERS_FILE) : null;
     this.hostKey = hostKey;
@@ -256,6 +259,30 @@ export class IntentKeys {
   }
 
   /**
+   * The minter's signing key this box keeps, for the one other thing it
+   * signs for a box: its answer to a vault request (sidecar.js, #askVault;
+   * protocol/vault-answer.js). The same key the key list is checked with, so
+   * a box has one pin and not two.
+   *
+   * THE KEPT KEY, WITHOUT ASKING AGAIN, once there is one: the address is
+   * asked on every key list, which is where a changed key is noticed and
+   * said (#pin). Until one is kept it is fetched now, because a box's first
+   * vault answer can arrive before its first key list. Null when there is
+   * none to be had, and `problem` then says why. Never throws.
+   *
+   * @returns {Promise<{ kty: string, crv: string, x: string, y: string }|null>}
+   */
+  async minterKey() {
+    if (this.pinned) return this.pinned;
+    try {
+      await this.#pin();
+    } catch (e) {
+      this.problem = `the minter’s signing key could not be kept: ${/** @type {Error} */ (e).message}`;
+    }
+    return this.pinned;
+  }
+
+  /**
    * Ask for the key list and keep it if it is the minter's. Never throws.
    *
    * @returns {Promise<boolean>} whether a list was taken
@@ -284,6 +311,11 @@ export class IntentKeys {
       this.revoked = list.revoked;
       this.#noteSigners(list.directory, list.cleared);
       this.problem = null;
+      // After the list is in place, and never for one that was not taken:
+      // every return above this one leaves the last list as it was.
+      try {
+        this.onList?.();
+      } catch { /* what a listener does with a list is not a reason to refuse the list */ }
       return true;
     } catch (e) {
       this.problem = `the key list could not be fetched: ${/** @type {Error} */ (e).message}`;

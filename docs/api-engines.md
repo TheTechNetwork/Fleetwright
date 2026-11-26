@@ -64,8 +64,12 @@ not `apikeys` is handed a Codex sign-in and never a key.
 **On the box**, a key is kept with the member's other items and handed to a
 session over its own socket, only for an engine that session's member names
 on that provider ([engines.md](./engines.md), "Credentials"). The runner
-writes it where OpenCode reads its keys, inside the container, and for
-OpenRouter also sets the variable OpenCode's documentation names.
+hands it to OpenCode in that one process's environment and writes it
+nowhere: in `OPENCODE_AUTH_CONTENT`, which OpenCode reads in place of its
+key file, and for OpenRouter also in the variable OpenCode's documentation
+names. It is not written into the member's engine home, which outlives the
+session. On a box with no engine home it is written where OpenCode reads
+its keys inside the session's own container, as it always was.
 
 **A session with no key to be handed is told which of two things it is**,
 in the words its turn ends with. The box holds none for the member: *"This
