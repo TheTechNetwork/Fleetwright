@@ -484,7 +484,13 @@ const aliasesFor = (/** @type {number} */ maxWaitSeconds) => [
  * the protocol is untouched, because this is presentation and `logs` remains
  * one verb with both parameters.
  */
-/** @type {Record<string, { name?: string, description?: string, omit?: string[] }>} */
+/**
+ * `host`, what this tool's `host` is, where the words every tool carries for
+ * it would be wrong. `omit` takes `tag` too, for a verb that goes to the
+ * machine named and is never placed by a tag.
+ *
+ * @type {Record<string, { name?: string, description?: string, omit?: string[], host?: string }>}
+ */
 const OVERRIDE = {
   logs: {
     description:
@@ -503,15 +509,25 @@ const OVERRIDE = {
     name: 'fleet_engine_signin',
     // `reply` is a key a phone makes to have the answer sealed to it. An
     // agent has none, and what it could do with a sealed answer is nothing.
-    omit: ['reply'],
+    // AND NO `tag`: a sign-in goes to the machine that is named (below).
+    omit: ['reply', 'tag'],
+    // WHERE, FOR THIS TOOL. Every tool's `host` says it is how a temporary
+    // host is reached, and every tool takes a `tag`. Here a temporary host
+    // is refused and a tag was read by nothing: a sign-in is kept on the
+    // machine it is made on, so the machine is named (scheduler.js).
+    host:
+      'The machine to sign in on, by name: a permanent one that runs this engine and is approved for the member’s credentials. ' +
+      'All four actions name the same one. A temporary host is refused: a sign-in is kept on the machine it is made on.',
     description:
       'Sign Codex or OpenCode in for one member on the machine it runs on, with the engine’s own device code. ' +
       '`start` answers with a page to open and a code that lasts 15 minutes: give both to the person, who enters the ' +
       'code under their own account, then ask `status` until it says how it ended. A second `start` while one waits ' +
       'answers with the one waiting. `cancel` stops an attempt and `signout` has the engine remove its sign-in there. ' +
       'Name the machine with `host`: one whose engines (fleet_health) include this one, and that is approved for the member’s credentials. No token is sent or returned. ' +
-      'THE PAGE AND CODE ARE UNVERIFIED HERE: the machine signs them and a phone checks that signature before it shows a code, ' +
-      'and this server cannot, so it cannot tell the machine’s code from one the fleet’s coordinator put in its place. Say so when you pass them on. ' +
+      'NOTHING THIS TOOL ANSWERS IS VERIFIED HERE: the page, the code, where the sign-in stands and the account it is on reach this server ' +
+      'through the fleet’s coordinator in the clear. A coordinator that is not honest can read the code and enter it first under an account of its own, ' +
+      'or put a code or an account of its own in its place. A phone has the machine seal and sign its answer and checks that; this server cannot. ' +
+      'Say so whenever you pass any of it on. ' +
       'Only who may start a session as the member may, and the grant this server acts under must carry this and name the member.',
   },
 };
@@ -613,7 +629,7 @@ export function toolsFor({ allow = null, deny = DEFAULT_DENY, budgetMinutes = 15
       // exists for.
       properties.host = {
         type: 'string',
-        description: 'Run on this host by name. Required to reach a temporary host: those are never chosen automatically.',
+        description: OVERRIDE[verb]?.host ?? 'Run on this host by name. Required to reach a temporary host: those are never chosen automatically.',
       };
       // A TAG IS PLACEMENT, NOT AN INTENT PARAMETER, and the difference is a
       // flag day — adding a parameter to an existing verb makes an old host

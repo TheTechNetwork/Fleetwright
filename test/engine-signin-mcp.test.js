@@ -37,10 +37,14 @@ test('the tool is the verb under a name of two words, with the verb’s own para
   assert.equal(tool?.inputSchema.properties.reply, undefined);
   assert.deepEqual(tool?.inputSchema.properties.engine.enum, VERBS.enginesignin.params.engine.values);
   assert.deepEqual(tool?.inputSchema.properties.action.enum, ['start', 'status', 'cancel', 'signout']);
-  assert.equal(typeof tool?.inputSchema.properties.host?.description, 'string');
+  // WHERE, in this tool's own words: every other tool's `host` says it is how a temporary host is reached, and this verb refuses one.
+  assert.equal(tool?.inputSchema.properties.host?.description, 'The machine to sign in on, by name: a permanent one that runs this engine and is approved for the member’s credentials. All four actions name the same one. A temporary host is refused: a sign-in is kept on the machine it is made on.');
+  // And no `tag`: a sign-in goes to the machine that is named, and a tag was read by nothing.
+  assert.equal(tool?.inputSchema.properties.tag, undefined);
+  assert.equal(typeof toolsFor().find((t) => t.verb === 'start')?.inputSchema.properties.tag?.description, 'string');
   assert.equal(tool?.mutating, true);
-  // Whoever picks the tool is told, before calling it, that what it hands back is not checked here.
-  assert.match(String(tool?.description), /THE PAGE AND CODE ARE UNVERIFIED HERE: the machine signs them and a phone checks that signature before it shows a code, and this server cannot/);
+  // Whoever picks the tool is told, before calling it, that nothing it hands back is checked here, and what an untrusted fleet could do with that.
+  assert.match(String(tool?.description), /NOTHING THIS TOOL ANSWERS IS VERIFIED HERE: the page, the code, where the sign-in stands and the account it is on reach this server through the fleet’s coordinator in the clear\. A coordinator that is not honest can read the code and enter it first under an account of its own, or put a code or an account of its own in its place\./);
   // The way back from a tool's name to its verb, which is not always what is left after `fleet_`.
   assert.deepEqual([verbOfTool('fleet_engine_signin'), verbOfTool('fleet_stop'), verbOfTool('fleet_read_log')], ['enginesignin', 'stop', 'read_log']);
   // Every other verb's tool is still named as it was.
@@ -54,7 +58,13 @@ test('it is withheld unless an operator allows it, and says so under its own nam
   assert.equal(written[0].result.isError, true);
   assert.match(written[0].result.content[0].text, /^fleet_engine_signin is not exposed by this server\./);
   assert.match(written[0].result.content[0].text, /FLEETWRIGHT_MCP_ALLOW=enginesignin /);
+  // NOT "THE WHOLE CHANGE", which every other withheld tool is told and which is false of this one: no delegation a phone makes carries the verb.
+  assert.match(written[0].result.content[0].text, /in its environment, and that is half of it: a machine takes it only under a delegation that carries this verb and names the member, and the delegation a phone makes for an MCP client does not carry it\. Until one does, sign the engine in from the Fleetwright app, on the member’s Credentials, with Sign in on a machine\.$/);
+  assert.doesNotMatch(written[0].result.content[0].text, /that is the whole change/);
   assert.deepEqual(sent, []);
+  // Every other withheld tool is told what it always was.
+  await server.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'fleet_reboot', arguments: {} } }));
+  assert.match(written[1].result.content[0].text, /FLEETWRIGHT_MCP_ALLOW=reboot in its environment\. If that is you, that is the whole change\.$/);
 });
 
 test('allowed, a call is one enginesignin intent beside the machine it names, and the box’s answer is what the agent reads, a refusal included', async () => {
@@ -64,18 +74,31 @@ test('allowed, a call is one enginesignin intent beside the machine it names, an
   assert.deepEqual([sent[0].url, sent[0].body.verb, sent[0].body.params, sent[0].body.host], ['https://fleet.example/api/intent', 'enginesignin', { member: 'debbie', engine: 'codex', action: 'start' }, 'ops-box']);
   assert.equal(written[0].result.isError, undefined);
   assert.match(written[0].result.content[0].text, /Open https:\/\/auth\.openai\.com\/codex\/device and enter ABCD-EFGH /);
-  // AND THAT THE CODE IS UNVERIFIED, in the words the agent reads, whether or
+  // AND THAT NONE OF IT IS VERIFIED, in the words the agent reads, whether or
   // not the answer came signed: this server has no list of approved machines
-  // to hold a signature to.
-  const unverified = /\n\nUNVERIFIED\. This server cannot check that the page and code above came from the machine and not from the fleet’s coordinator, which carries them\. A phone checks the machine’s signature against the machines approved for the member’s credentials before it shows a code\. Tell the person the code is unverified, or have them sign in from the Fleetwright app, on the member’s Credentials\.$/;
+  // to hold a signature to. All of it: the account as well as the code, and
+  // that whatever carries a clear answer can read the code and enter it first.
+  const unverified = /\n\nUNVERIFIED, ALL OF IT\. This server cannot check anything above: not the page or the code, not where the sign-in stands, and not which account it says is signed in\. It reaches this server through the fleet’s coordinator, in the clear\. A coordinator that is not honest can read a code and enter it first under an account of its own, or put a page, a code or an account of its own in its place\. A phone has the machine seal its answer and checks the machine’s signature against the machines approved for the member’s credentials before it shows any of it\. Tell the person this is unverified, or have them sign in from the Fleetwright app, on the member’s Credentials\.$/;
   assert.match(written[0].result.content[0].text, unverified);
   const signedToo = serverWith({ ...waiting, signedAt: 1764000001000, hostKey: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' }, signature: 'sig' }, { allow: ['enginesignin'] });
   await signedToo.server.handleLine(call(7, { member: 'debbie', engine: 'codex', action: 'status', host: 'ops-box' }));
   assert.match(signedToo.written[0].result.content[0].text, unverified);
-  // An answer with no code has nothing to be unverified about.
-  const over = serverWith({ ok: true, state: 'signed_in', text: 'Codex is signed in for debbie on ops-box.' }, { allow: ['enginesignin'] });
+  // WHATEVER FIELDS THE ANSWER HAS. The warning was shown only when the
+  // answer had a `code` field, and the party it warns about writes the
+  // answer: a second outside review sent a code in the sentence and no
+  // field, and the agent read it with no warning.
+  const inWords = serverWith({ ok: true, state: 'waiting', text: 'Open https://auth.openai.com/codex/device and enter WXYZ-1234 to sign Codex in for debbie on ops-box.' }, { allow: ['enginesignin'] });
+  await inWords.server.handleLine(call(9, { member: 'debbie', engine: 'codex', action: 'start', host: 'ops-box' }));
+  assert.match(inWords.written[0].result.content[0].text, unverified);
+  // AND THE ACCOUNT A SIGN-IN IS ON, which is as unchecked here as a code and was never said to be.
+  const over = serverWith({ ok: true, state: 'signed_in', signedIn: { since: 1, who: { email: 'eli@example.com', plan: 'plus' } }, text: 'Codex is signed in for debbie on ops-box as eli@example.com.' }, { allow: ['enginesignin'] });
   await over.server.handleLine(call(8, { member: 'debbie', engine: 'codex', action: 'status', host: 'ops-box' }));
-  assert.equal(over.written[0].result.content[0].text, 'Codex is signed in for debbie on ops-box.');
+  assert.match(over.written[0].result.content[0].text, /^Codex is signed in for debbie on ops-box as eli@example\.com\.\n\nUNVERIFIED, ALL OF IT\./);
+  // A `tag` is not one of this tool's parameters, and is refused as any other is, before anything is sent.
+  const tagged = serverWith(waiting, { allow: ['enginesignin'] });
+  await tagged.server.handleLine(call(10, { member: 'debbie', engine: 'codex', action: 'start', tag: 'linux' }));
+  assert.match(tagged.written[0].result.content[0].text, /^fleet_engine_signin takes no parameter `tag`/);
+  assert.deepEqual(tagged.sent, []);
   // What the verb needs is asked for before anything is sent.
   await server.handleLine(call(2, { member: 'debbie', action: 'start', host: 'ops-box' }));
   assert.equal(written[1].result.isError, true);
@@ -85,4 +108,6 @@ test('allowed, a call is one enginesignin intent beside the machine it names, an
   await refused.server.handleLine(call(3, { member: 'debbie', engine: 'codex', action: 'status', host: 'ops-box' }));
   assert.equal(refused.written[0].result.isError, true);
   assert.match(refused.written[0].result.content[0].text, /does not cover signing an engine in for Debbie/);
+  // A refusal started nothing and hands nothing on, so it carries no warning.
+  assert.doesNotMatch(refused.written[0].result.content[0].text, /UNVERIFIED/);
 });
