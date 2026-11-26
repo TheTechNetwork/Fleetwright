@@ -70,7 +70,13 @@ if [ -n "${VERIFY_SKIP_TESTS:-}" ]; then
   printf 'skipped (VERIFY_SKIP_TESTS)\n'
 elif [ -n "$cov_ok" ]; then
   if printf '%s' "$cov_out" | grep -q 'the suite did not pass'; then
-    printf 'FAILED\n%s\n' "$(printf '%s' "$cov_out" | grep -E '^(not ok|✖)' | head -10)"; fail=1
+    # THE FAILING TESTS BY NAME, and when the run failed without one, what
+    # check-coverage said ended it. This printed only the names, so a runner
+    # that was killed, or died after its last test, came out as `FAILED` over
+    # an empty line, and was rerun until it was green.
+    named=$(printf '%s' "$cov_out" | grep -E '^(not ok|✖)' | head -10)
+    [ -n "$named" ] || named=$(printf '%s\n' "$cov_out" | sed -n '/the suite did not pass/,$p' | tail -n +2 | head -14)
+    printf 'FAILED\n%s\n' "$named"; fail=1
   else
     printf '%s (one run, under coverage)\n' "$(printf '%s' "$cov_out" | sed -n 's/^suite: //p' | head -1)"
   fi

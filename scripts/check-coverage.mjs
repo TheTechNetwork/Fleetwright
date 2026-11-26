@@ -51,7 +51,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { globSync } from 'node:fs';
 
-import { parseLcov, judge, skippedCount } from './coverage-verdict.mjs';
+import { parseLcov, judge, skippedCount, whatFailed } from './coverage-verdict.mjs';
 
 const FLOORS = 'test/coverage-floor.json';
 const update = process.argv.includes('--update');
@@ -116,15 +116,11 @@ console.log(`suite: ${(run.stdout || '').split('\n').filter((l) => /^(#|ℹ) (pa
 // whatever it happened to reach before it stopped, and ratcheting against that
 // would record a floor from a broken run. Say what failed and stop.
 if (run.status !== 0) {
-  // Both reporter formats: `not ok` is TAP, `✖` is the spec reporter node emits
-  // now. Naming only one is how a failure message becomes an empty one — see
-  // the same fix in scripts/verify.sh.
-  const notOk = (run.stdout || '')
-    .split('\n')
-    .filter((l) => /^(not ok|✖)/.test(l))
-    .slice(0, 10);
+  // The failing tests by name, or, when the run failed without one, what
+  // ended it (coverage-verdict.mjs, whatFailed). Both reporter formats are
+  // read there: `not ok` is TAP, `\u2716` is the spec reporter node emits now.
   console.error('the suite did not pass, so there is no coverage to judge:');
-  console.error(notOk.length ? notOk.join('\n') : (run.stderr || '').slice(-2000));
+  console.error(whatFailed(run).join('\n'));
   rmSync(work, { recursive: true, force: true });
   process.exit(1);
 }

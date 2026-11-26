@@ -113,3 +113,42 @@ export function skippedCount(stdout) {
   const m = /^\u2139 skipped (\d+)$/m.exec(stdout || '');
   return m ? Number(m[1]) : 0;
 }
+
+/**
+ * What to say of a suite run that did not pass.
+ *
+ * THE FAILING TESTS, WHEN THERE ARE ANY TO NAME. And when there are none,
+ * WHATEVER ENDED THE RUN, because a run can fail without a failing test: the
+ * runner is killed (out of memory is a SIGKILL, and leaves no last word), its
+ * output passes the buffer it is read into, or it dies after the last test
+ * with something on stderr. Each of those used to print an empty line here,
+ * and verify.sh then printed `tests ... FAILED` over nothing. Three people
+ * met that in one night with several suites running on one box, reran, saw
+ * green, and never learned which it had been. A failure with no name gets
+ * reread as noise, which is the thing a gate must not teach.
+ *
+ * @param {{ status: number|null, signal?: string|null, error?: { code?: string, message?: string }|null, stdout?: string, stderr?: string }} run
+ *   what `spawnSync` returned for the suite
+ * @returns {string[]}  lines to print, never empty
+ */
+export function whatFailed(run) {
+  const named = (run.stdout || '').split('\n').filter((l) => /^(not ok|\u2716)/.test(l)).slice(0, 10);
+  if (named.length) return named;
+  const said = [];
+  if (run.error) {
+    said.push(run.error.code === 'ENOBUFS'
+      ? 'the suite printed more than this script reads, so it was stopped before its end. Something is printing far more than it used to.'
+      : `the suite could not be run to its end: ${run.error.code || run.error.message || 'no reason given'}.`);
+  }
+  if (run.signal) {
+    said.push(`the test runner was ended by ${run.signal}, and named no failing test.${run.signal === 'SIGKILL' ? ' That is what running out of memory looks like: is another suite running on this machine?' : ''}`);
+  }
+  if (!said.length) said.push(`the test runner exited ${run.status === null ? 'with no status' : run.status} and named no failing test.`);
+  const stderr = (run.stderr || '').trim();
+  if (stderr) said.push('what it wrote last:', stderr.slice(-2000));
+  else {
+    const last = (run.stdout || '').trim().split('\n').slice(-8);
+    if (last.join('').trim()) said.push('the last lines of its output:', ...last);
+  }
+  return said;
+}

@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseLcov, judge, skippedCount, SLACK_LINES } from '../scripts/coverage-verdict.mjs';
+import { parseLcov, judge, skippedCount, whatFailed, SLACK_LINES } from '../scripts/coverage-verdict.mjs';
 
 /** One lcov record. Only SF/LF/LH are read, so only those are written. */
 const record = (file, found, hit) => `TN:\nSF:${file}\nLF:${found}\nLH:${hit}\nend_of_record\n`;
@@ -133,4 +133,36 @@ test('a full run counts zero, so the ratchet still runs where nothing skips', ()
   // Not fooled by the word appearing in a test NAME, which is the obvious way
   // for a line-matching parser to be wrong.
   assert.equal(skippedCount('\u2714 a test about skipped 3 things (1ms)\n\u2139 skipped 0\n'), 0);
+});
+
+test('a run that failed names its failing tests, and nothing else when it has them', () => {
+  const said = whatFailed({ status: 1, stdout: '\u2714 fine (1ms)\n\u2716 a box refuses an unsigned answer (4ms)\n  \u2716 nested, not at the margin\nnot ok 3 - the TAP form\n', stderr: 'noise' });
+  assert.deepEqual(said, ['\u2716 a box refuses an unsigned answer (4ms)', 'not ok 3 - the TAP form']);
+});
+
+test('a run that was killed says so, where it used to print an empty line', () => {
+  // THE CASE THIS WAS WRITTEN FOR. Out of memory is a SIGKILL: no status, no
+  // failing test, nothing on stderr. The gate printed `FAILED` over nothing,
+  // and a failure with no name is rerun until it is green.
+  const said = whatFailed({ status: null, signal: 'SIGKILL', stdout: '\u2714 one (1ms)\n\u2714 two (1ms)\n', stderr: '' });
+  assert.match(said[0], /ended by SIGKILL/);
+  assert.match(said[0], /out of memory/);
+  assert.match(said.join('\n'), /\u2714 two/, 'the last thing it printed says how far it got');
+  // Another signal is named and not explained as memory.
+  assert.doesNotMatch(whatFailed({ status: null, signal: 'SIGTERM', stdout: '', stderr: '' })[0], /memory/);
+});
+
+test('a run whose output passed the buffer, or that died after its last test, says which', () => {
+  assert.match(whatFailed({ status: null, error: { code: 'ENOBUFS' }, signal: 'SIGTERM', stdout: '', stderr: '' })[0], /printed more than this script reads/);
+  const died = whatFailed({ status: 7, stdout: '\u2139 pass 12\n\u2139 fail 0\n', stderr: 'Error: the reporter could not write coverage.lcov\n' });
+  assert.match(died[0], /exited 7 and named no failing test/);
+  assert.match(died.join('\n'), /the reporter could not write coverage\.lcov/);
+});
+
+test('whatever a failed run was, something is said of it', () => {
+  // Never an empty answer: that is the failure this function replaces.
+  for (const run of [{ status: 1 }, { status: null }, { status: 1, stdout: '', stderr: '' }]) {
+    const said = whatFailed(run);
+    assert.ok(said.length && said.every((l) => typeof l === 'string') && said.join('').trim(), JSON.stringify(run));
+  }
 });
