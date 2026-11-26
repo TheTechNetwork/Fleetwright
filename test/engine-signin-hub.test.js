@@ -803,6 +803,27 @@ test('a file a session left in the home, with a piece of the runner’s own line
   assert.deepEqual(p.signins.report().map((row) => [row.state, row.since]), [['cancelled', null]]);
 });
 
+test('a code this box’s clock says is over is not said to be waiting, though no timer of its own has fired', async (t) => {
+  let skew = 0;
+  const b = box(t, {}, { now: () => Date.now() + skew });
+  const first = await b.ask('start');
+  assert.equal(first.state, 'waiting');
+  // SUSPENDED FOR AN HOUR WITH THE CODE OUT. The clock on the wall moved; a
+  // timer does not count time the machine was not running, so the one that
+  // ends the attempt is still fourteen minutes off. It answered "waiting,
+  // about 1 more minute", with the page and a code OpenAI had long ended.
+  skew = 3_600_000;
+  const later = await b.ask('status');
+  assert.deepEqual([later.ok, later.state, later.url, later.code, later.signedIn], [true, 'expired', undefined, undefined, null]);
+  assert.equal(later.text, 'The code ran out before anybody approved it, so Codex was not signed in for debbie on ops-box. Start again for a new code.');
+  // Ended by what ends one: the container is gone, and the home was asked before anything was said.
+  assert.ok(b.runs().some((l) => l.includes('--signedin')), 'the home was not asked what became of a code this box ended');
+  await until(() => !b.running('fw-signin-codex-debbie'), 'the container of a code that is over, ended');
+  // And a start is a new attempt with a life of its own, not the old one handed back as in flight.
+  const again = await b.ask('start');
+  assert.deepEqual([again.state, again.already, again.expiresAt > first.expiresAt + skew - 1000], ['waiting', undefined, true]);
+});
+
 // ── A record that cannot be written, or does not read ───────────────────────
 
 test('a record that cannot be written ends the attempt that needed it, in words, and nothing stays wedged once it can be written again', async (t) => {

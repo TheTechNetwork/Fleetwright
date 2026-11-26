@@ -390,6 +390,9 @@ export class EngineSignins {
       };
     }
     const key = `${member}/${engine}`;
+    // Before anything is asked of it: a code this box's clock says is over
+    // is ended here, so that what follows waits for the home's answer (#overdue).
+    this.#overdue(key);
     if (action === 'start') return this.#start({ key, member, engine, account, volume, by, box });
     if (action === 'cancel') return this.#cancel(key, box, volume);
     if (action === 'signout') return this.#signout({ key, member, engine, account, volume, by, box });
@@ -406,6 +409,8 @@ export class EngineSignins {
    */
   #view(key, box, extra = {}) {
     const [member, engine] = key.split('/');
+    // Never "waiting" for a code that is over, whoever is asking and by what road.
+    this.#overdue(key);
     const entry = this.#entry(key);
     const signedIn = entry?.signedIn ? { since: entry.signedIn.since, who: entry.signedIn.who ?? null } : null;
     // The account, in words, and the same sentence without it (ask).
@@ -456,6 +461,29 @@ export class EngineSignins {
       signedIn, ...extra,
       text: sentence(named), quietText: sentence(''),
     };
+  }
+
+  /**
+   * End an attempt whose code is over by this box's clock, though no timer
+   * of its own has said so yet.
+   *
+   * A CODE ENDS BY THE CLOCK ON THE WALL, AND A TIMER DOES NOT COUNT TIME
+   * THIS MACHINE WAS NOT RUNNING. The attempt was ended by a timer set when
+   * it began (#run) and by nothing else. A box that was suspended for an
+   * hour with a code out woke with the timer still fourteen minutes from
+   * firing, and went on answering "waiting, about 1 more minute" for a code
+   * the provider had ended long before, with a page to open and a code to
+   * type that could sign nobody in. So whenever it is asked, the clock is
+   * looked at: past the code's life and the little more the runner is given
+   * to say so itself (GRACE_MS), the attempt is ended as expired, by what
+   * ends one (#run, `end`). That is an ending this box decided with a code
+   * out, so the home is asked what became of it, as for the timer's.
+   *
+   * @param {string} key
+   */
+  #overdue(key) {
+    const live = this.attempts.get(key);
+    if (live && live.code && !live.over && this.now() > live.expiresAt + this.graceMs) live.end('expired');
   }
 
   /**
