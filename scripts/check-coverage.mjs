@@ -45,7 +45,7 @@
 // people learn to re-run, and then to ignore, and the day it is right nobody
 // reads it.
 
-import { readFileSync, writeFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdtempSync, mkdirSync, chmodSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -87,6 +87,27 @@ const EXCLUDE = ['test/**', 'build/**', 'dist/**', 'node_modules/**', 'scripts/*
 const work = mkdtempSync(path.join(tmpdir(), 'cov-'));
 const lcovPath = path.join(work, 'coverage.lcov');
 
+// THE SUITE'S OWN TEMPORARY FILES GO WITH THE RUN. Most tests make a
+// directory under the system's temporary one and not all of them take it
+// away again, which on a CI runner nobody sees, because the runner is thrown
+// away. On a machine that keeps running the gate they add up: one box that
+// had run it for some weeks held 150,000 of them, 18 GB, and the gate then
+// failed for want of disk in ways that named no test. So the suite is given
+// a temporary directory inside this run's own, and it leaves when the run
+// does (every exit below removes `work`). Kept short: a test that binds a
+// socket in it has about a hundred characters for the whole path.
+//
+// AND OPEN THE WAY /tmp IS, sticky and writable by all, with this run's own
+// directory passable above it. `mkdtemp` makes a directory only its owner
+// can enter, and the installer's tests hand files to another account
+// (`nobody`) and ask what it can reach: under a closed directory the answer
+// to that changes, and a test of who root will run a helper for failed for
+// a reason that was the gate's and not the installer's.
+const suiteTmp = path.join(work, 't');
+chmodSync(work, 0o755);
+mkdirSync(suiteTmp);
+chmodSync(suiteTmp, 0o1777);
+
 const run = spawnSync(
   process.execPath,
   [
@@ -104,7 +125,7 @@ const run = spawnSync(
     ...EXCLUDE.map((p) => `--test-coverage-exclude=${p}`),
     ...testFiles,
   ],
-  { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: { ...process.env, TMPDIR: suiteTmp } },
 );
 
 // WHAT THE SUITE ITSELF SAID, first, so scripts/verify.sh can report the run
