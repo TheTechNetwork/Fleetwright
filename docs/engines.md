@@ -727,8 +727,8 @@ the engines this machine does not run.
   under a grant that carries `enginesignin` and names the member. Its
   caller cannot check the machine's signature, having no vault answer to
   check it against, and sends no `reply`, so its answers are in the clear:
-  the tool's description and every answer that carries a code say the
-  code is unverified.
+  the tool's description and every answer the fleet gives it, a refusal
+  included, say that none of it is verified.
 - **Both phones**: Engines on a member's edit page, to add, remove, reorder
   and name a model; under a member's Credentials, for Codex and for
   Copilot, *Sign in on a machine* where a connected machine runs the

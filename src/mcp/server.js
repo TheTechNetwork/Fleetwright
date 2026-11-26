@@ -1211,7 +1211,11 @@ export class McpServer {
       // A TOOL ERROR, NOT A PROTOCOL ERROR. The call was well-formed. isError
       // lets the agent see it and carry on rather than the client treating the
       // session as broken.
-      return this.#text(describeFailure(e), true);
+      //
+      // An engine sign-in's failure quotes what arrived where it would not
+      // parse, and what arrived is the coordinator's to write, so it is said
+      // to be unverified as an answer is (below).
+      return this.#text(tool.verb === 'enginesignin' ? `${describeFailure(e)}\n\n${SIGNIN_UNVERIFIED}` : describeFailure(e), true);
     }
 
     // Remembered only on success, and forgotten when stopped — so the set is
@@ -1309,11 +1313,15 @@ export class McpServer {
     // has none, so the signature proves nothing to it, and an answer that
     // reads as checked here would be a claim with no answer behind it.
     //
-    // ON EVERY ANSWER THAT IS NOT A REFUSAL, whatever fields it has
-    // (SIGNIN_UNVERIFIED): which fields an answer has is decided by the
-    // party the warning is about.
-    if (tool.verb === 'enginesignin' && reply?.ok !== false) {
-      reply = { ...reply, text: `${reply?.text ?? JSON.stringify(reply, null, 1)}\n\n${SIGNIN_UNVERIFIED}` };
+    // ON EVERY ANSWER THE FLEET GAVE, A REFUSAL INCLUDED, whatever fields it
+    // has (SIGNIN_UNVERIFIED): which fields an answer has, and whether it
+    // says `ok`, is decided by the party the warning is about. It was left
+    // off a refusal, as one that "hands nothing on", and a third review
+    // sent the page and the code in a refusal's sentence: the agent read
+    // "enter WXYZ-1234" with no warning under it. What this server refuses
+    // by itself, before anything is asked of the fleet, carries none.
+    if (tool.verb === 'enginesignin') {
+      reply = { ...(reply && typeof reply === 'object' ? reply : {}), text: `${reply?.text ?? JSON.stringify(reply, null, 1)}\n\n${SIGNIN_UNVERIFIED}` };
     }
 
     const failed = reply?.ok === false;

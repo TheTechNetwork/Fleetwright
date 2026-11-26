@@ -176,7 +176,14 @@ the machine made from one the coordinator put in its place. A phone also
 has the machine seal the answer to a key of its own (`reply`), which the
 tool does not offer, so what comes back here crossed the coordinator in
 the clear. The tool's description says the code is unverified, and so
-does every answer that carries one, in the words the agent reads.
+does every answer the fleet gives it, in the words the agent reads: a
+sign-in under way, one that is done, and a refusal. Which of those an
+answer is, and which fields it has, is written by the party the warning is
+about, so the warning does not depend on either. It was once shown only
+beside a `code` field, then only on an answer that was not a refusal, and
+each time the page and the code were sent the other way with nothing under
+them. Only what this server refuses by itself, before it asks the fleet
+(a tool that is withheld, a parameter it does not take), carries none.
 
 **`sandbox` is offered and `labels` is not,** which looks inconsistent from the
 outside and is the same rule applied twice. The variant decides what the next
