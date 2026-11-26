@@ -94,6 +94,8 @@ on disk or in durable KV; "in flight" means in a process or on a wire.
 | **Member GitHub refresh token** | `<row>.renewal.json`, `0600` | host service user only; **no session** | rotated on every renewal exchange | `unlink`, which until G13 left this file behind; `forgetperson`, for somebody removed; provider revoke | renewal-failure log |
 | **Machine ticket** (`fwt_…` minted for a machine on somebody's pool) | coordinator DO (`runnerTickets`), **hash only**; in flight on the machine's cloud-init drive | the Worker, as a hash; every box holding the pool's token may export the drive until Xen Orchestra destroys it after boot (G14) | single use, 15 minutes (`VM_TICKET_TTL_MS`) | spent at `/api/enroll/vm`; expiry | the spending is remembered until expiry: a second presentation is refused `ticket_reused`, recorded as `vm.ticket-reused` for the owner and the admins, and the host it enrolled revoked (`#vmTicketSpentTwice`, `core.js`) |
 | **Claude login on a session machine** | the box that made it: sidecar memory, from the owner's vault; the machine: `${stateDir}/runner-login.token`, `0600`, once handed over. **Not on its cloud-init drive** (G14) | that box; the machine's hub and its owner's sessions; and, at Xen Orchestra's check, every box holding the pool's token, which may export the machine's disk (G14, not measured whether XAPI serves it) | the person's (`claude setup-token`) | gone with the machine; the box hands it to a machine once (`XoPools#handLogin`) | `vm.claude` / `vm.claude-refused` events; `vm.ticket-reused` says when a revoked copy had been handed it |
+| **Engine sign-in made on a machine** (Codex's `auth.json`, OpenCode's GitHub Copilot token; `enginesignin`, [engines.md](./engines.md)) | the member's **engine home** on the box it was made on: a Podman volume, `fw-engine-<member id>` for an agent, `fw-engine-person.<tag>` for a person. Never in the vault, a record, a frame or an answer | that member's sessions on an engine other than Claude Code, the short container a sign-in runs in, and root on the box | the engine renews it in place, as on a person's computer | `enginesignin signout` on that machine; signing out at the provider; `podman volume rm`. **A removed member's stays** until its operator removes the volume | `health.engineSignins` (who is signed in where, to who may act for the member), the `engine.signin` push to the member's custodians, and a session's TurnEnded with reason `auth` |
+| **Member's pasted `codex` / `copilot` item** (the fallback where device code is off) | sealed at rest in the minter, in the member's vault; on a box approved for that vault that says it runs the engine, in `vault/<account>.json`, `0600` (a `codex` item on one machine only) | the minter; the box's service user; that member's session, through its own socket, only when its engine home holds no sign-in | never from the vault: the engine renews the copy on the box | forget it in the member's Credentials; the box drops it on its next vault answer | the vault's list (`heldBy`); TurnEnded `auth` |
 | **Enrolment pin** | coordinator DO, **plaintext**, 10-min TTL | the Worker | single-use, expires | expiry; `DELETE /api/enroll/{id}` by its minter or an admin; dropped when its minter is removed (`#forgetPerson`) | `outstanding()` (masked) |
 | **Telegram bot token** (archived) | host env (`FLEETWRIGHT_TELEGRAM_TOKEN`), **read by nothing** | host service user | manual | delete the line | `fleetwright doctor` names it |
 | **GitHub App private key** | **nowhere in this system** (ASPIRATIONAL: waits for the broker) | — | regenerate at first use | delete in GitHub | — |
@@ -970,6 +972,59 @@ in its place; and `pin-admin` run as root must refuse and write nothing in the
 sidecar's directory, nor through a link that account owns, nor in a directory
 of root's under one another account can change (`test/pinned-admins.test.js`
 does).
+
+**`enginesignin`, which puts a sign-in on a box, and what it adds to this
+bound.** Protocol 22 lets a custodian have a machine sign Codex or OpenCode
+in for a member with the engine's own device code
+([engines.md](./engines.md), "Signing in on the machine"). The sign-in is
+made on the machine and stays in that member's engine home there; what
+crosses the fleet is a page and a short code that a person enters under
+their own account. That code is the thing to protect: a coordinator that
+could read it could enter it first under an account of its own, and one
+that could put a code of its own in front of the person would have them
+sign the coordinator's machine in as themselves.
+
+- **The coordinator cannot ask.** A box takes all four actions, `status`
+  included, only with a custodian's signature over the request or a
+  delegation that names the member, checked against the minter's signed
+  list, whatever the box's signature mode (`sidecar.js`, `#signInAs`). No
+  delegation a phone makes carries the verb.
+- **It cannot read the answer.** A phone sends a key of its own inside what
+  it signs (`reply`), and the box seals the page, the code and the account
+  to it. Swapping or dropping `reply` breaks the phone's signature.
+- **It cannot write the answer.** The box signs what it seals with the key a
+  custodian approved for the member's vault, over the request's own id, and
+  the phone holds that key to the grants in the vault's own answer to the
+  phone, which the coordinator cannot write because a phone's `reply` to
+  the vault travels inside a request sealed to the minter.
+- **Nor the sentence beside it.** Where the sign-in stands, the engine's
+  sentence for a failure and when the code runs out are inside the seal and
+  signed (`state`, `detail`, `expiresAt`), and a phone draws nothing in the
+  sign-in sheet that came from outside it: a refusal is the phone's own
+  sentence for the refusal's code.
+
+  *The second outside review found the last point false as first built.*
+  Those three were only beside the seal, in the clear, and both phones drew
+  a refusal's `text` and a failed attempt's `detail` as they came. So a
+  coordinator could answer a custodian's request with a sentence naming a
+  code of its own, next to the page button that had passed every check.
+  The box now signs them, and the phones stopped drawing what is not
+  signed.
+- **Nor tell a box it is approved.** A `start` is taken only by a box
+  approved for the member's vault, and the box knows that from the vault's
+  answer, which the minter now signs (the vault bullets below). Before
+  that the coordinator could write that answer too.
+
+**What is still the coordinator's here:** to drop, delay and refuse; the
+unsigned clear copies of `state` and the times, which decide nothing a
+person relies on; who is shown `health.engineSignins`, and so who learns
+that a member is signed in to an engine on a machine since when (never the
+account). **And outside it:** the MCP tool, which has no key to seal to and
+no vault answer to hold a machine's key against, so its answers are clear,
+the coordinator reads the code and can enter it first, and the tool says
+all of that after every answer (`src/mcp/server.js`); a phone or a box from
+before this round, which draws or takes what the newer ones refuse; and a
+pasted item, which is a vault item like any other.
 
 ### 4.2 Compromised host (root on the box)
 

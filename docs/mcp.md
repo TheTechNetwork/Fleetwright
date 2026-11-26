@@ -149,8 +149,18 @@ labels                            where everybody else's work lands
 (`FLEETWRIGHT_MCP_ALLOW=enginesignin`): the one tool whose name is not its
 verb's, because one word of twelve letters is not what an agent looks for.
 It hands back the provider's page and a code for the person to enter, and
-no token ([engines.md](./engines.md), "Signing in on the machine"). Allowing
-it here is half of it. This server acts on a delegation, and a box takes
+no token ([engines.md](./engines.md), "Signing in on the machine"). It
+takes a `host`, the machine to sign in on, and no `tag`: a sign-in is kept
+on the machine it is made on, so the machine is named. **Nothing it
+answers is verified here**, and it says so after every answer that is not
+a refusal, whatever fields the answer has: the page, the code, where the
+sign-in stands and the account it is on all reach this server through the
+coordinator in the clear, which can read the code and enter it first under
+an account of its own. The warning used to follow only an answer that had
+a `code` field, which the coordinator writes. Allowing
+it here is half of it, and the refusal for the withheld tool says that
+too, where every other withheld tool is told that allowing it is the
+whole change. This server acts on a delegation, and a box takes
 the verb only under one that carries `enginesignin` and names the member.
 The delegation the phones make for an MCP client is the verbs this server
 offers by default, so it does not carry a withheld one: until it does, a box

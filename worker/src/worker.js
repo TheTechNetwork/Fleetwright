@@ -2703,7 +2703,7 @@ const OPENAPI = JSON.stringify({
           "intents"
         ],
         "summary": "Do something to a session",
-        "description": "The fixed verb set is the security model: this API cannot express a shell string even to itself, so a compromised coordinator can start and stop sessions and can never run anything. A caller-supplied `actor` is a label; a signed-in device's verified email overrides it. `enginesignin` signs Codex or OpenCode in for one member on one machine with the engine's own device code (docs/engines.md, \"Signing in on the machine\"): `start` answers with `url` and `code`, `status` says where it stands, `cancel` stops it, `signout` has the engine sign out. It is asked by whoever may start a session as that member, and a machine takes it only signed by them or delegated in a grant that names the member. No token is in any answer.",
+        "description": "The fixed verb set is the security model: this API cannot express a shell string even to itself, so a compromised coordinator can start and stop sessions and can never run anything. A caller-supplied `actor` is a label; a signed-in device's verified email overrides it. `enginesignin` signs Codex or OpenCode in for one member on one machine with the engine's own device code (docs/engines.md, \"Signing in on the machine\"): `start` answers with `url` and `code`, `status` says where it stands, `cancel` stops it, `signout` has the engine sign out. It is asked by whoever may start a session as that member, and a machine takes it only signed by them or delegated in a grant that names the member. The signature travels beside the intent as `sig`, `kid` and `issuedAt`. No token is in any answer.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2775,7 +2775,7 @@ const OPENAPI = JSON.stringify({
                   },
                   "id": {
                     "type": "string",
-                    "description": "Idempotency key, honoured: a retried `start` returns the original outcome rather than a second session."
+                    "description": "Idempotency key, honoured: a retried `start` returns the original outcome rather than a second session. For `enginesignin` the machine keeps nothing of an answer, so a request repeated under its id is answered with where the sign-in stands now, for the member and engine the repeat names, and `replayed: true`; it never starts a second attempt. A repeat sent while the first is still being answered is refused with `in_flight` and told to wait. An id is one request's: another verb under a sign-in's id, or a sign-in under another verb's, is refused by the machine with `id_reused`."
                   },
                   "host": {
                     "type": "string",
@@ -2804,6 +2804,35 @@ const OPENAPI = JSON.stringify({
                   "oauthFinish": {
                     "type": "boolean",
                     "description": "For `connect` only: this client can finish a provider sign-in with `POST /api/oauth/finish`, so the coordinator may rewrite the GitHub and Cloudflare entries to its own authorize URLs (`flow: \"app\"`) and mint a state for each. Without it the catalogue comes back as the host sent it, with the paste route, and nothing is minted."
+                  },
+                  "sig": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{86}$",
+                    "description": "The asking device's signature over this intent: ECDSA P-256 with SHA-256, the 64 raw bytes r||s in base64url without padding, over the UTF-8 of `agent-fleet/v1/intent\\n` followed by the JSON of `{actor, host, id, issuedAt, params, verb}` with keys sorted and no spaces, `actor` being the signed-in address and `host` the machine named beside the intent (docs/signed-intents.md). Sent with `kid` and `issuedAt`, all three or none. This API does not check it: the machine does, against keys the minter lists. A machine that takes only signed requests refuses one without it (`signature_required`), and every machine refuses an unsigned `enginesignin` or a `start` as a member, whatever its mode."
+                  },
+                  "kid": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "The id of the key that made `sig`: the whole SHA-256, in hex, of the key's JWK as `{\"crv\":\u2026,\"kty\":\u2026,\"x\":\u2026,\"y\":\u2026}`."
+                  },
+                  "issuedAt": {
+                    "type": "integer",
+                    "description": "When the device signed, epoch ms. It is in what `sig` covers, and a machine refuses one too far from its own clock."
+                  },
+                  "delegation": {
+                    "description": "What the asking person's device signed earlier to let the fleet send this in their name, for a request the device cannot sign itself because the fleet chooses the machine: `{ grant, sig, kid }`, or a list of at most two (docs/signed-intents.md, \"Delegations\"). Taken only from a signed-in person, and only their own. A machine takes an `enginesignin` or a `start` as a member under one only when its grant names that member.",
+                    "oneOf": [
+                      {
+                        "type": "object"
+                      },
+                      {
+                        "type": "array",
+                        "maxItems": 2,
+                        "items": {
+                          "type": "object"
+                        }
+                      }
+                    ]
                   }
                 }
               }
@@ -2852,7 +2881,7 @@ const OPENAPI = JSON.stringify({
                             "signed_out",
                             "ended"
                           ],
-                          "description": "For `enginesignin`: where the sign-in of one member's engine on one machine stands, and never more than that machine knows. `none`: it knows of no attempt and no sign-in. `waiting`: a code is out. `signed_in`: the engine said the sign-in succeeded. `expired`: 15 minutes passed with nobody approving it. `failed`: the engine refused or failed, with its own sentence in `detail`. `cancelled`: somebody cancelled it. `lost`: the machine's hub restarted while a code was out, so that attempt is gone. `signed_out`: the engine was asked to sign out there, and did. `ended`: a session of that member found the sign-in no longer works. A refusal that ends an attempt at its start (`error.code` `device_code_off`, `signin_failed`, `no_code`) carries `failed` here too."
+                          "description": "For `enginesignin`: where the sign-in of one member's engine on one machine stands, and never more than that machine knows. `none`: it knows of no attempt and no sign-in. `waiting`: a code is out. `signed_in`: the engine said the sign-in succeeded. `expired`: 15 minutes passed with nobody approving it. `failed`: the engine refused or failed, with its own sentence in `detail`. `cancelled`: somebody cancelled it. `lost`: the machine's hub restarted while a code was out, so that attempt is gone. `signed_out`: the engine was asked to sign out there, and did. `ended`: a session of that member found the sign-in no longer works. A refusal that ends an attempt at its start (`error.code` `device_code_off`, `signin_failed`, `no_code`) carries `failed` here too. Beside a `sealed` answer this copy is unsigned: the one inside the seal is the machine\u2019s word."
                         },
                         "member": {
                           "type": "string",
@@ -2922,11 +2951,11 @@ const OPENAPI = JSON.stringify({
                         },
                         "signature": {
                           "type": "string",
-                          "description": "For `enginesignin` in state `waiting`: `hostKey`\u2019s ECDSA P-256 SHA-256 signature, the 64 raw bytes r||s in base64url without padding, over the UTF-8 of `agent-fleet/v1/engine-signin-answer\\n` followed by the JSON of `{at, code, engine, host, id, member, url, v}` with keys in that order and no spaces: `at` is `signedAt`, `host` the hash of `hostKey`, `id` the id of the request, `v` 1. A caller that shows the code checks this first, and that `host` is a machine approved for the member\u2019s vault. The coordinator passes it on and does not check it. When the request carried `reply`, absent here and inside `sealed`, where the signed JSON also has `signedIn` (`{since, who}` or null), and has `code` and `url` only while a code is out."
+                          "description": "For `enginesignin` in state `waiting`: `hostKey`\u2019s ECDSA P-256 SHA-256 signature, the 64 raw bytes r||s in base64url without padding, over the UTF-8 of `agent-fleet/v1/engine-signin-answer\\n` followed by the JSON of `{at, code, engine, host, id, member, url, v}` with keys in that order and no spaces: `at` is `signedAt`, `host` the hash of `hostKey`, `id` the id of the request, `v` 1. A caller that shows the code checks this first, and that `host` is a machine approved for the member\u2019s vault. The coordinator passes it on and does not check it. When the request carried `reply`, absent here and inside `sealed`, where the signed JSON also has `signedIn` (`{since, who}` or null), `state`, `detail` (a string or null) and, while a code is out, `expiresAt` (a whole number), and has `code` and `url` only while a code is out. A checker rebuilds it from everything it opened but `hostKey` and `signature`."
                         },
                         "sealed": {
                           "type": "object",
-                          "description": "For `enginesignin` asked with `reply`, in every answer that says where a sign-in stands: what the machine says of the page, the code and the account, sealed to `reply` as a vault's answer is sealed (ECDH on P-256 with an ephemeral key, HKDF-SHA-256, AES-256-GCM), under the additional data `fleetwright-engine-signin/v1`. Opened, it is `{ v: 1, id, host, member, engine, url, code, at, signedIn, hostKey, signature }`, with `url` and `code` only while a code is out. `signature` is `hostKey`\u2019s over the rest, as described there. The coordinator carries it and cannot open it. Whoever opens it still checks `signature`, and that `host` is a machine approved for the member\u2019s vault: `reply` is a public key, so anybody could have sealed to it.",
+                          "description": "For `enginesignin` asked with `reply`, in every answer with `ok: true`: what the machine says of the page, the code, the account and where the sign-in stands, sealed to `reply` as a vault's answer is sealed (ECDH on P-256 with an ephemeral key, HKDF-SHA-256, AES-256-GCM), under the additional data `fleetwright-engine-signin/v1`. Opened, it is `{ v: 1, id, host, member, engine, url, code, at, signedIn, state, detail, expiresAt, hostKey, signature }`: `url`, `code` and `expiresAt` only while a code is out, `state` as the clear `state`, and `detail` the engine's sentence for an attempt that failed, else null. `signature` is `hostKey`\u2019s over everything else in it, as described there. A refusal is never sealed, the ones that carry a `state` included (`device_code_off`, `signin_failed`, `no_code`, `answer_unsigned`). The coordinator carries it and cannot open it. Whoever opens it still checks `signature`, and that `host` is a machine approved for the member\u2019s vault: `reply` is a public key, so anybody could have sealed to it. And whoever opens it reads `state`, `detail` and `expiresAt` from inside: the clear copies beside the seal are unsigned.",
                           "required": [
                             "epk",
                             "iv",
@@ -2960,7 +2989,7 @@ const OPENAPI = JSON.stringify({
                             "string",
                             "null"
                           ],
-                          "description": "For `enginesignin` in state `failed`: the engine's own sentence, one line, with anything from a sign-in file taken out."
+                          "description": "For `enginesignin` in state `failed`: the engine's own sentence, one line, with anything from a sign-in file taken out. Beside a `sealed` answer this copy is unsigned, and the signed one is inside the seal."
                         },
                         "signedIn": {
                           "type": [
@@ -2998,6 +3027,14 @@ const OPENAPI = JSON.stringify({
                               }
                             }
                           }
+                        },
+                        "replayed": {
+                          "type": "boolean",
+                          "description": "True when the machine had already answered this `id`. For most verbs the answer is then the first one again. For `enginesignin` it is where the sign-in stands now, asked afresh: the machine keeps nothing of a sign-in's answer."
+                        },
+                        "hostId": {
+                          "type": "string",
+                          "description": "The machine that answered, added by this API to an answer that came from one."
                         }
                       }
                     }
