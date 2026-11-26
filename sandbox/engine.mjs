@@ -131,6 +131,8 @@ export function providerOf(engine, model) {
  * there.
  */
 const withheld = new Set();
+/** The shortest value that is withheld. One shorter is an ordinary word, and would be cut out of every sentence. */
+const WITHHELD_MIN = 12;
 
 /**
  * Never say this value. One short enough to be an ordinary word is not kept, or it would be cut out of every sentence.
@@ -157,7 +159,7 @@ const withheld = new Set();
 export function withhold(value) {
   const v = typeof value === 'string' ? value.trim() : '';
   const one = (/** @type {string} */ text) => {
-    if (text.length >= 12 && !/\s/.test(text) && !/^https?:\/\/[a-z0-9.-]+(?::\d+)?\/?$/i.test(text)) withheld.add(text);
+    if (text.length >= WITHHELD_MIN && !/\s/.test(text) && !/^https?:\/\/[a-z0-9.-]+(?::\d+)?\/?$/i.test(text)) withheld.add(text);
   };
   one(v);
   if (v[0] !== '{') return;
@@ -178,6 +180,59 @@ export function hide(text) {
   let said = String(text);
   for (const secret of withheld) said = said.split(secret).join('[withheld]');
   return said;
+}
+
+/**
+ * What is written to the pane, with every value this runner was handed
+ * taken out THOUGH IT ARRIVE IN PIECES.
+ *
+ * An agent's words come a few characters at a time, and `hide` was applied
+ * to each piece as it was written. A value whole in one piece was taken
+ * out; the same value across five pieces was written whole, a piece at a
+ * time, to the pane, and from the pane to the log, to peek and to the note
+ * a handoff commits. So what has been written is remembered as far as it
+ * could still be the beginning of a value: the end of the text that a
+ * withheld value starts with is held back until the next piece says whether
+ * it goes on. Nothing else is held, so words appear as they arrive.
+ *
+ * A VALUE THAT BREAKS OFF IS NOT SAID AS FAR AS IT GOT. Twelve characters or
+ * more of the beginning of a value, followed by something else or by
+ * nothing, are most of a credential. They are written as `[withheld]` too.
+ * The cost is ordinary words that begin as a value does for twelve
+ * characters, which read `[withheld]` where they began.
+ *
+ * @param {(text: string) => void} write
+ * @returns {{ say: (text: string) => void, flush: () => void }}  `flush` writes what is held, at the end of what is being said
+ */
+export function quietly(write) {
+  let held = '';
+  /** What a beginning that went no further is written as. */
+  const brokenOff = (/** @type {string} */ part) => (part.length >= WITHHELD_MIN ? '[withheld]' : part);
+  return {
+    say(text) {
+      let all = hide(held + String(text));
+      // How much of the end of it a withheld value begins with: the longest such.
+      let keep = 0;
+      for (const secret of withheld) {
+        for (let i = Math.max(0, all.length - (secret.length - 1)); i < all.length - keep; i += 1) {
+          if (secret.startsWith(all.slice(i))) {
+            keep = all.length - i;
+            break;
+          }
+        }
+      }
+      // What was held is still there, and is no longer where a value could
+      // be beginning: it went no further.
+      if (held && keep < all.length && all.startsWith(held)) all = brokenOff(held) + all.slice(held.length);
+      held = keep ? all.slice(all.length - keep) : '';
+      const now = keep ? all.slice(0, all.length - keep) : all;
+      if (now) write(now);
+    },
+    flush() {
+      if (held) write(brokenOff(held));
+      held = '';
+    },
+  };
 }
 
 /**
@@ -1045,7 +1100,9 @@ export async function run(args, io = {}) {
   const write = io.out ?? ((text) => process.stdout.write(text));
   // EVERYTHING THE PANE IS SHOWN PASSES HERE, the agent's own words included:
   // an agent that echoes its key is as much a leak as a provider that does.
-  const out = (/** @type {string} */ text) => write(hide(text));
+  // In pieces as much as whole (`quietly`).
+  const pane = quietly(write);
+  const out = pane.say;
   const note = (/** @type {string} */ text) => out(`\n[fleetwright] ${text}\n`);
   // AN ENGINE THAT IS NOT SIGNED IN SAYS WHERE IT IS SIGNED IN AGAIN, in the
   // turn's detail, which is what a person reads on the session: the engine's
@@ -1234,6 +1291,8 @@ export async function run(args, io = {}) {
     for (const name of ['SIGTERM', 'SIGINT', 'SIGHUP']) io.signals?.once(name, () => resolve('stopped'));
   });
   const leave = async () => {
+    // What the pane was still holding back, in case it was the beginning of a value.
+    pane.flush();
     unwatch(live);
     await keep(live);
     live?.child.kill?.();
@@ -1296,6 +1355,7 @@ export async function run(args, io = {}) {
       }
     }
     out('\n> ');
+    pane.flush();
     const next = await Promise.race([lines.next(), stopped]);
     if (next === 'stopped' || next.done) break;
     prompt = String(next.value ?? '');

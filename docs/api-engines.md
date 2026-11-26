@@ -86,7 +86,8 @@ the first sentence too.
 and a provider that quotes a key in its refusal would otherwise put it in a
 notification. The runner takes any value it was handed out of everything it
 reports or prints: the turn's ending, the agent's own words in the pane,
-and the engine's error output, which is where a handoff note is cut from.
+whole or a few characters at a time as a model streams them, and the
+engine's error output, which is where a handoff note is cut from.
 The sandbox driver does the same with a provider's answer.
 
 ### Off until an operator says so, per provider

@@ -250,6 +250,15 @@ Codex writes names who issued its tokens (`https://auth.openai.com`) beside
 them, and with that withheld the page for a second sign-in was printed as
 `[withheld]/codex/device`, which no box would pass on.
 
+**In pieces as much as whole.** An agent's words reach the pane a few
+characters at a time. A value was looked for inside each piece, so one that
+arrived in five pieces was written in five pieces. The runner now holds back
+the end of what it is writing for as long as it could be the beginning of a
+value, and nothing else, so words still appear as they arrive. A value that
+breaks off after twelve characters or more is written as `[withheld]` as far
+as it got. What this does not stop is an agent that says a value some other
+way, spelled out or encoded: only the value itself is known to the runner.
+
 ## Before a turn
 
 The runner sends no prompt until two things are true, and says which was not.

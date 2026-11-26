@@ -846,6 +846,49 @@ test('the tokens inside a Codex sign-in are never said, in the pane or in a turn
   assert.ok(!JSON.stringify(posts.filter((p) => p.path === '/internal/session-event')).includes('tok-'), 'nothing reported names a token');
 });
 
+test('a value the runner withholds is kept out of the pane when it arrives in pieces, as a model streams its words', async (t) => {
+  const TOKEN = 'reftok-cccccccccccccccc';
+  const file = codexSignIn({ signature: 'idtok-aaaaaaaaaaaaaaaa', access: 'acctok-bbbbbbbbbbbbbbbb', refresh: TOKEN, lastRefresh: '2026-11-24T10:00:00.000000Z' });
+  const { socket, home } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: file }));
+  const said = (/** @type {(send: (m: any) => void) => void} */ turn) => async () => {
+    /** @type {string[]} */
+    const out = [];
+    await run({ engine: 'codex', model: 'gpt-5.1-codex', mode: 'safe', prompt: 'Go.' }, { socket, home, cwd: '/work', env: {}, out: (s) => out.push(s), stdin: typed(), spawnEngine: () => codexServer({ turn }).child });
+    return out.join('');
+  };
+  const delta = (/** @type {(m: any) => void} */ send, /** @type {string} */ text) => send({ method: 'item/agentMessage/delta', params: { delta: text } });
+  // AN AGENT'S WORDS ARRIVE A FEW CHARACTERS AT A TIME, and a value was looked
+  // for inside each piece as it was written: whole in one piece it was taken
+  // out, and in pieces every one of them went to the pane, and with the pane
+  // to the log, to peek and to the note a handoff commits.
+  const pieces = await said((send) => {
+    delta(send, 'auth.json says refresh_token ');
+    for (const piece of TOKEN.match(/.{1,5}/g) ?? []) delta(send, piece);
+    delta(send, ', and that is all.');
+    completed(send, { status: 'completed', error: null });
+  })();
+  assert.ok(!pieces.includes(TOKEN), 'the token, put together again from its pieces');
+  assert.match(pieces, /auth\.json says refresh_token \[withheld\], and that is all\./);
+  // WORDS THAT ONLY BEGIN AS A VALUE DOES are held until it is plain they are
+  // not one, and then said, all of them and in order.
+  const lookalike = await said((send) => {
+    delta(send, 'The file is called ref');
+    delta(send, 'tok-notes.md, and it is short.');
+    completed(send, { status: 'completed', error: null });
+  })();
+  assert.match(lookalike, /The file is called reftok-notes\.md, and it is short\./);
+  // A VALUE THAT BREAKS OFF, most of it said and the turn then ended or gone
+  // on to other words, is not said as far as it got.
+  const broken = await said((send) => {
+    delta(send, 'refresh_token is reftok-cccccccccc');
+    delta(send, ' ... and the rest I will not print.');
+    delta(send, ' Then again: reftok-ccccccccccccccc');
+    completed(send, { status: 'completed', error: null });
+  })();
+  assert.ok(!broken.includes('reftok-cccc'), broken);
+  assert.match(broken, /refresh_token is \[withheld\] \.\.\. and the rest I will not print\. Then again: \[withheld\]/);
+});
+
 // ── A sign-in made on the machine ───────────────────────────────────────────
 
 test('a sign-in in the member’s engine home is used first: the box is asked for nothing, handed nothing back, and what the engine renews there is kept as quiet', async (t) => {
