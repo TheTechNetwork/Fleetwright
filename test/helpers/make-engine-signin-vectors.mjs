@@ -11,6 +11,12 @@
 //
 //   node test/helpers/make-engine-signin-vectors.mjs
 //
+// EVERY RUN MAKES A NEW KEY FOR THE MACHINE, so the fixture's vectors are not
+// all under one: the first five were printed by one run, and
+// `next-signed-in` and `next-failed-quoted` by a later one, taken from the
+// end of what it printed. Each carries its own key and that key's id, and a
+// test takes both from the vector it picked, so that changes nothing.
+//
 // AS A BOX MAKES ONE (src/fleet/host/sidecar.js, where an enginesignin
 // answer is sealed): `signed` is the request's id, the key's own id, the
 // member, the engine, the page and code while a code is out, `at`, and who
@@ -73,4 +79,18 @@ console.log(JSON.stringify([
   await make('foreign-page', 'a code beside a page that is not the provider’s own, signed all the same: a phone draws no code for it', 'main',
     { id: 'app-0b6f2c1e-51a7-4d0e-9c3b-7a1d2e3f4a55', member: 'debbie', engine: 'codex', at: at + 4000, state: 'waiting',
       url: 'https://auth.openai.com.example.test/codex/device', code: 'LMNO-2468', signedIn: null }),
+  // THE COMMONEST ANSWER A BOX SENDS, and no vector had it: Codex signed in,
+  // which names its account, in the next shape. `who` is an object inside an
+  // object inside what is signed, and a phone that wrote either in another
+  // order than the box does would refuse every Codex sign-in there is.
+  await make('next-signed-in', 'the next shape, Codex signed in: `state` is signed_in and `who` names the account and its plan', 'next',
+    { id: 'app-0b6f2c1e-51a7-4d0e-9c3b-7a1d2e3f4a56', member: 'debbie', engine: 'codex', at: at + 5000, state: 'signed_in', detail: null,
+      signedIn: { since: at - 120_000, who: { email: 'debbie@example.com', plan: 'plus' } } }),
+  // AN ENGINE'S REASON IS ITS OWN WORDS, and they can hold the three
+  // characters a JSON writer may spell more than one way: a quote, a
+  // backslash and a slash. The bytes signed spell them one way, and a phone
+  // that spelled one differently could not check an answer that had it.
+  await make('next-failed-quoted', 'the next shape, a reason with a quote, a backslash and a slash in it, each signed as the box writes it', 'next',
+    { id: 'app-0b6f2c1e-51a7-4d0e-9c3b-7a1d2e3f4a57', member: 'debbie', engine: 'codex', at: at + 6000, state: 'failed',
+      detail: 'the provider said "no" for C:\\Users\\debbie at /codex/device', signedIn: null }),
 ], null, 2));

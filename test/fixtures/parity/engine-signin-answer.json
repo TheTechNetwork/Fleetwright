@@ -324,6 +324,86 @@
       },
       "host": "e9f59ced277599178f600e036eaad0db57cb76f860086ccd68737f9312119d14",
       "signingInput": "agent-fleet/v1/engine-signin-answer\n{\"at\":1764100004000,\"code\":\"LMNO-2468\",\"engine\":\"codex\",\"host\":\"e9f59ced277599178f600e036eaad0db57cb76f860086ccd68737f9312119d14\",\"id\":\"app-0b6f2c1e-51a7-4d0e-9c3b-7a1d2e3f4a55\",\"member\":\"debbie\",\"signedIn\":null,\"url\":\"https://auth.openai.com.example.test/codex/device\",\"v\":1}"
+    },
+    {
+      "name": "next-signed-in",
+      "why": "the next shape, Codex signed in: `state` is signed_in and `who` names the account and its plan",
+      "shape": "next",
+      "asked": "ops-box",
+      "recipient": {
+        "d": "bIqrMasYV0URC31gjiPvBGYK7p0WLYM75wsYTr-zP9o",
+        "x": "c3JYLcVE5VbWmlrTn6-cGHfKRmtMb0t8aq6p-E8BTsE",
+        "y": "EZtOxkWH0cNit92Et2Rj0JLVCV6QKLQ1fxAFXriVrwM",
+        "publicKey": "BHNyWC3FROVW1ppa05-vnBh3ykZrTG9LfGquqfhPAU7BEZtOxkWH0cNit92Et2Rj0JLVCV6QKLQ1fxAFXriVrwM"
+      },
+      "sealed": {
+        "epk": "BFhVBq1XxaztjiXzjqHuZKw4L0rBKattNxph5_k9MMbmjDZVAUYjr4mjUeqycbzLlp40ol4HEIO4I_Ey7557lDs",
+        "iv": "svDvUExpFbesBcCP",
+        "ct": "I2P4lzpydpuspB16faTR8XXjNN_9Y0NW3_aKhmQlg9yLLaI11DauRUMVOa4o2uaykQbEIhYZebyf8KPVayTpYgNd1MCw1_1E7U1sy8d59rr2I-hnQR4osX9ZN-u_0Ihq6kx4kDaxs9HMFe2NkC7onW3sgYZ1ktToCgeOz3NI3m96xQajtAVkts_QYx_HGjziCxZJZWY6Cw-J0v8W6e6Eeqv57bpERsI1a9weyuiRR1ZrK09aNAGE7Qw2_Eoo07nRa25JKeAQg-zTDQ0hXmKTDB6tDGY6e0hZ-oN9fBC6e4Rb0pnbgm6hGqwMU_SB1uL1wBp85giRee36SK6StwOpuirCYBlJsYXsOTOaVw0Ow6aSzTGnZ2CpcY-8CM498CDBRLkgVLHHw-7B7MVc5vNS3LW7b6M1nEbc1DRTCcyRbEV9_JYpfbEMZi2vQPxTqaQccv-bQqF5eWGL8Zx1lr5xXg_8vG8VWk68sbNJ-PFZhtLDZY45lQmMWTj5hBS7AjXBknT6YxI9YD8fyr1C_eYqupPufKJqTISmibqMFVj7SQawu5d4WtLPNGb3Nxa2m6fmm3Jx1eDbRZv8Qb8kbhFu06R1nKg4feHyVstoFKWaJvH8XJTBfBHzm0OTE3ylVAQLin69GxF8sZnr1bDgKVLiBa-9jnpRfBb1xkDA0vDBFnPgcj-GDPu0-KPJXKUk8VaBj2MCMus6oStSkiHqsrXbz0lirnxxE4SpNv7LJlY"
+      },
+      "opened": {
+        "v": 1,
+        "id": "app-0b6f2c1e-51a7-4d0e-9c3b-7a1d2e3f4a56",
+        "host": "4f8bed344ef953937c7b90cc8747748971587dcd0aa12a6221860feffc1f66c7",
+        "member": "debbie",
+        "engine": "codex",
+        "at": 1764100005000,
+        "signedIn": {
+          "since": 1764099880000,
+          "who": {
+            "email": "debbie@example.com",
+            "plan": "plus"
+          }
+        },
+        "state": "signed_in",
+        "detail": null,
+        "hostKey": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "pSWD56EgKCe4zpwjZGNkTjm3yzkkey-eorga9ojV294",
+          "y": "vnEAuSulh3HX3Q6D-kbrHFBNA7EkPwkpAp3L_qhuD9w"
+        },
+        "signature": "a-bk9pBFk7Iwyn4aCg76oaTKKI6YzwrfpG2N3T92Q1MHkwP5TrJVK-gtXooQDgubU_aV9xEVmMczUBNAb_C6tg"
+      },
+      "host": "4f8bed344ef953937c7b90cc8747748971587dcd0aa12a6221860feffc1f66c7",
+      "signingInput": "agent-fleet/v1/engine-signin-answer\n{\"at\":1764100005000,\"detail\":null,\"engine\":\"codex\",\"host\":\"4f8bed344ef953937c7b90cc8747748971587dcd0aa12a6221860feffc1f66c7\",\"id\":\"app-0b6f2c1e-51a7-4d0e-9c3b-7a1d2e3f4a56\",\"member\":\"debbie\",\"signedIn\":{\"since\":1764099880000,\"who\":{\"email\":\"debbie@example.com\",\"plan\":\"plus\"}},\"state\":\"signed_in\",\"v\":1}"
+    },
+    {
+      "name": "next-failed-quoted",
+      "why": "the next shape, a reason with a quote, a backslash and a slash in it, each signed as the box writes it",
+      "shape": "next",
+      "asked": "ops-box",
+      "recipient": {
+        "d": "jFVKsQCt71OnRybJGO9nBkgkqNJATXqDz7yfqMjsXx4",
+        "x": "FFJKj6bVjccaoY7Se_4oVAb8nkX0LcoBKnJOCJPtEJU",
+        "y": "N0kkDhDavQpzqO-8MVnNiAA1vWFn3lRklTpRtkEJLVA",
+        "publicKey": "BBRSSo-m1Y3HGqGO0nv-KFQG_J5F9C3KASpyTgiT7RCVN0kkDhDavQpzqO-8MVnNiAA1vWFn3lRklTpRtkEJLVA"
+      },
+      "sealed": {
+        "epk": "BJCDoDd7sWQYiSypNGO9cO_V4Ezcpvrd0XMifRfK0OXfPNAiS2hoWv9Xhjopi2p4g8usybT_ntwqTLDRZnTEHl4",
+        "iv": "dKLcGlpF6y3P9Ket",
+        "ct": "OiCdIxV1fPVfcFavBzLlsSxPRhIHqwkO3N6KFlQt-YTPhQzqnejLpAIx-wjZY-eivod7TaHP_tCkMS6TZbZzaNHxMaar77Fh2qre62MGLoeqTMyh_7HnifjnFQ8lcXrKgLlJFdo_iLq_P7QznqWhcQf8jbJIhpofURuqcjOsOMQvdTnWK-A_QyzLqBQd_0rZOuqQFT2kMCWFzDbH41iVfVmZ-tqZPVglMWvRf1wCNjPkAmAWGYSl-xFXpEaZSQBikLmV0TOts84j1ZeDoaYpfSFt47EjQruYrgDgD9CRwS9KTGY4BwmD5-Z9B_SEbjbvIP1AOLIZCA3fMmPJXgGvfk2aPds3QBxzn8_oSx7p2Ti5DthymmG-b-JGea1d2yfuJTpwWOf9OsPW1xmVJI2MP-vg0CISzQ-3HPDIWfxcJUogdiAA5hGuvRv3LVGrOKJ1MgzxUJ79odqHypxSvs2uqH6Te063JfBBqtobNYW8eowN3xXRnjVrMT24D3TNy5ZG-B9KAYoLQUls0ZNu5eqUrSjwRPM7l0MHr0MEZAAU0FwiMnYL2mou0BqFqXJAG9aaIPvlogu_UASiVBsX72jaH1fXvDM35RZ9-cnisIf-dPgbNsg9Vmsi5aGuritJjnNbzEnrBEEhkT_6_QsnOMZHbFrsnM9vfQDOKBmFPeJ93N8370iIEkjYPkZl6T9EeonFJJVhPBmP-z5NfwHCtJCZ5sY"
+      },
+      "opened": {
+        "v": 1,
+        "id": "app-0b6f2c1e-51a7-4d0e-9c3b-7a1d2e3f4a57",
+        "host": "4f8bed344ef953937c7b90cc8747748971587dcd0aa12a6221860feffc1f66c7",
+        "member": "debbie",
+        "engine": "codex",
+        "at": 1764100006000,
+        "signedIn": null,
+        "state": "failed",
+        "detail": "the provider said \"no\" for C:\\Users\\debbie at /codex/device",
+        "hostKey": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "pSWD56EgKCe4zpwjZGNkTjm3yzkkey-eorga9ojV294",
+          "y": "vnEAuSulh3HX3Q6D-kbrHFBNA7EkPwkpAp3L_qhuD9w"
+        },
+        "signature": "bnN6ePPtsdaPR5KoqDoBbIuNSBguA9FMh4IMLqT3S8ML58MtFyD8Nhx9MpcfGdOP20rBzYL1PvWhFjMkI6xdzA"
+      },
+      "host": "4f8bed344ef953937c7b90cc8747748971587dcd0aa12a6221860feffc1f66c7",
+      "signingInput": "agent-fleet/v1/engine-signin-answer\n{\"at\":1764100006000,\"detail\":\"the provider said \\\"no\\\" for C:\\\\Users\\\\debbie at /codex/device\",\"engine\":\"codex\",\"host\":\"4f8bed344ef953937c7b90cc8747748971587dcd0aa12a6221860feffc1f66c7\",\"id\":\"app-0b6f2c1e-51a7-4d0e-9c3b-7a1d2e3f4a57\",\"member\":\"debbie\",\"signedIn\":null,\"state\":\"failed\",\"v\":1}"
     }
   ]
 }

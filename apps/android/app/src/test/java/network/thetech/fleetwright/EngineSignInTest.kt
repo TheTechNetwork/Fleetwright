@@ -311,6 +311,27 @@ class EngineSignInTest {
     }
 
     @Test
+    fun codexSignedInNamesItsAccountAndAReasonKeepsItsQuotesAndSlashes() {
+        // What a box answers most: Codex signed in, with its account inside
+        // what is signed. Whatever word is beside the answer.
+        val v = made("next-signed-in")
+        val since = v.opened.getJSONObject("signedIn").getLong("since")
+        val got = shown(v, answered(v, "none"))
+        assertEquals(EngineSignedIn(since, "debbie@example.com", "plus"), got.signedIn)
+        assertNull(got.code)
+        assertEquals("", got.says)
+        assertFalse(got.bad)
+        assertTrue(EngineSigninWords.signedIn("ops-box", got.signedIn!!).startsWith("Signed in on ops-box as debbie@example.com, on the plus plan, since "))
+        // An engine's reason with a quote, a backslash and a slash in it:
+        // checked over the bytes the machine signed, and drawn as it wrote it.
+        val q = made("next-failed-quoted")
+        assertEquals(
+            "Codex did not sign in: the provider said \"no\" for C:\\Users\\debbie at /codex/device",
+            shown(q, answered(q, "failed")).says,
+        )
+    }
+
+    @Test
     fun howItEndedIsTheMachinesCheckedWordWhereItSignedOne() {
         // The next shape: the checked state and reason, whatever is beside it.
         val failed = made("next-failed")

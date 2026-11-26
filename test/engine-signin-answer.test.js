@@ -95,15 +95,15 @@ test('the sealed vector opens with the key a phone kept, to what a box signed: t
 });
 
 test('each further sealed answer opens with its own key, to bytes a box builds and a signature that holds over them', async () => {
-  // FIVE MORE, under `more`, made by test/helpers/make-engine-signin-vectors.mjs
+  // SEVEN MORE, under `more`, made by test/helpers/make-engine-signin-vectors.mjs
   // (which says how) and carried by both phones' tests. Three are the shape a
   // box sends on main: their bytes are `signinAnswerInput`'s, the function a
-  // box signs with. Two are the next shape, with `state`, `detail` and
+  // box signs with. Four are the next shape, with `state`, `detail` and
   // `expiresAt` inside what is signed: their bytes are every opened field
   // but the key and the signature, in the same canonical form, which is what
   // a phone checks whatever the fields are.
   const names = VECTOR.more.map((/** @type {any} */ m) => m.name);
-  assert.deepEqual(names, ['opencode-signed-in', 'none', 'next-waiting', 'next-failed', 'foreign-page']);
+  assert.deepEqual(names, ['opencode-signed-in', 'none', 'next-waiting', 'next-failed', 'foreign-page', 'next-signed-in', 'next-failed-quoted']);
   for (const m of VECTOR.more) {
     const mine = await importDepositKey(JSON.stringify({ kty: 'EC', crv: 'P-256', d: m.recipient.d, x: m.recipient.x, y: m.recipient.y }));
     assert.equal(mine.publicKey, m.recipient.publicKey, m.name);
@@ -126,4 +126,15 @@ test('each further sealed answer opens with its own key, to bytes a box builds a
   assert.equal(by['next-waiting'].expiresAt - by['next-waiting'].at, 15 * 60_000);
   assert.deepEqual([by['next-failed'].state, typeof by['next-failed'].detail, 'code' in by['next-failed']], ['failed', 'string', false]);
   assert.notEqual(by['foreign-page'].url, 'https://auth.openai.com/codex/device');
+  // The answer a box sends most: Codex signed in, naming its account, with
+  // `who` written inside `signedIn` inside what is signed, keys in order.
+  assert.deepEqual([by['next-signed-in'].state, by['next-signed-in'].signedIn.who], ['signed_in', { email: 'debbie@example.com', plan: 'plus' }]);
+  const signedIn = VECTOR.more.find((/** @type {any} */ m) => m.name === 'next-signed-in').signingInput;
+  assert.ok(signedIn.includes(`"signedIn":{"since":${by['next-signed-in'].signedIn.since},"who":{"email":"debbie@example.com","plan":"plus"}},"state":"signed_in"`), signedIn);
+  // A reason with a quote, a backslash and a slash: the first two are
+  // signed with a backslash before them and the slash as itself, which is
+  // the one spelling a phone has to write to check it.
+  const quoted = VECTOR.more.find((/** @type {any} */ m) => m.name === 'next-failed-quoted');
+  for (const mark of ['"', '\\', '/']) assert.ok(quoted.opened.detail.includes(mark), `the reason has no ${mark}`);
+  assert.ok(quoted.signingInput.includes(String.raw`"detail":"the provider said \"no\" for C:\\Users\\debbie at /codex/device"`), quoted.signingInput);
 });

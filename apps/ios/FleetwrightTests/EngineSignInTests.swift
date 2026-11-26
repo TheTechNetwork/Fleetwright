@@ -308,6 +308,25 @@ final class EngineSignInTests: XCTestCase {
         XCTAssertEqual(EngineSigninWords.waiting("OpenAI", minutes: 8, fixedLife: false), "Waiting for this code to be approved at OpenAI. It lasts 8 more minutes.")
     }
 
+    func testCodexSignedInNamesItsAccountAndAReasonKeepsItsQuotesAndSlashes() throws {
+        // What a box answers most: Codex signed in, with its account inside
+        // what is signed. Whatever word is beside the answer.
+        let v = try made("next-signed-in")
+        let there = try XCTUnwrap(v.opened["signedIn"] as? [String: Any])
+        let since = try XCTUnwrap((there["since"] as? NSNumber)?.doubleValue)
+        let got = try shown(v, ["ok": true, "state": "none", "detail": lie, "sealed": v.sealed])
+        XCTAssertEqual(got.signedIn, EngineSignedIn(since: since, email: "debbie@example.com", plan: "plus"))
+        XCTAssertNil(got.code)
+        XCTAssertEqual(got.says, "")
+        XCTAssertFalse(got.bad)
+        XCTAssertTrue(EngineSigninWords.signedIn("ops-box", try XCTUnwrap(got.signedIn)).hasPrefix("Signed in on ops-box as debbie@example.com, on the plus plan, since "))
+        // An engine's reason with a quote, a backslash and a slash in it:
+        // checked over the bytes the machine signed, and drawn as it wrote it.
+        let q = try made("next-failed-quoted")
+        XCTAssertEqual(try shown(q, ["ok": true, "state": "failed", "detail": lie, "sealed": q.sealed]).says,
+                       #"Codex did not sign in: the provider said "no" for C:\Users\debbie at /codex/device"#)
+    }
+
     func testHowItEndedIsTheMachinesCheckedWordWhereItSignedOne() throws {
         // The next shape: the checked state and reason, whatever is beside it.
         let failed = try made("next-failed")
