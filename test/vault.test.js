@@ -3241,11 +3241,20 @@ test('removing an agent empties its vault, and whoever files the id again is han
   assert.equal((await as(DANA, { op: 'put', name: 'secret:DEPLOY_KEY', value: 'debbie-deploy', for: 'debbie' })).ok, true);
   const oldBox = await generateKeyPair();
   assert.equal((await as(DANA, { op: 'grant', hostKey: oldBox.publicJwk, label: 'ops-box', for: 'debbie' })).ok, true);
+  // Eli, who is above Debbie whoever files it, approves a box of his for it.
+  // The coordinator carried that request and can send it again for ten minutes.
+  const elisBox = await generateKeyPair();
+  const elisApproval = { op: 'grant', hostKey: elisBox.publicJwk, label: 'elis-box', for: 'debbie' };
+  assert.equal((await as(ELI, elisApproval)).ok, true);
+  const sealedAt = Math.max(...Object.values(m.rows.get('v:member:debbie').grants).map((/** @type {any} */ g) => g.at));
+  assert.equal((await as(ELI, elisApproval, { at: sealedAt })).error?.code, 'stale', 'sent again at once, it is refused as it always was');
+  // And an agent that never kept anything, with a request for it that is held back.
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'idle', kind: 'agent', reportsTo: 'eli' })).ok, true);
 
   const gone = await as(DANA, { op: 'orgmember', id: 'debbie', remove: true });
   assert.equal(gone.ok, true, gone.text);
   // Said in numbers, because it cannot be undone and nobody can look after.
-  assert.match(gone.text, /2 things it kept and 1 approved machine are forgotten/);
+  assert.match(gone.text, /2 things it kept and 2 approved machines are forgotten/);
   // The box that held it is given nothing the next time it asks.
   const after = await m.box(oldBox, { members: [ELI, DANA], accepts: ['members'] });
   assert.ok(!/debbie-deploy|sk-ant-oat01-d/.test(JSON.stringify(after.answer ?? after)), 'a removed member’s sign-ins were still handed to its box');
@@ -3261,6 +3270,23 @@ test('removing an agent empties its vault, and whoever files the id again is han
   assert.equal((await as(ELI, { op: 'grant', hostKey: newBox.publicJwk, label: 'new-box', for: 'debbie' })).ok, true);
   const handed = await m.box(newBox, { members: [ELI, DANA], accepts: ['members'] });
   assert.ok(!/debbie-deploy|sk-ant-oat01-d/.test(JSON.stringify(handed.answer)), 'the new member was handed the old one’s sign-ins');
+
+  // A REQUEST MADE FOR THE MEMBER THAT WAS REMOVED is not the new one's. The
+  // emptied vault kept no time of anything, so the approval sealed before
+  // the removal was "newer than nothing" and Eli's old box was approved for
+  // what the new Debbie keeps. So was a request the coordinator held back
+  // and never delivered, which names something the old vault never had.
+  const replayed = await as(ELI, elisApproval, { at: sealedAt });
+  assert.equal(replayed.error?.code, 'stale', replayed.text);
+  assert.match(replayed.text, /debbie was removed, or filed again, after this was asked, so this could be a request made for the member that was there before\. Nothing was changed\. Ask again\./);
+  assert.equal((await as(ELI, { op: 'put', name: 'secret:HELD', value: 'for-the-old-one', for: 'debbie' }, { at: sealedAt + 1 })).error?.code, 'stale');
+  const now = (await as(ELI, { op: 'list', for: 'debbie' })).answer;
+  assert.deepEqual([now.items, now.grants.map((/** @type {any} */ g) => g.label)], [[], ['new-box']]);
+  // The same for a vault that never had a row to empty.
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'idle', remove: true })).ok, true);
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'idle', kind: 'agent', reportsTo: 'eli' })).ok, true);
+  assert.equal((await as(ELI, { op: 'put', name: 'secret:HELD', value: 'for-the-old-one', for: 'idle' }, { at: sealedAt + 1 })).error?.code, 'stale');
+  assert.equal((await as(ELI, { op: 'put', name: 'secret:OWN', value: 'the-new-idles', for: 'idle' })).ok, true, 'and what is asked afterwards is taken');
   // Only what there was is counted: no "0 things".
   const second = await as(ELI, { op: 'orgmember', id: 'debbie', remove: true });
   assert.match(second.text, /Its vault went with it: 1 approved machine is forgotten/);

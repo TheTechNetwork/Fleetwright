@@ -181,6 +181,9 @@ much. It used to stay "until a custodian forgets it", which could not
 happen: nobody is the custodian of a member that is not in the tree, so the
 sign-ins were kept, renewed, and handed to whoever filed the same id next. A
 new agent filed under an id something was left under starts empty too. A
+request made for the member that was removed is not taken by the one filed
+under its id afterwards: the vault keeps when it was emptied, and refuses
+anything asked at or before then (`stale`). A
 person's vault is their own and a removal does not touch it.
 
 **Custodians of a person member.** A person's vault holds their own

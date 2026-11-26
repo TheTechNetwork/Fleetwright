@@ -462,19 +462,29 @@ async function loadKey(config) {
 
 /**
  * Everything an agent member's vault keeps and every machine approved for
- * it, forgotten at once (org.js, a removal). Rows are written over and not
- * deleted, as a single forget does, so an older request replayed afterwards
- * is still told it is stale. Called under the vault's `row:` lock.
+ * it, forgotten at once (org.js, a removal). Called under the vault's `row:`
+ * lock.
+ *
+ * WHEN IT WAS EMPTIED IS KEPT ON THE ROW (`emptied`), and nothing asked at or
+ * before then is taken afterwards (runDeviceOp). The row used to be written
+ * as nothing at all, which also dropped the time of every change it had
+ * held: an approval sealed for the member that was removed, sent again
+ * inside its ten minutes once the id had been filed again, was not "older
+ * than a newer change" any more, and the old member's box was handed the new
+ * member's sign-ins. One time for the whole vault and not a tombstone an
+ * item, because a request the coordinator held back and never delivered
+ * names an item the vault never had.
  *
  * @param {VaultStore} store @param {string} vaultId  `member:<id>` @param {number} at
+ * @param {{ always?: boolean }} [o]  `always` writes the row though the vault never had one: a removal, which a held-back request must not outlive
  * @returns {Promise<{ items: number, grants: number }>} how much there was
  */
-async function emptyMemberVault(store, vaultId, at) {
+async function emptyMemberVault(store, vaultId, at, { always = false } = {}) {
   const kept = await store.get(`v:${vaultId}`);
   const claude = await store.get(`gh:${vaultId}`);
   const items = Object.values(kept?.items ?? {}).filter((v) => v && !v.forgotten && v.sealed).length + (claude?.sealed && !claude.forgotten ? 1 : 0);
   const grants = Object.values(kept?.grants ?? {}).filter((g) => g && !g.revoked && g.jwk).length;
-  if (kept) await store.put(`v:${vaultId}`, { login: vaultId, items: {}, grants: {} });
+  if (kept || always) await store.put(`v:${vaultId}`, { login: vaultId, items: {}, grants: {}, emptied: Math.max(at, Number(kept?.emptied) || 0) });
   if (claude) await store.put(`gh:${vaultId}`, { at: Math.max(at, Number(claude.at) || 0), login: vaultId, forgotten: true });
   return { items, grants };
 }
@@ -516,6 +526,8 @@ function emptyRow(row) {
     login: String(row?.login || ''), items: { ...(row?.items || {}) }, grants: { ...(row?.grants || {}) },
     // Whether this person's managers may manage it (org.js), kept with the row it is about.
     ...(row?.custody && typeof row.custody === 'object' ? { custody: { allow: row.custody.allow === true, at: Number(row.custody.at) || 0 } } : {}),
+    // When an agent member's vault was last emptied (emptyMemberVault).
+    ...(Number(row?.emptied) > 0 ? { emptied: Number(row.emptied) } : {}),
   };
 }
 
@@ -586,7 +598,7 @@ export async function answerVaultDevice(ask, config) {
     let text = done.text;
     if (done.empty) {
       const memberVault = `${MEMBER_PREFIX}${done.empty}`;
-      const gone = await withLock(`row:${memberVault}`, () => emptyMemberVault(store, memberVault, at));
+      const gone = await withLock(`row:${memberVault}`, () => emptyMemberVault(store, memberVault, at, { always: inside.remove === true }));
       if (inside.remove === true) {
         // IN NUMBERS, since it cannot be undone and nobody can look after.
         const what = [
@@ -692,6 +704,15 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
   // THE FLEET ACCOUNT THE VAULT IS FILED UNDER: the asker's own, a person's
   // whose manager opened it, or none for an agent, which has no address.
   const owner = acting ? acting.owner : email;
+
+  // A MEMBER'S VAULT THAT WAS EMPTIED takes nothing asked before it was
+  // (emptyMemberVault): the member that request was made for is gone, and
+  // the one under its id now is another. A list changes nothing and is
+  // answered.
+  if (inside.op !== 'list' && row.emptied && at <= row.emptied) {
+    const whose = acting?.member ?? 'This member';
+    return refuse('stale', `${whose} was removed, or filed again, after this was asked, so this could be a request made for the member that was there before. Nothing was changed. Ask again.`);
+  }
 
   if (inside.op === 'list') {
     if (acting) {
