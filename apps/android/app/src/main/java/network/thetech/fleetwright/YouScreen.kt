@@ -949,7 +949,7 @@ private fun DelegationsSheet(settings: Settings, onDismiss: () -> Unit) {
                 Modifier.fillMaxWidth().heightIn(min = 48.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Start sessions as ${member.name}", style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
+                Text("Start and steer sessions as ${member.name}", style = Design.Style.body, color = Design.Palette.ink.now, modifier = Modifier.weight(1f))
                 Switch(
                     checked = member.id in chosen,
                     enabled = !busy,
@@ -990,10 +990,14 @@ internal fun describeDelegation(d: Fleet.Delegation): String = when {
 }
 
 /**
- * What turning on a member under An MCP client does, in one sentence. The
- * same sentence as iOS.
+ * What turning on a member under An MCP client does. A machine that takes
+ * only signed requests asks for a grant that names the member not only to
+ * start a session as it but to act on one that runs as it, and answers
+ * `member_not_delegated` without. The switch said "Start sessions as", so
+ * somebody who wanted their client to answer a member's prompt had no way to
+ * know this was the switch. The same words as iOS.
  */
-const val MCP_MEMBERS_SENTENCE = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member."
+const val MCP_MEMBERS_SENTENCE = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and steer one that runs as that member: write a file into it, answer its prompt, resume it, read it or stop it. It does neither as any other member."
 
 /**
  * What an older machine does with a grant that names members, and what to do
@@ -1012,7 +1016,7 @@ const val MCP_MEMBERS_OLDER_MACHINE = "A machine from before members could be na
 internal fun delegationStartsAs(d: Fleet.Delegation, names: List<Fleet.Member>): String {
     if (d.members.isEmpty()) return ""
     val said = d.members.map { id -> names.firstOrNull { it.id == id }?.name ?: id }
-    return " · starts sessions as ${said.joinToString(", ")}"
+    return " · starts and steers sessions as ${said.joinToString(", ")}"
 }
 
 /** Where, and until when. */
