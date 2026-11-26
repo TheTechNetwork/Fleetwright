@@ -33,7 +33,7 @@ Nothing here runs unless somebody makes a task.
 | `state` | `open`, `working`, `returned`, `done` or `cancelled` | |
 | `branch` | `task/<id>-<the title as a slug>` | set when the task is made, never changed |
 | `parent` | the task this one was delegated from | optional |
-| `lock` | the session working on it: `{ session, hostId, member, by, at }`, with `readyAt` once that session is back at its prompt with no result, and, as a screen is sent it, `connected`: whether its machine is connected now | one, or none |
+| `lock` | the session working on it: `{ session, hostId, member, by, at }`, with `readyAt` once that session is back at its prompt with no result, `unheardSince` on a start nobody answered once the wait for it is over and its machine has not been heard from, and, as a screen is sent it, `connected`: whether its machine is connected now | one, or none |
 | `result` | what came back: `{ outcome, summary, session, hostId, member, at, truncated }` | the summary is at most 4000 bytes |
 | `routing` | this task's own routing mode, `auto`, `manual` or `off` ([routing.md](./routing.md)) | optional; absent follows the fleet's |
 | `route` | the last routing decision about it: how, who, among whom, and why | set by the coordinator |
@@ -101,11 +101,30 @@ taken up the moment the box speaks of it. When the hold runs out the
 coordinator looks at that box's own list of sessions, the one in every report
 it sends. A session running there on this task, begun since the start was
 sent, is the start's, and the lock becomes that session's. Only when the box
-lists none, or is away and cannot be asked, is the start taken not to have
+lists none, in a list made since the start, is the start taken not to have
 happened, and the task can be started again. The list used not to be looked
 at: a task was offered again while its box listed the session working on it,
 a second session was started on the same branch, and the first one's result
 was dropped when it came back.
+
+**A box that is away when the hold runs out is cannot-tell, and the lock is
+kept.** Not connected, or connected and sending no list of its sessions, it
+has said nothing either way about the start it was sent. That was read as
+*lists none*: the connection that lost a start's answer is often the one
+still down ten minutes later, so the task was offered again with its session
+running, a second was started on another box, and the first one's result was
+dropped when its box came back. The lock now stays, with `unheardSince` on
+it, until that box reports (a session on the task takes the lock; a list
+without one ends it) or a person releases it. While it is kept the task is
+not offered to start, and a start on it is refused `task_locked` in words
+that say what is not known and that Release frees it: *t12 is held for a
+start that was not answered: … deb132 did not answer and has not been heard
+from since, so whether a session is working on it there is not known. It is
+kept until deb132 reports, which settles it either way. Release it to start
+it again now. Releasing does not stop a session, if one did start there.*
+A box that never comes back holds its task until somebody releases it.
+Release was already there for this, on both phones wherever a task has a
+lock, so nothing new had to be offered.
 
 **Only the box a start was sent to is heard about a task.** After that hold
 the coordinator still keeps which box the unanswered start went to, for a

@@ -222,6 +222,61 @@ test('a start nobody answered is its session’s once the hold runs out, when it
   assert.deepEqual([task('t2').state, task('t2').lock], ['open', null]);
 });
 
+test('a start nobody answered keeps its lock while its box is away: away is cannot-tell, the task says so, and the first session’s result is the task’s when the box returns', async () => {
+  // What the third review ran. The connection that lost the start's answer
+  // was still down when the hold ran out, `no list` was read as `no session`,
+  // and the task was offered again: a second session started on another box
+  // and the first one's result was dropped when its box came back.
+  const { core, make, start, task, answers, says, reports, pass, now } = fleet([['deb132', PROTOCOL_VERSION], ['other-box', PROTOCOL_VERSION]]);
+  make(dana);
+  answers(() => { throw new Error('deb132 did not answer in time'); });
+  assert.equal((await start(dana, 't1')).error?.code, 'host_timeout');
+  const sentAt = now();
+  core.registry.disconnect('deb132', 'socket closed');
+  pass(11 * 60_000);
+  await reports('other-box', []);
+  assert.deepEqual([task('t1').state, task('t1').lock?.hostId, task('t1').lock?.session, task('t1').lock?.unheardSince], ['open', 'deb132', null, now()]);
+  const shown = /** @type {any} */ (core.taskFor(dana, 't1'));
+  assert.deepEqual([shown.start, shown.task.lock.connected], [null, false], 'it is not offered to start, and its page can say its box is not connected');
+  // A second start is refused in words that say what is not known and how a person overrides it.
+  answers(() => ({ ok: true, text: 'Started.', sessions: [{ name: 'cc-second', status: 'running' }] }));
+  const second = /** @type {any} */ (await core.dispatch({ verb: 'start', params: { member: 'debbie', taskId: 't1', taskBranch: task('t1').branch, task: wordsFor(task('t1')) }, actor: dana.email, requester: dana, preferHost: 'other-box' }));
+  assert.equal(second.error?.code, 'task_locked');
+  assert.match(second.text, /^t1 is held for a start that was not answered: dana@example\.com started a session on it at .* UTC, and deb132 did not answer and has not been heard from since, so whether a session is working on it there is not known\. It is kept until deb132 reports, which settles it either way\. Release it to start it again now\. Releasing does not stop a session, if one did start there\.$/);
+  // Still away an hour on, and connected again but too busy to list: still cannot tell.
+  pass(60 * 60_000);
+  await reports('other-box', []);
+  core.registry.connect('deb132', () => {});
+  await reports('deb132', null);
+  assert.equal(task('t1').lock?.hostId, 'deb132');
+  // The box returns listing the session the start made, and its result is the task's.
+  await core.onHostMessage('deb132', { kind: 'health', health: { hub: { reachable: true }, protocol: PROTOCOL_VERSION, maxSessions: 5, running: 1, free: 4, labels: [], sandboxed: true, sessions: [{ name: 'cc-slow', status: 'running', member: 'debbie', taskId: 't1', startedAt: sentAt + 40_000 }] } });
+  assert.deepEqual([task('t1').state, task('t1').lock?.session, task('t1').lock?.unheardSince], ['working', 'cc-slow', undefined]);
+  await says('deb132', { event: 'session.ready', name: 'cc-slow', taskId: 't1', result: { text: 'DONE\nFixed in three commits.' } });
+  assert.deepEqual([task('t1').state, task('t1').result?.session], ['returned', 'cc-slow']);
+
+  // THE OTHER TWO ENDINGS. The box returns and lists no session for it: the
+  // start is taken not to have happened, as it is for a box that never left.
+  make(dana, { title: 'Second' });
+  answers(() => { throw new Error('deb132 did not answer in time'); });
+  assert.equal((await start(dana, 't2')).error?.code, 'host_timeout');
+  core.registry.disconnect('deb132', 'socket closed');
+  pass(11 * 60_000);
+  await reports('other-box', []);
+  assert.notEqual(task('t2').lock, null);
+  core.registry.connect('deb132', () => {});
+  await reports('deb132', []);
+  assert.deepEqual([task('t2').state, task('t2').lock], ['open', null]);
+  // Or the box is gone for good, and a person says so: Release, written down.
+  make(dana, { title: 'Third' });
+  assert.equal((await start(dana, 't3')).error?.code, 'host_timeout');
+  core.registry.disconnect('deb132', 'socket closed');
+  pass(11 * 60_000);
+  await reports('other-box', []);
+  assert.equal(core.actOnTask(dana, 't3', 'release', '').ok, true);
+  assert.deepEqual([task('t3').lock, task('t3').handoffs.at(-1).kind, Boolean(/** @type {any} */ (core.taskFor(dana, 't3')).start)], [null, 'released', true]);
+});
+
 test('a task’s title and brief are what its session was told: they do not change while it is held, and a change at any other time is written down', async () => {
   // The other order of the first review's finding. A start carries the
   // task's own words; rewritten while the session worked, the record and
@@ -567,6 +622,16 @@ test('tasks survive the Durable Object being rebuilt, one row each, with the cou
   assert.deepEqual(revived.core.tasks.all().map((t) => t.id), ['t1']);
   assert.deepEqual(revived.core.tasks.get('t1'), first.core.tasks.get('t1'));
   assert.equal(/** @type {any} */ (revived.core.createTask(admin, { title: 'Three', brief: 'B' })).task.id, 't3');
+
+  // A lock kept for a box that is away still says since when, read back.
+  const store = new OrgTasks({ now: () => 5_000 });
+  const who = { email: admin.email, admin: true, acts: [] };
+  assert.equal(store.create(who, { title: 'One', brief: 'B', assignee: 'debbie' }, () => ({ name: 'Debbie' })).ok, true);
+  assert.equal(store.lock(who, 't1', { member: 'debbie', branch: String(store.get('t1')?.branch), hostId: 'deb132' }).ok, true);
+  assert.equal(store.hold('t1', 'deb132'), true);
+  const again = new OrgTasks();
+  again.restore(JSON.parse(JSON.stringify(store.serialise().tasks)), store.seq);
+  assert.deepEqual(again.get('t1')?.lock, { session: null, hostId: 'deb132', member: 'debbie', by: admin.email, at: 5_000, unheardSince: 5_000 });
 });
 
 test('the widest task fits a Durable Object value several times over', () => {

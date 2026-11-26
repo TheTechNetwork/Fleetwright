@@ -197,7 +197,13 @@ function describeTask(t, full = false) {
         ? `Held by ${t.lock.session} on ${t.lock.hostId} since ${taskTime(t.lock.at)}, started by ${t.lock.by}.` +
           (t.lock.connected === false ? ` ${t.lock.hostId} is not connected, so the fleet cannot tell whether it is still working.` : '') +
           (t.lock.readyAt ? ` It came back to its prompt at ${taskTime(t.lock.readyAt)} and wrote no ${RESULT_FILE}.` : '')
-        : `A session was asked for on ${t.lock.hostId} at ${taskTime(t.lock.at)} by ${t.lock.by}, and the box has not answered yet.`,
+        // NOT "NOT YET" once the wait is over and the box is away
+        // (protocol/tasks.js, holdLock): the fleet keeps the lock because
+        // it cannot tell, and an agent told "not yet" waits for nothing.
+        : t.lock.unheardSince
+          ? `A session was asked for on ${t.lock.hostId} at ${taskTime(t.lock.at)} by ${t.lock.by}. The box did not answer and has not been heard from since, so the fleet cannot tell whether a session is working on it there. ` +
+            `The task is held until ${t.lock.hostId} reports. If that box is gone, fleet_task with action release frees the task; it does not stop a session.`
+          : `A session was asked for on ${t.lock.hostId} at ${taskTime(t.lock.at)} by ${t.lock.by}, and the box has not answered yet.`,
     );
   }
   if (t.parent) lines.push(`Delegated from ${t.parent}.`);

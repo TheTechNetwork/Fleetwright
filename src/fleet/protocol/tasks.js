@@ -71,6 +71,7 @@ export const RESULT_FOOTER =
  * @property {number} at
  * @property {number} [readyAt]  when its session last came back to its prompt with no result written
  * @property {{ engine: string, reason: string, resetsAt?: number }} [stopped]  why, when its engine said (docs/engines.md)
+ * @property {number} [unheardSince]  on a lock with no session: when the wait for its box's answer ran out with the box not heard from since the start (holdLock)
  */
 /**
  * @typedef {object} TaskResult
@@ -254,8 +255,11 @@ export function lockWords(/** @type {Task} */ task) {
   const lock = task.lock;
   if (!lock) return '';
   const since = new Date(lock.at).toISOString().replace('T', ' ').slice(0, 16);
-  return lock.session
-    ? `${lock.session} on ${lock.hostId} has been working on it since ${since} UTC, started by ${lock.by}`
+  if (lock.session) return `${lock.session} on ${lock.hostId} has been working on it since ${since} UTC, started by ${lock.by}`;
+  // NOT "NOT YET", once the wait for an answer is over and the box is away
+  // (holdLock): nothing is on its way, and what is true is that nobody knows.
+  return lock.unheardSince
+    ? `${lock.by} started a session on it at ${since} UTC, and ${lock.hostId} did not answer and has not been heard from since, so whether a session is working on it there is not known`
     : `${lock.by} started a session on it at ${since} UTC, and ${lock.hostId} has not answered yet`;
 }
 
@@ -372,6 +376,11 @@ export function lockTask(task, { member, branch, hostId, by, at }) {
   if (!task.assignee) return refuse('task_unassigned', `${task.id} is assigned to nobody. Assign it to a member first.`);
   if (task.assignee !== member) return refuse('task_not_theirs', `${task.id} is assigned to ${task.assignee}, and this would start it as ${member || 'nobody'}. A task is started as its assignee.`);
   if (branch !== task.branch) return refuse('task_branch', `${task.id} is worked on the branch ${task.branch}, and this names ${branch || 'none'}.`);
+  if (task.lock?.unheardSince && !task.lock.session) {
+    // Not "already being worked on", which nobody knows, and with the way
+    // out: the lock waits on a box that may be gone for good.
+    return refuse('task_locked', `${task.id} is held for a start that was not answered: ${lockWords(task)}. It is kept until ${task.lock.hostId} reports, which settles it either way. Release it to start it again now. Releasing does not stop a session, if one did start there.`);
+  }
   if (task.lock) return refuse('task_locked', `${task.id} is already being worked on: ${lockWords(task)}.`);
   if (task.state !== 'open') {
     return refuse('task_not_open', task.state === 'returned'
@@ -404,6 +413,33 @@ export function expireLock(task, { at }) {
 }
 
 /**
+ * A start's lock is past the time it is held for, and ITS BOX CANNOT BE
+ * ASKED: it is not connected, or has sent no list of its sessions since the
+ * start. That is cannot-tell, and the lock is kept, as a session's lock is
+ * when its box is away (org-tasks.js, sweep).
+ *
+ * It used to run out here like any other. The connection that lost a
+ * start's answer is often still down ten minutes on, so the task was
+ * offered again while the session the start had made was working, a second
+ * session was started on the same branch on another box, and the first
+ * one's result was dropped when its box came back, because the lock was
+ * the second's by then. A person who knows the box is gone releases the
+ * task by hand, which both phones offer wherever there is a lock.
+ *
+ * What is written is when this was first found, so the task's own sentence
+ * (`lockWords`) stops saying "has not answered yet" about an answer nobody
+ * is waiting for.
+ *
+ * @param {Task} task
+ * @param {{ at: number }} when
+ * @returns {Task}
+ */
+export function holdLock(task, { at }) {
+  if (!task.lock || task.lock.session || task.lock.unheardSince) return task;
+  return { ...task, lock: { ...task.lock, unheardSince: at }, updatedAt: at };
+}
+
+/**
  * The box answered a start: the lock is this session's and the task is being
  * worked on. Also how a session the coordinator did not hear start (a reply
  * that timed out) is taken up when its box next speaks of it.
@@ -413,7 +449,8 @@ export function expireLock(task, { at }) {
  * @returns {Task}
  */
 export function confirmLock(task, { session, hostId, member, by, at }) {
-  const lock = task.lock ?? { session: null, hostId, member: member ?? task.assignee ?? '', by: by ?? '', at };
+  // Heard from now, so the note that it had not been goes (holdLock).
+  const { unheardSince: _heard, ...lock } = task.lock ?? { session: null, hostId, member: member ?? task.assignee ?? '', by: by ?? '', at };
   const { sent: _spent, ...rest } = task;
   return {
     ...rest,

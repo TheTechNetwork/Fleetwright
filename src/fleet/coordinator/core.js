@@ -6925,11 +6925,20 @@ export class CoordinatorCore {
 
   /**
    * End the locks no box stands behind any more: a session its box no longer
-   * lists, and a start whose box never answered.
+   * lists, and a start whose box never answered and, asked since, lists no
+   * session for it. A box that cannot be asked ends nothing.
    */
   #sweepTasks() {
     const now = this.now();
     let changed = false;
+    /** A box's own list of sessions and when it sent it, or null. @param {string} hostId */
+    const listed = (hostId) => {
+      const host = this.registry.get(hostId);
+      // Only a connected box's own list, as of its last frame. A box that is
+      // away, or too busy to list its sessions, is cannot-tell.
+      if (!host?.connected || !Array.isArray(host.health?.sessions)) return null;
+      return { names: new Set(host.health.sessions.map((/** @type {any} */ s) => String(s?.name ?? ''))), at: Number(host.healthAt) || 0 };
+    };
     for (const task of this.tasks.all()) {
       const lock = task.lock;
       if (lock && !lock.session && now - lock.at > this.intentTimeoutMs + TASK_START_GRACE_MS) {
@@ -6942,18 +6951,33 @@ export class CoordinatorCore {
         // dropped because the lock was the second's by then. The list is
         // the one a lock is ended by below, believed for the same reason.
         const held = this.#sessionOn(task.id, lock);
-        if (held) this.tasks.confirm(task.id, { session: held, hostId: lock.hostId });
-        else this.tasks.expire(task.id, lock.hostId);
-        changed = true;
+        if (held) {
+          this.tasks.confirm(task.id, { session: held, hostId: lock.hostId });
+          changed = true;
+          continue;
+        }
+        // IT LISTS NONE, IN A LIST MADE SINCE THE START: the start is taken
+        // not to have happened. AWAY, OR NOT LISTING, IS CANNOT TELL, and
+        // was taken for "no session" too: `#sessionOn` answers null for a
+        // box that is not connected, and the lock ran out on that null. The
+        // connection that lost a start's answer is often the one still
+        // down ten minutes on, so the task was offered again with its
+        // session running, a second was started on another box, and the
+        // first one's result was dropped when its box came back. The lock
+        // is kept, saying since when, until the box is heard from or a
+        // person releases it (docs/tasks.md, "The lock follows the box's
+        // word"). The same grace as below: a list from the first moments
+        // after the start may be the one from before it.
+        const seen = listed(lock.hostId);
+        if (seen && seen.at >= lock.at + TASK_LIST_GRACE_MS) {
+          this.tasks.expire(task.id, lock.hostId);
+          changed = true;
+        } else if (this.tasks.hold(task.id, lock.hostId)) {
+          changed = true;
+        }
       }
     }
-    const released = this.tasks.sweep((hostId) => {
-      const host = this.registry.get(hostId);
-      // Only a connected box's own list, as of its last frame. A box that is
-      // away, or too busy to list its sessions, is cannot-tell.
-      if (!host?.connected || !Array.isArray(host.health?.sessions)) return null;
-      return { names: new Set(host.health.sessions.map((/** @type {any} */ s) => String(s?.name ?? ''))), at: Number(host.healthAt) || 0 };
-    }, TASK_LIST_GRACE_MS);
+    const released = this.tasks.sweep(listed, TASK_LIST_GRACE_MS);
     for (const task of released) {
       this.record({ event: 'task.released', actor: task.createdBy, text: `${task.id} “${oneLine(task.title, 80)}” is open again: its box no longer lists the session that held it` });
     }

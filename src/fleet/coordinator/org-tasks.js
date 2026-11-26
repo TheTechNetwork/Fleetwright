@@ -25,7 +25,7 @@
 // NEVER THROWS. Every refusal is a code and a sentence.
 
 import {
-  checkTask, checkNote, newTask, changeTask, routeTask, lockTask, confirmLock, expireLock, releaseLock, returnTask, actOn, startFor,
+  checkTask, checkNote, newTask, changeTask, routeTask, lockTask, confirmLock, expireLock, holdLock, releaseLock, returnTask, actOn, startFor,
   TASK_ID_RE, TASK_STATES, MAX_TASKS,
 } from '../protocol/tasks.js';
 import { cleanTurn } from '../protocol/engines.js';
@@ -350,6 +350,21 @@ export class OrgTasks {
   }
 
   /**
+   * A start whose box never answered, past the time its lock is held for,
+   * WHOSE BOX CANNOT BE ASKED. The lock is kept and says since when
+   * (protocol/tasks.js, holdLock). False when it said so already.
+   *
+   * @param {string} id @param {string} hostId
+   * @returns {boolean} whether the task changed
+   */
+  hold(id, hostId) {
+    const task = this.byId.get(id);
+    if (!task?.lock || task.lock.session || task.lock.hostId !== hostId || task.lock.unheardSince) return false;
+    this.#keep(holdLock(task, { at: this.now() }));
+    return true;
+  }
+
+  /**
    * A box said something about a session it holds for a task.
    *
    *  - Back at its prompt with a result: the task returns.
@@ -526,7 +541,7 @@ function readTask(row) {
   const made = newTask({ id: row.id, title: checked.fields.title ?? '', brief: checked.fields.brief ?? '', ...checked.fields }, { by: String(row.createdBy || ''), at: Number(row.createdAt) || 0 });
   const text = (/** @type {unknown} */ v) => (typeof v === 'string' ? v : '');
   const lock = row.lock && typeof row.lock === 'object' && typeof row.lock.hostId === 'string'
-    ? { session: typeof row.lock.session === 'string' ? row.lock.session : null, hostId: row.lock.hostId, member: text(row.lock.member), by: text(row.lock.by), at: Number(row.lock.at) || 0, ...(Number(row.lock.readyAt) ? { readyAt: Number(row.lock.readyAt) } : {}), ...(cleanTurn(row.lock.stopped) ? { stopped: { engine: row.lock.stopped.engine, reason: row.lock.stopped.reason, ...(Number(row.lock.stopped.resetsAt) > 0 ? { resetsAt: Number(row.lock.stopped.resetsAt) } : {}) } } : {}) }
+    ? { session: typeof row.lock.session === 'string' ? row.lock.session : null, hostId: row.lock.hostId, member: text(row.lock.member), by: text(row.lock.by), at: Number(row.lock.at) || 0, ...(Number(row.lock.readyAt) ? { readyAt: Number(row.lock.readyAt) } : {}), ...(typeof row.lock.session !== 'string' && Number(row.lock.unheardSince) > 0 ? { unheardSince: Number(row.lock.unheardSince) } : {}), ...(cleanTurn(row.lock.stopped) ? { stopped: { engine: row.lock.stopped.engine, reason: row.lock.stopped.reason, ...(Number(row.lock.stopped.resetsAt) > 0 ? { resetsAt: Number(row.lock.stopped.resetsAt) } : {}) } } : {}) }
     : null;
   const result = row.result && typeof row.result === 'object' && typeof row.result.summary === 'string'
     ? {
