@@ -74,8 +74,10 @@ elif [ -n "$cov_ok" ]; then
     # check-coverage said ended it. This printed only the names, so a runner
     # that was killed, or died after its last test, came out as `FAILED` over
     # an empty line, and was rerun until it was green.
-    named=$(printf '%s' "$cov_out" | grep -E '^(not ok|✖)' | head -10)
-    [ -n "$named" ] || named=$(printf '%s\n' "$cov_out" | sed -n '/the suite did not pass/,$p' | tail -n +2 | head -14)
+    named=$(printf '%s' "$cov_out" | grep -E '^(not ok|✖|and the (test runner|run) was then )' | head -11)
+    # All of what it said, and not its first lines: the line that says which
+    # process it was is the last one, after however much the runner wrote.
+    [ -n "$named" ] || named=$(printf '%s\n' "$cov_out" | sed -n '/the suite did not pass/,$p' | tail -n +2 | head -40)
     printf 'FAILED\n%s\n' "$named"; fail=1
   else
     printf '%s (one run, under coverage)\n' "$(printf '%s' "$cov_out" | sed -n 's/^suite: //p' | head -1)"

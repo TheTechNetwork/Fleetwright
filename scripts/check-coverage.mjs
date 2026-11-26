@@ -45,7 +45,7 @@
 // people learn to re-run, and then to ignore, and the day it is right nobody
 // reads it.
 
-import { readFileSync, writeFileSync, existsSync, mkdtempSync, mkdirSync, chmodSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdtempSync, mkdirSync, chmodSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -84,7 +84,11 @@ if (testFiles.length === 0) {
 // counting a number nobody can act on.
 const EXCLUDE = ['test/**', 'build/**', 'dist/**', 'node_modules/**', 'scripts/**', 'apps/**'];
 
-const work = mkdtempSync(path.join(tmpdir(), 'cov-'));
+// NAMED AS NOTHING ELSE'S IS, because the next run removes what a killed one
+// left by this name (below), and short, because a test that binds a socket
+// under it has about a hundred characters for the whole path.
+const WORK_PREFIX = 'fwgate-';
+const work = mkdtempSync(path.join(tmpdir(), WORK_PREFIX));
 const lcovPath = path.join(work, 'coverage.lcov');
 
 // THE SUITE'S OWN TEMPORARY FILES GO WITH THE RUN. Most tests make a
@@ -108,6 +112,50 @@ chmodSync(work, 0o755);
 mkdirSync(suiteTmp);
 chmodSync(suiteTmp, 0o1777);
 
+// A COPY OF EVERY PROCESS'S COVERAGE FILE, KEPT UNTIL THIS SCRIPT HAS READ
+// WHAT IT NEEDS. Node's test runner writes them into a directory of its own
+// and removes that directory before it exits, also when it could not read
+// one of them, which is the one time this script wants to look (below, a
+// coverage file cut short). Given a directory in NODE_V8_COVERAGE it copies
+// them there first. The first version of the message below read the file
+// the warning names, said in a comment that it was still there, and so
+// could never name anything: an outside review ran it and it never did.
+// It costs a copy of a few hundred megabytes for as long as this run lasts.
+const v8Kept = path.join(work, 'v8');
+mkdirSync(v8Kept);
+
+/**
+ * This run's directory, taken away. NEVER WHAT DECIDES HOW THE RUN ENDED:
+ * it holds the suite's whole temporary directory now, and a process a test
+ * left running can still be writing there, which makes a removal fail with
+ * "directory not empty". That was an uncaught exception on the path where
+ * every test had passed. Tried a few times, and then said and left.
+ */
+function leave() {
+  try {
+    rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (e) {
+    console.error(`note: ${work} could not be removed (${/** @type {Error} */ (e).message}); a test left a process writing there.`);
+  }
+}
+
+// WHAT A KILLED RUN LEFT. This script waits on the suite and can run
+// nothing while it does, so a run that is ended (Ctrl-C, a cancelled job)
+// takes nothing away. Its directory is this user's, is named as below, and
+// is hours old by the time anybody else looks: those go here, at the start
+// of the next run. Never a young one, which is a gate running beside this.
+const STALE_MS = 6 * 60 * 60_000;
+for (const name of readdirSync(tmpdir())) {
+  if (!name.startsWith(WORK_PREFIX) || !/^[A-Za-z0-9]{6}$/.test(name.slice(WORK_PREFIX.length)) || path.join(tmpdir(), name) === work) continue;
+  const old = path.join(tmpdir(), name);
+  try {
+    const st = statSync(old);
+    if (st.isDirectory() && st.uid === process.getuid?.() && Date.now() - st.mtimeMs > STALE_MS) rmSync(old, { recursive: true, force: true });
+  } catch {
+    // Somebody else's, or gone already.
+  }
+}
+
 const run = spawnSync(
   process.execPath,
   [
@@ -125,7 +173,7 @@ const run = spawnSync(
     ...EXCLUDE.map((p) => `--test-coverage-exclude=${p}`),
     ...testFiles,
   ],
-  { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: { ...process.env, TMPDIR: suiteTmp } },
+  { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: { ...process.env, TMPDIR: suiteTmp, NODE_V8_COVERAGE: v8Kept } },
 );
 
 // WHAT THE SUITE ITSELF SAID, first, so scripts/verify.sh can report the run
@@ -142,22 +190,23 @@ if (run.status !== 0) {
   // read there: `not ok` is TAP, `\u2716` is the spec reporter node emits now.
   console.error('the suite did not pass, so there is no coverage to judge:');
   console.error(whatFailed(run).join('\n'));
-  // WHICH PROCESS'S COVERAGE WAS CUT SHORT, read out of the file before this
-  // run's directory goes (coverage-verdict.mjs, scriptsIn). It is still
-  // there: the suite's temporary directory is this run's own.
+  // WHICH PROCESS'S COVERAGE WAS CUT SHORT, read out of this run's own copy
+  // of the file (above, `v8Kept`; coverage-verdict.mjs, scriptsIn). The one
+  // the warning names is in a directory node has removed by now.
   const unread = unreadCoverageFile(run.stdout || '');
   if (unread) {
+    /** @type {string[]} */
     let ran = [];
     try {
-      ran = scriptsIn(readFileSync(unread, 'utf8'));
+      ran = scriptsIn(readFileSync(path.join(v8Kept, path.basename(unread)), 'utf8'));
     } catch {
-      // Gone already, or never readable: say only what is known.
+      // Not copied, or never readable: say only what is known.
     }
     console.error(ran.length
       ? `the process whose coverage was cut short had loaded, first: ${ran.join(', ')}. A test left it running, or ended it, while it was still writing.`
       : 'which process that file was could not be read from it.');
   }
-  rmSync(work, { recursive: true, force: true });
+  leave();
   process.exit(1);
 }
 
@@ -189,12 +238,12 @@ const skipped = skippedCount(run.stdout || '');
 
 if (!existsSync(lcovPath)) {
   console.error('no coverage was written — node produced no lcov report');
-  rmSync(work, { recursive: true, force: true });
+  leave();
   process.exit(1);
 }
 
 const actual = parseLcov(readFileSync(lcovPath, 'utf8'));
-rmSync(work, { recursive: true, force: true });
+leave();
 
 /** @type {Record<string, number>} */
 const floors = existsSync(FLOORS) ? JSON.parse(readFileSync(FLOORS, 'utf8')) : {};

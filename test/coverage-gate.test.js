@@ -11,6 +11,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { parseLcov, judge, skippedCount, whatFailed, unreadCoverageFile, scriptsIn, SLACK_LINES } from '../scripts/coverage-verdict.mjs';
 
@@ -140,6 +144,17 @@ test('a run that failed names its failing tests, and nothing else when it has th
   assert.deepEqual(said, ['\u2716 a box refuses an unsigned answer (4ms)', 'not ok 3 - the TAP form']);
 });
 
+test('a run that was ended after a test had failed says both', () => {
+  // The names alone read as the whole list. It is the list up to where the
+  // run was stopped, and a reader who fixes those two has not finished.
+  const stdout = '\u2716 a box refuses an unsigned answer (4ms)\n';
+  assert.deepEqual(whatFailed({ status: null, signal: 'SIGKILL', stdout, stderr: '' }), [
+    '\u2716 a box refuses an unsigned answer (4ms)',
+    'and the test runner was then ended by SIGKILL, so tests after these did not run.',
+  ]);
+  assert.match(whatFailed({ status: null, error: { code: 'ENOBUFS' }, stdout, stderr: '' })[1], /^and the run was then stopped \(ENOBUFS\)/);
+});
+
 test('a run that was killed says so, where it used to print an empty line', () => {
   // THE CASE THIS WAS WRITTEN FOR. Out of memory is a SIGKILL: no status, no
   // failing test, nothing on stderr. The gate printed `FAILED` over nothing,
@@ -194,4 +209,50 @@ test('a cut-short coverage file still says which program it was', () => {
     + '{"scriptId":"10","url":"file:///home/x/fleet/src/core/regis';
   assert.deepEqual(scriptsIn(cut), ['bin/fleetwright', 'src/index.js']);
   assert.deepEqual(scriptsIn(''), []);
+});
+
+
+test('the gate itself, run on one small suite: it names the process and takes its directory away', () => {
+  // THE RUNNER HALF, ONCE, on a project of one source file and one test, not
+  // on this repository's suite. It is here because the half that reads the
+  // cut-short file could not be reached from the arithmetic: its first
+  // version looked for the file where node's test runner had already
+  // removed it, said in a comment that it was still there, and passed every
+  // test above while never once naming a process.
+  const project = mkdtempSync(path.join(tmpdir(), 'gate-'));
+  try {
+    for (const dir of ['scripts', 'src', 'test', 'tmp']) mkdirSync(path.join(project, dir));
+    for (const script of ['check-coverage.mjs', 'coverage-verdict.mjs']) copyFileSync(path.join('scripts', script), path.join(project, 'scripts', script));
+    writeFileSync(path.join(project, 'scripts', 'build-web.mjs'), 'process.exit(0);\n');
+    writeFileSync(path.join(project, 'src', 'a.js'), 'export const a = 1;\n');
+    writeFileSync(path.join(project, 'test', 'coverage-floor.json'), '{}\n');
+    // One passing test, which leaves beside its own coverage file one that
+    // stops in the middle of a string, as a process ended while writing does.
+    writeFileSync(path.join(project, 'test', 'a.test.js'), [
+      "import { test } from 'node:test';",
+      "import fs from 'node:fs';",
+      "import path from 'node:path';",
+      "import { a } from '../src/a.js';",
+      "test('passes', () => {",
+      "  if (a !== 1) throw new Error('no');",
+      "  fs.writeFileSync(path.join(process.env.NODE_V8_COVERAGE, 'coverage-424242-1700000000000-0.json'),",
+      "    '{\"result\":[{\"scriptId\":\"7\",\"url\":\"file:///home/x/fleet/src/index.js\",\"functions\":[{\"functionName\":\"tru');",
+      '});',
+      '',
+    ].join('\n'));
+    // A RUN OF ITS OWN, not a child of this one: the runner this test is
+    // inside marks its children (NODE_TEST_CONTEXT) so that they report to
+    // it, and one so marked prints nothing and writes no coverage report.
+    const { NODE_V8_COVERAGE: _outer, NODE_TEST_CONTEXT: _child, ...env } = process.env;
+    const run = spawnSync(process.execPath, ['scripts/check-coverage.mjs'], { cwd: project, encoding: 'utf8', env: { ...env, TMPDIR: path.join(project, 'tmp') } });
+    const said = `${run.stdout}${run.stderr}`;
+    assert.equal(run.status, 1, said);
+    assert.match(said, /suite: \u2139 pass 1 \u2139 fail 0/);
+    assert.match(said, /Could not report code coverage/);
+    assert.match(said, /the process whose coverage was cut short had loaded, first: src\/index\.js\. A test left it running, or ended it, while it was still writing\./);
+    // And nothing of the run is left where it made its directory.
+    assert.deepEqual(readdirSync(path.join(project, 'tmp')), []);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
 });

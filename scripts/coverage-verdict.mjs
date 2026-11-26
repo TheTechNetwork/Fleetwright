@@ -133,7 +133,13 @@ export function skippedCount(stdout) {
  */
 export function whatFailed(run) {
   const named = (run.stdout || '').split('\n').filter((l) => /^(not ok|\u2716)/.test(l)).slice(0, 10);
-  if (named.length) return named;
+  // A RUN THAT WAS ENDED AFTER A TEST HAD FAILED says both. The names alone
+  // read as the whole list, and it is the list up to where the run stopped.
+  if (named.length) {
+    if (run.signal) named.push(`and the test runner was then ended by ${run.signal}, so tests after these did not run.`);
+    else if (run.error) named.push(`and the run was then stopped (${run.error.code || run.error.message || 'no reason given'}), so tests after these did not run.`);
+    return named;
+  }
   const said = [];
   if (run.error) {
     said.push(run.error.code === 'ENOBUFS'
