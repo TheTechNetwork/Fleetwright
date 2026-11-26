@@ -146,6 +146,40 @@ test('Codex: each of the app server’s named errors is the reason it means', ()
   assert.equal(codexResetsAt({ primary: { usedPercent: 100, resetsAt: 100 }, secondary: { usedPercent: 100, resetsAt: 900 } }), 900_000);
 });
 
+/**
+ * Codex's five sentences for a sign-in it could not renew, as its source has
+ * them at the version the image pins (codex-rs/login/src/auth/manager.rs,
+ * rust-v0.171.0: REFRESH_TOKEN_EXPIRED_MESSAGE, _REUSED_, _INVALIDATED_,
+ * _UNKNOWN_ and _ACCOUNT_MISMATCH_). `account/read` answers with one as a
+ * plain error, with no name beside it, so the words are all the runner has.
+ */
+const COULD_NOT_RENEW = [
+  'Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.',
+  'Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.',
+  'Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.',
+  'Your access token could not be refreshed. Please log out and sign in again.',
+  'Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.',
+];
+/** Codex's app server answering `account/read` with an error, as it does for a ChatGPT sign-in it cannot vouch for. */
+const codexRefusing = (/** @type {string} */ message) => standIn((m, send) => {
+  if (m.method === 'initialize') send({ id: m.id, result: { userAgent: 'codex/0.171.0' } });
+  else if (m.method === 'account/read') send({ id: m.id, error: { code: -32603, message } });
+});
+
+test('Codex: every sentence it has for a sign-in it could not renew is the sign-in ending, so the session is handed on and the person is sent to sign in', async () => {
+  for (const said of COULD_NOT_RENEW) assert.equal(reasonFromCodexError({ message: said }), 'auth', said);
+  // And as it arrives: the answer to the question asked before any thread.
+  const server = codexRefusing(COULD_NOT_RENEW[1]);
+  const failed = await codexOn(server).adapter.open();
+  assert.deepEqual([failed?.reason, failed?.detail], ['auth', COULD_NOT_RENEW[1]]);
+  assert.deepEqual(server.methods(), ['initialize', 'initialized', 'account/read']);
+});
+
+test('Codex: a sign-in it could not check because chatgpt.com is out of reach is no ended sign-in, and the detail names the host', async () => {
+  const failed = await codexOn(codexRefusing('workspace routing discovery failed')).adapter.open();
+  assert.deepEqual([failed?.reason, failed?.detail], ['error', 'Codex could not reach chatgpt.com to check its sign-in (workspace routing discovery failed). This machine must be able to reach chatgpt.com']);
+});
+
 test('Codex: a turn the app server moves to another model is stopped, and ends as the wrong model', async () => {
   const server = codexServer({ turn: (send) => send({ method: 'model/rerouted', params: { threadId: 'th-1', turnId: 'tu-1', fromModel: 'gpt-5.1-codex', toModel: 'gpt-5-mini', reason: 'capacity' } }) });
   const { adapter } = codexOn(server);

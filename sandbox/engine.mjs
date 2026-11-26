@@ -68,8 +68,19 @@ export const TURN_REASONS = Object.freeze(['done', 'limit', 'auth', 'model', 're
  * started for the ordinary way a paid engine stops.
  */
 export const LIMIT_WORDS = /rate.?limit|usage.?limit|quota|too many requests|\b429\b|credit balance|limit (?:reached|exceeded)|out of (?:credits|usage)|insufficient (?:credits?|funds|balance)|more credits|payment.?required|\b402\b|exceeded your [a-z ]{0,40}allowance/i;
-/** Words that mean the sign-in is missing or ended. Mirrored the same way. */
-export const AUTH_WORDS = /not (?:logged|signed) in|unauthori[sz]ed|authentication|\b401\b|invalid (?:api key|token|credentials)|(?:token|credentials|session) (?:has |have )?expired|log ?in required|please (?:log|sign) in/i;
+/**
+ * Words that mean the sign-in is missing or ended. Mirrored the same way.
+ *
+ * CODEX'S OWN SENTENCES FOR A SIGN-IN IT COULD NOT RENEW are five
+ * (codex-rs/login/src/auth/manager.rs, at rust-v0.171.0), and all begin
+ * "Your access token could not be refreshed". Three of them, a refresh token
+ * "already used", one "revoked", and the one with no reason, end "Please
+ * log out and sign in again", which is none of the phrases above: they read
+ * as an `error`, so nothing was handed on, the box went on saying the
+ * engine was signed in, and nobody was told to sign it in again. "Already
+ * used" is what a sign-in becomes when a second copy of it renews.
+ */
+export const AUTH_WORDS = /not (?:logged|signed) in|unauthori[sz]ed|authentication|\b401\b|invalid (?:api key|token|credentials)|(?:token|credentials|session) (?:has |have )?expired|log ?in required|please (?:log|sign) in|access token could not be refreshed|log out and sign in again/i;
 
 /** What each engine is started with, and the vault item it runs on. */
 export const RUNS = Object.freeze({
@@ -432,7 +443,16 @@ export function codexAdapter(peer, { engine = 'codex', model = null, cwd, mode, 
         if (model && ran !== model) return ended(engine, 'model', { model: ran, detail: `asked for ${model}` });
         return null;
       } catch (e) {
-        return ended(engine, reasonFromCodexError({ message: e?.message, codexErrorInfo: e?.data?.codexErrorInfo }), { detail: e?.message });
+        const reason = reasonFromCodexError({ message: e?.message, codexErrorInfo: e?.data?.codexErrorInfo });
+        // CODEX ASKS chatgpt.com ABOUT A CHATGPT SIGN-IN'S WORKSPACE before it
+        // answers `account/read` (GET /backend-api/wham/accounts/check), and
+        // says only this when it cannot. On a box behind an egress list
+        // without that host every session ended on these four words, which
+        // name nothing a person can change.
+        if (reason === 'error' && /workspace routing discovery (?:failed|timed out)/i.test(String(e?.message ?? ''))) {
+          return ended(engine, 'error', { detail: `Codex could not reach chatgpt.com to check its sign-in (${e.message}). This machine must be able to reach chatgpt.com` });
+        }
+        return ended(engine, reason, { detail: e?.message });
       }
     },
 

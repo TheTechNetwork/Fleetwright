@@ -186,13 +186,25 @@ line typed starts the engine again.
 
 The runner sends no prompt until two things are true, and says which was not.
 
-**Signed in.** Codex is asked `account/read`, which answers at once; a
-`codex exec` with no sign-in retries for 45 seconds before it says so. An ACP
-agent is asked for a session, and an Authentication required error is the
-answer. Neither is a turn, and neither spends anything. An engine that is
-not signed in, or whose sign-in has ended, is a TurnEnded with reason `auth`
-as before, and the pane and the turn's detail now say where it is signed in
-again: the member's Credentials, *Sign in on a machine*, on this machine.
+**Signed in.** Codex is asked `account/read`, which answers at once with
+no sign-in; a `codex exec` with no sign-in retries for 45 seconds before it
+says so. An ACP agent is asked for a session, and an Authentication required
+error is the answer. Neither is a turn, and neither spends anything. An
+engine that is not signed in, or whose sign-in has ended, is a TurnEnded
+with reason `auth` as before, and the pane and the turn's detail now say
+where it is signed in again: the member's Credentials, *Sign in on a
+machine*, on this machine.
+
+With a ChatGPT sign-in, `account/read` is not answered at once: Codex first
+asks `chatgpt.com` which workspace the account is in, and renews the sign-in
+if it is told to. A sign-in it could not renew comes back in one of five
+sentences, all beginning "Your access token could not be refreshed", and
+each is the sign-in ending (`auth`): three of them ("already used",
+"revoked", and the one with no reason) used to read as an `error`, which
+handed nothing on and left the box saying the engine was signed in. When
+`chatgpt.com` cannot be reached at all Codex says "workspace routing
+discovery failed"; that is an `error`, not an ended sign-in, and the detail
+says that this machine must be able to reach `chatgpt.com`.
 
 **On the model that was asked for.** OpenCode, given a model it cannot reach,
 uses another one and says nothing. So a turn runs only when the engine
