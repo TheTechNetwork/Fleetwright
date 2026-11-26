@@ -36,9 +36,11 @@
 // THE PAGE IS THE PROVIDER'S OWN, OR THE CODE GOES TO NOBODY. What a person
 // is sent to open is checked here against the one page each engine's
 // sign-in is made at (SIGNIN_PAGES), whatever the runner or the engine in
-// the container said. That container reads a volume the member's sessions
-// write, so what it prints is not this box's word until this box has held it
-// to something it knows.
+// the container said. The runner holds the engine to the same pages and
+// starts it on an empty home of its own (sandbox/engine.mjs); this is the
+// second check, and it does not rest on the runner in the image being the
+// one this release shipped. What a container prints is not this box's word
+// until this box has held it to something it knows.
 //
 // NOT RUN ON A BOX. Everything here is driven in tests through a script that
 // stands in for Podman and runs the real runner (test/engine-signin-hub.test.js).
@@ -112,7 +114,17 @@ const says = (/** @type {string} */ engine) => ENGINES[/** @type {keyof typeof E
 /** One printable line, bounded: the runner's `detail` is the engine's own words. */
 const oneLine = (/** @type {unknown} */ v, max = 200) => (typeof v === 'string' ? v.split('\n')[0].replace(/[^\x20-\x7e]/g, '').trim().slice(0, max) : '') || null;
 const when = (/** @type {number} */ at) => `${new Date(at).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
-/** Somebody else's sentence, to go inside one of ours: without the full stop it ended on, so ours does not end on two. */
+/**
+ * Somebody else's words, to go inside a sentence of ours: without the full
+ * stop they ended on, so ours does not end on two.
+ *
+ * A DETAIL IS A CLAUSE WITH NO SUBJECT AND NO FULL STOP, the runner's and
+ * this file's own alike (sandbox/engine.mjs, "Signing in on the machine"):
+ * the machine says "Codex was not signed in for debbie on ops-box: " before
+ * it and a phone "Codex did not sign in: ", and each puts the full stop
+ * after. An engine's own words are passed on as they are, and may end on
+ * one, which is what this is for.
+ */
 const inside = (/** @type {unknown} */ words) => String(words ?? '').replace(/[.\s]+$/, '');
 /** A promise that settles as `value` after `ms`, and the way to stop waiting on it. @param {number} ms @param {unknown} value */
 function after(ms, value) {
@@ -530,7 +542,7 @@ export class EngineSignins {
       return refuse('no_image', `${box} has not fetched its session image yet, so there is nothing to run the sign-in in. Start a session there first, then ask again.`);
     }
     const way = await ensureEgress(this.cfg, a.account);
-    if (!way.ok) return refuse('no_egress', `${box} could not prepare ${a.member}’s way out to the provider: ${oneLine(way.message) ?? 'no reason given'}.`);
+    if (!way.ok) return refuse('no_egress', `${box} could not prepare ${a.member}’s way out to the provider: ${inside(oneLine(way.message) ?? 'no reason given')}.`);
     return { ok: /** @type {const} */ (true), route: way };
   }
 
@@ -680,7 +692,7 @@ export class EngineSignins {
       // is left to answer later with nobody asking.
       attempt.timers.push(setTimeout(() => {
         if (attempt.code || attempt.over) return;
-        end('failed', { detail: `${says(a.engine)} gave no sign-in code within ${Math.round(this.codeMs / 1000)} seconds` });
+        end('failed', { detail: `it gave no sign-in code within ${Math.round(this.codeMs / 1000)} seconds` });
         answer(refused('no_code', this.#view(a.key, a.box), ' Nothing is waiting; start again.'));
       }, this.codeMs));
       // THE CODE'S LIFE, and a little more for the runner to say so itself.
@@ -722,18 +734,20 @@ export class EngineSignins {
                 : null;
             if (unread) {
               log.warn(`engines: ${a.engine} sign-in for ${a.member}: the runner’s first line did not read as a page and a code (${unread}), so the attempt was ended`);
-              end('failed', { detail: `${a.box} could not read the page and the code ${says(a.engine)} gave it (${unread})` });
+              end('failed', { detail: `${a.box} could not read the page and the code it gave (${unread})` });
               answer(refused('unreadable_code', this.#view(a.key, a.box), ` Nothing is waiting. That is a fault in fleetwright on ${a.box} and not at ${own.at}: update fleetwright on ${a.box} and start again, or paste a sign-in instead.`));
               continue;
             }
             // THE PAGE IS THE PROVIDER'S OWN, OR THE CODE GOES TO NOBODY
             // (SIGNIN_PAGES). Any https page was passed on as this machine's
             // word, signed by the sidecar and opened from a phone. The engine
-            // that names the page runs on the member's engine home, which
+            // that named the page ran on the member's engine home, which
             // that member's sessions write; OpenCode loads settings and
             // plugins named there, and a plugin can answer for the sign-in.
             // So a session could choose the page and the code a custodian was
-            // sent, under this box's name. The attempt is ended before
+            // sent, under this box's name. The runner no longer starts the
+            // engine there and checks the page itself; this check stays, for
+            // whatever the container prints. The attempt is ended before
             // anybody is answered with either.
             if (url !== own.page) {
               log.warn(`engines: ${a.engine} sign-in for ${a.member}: the page it named is not ${own.at}’s own, so the attempt was ended and its code given to nobody`);
@@ -853,7 +867,7 @@ export class EngineSignins {
       if (said?.state !== 'signed_out') {
         // Nothing is recorded: what this box knows of the sign-in is what it knew.
         log.warn(`engines: ${a.engine} was not signed out for ${a.member}`);
-        return refusal('signout_failed', `${says(a.engine)} was not signed out for ${a.member} on ${a.box}: ${oneLine(said?.detail) ?? `the container that asks it ended with no answer (exit ${ran.status})`}. What ${a.box} knows of the sign-in is unchanged.`);
+        return refusal('signout_failed', `${says(a.engine)} was not signed out for ${a.member} on ${a.box}: ${inside(oneLine(said?.detail) ?? `the container that asks it ended with no answer (exit ${ran.status})`)}. What ${a.box} knows of the sign-in is unchanged.`);
       }
       const at = this.now();
       // The engine has signed out whether or not this can be written: kept

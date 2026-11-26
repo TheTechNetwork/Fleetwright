@@ -32,6 +32,7 @@ import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { SessionWatcher } from '../src/fleet/host/watcher.js';
 import { setLogStream } from '../src/log.js';
 import { signinBox, TOKEN } from './helpers/stub-signin-podman.js';
+import { SIGNIN_PAGES as RUNNER_PAGES } from '../sandbox/engine.mjs';
 import { codexSignIn } from './helpers/engine-files.js';
 import { startStubHub } from './helpers/stub-hub.js';
 
@@ -434,7 +435,7 @@ test('the hub itself answers on that route for whoever holds its token, tells a 
 
 test('the sidecar asks its hub on a route of its own, says so when the hub is older, reports only who is signed in, and says when an attempt ends', async (t) => {
   // An older hub has no such route.
-  const old = await startStubHub({ host: 'ops-box', without: ['/api/engine-signin'] });
+  const old = await startStubHub({ host: 'ops-box', without: ['/api/engine-signin', '/api/engine-members'] });
   t.after(() => old.close());
   // Said by the machine's name, with what to do there: "fleetwright here" reads, on a phone, as the phone.
   assert.deepEqual(await new HubClient({ baseUrl: old.baseUrl, token: null }).engineSignin({ ...DEBBIE, engine: 'codex', action: 'start' }), {
@@ -576,7 +577,7 @@ test('a first line that does not read as a page and a code is refused at once, i
     const r = await b.ask('start');
     assert.ok(Date.now() - began < 10_000, 'it waited out its 45 seconds to say so');
     assert.deepEqual([r.ok, r.error?.code, r.state, r.url, r.code], [false, 'unreadable_code', 'failed', undefined, undefined]);
-    assert.equal(r.text, `Codex was not signed in for debbie on ops-box: ops-box could not read the page and the code Codex gave it (${half}). Nothing is waiting. That is a fault in fleetwright on ops-box and not at OpenAI: update fleetwright on ops-box and start again, or paste a sign-in instead.`);
+    assert.equal(r.text, `Codex was not signed in for debbie on ops-box: ops-box could not read the page and the code it gave (${half}). Nothing is waiting. That is a fault in fleetwright on ops-box and not at OpenAI: update fleetwright on ops-box and start again, or paste a sign-in instead.`);
     assert.deepEqual([(await b.ask('status')).state, b.signins.attempts.size], ['failed', 0]);
     await until(() => !b.running('fw-signin-codex-debbie'), 'the container ended');
     // Neither half is repeated anywhere: what was given is not known to be anybody's page.
@@ -589,6 +590,9 @@ test('a first line that does not read as a page and a code is refused at once, i
 test('a page that is not the provider’s own ends the attempt, and its code is given to nobody: not in the answer, a status, the record or the log', async (t) => {
   const said = logged(t);
   assert.deepEqual(SIGNIN_PAGES, { codex: { page: 'https://auth.openai.com/codex/device', at: 'OpenAI' }, opencode: { page: 'https://github.com/login/device', at: 'GitHub' } });
+  // THE RUNNER HOLDS ITS ENGINE TO THE SAME TWO (sandbox/engine.mjs, which this box cannot import from and the image cannot import this from).
+  // One list moved without the other is every sign-in refused by whichever was left behind.
+  assert.deepEqual(Object.fromEntries(Object.entries(SIGNIN_PAGES).map(([engine, own]) => [engine, own.page])), { ...RUNNER_PAGES });
   // The engine in a sign-in's container runs on a volume the member's
   // sessions write. Whatever it names, only the one page is this box's word.
   for (const [engine, url] of /** @type {const} */ ([

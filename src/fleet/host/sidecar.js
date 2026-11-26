@@ -585,8 +585,10 @@ export class Sidecar {
      * @type {IntentKeys|null}
      */
     this.intentKeys = vaultKey && transport?.origin
-      ? new IntentKeys({ origin: transport.origin, dir: xoStateDir, hostKey: vaultKey, ask: (request, signature) => this.#askKeys(request, signature), log: this.log })
+      ? new IntentKeys({ origin: transport.origin, dir: xoStateDir, hostKey: vaultKey, ask: (request, signature) => this.#askKeys(request, signature), onList: () => void this.#tellHubWhoIsListed(), log: this.log })
       : null;
+    /** The member ids the hub was last told the vault lists, and took (#tellHubWhoIsListed). Null until it has taken one. @type {string|null} */
+    this.listedToHub = null;
     /** @type {XoPools|Pools|null} */
     // ON A POOL'S OWN MACHINE, the Xen Orchestra it was made to hold
     // (xo-holder.js): its health says so, and the coordinator asks it first.
@@ -1424,6 +1426,57 @@ export class Sidecar {
     if (!asker || !member.may.includes(asker)) return no('unlisted', { listed: member.may.length ? member.may.join(', ') : 'nobody in the fleet now' });
     if (verdict !== 'signed' && verdict !== 'delegated') return no('unsigned');
     return { ok: true, id, name, asker, member, account: member.kind === 'agent' ? accountOfMember(id) : String(member.email ?? '') };
+  }
+
+  /**
+   * Tell the hub which members the vault lists now, each time this box takes
+   * a list, so that a member who has left it stops being reported as signed
+   * in here and its engine home is removed (src/core/engine-signin.js,
+   * keepMembers).
+   *
+   * Removing a member told a box nothing: its engine home stayed, the box
+   * went on reporting it signed in, and a member filed later under the same
+   * id was handed the first one's sign-in. This box already holds the one
+   * account of who is a member that it checks for itself, the minter's
+   * signed list, and holds every member start to it (#actingAs). The hub
+   * holds the volumes and the record, and neither the list nor the key it is
+   * checked with, so it is told the ids and nothing else.
+   *
+   * ONLY A LIST THIS BOX MAY STILL USE (`currentMembers`): none yet, one
+   * past its age, or a minter that sends no members is this box not knowing
+   * who is a member, and the hub is then told nothing. A member missing from
+   * what is sent loses its sign-in on this machine.
+   *
+   * ONCE A CHANGE. The list is taken every ten minutes and is nearly always
+   * the same one; the hub looks through its volumes each time it is told.
+   * What it was last told is remembered only once it said it took it, so a
+   * hub that was down, or could not finish, is told again with the next
+   * list. Never throws: the list is taken whatever becomes of this.
+   */
+  async #tellHubWhoIsListed() {
+    const members = this.intentKeys?.currentMembers ?? null;
+    if (!members) return;
+    // A list as long as this box reads of one (intent-keys.js, keyListFrom)
+    // may have been cut there, and a member past the cut is not one who left.
+    if (members.size >= 512) return;
+    const ids = [...members.keys()].sort();
+    const listed = ids.join(',');
+    if (listed === this.listedToHub) return;
+    try {
+      const told = await this.hub.engineMembers(ids);
+      if (!told.ok) {
+        this.log.warn(`sidecar: fleetwright did not take who the vault lists as members, so a removed member’s engine sign-in may still be on this machine: ${told.text}`);
+        return;
+      }
+      this.listedToHub = listed;
+      if (told.gone.length) {
+        this.log.info(`sidecar: ${told.text}`);
+        // Who is signed in here has changed, and the coordinator shows it.
+        void this.#pushHealth();
+      }
+    } catch (e) {
+      this.log.warn(`sidecar: could not tell fleetwright who the vault lists as members: ${/** @type {Error} */ (e).message}`);
+    }
   }
 
   /**

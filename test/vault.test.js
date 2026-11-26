@@ -151,9 +151,15 @@ async function minter(extra = {}) {
       // layer's pull request and is not on this branch, and a box now takes
       // nothing from an answer without it. So an answer that comes back
       // unsigned is signed here exactly as that layer signs one: with this
-      // minter's own signing key, over vaultBoxAnswerInput. Once both layers
-      // are on main every answer arrives signed and this never runs; it
-      // goes then.
+      // minter's own signing key, over vaultBoxAnswerInput.
+      //
+      // LEFT IN PLACE ON PURPOSE, AND WHAT REMOVES IT. This branch is based
+      // on main without the minter's change, which is pull request 1823
+      // (branch claude/intelligent-cori-0sfasc-r3-minter; it carries the
+      // same src/fleet/protocol/vault-answer.js, byte for byte). When 1823
+      // is on main beside this, every answer arrives signed, the branch
+      // below never runs, and it and `older` above become the whole of what
+      // an unsigned answer is in this file: delete this `else if` then.
       else if (!r.sealed.signature) {
         const over = { host: await boxKeyHash(body.request.hostKey), at: body.request.at, reply: body.request.reply, sealed: r.sealed };
         r.sealed = { epk, iv, ct, signature: await sign(await signingKey(), await vaultBoxAnswerInput(over)) };
@@ -2818,6 +2824,57 @@ test('a box starts a session as a member only for somebody the minter lists, who
   assert.equal(now.ok, true, now.text);
   assert.equal(stub.bodies.at(-1).startedBy, `fleet:${DANA}`);
   assert.equal(stub.bodies.at(-1).actor, 'fleet:debbie@members.invalid');
+});
+
+test('each time a box takes the vault’s list it tells its hub who is a member now, so one who has left loses its engine sign-in there: once a change, and never without a list', async (t) => {
+  // The hub holds the engine homes and the record of who is signed in, and
+  // neither the list nor the key it is checked with (engine-signin.js,
+  // keepMembers). What it does with the ids is test/engine-signin-hub.test.js.
+  /** @type {any} */
+  let answer = null;
+  const own = await startStubHub({ host: 'ops-box', onEngineMembers: () => answer ?? { ok: true, gone: [], text: 'Every member this machine holds an engine sign-in for is still listed.' } });
+  t.after(() => own.close());
+  const { m, box } = await signingFleet(t, { hub: /** @type {any} */ ({ baseUrl: own.baseUrl, token: null }) });
+  let clock = Date.now() - 30_000;
+  const filed = async (/** @type {Record<string, unknown>} */ body) => assert.equal((await m.phone(body, { at: (clock += 10), admin: true })).ok, true, JSON.stringify(body));
+  const told = async () => {
+    assert.equal(await box.sidecar.intentKeys?.refresh(), true, box.sidecar.intentKeys?.problem ?? '');
+    // Told after the list is in place, and not waited on by the list.
+    await new Promise((r) => setTimeout(r, 50));
+    return own.memberLists.splice(0);
+  };
+  // NO LIST, NOTHING SAID: a box that has not taken one does not know who is a member.
+  assert.deepEqual(own.memberLists, []);
+  await filed({ op: 'orgadmin', address: ELI });
+  await filed({ op: 'orgmember', id: 'eli', kind: 'person', address: ELI });
+  await filed({ op: 'orgmember', id: 'debbie', kind: 'agent', reportsTo: 'eli' });
+  await filed({ op: 'orgmember', id: 'jason', kind: 'agent', reportsTo: 'eli' });
+  // THE FIRST LIST: every id on it, people's records among them.
+  assert.deepEqual(await told(), [['debbie', 'eli', 'jason']]);
+  // THE SAME LIST AGAIN, ten minutes on, is not news.
+  assert.deepEqual(await told(), []);
+  // JASON IS REMOVED. The next list says so, and the hub is told who is left.
+  await filed({ op: 'orgmember', id: 'jason', remove: true, kind: 'agent' });
+  answer = { ok: true, gone: ['jason'], text: 'Forgot the engine sign-ins of jason, no longer listed by the vault.' };
+  assert.deepEqual(await told(), [['debbie', 'eli']]);
+  // A HUB THAT COULD NOT FINISH is told again with the next list, though the list is the same.
+  await filed({ op: 'orgmember', id: 'ada', kind: 'agent', reportsTo: 'eli' });
+  answer = { ok: false, gone: ['x'], text: 'Not everything of 1 removed member could be removed.' };
+  assert.deepEqual(await told(), [['ada', 'debbie', 'eli']]);
+  assert.deepEqual(await told(), [['ada', 'debbie', 'eli']], 'a hub that said it was not done was not asked again');
+  answer = null;
+  assert.deepEqual(await told(), [['ada', 'debbie', 'eli']]);
+  assert.deepEqual(await told(), []);
+  // A LIST THIS BOX COULD NOT TAKE says nothing of who has left: what was signed in stays.
+  const real = m.binding.vault;
+  m.binding.vault = /** @type {any} */ (async (/** @type {string} */ route, /** @type {any} */ ask) => {
+    const r = await real(route, ask);
+    if (route === 'keys' && r.ok) r.payload.members = [];
+    return r;
+  });
+  assert.equal(await box.sidecar.intentKeys?.refresh(), false, 'a list changed on its way was taken');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(own.memberLists, [], 'a list that was not the minter’s emptied this machine of every member’s sign-in');
 });
 
 test('a delegation carries a start as a member only when it names that member, signed with the rest of it', async (t) => {

@@ -664,33 +664,6 @@ while one waits answers with the one in flight (`already: true`) and
 starts nothing. A start that gets no code within 45 seconds is stopped and
 refused, with the engine's sentence when it gave one.
 
-**The page is the provider's own, or the code goes to nobody.** The box
-checks what the runner printed before it answers with any of it, against
-the one page each engine's code is entered at:
-
-| engine | the page | where it is from |
-|---|---|---|
-| `codex` | `https://auth.openai.com/codex/device` | what Codex builds from its own issuer (`login/src/server.rs` `DEFAULT_ISSUER`, `login/src/device_code_auth.rs`, at `rust-v0.171.0`) |
-| `opencode` | `https://github.com/login/device` | GitHub's own `verification_uri` for a device code asked of github.com, which OpenCode passes on as given |
-
-Exactly these, and nothing that only looks like them. The engine in a
-sign-in's container runs on the member's engine home, which that member's
-sessions write, and OpenCode loads settings and plugins named there: a
-plugin can answer for the sign-in. So what the container prints is not the
-machine's word until the machine has held it to something it knows. An
-attempt that names any other page is ended at once, its code is in no
-answer, no status and no file, and the start is refused (`wrong_page`)
-with what its operator looks at. The page it named is not repeated. An
-engine that moves its page is refused here until `SIGNIN_PAGES`
-(`src/core/engine-signin.js`) says the new one. A GitHub Enterprise
-deployment has another page and is not signed in this way.
-
-A first line that does not read as a page and a code at all is refused at
-once too (`unreadable_code`), in words that say which half the box could
-not read and that the fault is fleetwright's on that machine, not the
-provider's. It used to be skipped without a word, and the start then said
-45 seconds later that the engine gave no code.
-
 **`status`** says where it stands, and never more than the box knows:
 
 | `state` | what the box knows |
@@ -800,10 +773,34 @@ and the runner copies the one thing it made into the home: Codex's
 `auth.json`, or OpenCode's `github-copilot` entry beside whatever the
 home's file already holds. The directory is removed when the run ends.
 
-**The page is the engine's own, or no code is shown.** Each engine builds
-its page from a constant in its source: `https://auth.openai.com/codex/device`
-and `https://github.com/login/device`. The runner prints only that page,
-and refuses any other an engine names, whatever made it name one.
+**The page is the engine's own, or no code is shown. It is checked twice.**
+Each engine builds its page from a constant in its source:
+
+| engine | the page | where it is from |
+|---|---|---|
+| `codex` | `https://auth.openai.com/codex/device` | what Codex builds from its own issuer (`login/src/server.rs` `DEFAULT_ISSUER`, `login/src/device_code_auth.rs`, at `rust-v0.171.0`) |
+| `opencode` | `https://github.com/login/device` | GitHub's own `verification_uri` for a device code asked of github.com, which OpenCode passes on as given |
+
+Exactly these, and nothing that only looks like them. The runner prints
+only that page and refuses any other an engine names, whatever made it
+name one: the attempt ends as `failed`, in those words. The box then holds
+what the container printed to the same two pages, kept in its own file
+(`SIGNIN_PAGES` in `src/core/engine-signin.js`; a test holds the two lists
+to each other), before it answers with any of it. What a container prints
+is not the machine's word until the machine has held it to something it
+knows, and the box's check does not rest on the runner in the image being
+the one this release shipped. An attempt whose first line names any other
+page is ended at once, its code is in no answer, no status and no file,
+and the start is refused (`wrong_page`) with what its operator looks at.
+The page it named is not repeated. An engine that moves its page is
+refused until both lists say the new one. A GitHub Enterprise deployment
+has another page and is not signed in this way.
+
+A first line that does not read as a page and a code at all is refused at
+once too (`unreadable_code`), in words that say which half the box could
+not read and that the fault is fleetwright's on that machine, not the
+provider's. It used to be skipped without a word, and the start then said
+45 seconds later that the engine gave no code.
 
 **A failure's `detail` is a clause.** Both places it is shown put the
 engine's name in front ("OpenCode did not sign in: " on a phone, and "… was
@@ -1063,25 +1060,37 @@ the engines this machine does not run.
   before the volume's name was kept beside it names nobody's address, so
   it is still reported until a session finds the sign-in gone. The volume
   is removed all the same.
-- **A removed agent member's engine home still stays on the box, because
-  nothing tells the box yet.** The hub knows what to do when it is told
-  which members the vault lists now (`POST /api/engine-members`,
-  `keepMembers` in `src/core/engine-signin.js`): for an id it holds
-  something under and the list no longer names, it stops any attempt,
-  drops every entry so the member is no longer reported, and removes
-  `fw-engine-<id>`, including a home a pasted sign-in was staged into
-  that it recorded nothing of. That list is the minter's signed one, which
-  the sidecar already checks a member start against, so it is not the
-  coordinator's word, and gone can be told from not listed yet: nothing is
-  signed in, and no home is made, for a member the list did not name at
-  the time. **The sidecar does not send the list to its hub yet.** Until
-  it does, removing an agent empties its vault
-  ([members.md](./members.md)) and leaves `fw-engine-<id>` and its entry
-  on each machine: it is mounted only into a session started as that
-  member, which a removed member has none of, a new member filed under
-  the same id on that machine would find it, and an operator removes it
-  with `podman volume rm`. A person's home is never removed this way: it
-  is theirs while they are in the fleet, whatever member records name them.
+- **A removed agent member loses its engine sign-in on a machine when that
+  machine next takes the vault's list**, which it does every ten minutes
+  and whenever a signature names a key it has not seen. Nothing is sent to
+  a machine when a member is removed, and nothing needs to be: the sidecar
+  already holds the minter's signed list of who is a member and checks
+  every member start against it, so it is not the coordinator's word. Each
+  time it takes a list that is not the one it last told, it tells its hub
+  the ids (`POST /api/engine-members`; `keepMembers` in
+  `src/core/engine-signin.js`). For an id the hub holds something under and
+  the list no longer names, it stops any attempt, drops every entry so the
+  member is no longer reported, and removes `fw-engine-<id>`, including a
+  home a pasted sign-in was staged into that it recorded nothing of. Gone
+  can be told from not listed yet: nothing is signed in, and no home is
+  made, for a member the list did not name at the time. So a member filed
+  later under the same id starts with nothing of the first one's.
+  What stays, and for how long:
+  - Until that next list, up to ten minutes, the home and its entry are as
+    they were. A removed member has no session to mount it into.
+  - A machine that holds no list it may still use (none yet, one past its
+    age, a minter from before members) tells its hub nothing, and
+    everything stays until it holds one.
+  - A machine that is off, or whose hub is older than this, keeps the home
+    until it is back and updated. An operator removes it sooner with
+    `podman volume rm fw-engine-<id>`.
+  - One list without the id is enough: there is no second look, because
+    waiting for one is the time in which an id filed again would find the
+    last member's sign-in. A wrong list costs signing in again.
+  - A person's home is never removed this way. It is named by their
+    address and is theirs while they are in the fleet, whatever member
+    records name them; only their entries under a record that is gone are
+    dropped.
 - **A session on OpenCode or Codex that sits still is not restarted**, and
   nothing says it is stuck. An engine waiting out a provider's rate limit
   looks the same from the pane.

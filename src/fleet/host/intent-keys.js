@@ -142,11 +142,14 @@ export async function keyListFrom({ payload, signature, pinned, host, now }) {
 export class IntentKeys {
   /**
    * @param {{ origin: string, dir: string|null, hostKey: { publicJwk: { x: string, y: string }, sign: (message: string) => Promise<string> },
-   *   ask: (request: any, signature: string) => Promise<any>, fetchImpl?: typeof fetch, now?: () => number, log?: { info: (s: string) => void, warn: (s: string) => void } }} opts
-   *   `ask` sends the box's request to the coordinator and resolves with what came back
+   *   ask: (request: any, signature: string) => Promise<any>, onList?: (() => void)|null, fetchImpl?: typeof fetch, now?: () => number, log?: { info: (s: string) => void, warn: (s: string) => void } }} opts
+   *   `ask` sends the box's request to the coordinator and resolves with what came back;
+   *   `onList` is called each time a list is taken
    */
-  constructor({ origin, dir, hostKey, ask, fetchImpl = (...a) => fetch(...a), now = () => Date.now(), log = { info() {}, warn() {} } }) {
+  constructor({ origin, dir, hostKey, ask, onList = null, fetchImpl = (...a) => fetch(...a), now = () => Date.now(), log = { info() {}, warn() {} } }) {
     this.origin = new URL(origin).origin;
+    /** Told each time a list is taken, after it is in place: whoever holds this may act on who it names now (sidecar.js, #tellHubWhoIsListed). @type {(() => void)|null} */
+    this.onList = onList;
     this.file = dir ? path.join(dir, MINTER_KEY_FILE) : null;
     this.signersFile = dir ? path.join(dir, SIGNERS_FILE) : null;
     this.hostKey = hostKey;
@@ -308,6 +311,11 @@ export class IntentKeys {
       this.revoked = list.revoked;
       this.#noteSigners(list.directory, list.cleared);
       this.problem = null;
+      // After the list is in place, and never for one that was not taken:
+      // every return above this one leaves the last list as it was.
+      try {
+        this.onList?.();
+      } catch { /* what a listener does with a list is not a reason to refuse the list */ }
       return true;
     } catch (e) {
       this.problem = `the key list could not be fetched: ${/** @type {Error} */ (e).message}`;
