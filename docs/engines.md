@@ -180,7 +180,11 @@ and each token inside a Codex sign-in file, as handed over and as Codex
 renews it. A line of an engine's error output is passed on up to 64 KiB and
 the rest of that line is dropped. A message from an engine longer than 8 MiB
 ends the conversation with it, says so as the turn's error, and the next
-line typed starts the engine again.
+line typed starts the engine again. Of a sign-in file it withholds every string
+but two kinds that are nobody's secret: a date, and a bare origin. The file
+Codex writes names who issued its tokens (`https://auth.openai.com`) beside
+them, and with that withheld the page for a second sign-in was printed as
+`[withheld]/codex/device`, which no box would pass on.
 
 ## Before a turn
 
@@ -306,7 +310,12 @@ each.
 
 **A session uses what is signed in on its machine first.** Before a turn
 the runner looks in the engine home. With a sign-in there it asks the box
-for nothing. With none, it asks for the member's pasted item as it always
+for nothing. A sign-in is what the engine itself would start on: for Codex
+its three tokens, the first of them shaped as a signed token is, or an API
+key; for OpenCode a whole `github-copilot` entry with a token in it. Each
+was held against the real engine with a made-up file, because the rule
+used to be "a refresh token is in the file" and neither engine agrees with
+that. With none, it asks for the member's pasted item as it always
 did, and writes it into the home, so there is one place an engine reads.
 A key for an engine on a metered API ([api-engines.md](./api-engines.md))
 is asked for every time, as before, and is added to OpenCode's file beside

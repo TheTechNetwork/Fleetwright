@@ -30,6 +30,7 @@ import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { SessionWatcher } from '../src/fleet/host/watcher.js';
 import { setLogStream } from '../src/log.js';
 import { signinBox, TOKEN } from './helpers/stub-signin-podman.js';
+import { codexSignIn } from './helpers/engine-files.js';
 import { startStubHub } from './helpers/stub-hub.js';
 
 /** Wait until `said()` is true, or say what never happened. */
@@ -179,7 +180,7 @@ test('an attempt nobody approves expires on this box’s own clock, one the engi
   // THE ENGINE REFUSES IT, quoting a token from the sign-in that is there.
   const b2 = box(t);
   mkdirSync(b2.volume('fw-engine-debbie', 'codex'), { recursive: true });
-  writeFileSync(b2.volume('fw-engine-debbie', 'codex', 'auth.json'), JSON.stringify({ tokens: { refresh_token: TOKEN } }));
+  writeFileSync(b2.volume('fw-engine-debbie', 'codex', 'auth.json'), codexSignIn({ refresh: TOKEN }));
   await b2.ask('start');
   b2.provider('refused', `device code exchange failed: token ${TOKEN} is not for this workspace`);
   await until(async () => (await b2.ask('status')).state === 'failed', 'the refusal');

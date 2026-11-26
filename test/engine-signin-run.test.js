@@ -29,6 +29,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { signin, signedInAt, homePaths, SIGNIN_MINUTES } from '../sandbox/engine.mjs';
+import { codexSignIn, copilotEntry, fakeJwt } from './helpers/engine-files.js';
 
 /** A token as an engine would write it into its sign-in file: found anywhere else, it leaked. */
 const TOKEN = 'rt-LEAKCANARY-0123456789abcdef';
@@ -106,7 +107,7 @@ function codexLogin({ start = 'code', account = { type: 'chatgpt', email: 'debbi
     /** OpenAI said yes: Codex writes its file, then says so. */
     approve() {
       mkdirSync(path.dirname(authFile()), { recursive: true });
-      writeFileSync(authFile(), JSON.stringify({ OPENAI_API_KEY: null, tokens: { id_token: 'id-LEAKCANARY-0123456789', access_token: 'at-LEAKCANARY-0123456789', refresh_token: TOKEN, account_id: 'acct-1' }, last_refresh: '2026-11-25T10:00:00Z' }, null, 2), { mode: 0o600 });
+      writeFileSync(authFile(), codexSignIn({ refresh: TOKEN, access: 'at-LEAKCANARY-0123456789', signature: 'sig-LEAKCANARY-0123456789' }), { mode: 0o600 });
       send({ method: 'account/login/completed', params: { loginId: LOGIN_ID, success: true, error: null, onboardingEntrypoint: null } });
     },
     fail: (/** @type {string} */ error, loginId = LOGIN_ID) => send({ method: 'account/login/completed', params: { loginId, success: false, error, onboardingEntrypoint: null } }),
@@ -141,7 +142,7 @@ test('Codex: a sign-in that fails says so in Codex’s own sentence, with anythi
   const home = engineHome(t);
   // Signed in before, as another account: the file a new attempt would replace.
   mkdirSync(path.join(home, 'codex'), { recursive: true });
-  writeFileSync(path.join(home, 'codex', 'auth.json'), JSON.stringify({ tokens: { refresh_token: TOKEN } }));
+  writeFileSync(path.join(home, 'codex', 'auth.json'), codexSignIn({ refresh: TOKEN }));
   const server = codexLogin();
   const p = printed();
   const done = signin({ engine: 'codex' }, { env: { FLEETWRIGHT_ENGINE_HOME: home }, out: p.out, spawnEngine: server.spawn });
@@ -151,6 +152,22 @@ test('Codex: a sign-in that fails says so in Codex’s own sentence, with anythi
   assert.deepEqual(p.lines()[1], { engine: 'codex', signin: 'done', state: 'failed', detail: 'device code exchange failed: token [withheld] is not for this workspace' });
   // The sign-in that was there is still there: a failed attempt replaces nothing.
   assert.ok(signedInAt('codex', home));
+});
+
+test('Codex: a home that already holds a sign-in still gets its page: the issuer Codex keeps beside its tokens is no secret', async (t) => {
+  const home = engineHome(t);
+  mkdirSync(path.join(home, 'codex'), { recursive: true });
+  // As Codex 0.171.0 wrote it, `tokens.oauth_provenance.issuer` and all.
+  writeFileSync(path.join(home, 'codex', 'auth.json'), codexSignIn({ refresh: TOKEN }));
+  const server = codexLogin();
+  const p = printed();
+  const done = signin({ engine: 'codex' }, { env: { FLEETWRIGHT_ENGINE_HOME: home }, out: p.out, spawnEngine: server.spawn });
+  await until(() => p.lines().length === 1, 'the page and the code');
+  assert.deepEqual([p.lines()[0].url, p.lines()[0].code], ['https://auth.openai.com/codex/device', 'ABCD-EFGH']);
+  // And what is a secret in that file is still kept quiet.
+  server.fail(`the token ${TOKEN} from https://auth.openai.com was refused`);
+  await done;
+  assert.equal(p.lines()[1].detail, 'the token [withheld] from https://auth.openai.com was refused');
 });
 
 test('Codex: the 15 minutes running out is expired, whether Codex says it first or this runner’s own clock does', async (t) => {
@@ -194,7 +211,7 @@ test('Codex: a cancel from the box tells Codex, and ends as cancelled', async (t
 test('Codex: a sign out is Codex’s own, and removes what it kept', async (t) => {
   const home = engineHome(t);
   mkdirSync(path.join(home, 'codex'), { recursive: true });
-  writeFileSync(path.join(home, 'codex', 'auth.json'), JSON.stringify({ tokens: { refresh_token: TOKEN } }));
+  writeFileSync(path.join(home, 'codex', 'auth.json'), codexSignIn({ refresh: TOKEN }));
   const server = codexLogin();
   const p = printed();
   assert.equal(await signin({ engine: 'codex', out: true }, { env: { FLEETWRIGHT_ENGINE_HOME: home }, out: p.out, spawnEngine: server.spawn }), 0);
@@ -242,7 +259,7 @@ async function openCodeServe(/** @type {import('node:test').TestContext} */ t, {
         if (!pending) return json(400, { name: 'ProviderAuthOauthMissing', data: { providerID: 'github-copilot' } });
         if ((await answered) === 'failed') return json(400, { name: 'ProviderAuthOauthCallbackFailed', data: {} });
         mkdirSync(path.dirname(authFile()), { recursive: true });
-        writeFileSync(authFile(), `${JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: TOKEN, access: TOKEN, expires: 0 } })}\n`, { mode: 0o600 });
+        writeFileSync(authFile(), `${JSON.stringify({ 'github-copilot': copilotEntry(TOKEN) })}\n`, { mode: 0o600 });
         return json(200, true);
       }
       if (req.method === 'DELETE' && req.url === '/auth/github-copilot') {
@@ -352,7 +369,7 @@ test('OpenCode: the runner’s own 15 minutes is expired, a cancel is cancelled,
 test('OpenCode: a sign out removes its Copilot entry through its own server, and leaves a key beside it', async (t) => {
   const home = engineHome(t);
   mkdirSync(path.join(home, 'opencode'), { recursive: true });
-  writeFileSync(path.join(home, 'opencode', 'auth.json'), JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: TOKEN, access: TOKEN, expires: 0 }, openrouter: { type: 'api', key: 'sk-or-kept' } }));
+  writeFileSync(path.join(home, 'opencode', 'auth.json'), JSON.stringify({ 'github-copilot': copilotEntry(TOKEN), openrouter: { type: 'api', key: 'sk-or-kept' } }));
   const server = await openCodeServe(t);
   const p = printed();
   assert.equal(await signin({ engine: 'opencode', out: true }, { env: { FLEETWRIGHT_ENGINE_HOME: home }, out: p.out, spawnEngine: server.spawn }), 0);
@@ -394,16 +411,33 @@ test('an engine that is not in the image is said as that, not as a sign-in that 
   assert.deepEqual(p.lines(), [{ engine: 'codex', signin: 'done', state: 'failed', detail: "codex is not installed in this machine's session image" }]);
 });
 
-test('where each engine keeps its sign-in in an engine home, and what counts as one', (t) => {
+test('where each engine keeps its sign-in in an engine home, and what counts as one is what the engine itself would start on', (t) => {
   const home = engineHome(t);
   assert.deepEqual(homePaths('codex', home), { dir: path.join(home, 'codex'), file: path.join(home, 'codex', 'auth.json'), env: { CODEX_HOME: path.join(home, 'codex') } });
   assert.deepEqual(homePaths('opencode', home), { dir: path.join(home, 'opencode'), file: path.join(home, 'opencode', 'auth.json'), env: { XDG_DATA_HOME: home } });
   assert.equal(homePaths('claude-code', home), null);
-  // Nothing there, an empty file, a file that does not read, and a key alone are none.
-  assert.equal(signedInAt('codex', home), null);
+  assert.equal(signedInAt('codex', home), null, 'nothing there');
   for (const dir of ['codex', 'opencode']) mkdirSync(path.join(home, dir));
-  for (const [engine, text] of [['codex', ''], ['codex', '{"tokens":'], ['codex', '{"OPENAI_API_KEY":"sk-x","tokens":null}'], ['opencode', '{"openrouter":{"type":"api","key":"sk-or"}}']]) {
+  // EACH ROW IS WHAT THE REAL ENGINE SAID OF THAT FILE, asked with no network:
+  // Codex 0.171.0 through `account/read`, OpenCode 1.19.6 through the
+  // providers its server lists as connected.
+  const id = fakeJwt({ email: 'debbie@example.com' });
+  const rows = /** @type {Array<[string, boolean, string, string]>} */ ([
+    ['codex', true, 'the file Codex writes', codexSignIn()],
+    ['codex', true, 'its three tokens and nothing else', JSON.stringify({ tokens: { id_token: id, access_token: 'at-not-a-signed-token', refresh_token: 'rt-0123456789' } })],
+    ['codex', true, 'an API key: `{ "type": "apiKey" }` to Codex', '{"OPENAI_API_KEY":"sk-made-up-0123456789","tokens":null}'],
+    ['codex', false, 'a refresh token alone: `account: null` to Codex', '{"tokens":{"refresh_token":"rt-0123456789"}}'],
+    ['codex', false, 'an id token that is no signed token’s shape', JSON.stringify({ tokens: { id_token: 'id-0123456789', access_token: 'at-0123456789', refresh_token: 'rt-0123456789' } })],
+    ['codex', false, 'no access token', JSON.stringify({ tokens: { id_token: id, refresh_token: 'rt-0123456789' } })],
+    ['codex', false, 'an empty file', ''],
+    ['codex', false, 'a file that does not read', '{"tokens":'],
+    ['opencode', true, 'the entry OpenCode writes', JSON.stringify({ 'github-copilot': copilotEntry('gho_made_up_0123456789') })],
+    ['opencode', true, 'the entry this runner writes for a pasted token', '{"github-copilot":{"type":"oauth","refresh":"gho_made_up_0123456789","access":"","expires":0}}'],
+    ['opencode', false, 'an entry that is not whole, which OpenCode drops', '{"github-copilot":{"type":"oauth","refresh":"gho_made_up_0123456789"}}'],
+    ['opencode', false, 'another provider’s key alone', '{"openrouter":{"type":"api","key":"sk-or"}}'],
+  ]);
+  for (const [engine, counts, what, text] of rows) {
     writeFileSync(path.join(home, engine, 'auth.json'), text);
-    assert.equal(signedInAt(engine, home), null, `${engine}: ${text}`);
+    assert.equal(Boolean(signedInAt(engine, home)), counts, `${engine}: ${what}`);
   }
 });

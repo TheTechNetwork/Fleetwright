@@ -130,11 +130,22 @@ const withheld = new Set();
  * every string in a file this runner is handed is withheld on its own,
  * except one that is plainly a date (`last_refresh`), which is no secret
  * and would otherwise be cut out of ordinary output.
+ *
+ * AND EXCEPT A BARE ORIGIN. The file Codex 0.171.0 writes holds more than
+ * tokens: beside them is who issued them (`tokens.oauth_provenance.issuer`),
+ * which is "https://auth.openai.com". Withheld with the rest, it was cut
+ * out of the page a second sign-in prints, "[withheld]/codex/device", the
+ * box dropped that line, and a member signed in once could never be signed
+ * in again on that machine. A scheme and a host with no path, no query and
+ * nobody's name in it is no more a secret than a date is. Every other
+ * string is still withheld, one in a field this runner has never heard of
+ * included: a later engine's new token is kept quiet without being named
+ * here, which is the safe way round.
  */
 export function withhold(value) {
   const v = typeof value === 'string' ? value.trim() : '';
   const one = (/** @type {string} */ text) => {
-    if (text.length >= 12 && !/\s/.test(text)) withheld.add(text);
+    if (text.length >= 12 && !/\s/.test(text) && !/^https?:\/\/[a-z0-9.-]+(?::\d+)?\/?$/i.test(text)) withheld.add(text);
   };
   one(v);
   if (v[0] !== '{') return;
@@ -665,15 +676,52 @@ export function homePaths(engine, engineHome) {
   return null;
 }
 
+/** Whether a string is shaped as a signed token is: three parts, the middle one claims that read. */
+function tokenShaped(/** @type {unknown} */ text) {
+  if (typeof text !== 'string') return false;
+  const parts = text.split('.');
+  if (parts.length !== 3 || parts.some((part) => !part)) return false;
+  try {
+    const claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+    return Boolean(claims) && typeof claims === 'object';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The sign-in an engine home holds for this engine, or null for none.
  *
- * WHAT COUNTS IS WHAT THE ENGINE WROTE THERE: for Codex a file with a
- * refresh token in it, for OpenCode a `github-copilot` entry with a token.
- * An empty file, one that does not parse, and an OpenCode file that holds
- * only an API key are none, and the member's pasted item is asked for as
- * before. Whether a sign-in found here still works is the engine's to say,
- * in the check before a turn.
+ * WHAT COUNTS IS WHAT THE ENGINE ITSELF WOULD START ON, and each rule here
+ * was held against the real engine with a made-up file and no network
+ * (docs/engines.md, "What has and has not been run"). It was "a refresh
+ * token is in the file", which the engines do not agree with at either end:
+ *
+ *   Codex 0.171.0 reads its three tokens or none. A file whose `id_token`
+ *     is not a signed token's shape, or with no `access_token`, is no
+ *     account to it (`account/read` answers `account: null`), and the
+ *     runner called that signed in, so the member's pasted item was never
+ *     asked for and every turn ended `auth`. And a file with an
+ *     `OPENAI_API_KEY` is an account to it (`{ "type": "apiKey" }`), which
+ *     the runner called none and then wrote the pasted item over.
+ *   OpenCode 1.19.6 drops an entry that is not whole (`type`, `refresh`,
+ *     `access` and a number for `expires`, auth/index.ts), and the runner
+ *     called a token alone signed in.
+ *
+ * Two edges are left as they were, on purpose. An `OPENAI_API_KEY` that is
+ * an empty string is an account to Codex and none here: nothing can run on
+ * it, and none is what asks for the member's pasted item. And an OpenCode
+ * entry with no token in either place is whole to OpenCode and none here,
+ * for the same reason. An OpenCode file that holds only another provider's
+ * key is none, as before. Whether a sign-in found here still works is the
+ * engine's to say, in the check before a turn.
+ *
+ * WHAT THIS RUNNER WRITES ITSELF IS READ BACK AS A SIGN-IN: `stage` puts a
+ * pasted Copilot token in as `{ type, refresh, access: "", expires: 0 }`,
+ * which OpenCode takes whole and sends as it is (it sends `refresh`). A
+ * pasted Codex file is written as it was pasted, so it counts when it is a
+ * file Codex wrote and not otherwise, and one that does not count is asked
+ * for again by the next session, which is what happened before any home.
  *
  * @param {string} engine @param {string} engineHome
  * @returns {{ file: string, text: string }|null}
@@ -685,8 +733,15 @@ export function signedInAt(engine, engineHome) {
     const text = readFileSync(at.file, 'utf8');
     const held = JSON.parse(text);
     if (!held || typeof held !== 'object') return null;
-    const token = engine === 'codex' ? held.tokens?.refresh_token : (held['github-copilot']?.refresh || held['github-copilot']?.access);
-    return typeof token === 'string' && token ? { file: at.file, text } : null;
+    if (engine === 'codex') {
+      const tokens = held.tokens;
+      const signedIn = Boolean(tokens) && typeof tokens === 'object' && tokenShaped(tokens.id_token) && typeof tokens.access_token === 'string' && typeof tokens.refresh_token === 'string';
+      const key = typeof held.OPENAI_API_KEY === 'string' && held.OPENAI_API_KEY.trim() !== '';
+      return signedIn || key ? { file: at.file, text } : null;
+    }
+    const entry = held['github-copilot'];
+    const whole = Boolean(entry) && typeof entry === 'object' && entry.type === 'oauth' && typeof entry.refresh === 'string' && typeof entry.access === 'string' && typeof entry.expires === 'number';
+    return whole && (entry.refresh || entry.access) ? { file: at.file, text } : null;
   } catch {
     return null;
   }

@@ -25,11 +25,15 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 
+import { codexSignIn, copilotEntry } from './engine-files.js';
+
 const RUNNER = fileURLToPath(new URL('../../sandbox/engine.mjs', import.meta.url));
 const q = (/** @type {string} */ s) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** A token as an engine would write it into its sign-in file: found anywhere else, it leaked. */
 export const TOKEN = 'rt-LEAKCANARY-0123456789abcdef';
+/** The file Codex leaves when it signs in, in the shape the real one writes, each of its three tokens marked. */
+const CODEX_SIGNED_IN = codexSignIn({ refresh: TOKEN, access: 'at-LEAKCANARY-0123456789', signature: 'sig-LEAKCANARY-0123456789' });
 
 const CODEX = `
 import { createInterface } from 'node:readline';
@@ -53,7 +57,7 @@ createInterface({ input: process.stdin }).on('line', (text) => {
     waiting = setInterval(() => {
       if (said('provider-approved') !== null) {
         mkdirSync(path.dirname(auth), { recursive: true });
-        writeFileSync(auth, JSON.stringify({ OPENAI_API_KEY: null, tokens: { id_token: 'id-LEAKCANARY-0123456789', access_token: 'at-LEAKCANARY-0123456789', refresh_token: ${JSON.stringify(TOKEN)}, account_id: 'acct-1' }, last_refresh: '2026-11-25T10:00:00Z' }, null, 2), { mode: 0o600 });
+        writeFileSync(auth, ${JSON.stringify(CODEX_SIGNED_IN)}, { mode: 0o600 });
         // And says its new token out loud, on the stream a session would have passed on.
         process.stderr.write('refreshed, token ${TOKEN}\\n');
         done(true, null);
@@ -89,7 +93,7 @@ const server = createServer((req, res) => {
         if (said('provider-approved') !== null) {
           clearInterval(waiting);
           mkdirSync(path.dirname(auth), { recursive: true });
-          writeFileSync(auth, JSON.stringify({ 'github-copilot': { type: 'oauth', refresh: ${JSON.stringify(TOKEN)}, access: ${JSON.stringify(TOKEN)}, expires: 0 } }) + '\\n', { mode: 0o600 });
+          writeFileSync(auth, JSON.stringify({ 'github-copilot': ${JSON.stringify(copilotEntry(TOKEN))} }) + '\\n', { mode: 0o600 });
           json(200, true);
         } else if (said('provider-refused') !== null) { clearInterval(waiting); json(400, { name: 'ProviderAuthOauthCallbackFailed', data: {} }); }
       }, 15);

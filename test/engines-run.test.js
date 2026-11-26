@@ -18,6 +18,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, statSync, 
 import os from 'node:os';
 import path from 'node:path';
 
+import { codexSignIn } from './helpers/engine-files.js';
 import { Peer, codexAdapter, acpAdapter, run, parseArgs, stage, providerOf, acpModel, reasonFromCodexError, codexResetsAt, ERROR_LINE_MAX, OPENCODE_ASKS } from '../sandbox/engine.mjs';
 
 /** Wait until `said()` is true, or say what never happened. */
@@ -729,12 +730,12 @@ test('a Codex sign-in renewed in the middle of a turn goes back to the box when 
 });
 
 test('the tokens inside a Codex sign-in are never said, in the pane or in a turn’s detail, and its date still is', async (t) => {
-  // As `codex login` leaves it: a file with line breaks in it, which was not withheld at all.
-  const file = JSON.stringify({ OPENAI_API_KEY: null, tokens: { id_token: 'idtok-aaaaaaaaaaaaaaaa', access_token: 'acctok-bbbbbbbbbbbbbbbb', refresh_token: 'reftok-cccccccccccccccc', account_id: 'acct-dddddddddddddddd' }, last_refresh: '2026-11-24T10:00:00.000000Z' }, null, 2);
+  // As Codex leaves it: a file with line breaks in it, which was not withheld at all.
+  const file = codexSignIn({ signature: 'idtok-aaaaaaaaaaaaaaaa', access: 'acctok-bbbbbbbbbbbbbbbb', refresh: 'reftok-cccccccccccccccc', lastRefresh: '2026-11-24T10:00:00.000000Z' });
   const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: file }));
   const server = codexServer({
     turn: (send) => {
-      send({ method: 'item/agentMessage/delta', params: { delta: 'auth.json has "refresh_token": "reftok-cccccccccccccccc", last renewed 2026-11-24T10:00:00.000000Z' } });
+      send({ method: 'item/agentMessage/delta', params: { delta: 'auth.json has "refresh_token": "reftok-cccccccccccccccc", last renewed 2026-11-24T10:00:00.000000Z, issued by https://auth.openai.com' } });
       completed(send, { status: 'failed', error: { message: 'token acctok-bbbbbbbbbbbbbbbb was rejected' } });
     },
   });
@@ -742,7 +743,8 @@ test('the tokens inside a Codex sign-in are never said, in the pane or in a turn
   const out = [];
   await run({ engine: 'codex', model: 'gpt-5.1-codex', mode: 'safe', prompt: 'Go.' }, { socket, home, cwd: '/work', env: {}, out: (s) => out.push(s), stdin: typed(), spawnEngine: () => server.child });
   const pane = out.join('');
-  assert.match(pane, /auth\.json has "refresh_token": "\[withheld\]", last renewed 2026-11-24T10:00:00\.000000Z/);
+  // Its date and the issuer it names are in the file too, and are nobody's secret.
+  assert.match(pane, /auth\.json has "refresh_token": "\[withheld\]", last renewed 2026-11-24T10:00:00\.000000Z, issued by https:\/\/auth\.openai\.com/);
   for (const token of ['idtok-aaaaaaaaaaaaaaaa', 'acctok-bbbbbbbbbbbbbbbb', 'reftok-cccccccccccccccc']) assert.ok(!pane.includes(token), token);
   assert.equal(posts.at(-1)?.body.turn.detail, 'token [withheld] was rejected');
   assert.ok(!JSON.stringify(posts.filter((p) => p.path === '/internal/session-event')).includes('tok-'), 'nothing reported names a token');
@@ -755,13 +757,13 @@ test('a sign-in in the member’s engine home is used first: the box is asked fo
   const engineHome = path.join(home, 'engine-home');
   const file = path.join(engineHome, 'codex', 'auth.json');
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify({ tokens: { access_token: 'at-home-0123456789', refresh_token: 'rt-home-0123456789' } }));
+  writeFileSync(file, codexSignIn({ access: 'at-home-0123456789', refresh: 'rt-home-0123456789' }));
   /** @type {any} */
   let startedWith = null;
   const server = codexServer({
     turn: (send) => {
       // Codex renews in place, and then says both tokens out loud.
-      writeFileSync(file, JSON.stringify({ tokens: { access_token: 'at-next-0123456789', refresh_token: 'rt-next-0123456789' } }));
+      writeFileSync(file, codexSignIn({ access: 'at-next-0123456789', refresh: 'rt-next-0123456789', lastRefresh: '2026-11-26T10:00:00Z' }));
       setTimeout(() => {
         send({ method: 'item/agentMessage/delta', params: { delta: 'was rt-home-0123456789, now rt-next-0123456789' } });
         completed(send, { status: 'completed', error: null });
@@ -786,7 +788,7 @@ test('a sign-in in the member’s engine home is used first: the box is asked fo
 });
 
 test('with no sign-in in the engine home the pasted item is asked for and written there, so the member’s next session on the machine finds it', async (t) => {
-  const pasted = JSON.stringify({ tokens: { access_token: 'at-pasted-0123456789', refresh_token: 'rt-pasted-0123456789' } });
+  const pasted = codexSignIn({ access: 'at-pasted-0123456789', refresh: 'rt-pasted-0123456789' });
   const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: pasted }));
   const engineHome = path.join(home, 'engine-home');
   const go = () => {
