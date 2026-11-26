@@ -801,24 +801,58 @@ function tokenShaped(/** @type {unknown} */ text) {
  * @returns {{ file: string, text: string }|null}
  */
 export function signedInAt(engine, engineHome) {
+  return lookFor(engine, engineHome).held;
+}
+
+/**
+ * The same question, with the third answer kept apart: `read` is false when
+ * this runner COULD NOT TELL, which is not the same as none.
+ *
+ * NO FILE IS NONE. EVERY OTHER FAILURE TO READ ONE IS NOT KNOWING. They were
+ * one `catch`, so a file that was a directory, one this user may not open,
+ * a disk that would not give it up, and a file an engine was half way
+ * through writing all read as "nobody is signed in", and `--signedin` said
+ * so to a box that then stopped reporting a sign-in its sessions were still
+ * running on. A file that reads whole and is not a sign-in is none: that is
+ * known. One that does not read as JSON at all is not: it may be the first
+ * half of one.
+ *
+ * A session is not asked this way (`signedInAt`): for it, a home it cannot
+ * read a sign-in from is one to ask the member's pasted item for, as before.
+ *
+ * @param {string} engine @param {string} engineHome
+ * @returns {{ held: { file: string, text: string }|null, read: boolean }}
+ */
+function lookFor(engine, engineHome) {
   const at = homePaths(engine, engineHome);
-  if (!at) return null;
+  if (!at) return { held: null, read: true };
+  /** @type {string} */
+  let text;
+  /** @type {any} */
+  let held;
   try {
-    const text = readFileSync(at.file, 'utf8');
-    const held = JSON.parse(text);
-    if (!held || typeof held !== 'object') return null;
-    if (engine === 'codex') {
-      const tokens = held.tokens;
-      const signedIn = Boolean(tokens) && typeof tokens === 'object' && tokenShaped(tokens.id_token) && typeof tokens.access_token === 'string' && typeof tokens.refresh_token === 'string';
-      const key = typeof held.OPENAI_API_KEY === 'string' && held.OPENAI_API_KEY.trim() !== '';
-      return signedIn || key ? { file: at.file, text } : null;
-    }
+    text = readFileSync(at.file, 'utf8');
+  } catch (e) {
+    return { held: null, read: /** @type {NodeJS.ErrnoException} */ (e)?.code === 'ENOENT' };
+  }
+  try {
+    held = JSON.parse(text);
+  } catch {
+    return { held: null, read: false };
+  }
+  if (!held || typeof held !== 'object') return { held: null, read: true };
+  /** @type {boolean} */
+  let is;
+  if (engine === 'codex') {
+    const tokens = held.tokens;
+    const signedIn = Boolean(tokens) && typeof tokens === 'object' && tokenShaped(tokens.id_token) && typeof tokens.access_token === 'string' && typeof tokens.refresh_token === 'string';
+    is = signedIn || (typeof held.OPENAI_API_KEY === 'string' && held.OPENAI_API_KEY.trim() !== '');
+  } else {
     const entry = held['github-copilot'];
     const whole = Boolean(entry) && typeof entry === 'object' && entry.type === 'oauth' && typeof entry.refresh === 'string' && typeof entry.access === 'string' && typeof entry.expires === 'number';
-    return whole && (entry.refresh || entry.access) ? { file: at.file, text } : null;
-  } catch {
-    return null;
+    is = whole && Boolean(entry.refresh || entry.access);
   }
+  return { held: is ? { file: at.file, text } : null, read: true };
 }
 
 /**
@@ -1859,6 +1893,11 @@ export async function signin(args, io = {}) {
 //              there before it. A session that renews rewrites the file too,
 //              so "written since" is "may be another sign-in", not "is"
 //
+// AND WHEN IT CANNOT READ THE HOME IT SAYS SO: `signedIn: null`, with why.
+// No file is "no". A file that is there and would not read, or does not read
+// as one, is not: it was said as "no", and a box told "no" stops reporting a
+// sign-in (`lookFor`).
+//
 // WHO is not said. The file names nobody this runner would repeat without
 // the engine saying it, and the engine is not started here.
 
@@ -1881,7 +1920,11 @@ export function signedIn(args, io = {}) {
     write(`${JSON.stringify({ engine: line(engine, 40) ?? '', signin: 'is', signedIn: null, detail: at ? 'this container was given no engine home to look in' : 'not an engine this runner signs in, or no engine home to look in' })}\n`);
     return 0;
   }
-  const held = signedInAt(engine, engineHome);
+  const { held, read } = lookFor(engine, engineHome);
+  if (!read) {
+    write(`${JSON.stringify({ engine, signin: 'is', signedIn: null, detail: 'what the engine home holds as the sign-in could not be read' })}\n`);
+    return 0;
+  }
   let pasted = false;
   /** @type {number|null} */
   let writtenAt = null;

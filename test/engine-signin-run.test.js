@@ -694,4 +694,21 @@ test('asked whether a home holds a sign-in, the runner says so in one line from 
   // NOT ASKED IS NOT "NO": no home to look in, or an engine this runner does not sign in, is null.
   assert.equal(ask('codex', {}).signedIn, null);
   assert.equal(ask('claude-code').signedIn, null);
+  // AND COULD NOT READ IS NOT "NO" EITHER. Both of these were said as
+  // `signedIn: false`, which a box records as nobody signed in: what should
+  // be the file is something that cannot be read as one, and a file an
+  // engine is half way through writing.
+  const unread = { signin: 'is', signedIn: null, detail: 'what the engine home holds as the sign-in could not be read' };
+  for (const engine of ['codex', 'opencode']) {
+    const file = path.join(home, engine, 'auth.json');
+    rmSync(file, { force: true });
+    mkdirSync(file);
+    assert.deepEqual(ask(engine), { engine, ...unread }, `${engine}: a directory where the file goes`);
+    rmSync(file, { recursive: true });
+    writeFileSync(file, engine === 'codex' ? '{"tokens":{"id_tok' : '{"github-copilot":{"type":"oau');
+    assert.deepEqual(ask(engine), { engine, ...unread }, `${engine}: half a file`);
+    // No file is no, as it was.
+    rmSync(file);
+    assert.equal(ask(engine).signedIn, false, `${engine}: no file`);
+  }
 });
