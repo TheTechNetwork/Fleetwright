@@ -28,7 +28,7 @@ import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, mkdirSyn
 import os from 'node:os';
 import path from 'node:path';
 
-import { signin as runnerSignin, signedIn, signedInAt, stage, homePaths, PASTED, SIGNIN_MINUTES, SIGNIN_PAGES } from '../sandbox/engine.mjs';
+import { signin as runnerSignin, signedIn, signedInAt, stage, homePaths, ATTEMPT, PASTED, SIGNIN_MINUTES, SIGNIN_PAGES } from '../sandbox/engine.mjs';
 import { codexSignIn, copilotEntry, fakeJwt } from './helpers/engine-files.js';
 
 /** A token as an engine would write it into its sign-in file: found anywhere else, it leaked. */
@@ -686,14 +686,14 @@ test('asked whether a home holds a sign-in, the runner says so in one line from 
     return JSON.parse(said);
   };
   // NOTHING THERE.
-  assert.deepEqual(ask('codex'), { engine: 'codex', signin: 'is', signedIn: false, pasted: false, writtenAt: null });
-  assert.deepEqual(ask('opencode'), { engine: 'opencode', signin: 'is', signedIn: false, pasted: false, writtenAt: null });
+  assert.deepEqual(ask('codex'), { engine: 'codex', signin: 'is', signedIn: false, pasted: false, writtenAt: null, attempt: null });
+  assert.deepEqual(ask('opencode'), { engine: 'opencode', signin: 'is', signedIn: false, pasted: false, writtenAt: null, attempt: null });
   // A SIGN-IN CODEX WROTE, as a sign-in on this machine leaves it: there, not pasted, and when.
   const before = Date.now() - 2000;
   mkdirSync(path.join(home, 'codex'), { recursive: true });
   writeFileSync(path.join(home, 'codex', 'auth.json'), codexSignIn());
   const made = ask('codex');
-  assert.deepEqual({ ...made, writtenAt: 0 }, { engine: 'codex', signin: 'is', signedIn: true, pasted: false, writtenAt: 0 });
+  assert.deepEqual({ ...made, writtenAt: 0 }, { engine: 'codex', signin: 'is', signedIn: true, pasted: false, writtenAt: 0, attempt: null });
   assert.ok(made.writtenAt >= before && made.writtenAt <= Date.now() + 2000, `not when the file was written: ${made.writtenAt}`);
   // THE BOX'S COPY OF A PASTED ONE, as `stage` leaves it: there, and not a sign-in made here.
   assert.equal(stage('codex', codexSignIn(), home, null, home).ok, true);
@@ -728,5 +728,55 @@ test('asked whether a home holds a sign-in, the runner says so in one line from 
     // No file is no, as it was.
     rmSync(file);
     assert.equal(ask(engine).signedIn, false, `${engine}: no file`);
+  }
+});
+
+test('a sign-in leaves its attempt’s word beside it and no other does, which is how a box tells that attempt’s sign-in from any other file in the home', async (t) => {
+  const [mine, next] = ['0123456789abcdef0123456789abcdef', 'fedcba9876543210fedcba9876543210'];
+  for (const engine of /** @type {const} */ (['codex', 'opencode'])) {
+    const home = engineHome(t);
+    const word = () => {
+      /** @type {string[]} */
+      const raw = [];
+      signedIn({ engine }, { env: { FLEETWRIGHT_ENGINE_HOME: home }, out: (s) => void raw.push(s) });
+      return JSON.parse(raw.join('')).attempt;
+    };
+    /** One attempt, given that word by its box, and how it ends. @param {string|undefined} given @param {'approved'|'cancelled'} how */
+    const attempt = async (given, how) => {
+      const server = engine === 'codex' ? codexLogin() : await openCodeServe(t);
+      const signals = new EventEmitter();
+      const p = printed();
+      const done = signin({ engine }, { env: { FLEETWRIGHT_ENGINE_HOME: home, ...(given === undefined ? {} : { FLEETWRIGHT_SIGNIN_ATTEMPT: given }) }, out: p.out, spawnEngine: server.spawn, signals });
+      await until(() => p.lines().length === 1 && (engine === 'codex' || /** @type {any} */ (server).seen.length === 2), 'the page and the code');
+      if (how === 'cancelled') signals.emit('SIGTERM');
+      else if (engine === 'codex') /** @type {ReturnType<typeof codexLogin>} */ (server).approve();
+      else /** @type {any} */ (server).github('approved');
+      assert.equal(await done, 0);
+      assert.equal(p.lines()[1].state, how === 'approved' ? 'signed_in' : 'cancelled');
+      // The word is the box's and the home's, and is no part of what the runner says.
+      if (given) assert.ok(!p.raw.join('').includes(given), 'the attempt’s word was printed');
+    };
+    // AN APPROVED CODE: the word is beside the sign-in.
+    await attempt(mine, 'approved');
+    assert.equal(word(), mine, engine);
+    // AN ATTEMPT NOBODY APPROVED leaves the home as it was: the word there is still the earlier attempt's, and not its own.
+    await attempt(next, 'cancelled');
+    assert.equal(word(), mine, engine);
+    // WHAT A SESSION WRITES THERE IS REPEATED ONLY IF IT IS SHAPED AS A WORD, so nothing else of its choosing is in the answer.
+    writeFileSync(path.join(home, engine, ATTEMPT), '{"signedIn":true}\n');
+    assert.equal(word(), null, engine);
+    // A BOX THAT GIVES NO WORD, or something that is not one: the sign-in is made, and no earlier attempt's word is left to speak for it.
+    for (const none of [undefined, 'not-a-word', `${mine}0`]) {
+      writeFileSync(path.join(home, engine, ATTEMPT), `${mine}\n`);
+      await attempt(none, 'approved');
+      assert.equal(word(), null, `${engine}: ${none}`);
+    }
+    // A SIGN OUT takes the word with the sign-in: a file put there afterwards has none beside it.
+    await attempt(mine, 'approved');
+    const held = readFileSync(path.join(home, engine, 'auth.json'), 'utf8');
+    assert.equal(await signin({ engine, out: true }, { env: { FLEETWRIGHT_ENGINE_HOME: home }, out: () => {}, spawnEngine: codexLogin().spawn }), 0);
+    assert.equal(signedInAt(engine, home), null, engine);
+    writeFileSync(path.join(home, engine, 'auth.json'), held);
+    assert.equal(word(), null, engine);
   }
 });

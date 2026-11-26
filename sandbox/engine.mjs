@@ -863,6 +863,39 @@ function lookFor(engine, engineHome) {
 export const PASTED = 'auth.json.pasted';
 
 /**
+ * The file beside a sign-in in an engine home that names the attempt which
+ * made it: one line, the word the box made up for that attempt and gave to
+ * its sign-in container and to nothing else (FLEETWRIGHT_SIGNIN_ATTEMPT).
+ * A file of this runner's own, because the engine's file is the engine's.
+ *
+ * WHAT IT IS FOR. A box that did not hear how an attempt ended asks the home
+ * (`--signedin`). It used to take "a sign-in is here, written since the
+ * attempt began" as "the attempt signed in", and a member's sessions write
+ * this home: a file shaped as a sign-in, left by a session and touched,
+ * became a sign-in the box recorded for a code nobody had approved. A time
+ * proves nothing about who wrote a file. This does: the word is made per
+ * attempt, is in no session's environment, and is written here only once
+ * the engine has said the code was approved.
+ *
+ * WHAT IT DOES NOT PROVE, since a session can read, copy and remove any
+ * file in its own home:
+ *   - that the sign-in beside it is still the one the attempt made. A
+ *     session can put another file there afterwards, as it always could,
+ *     and the mark stays. The code was approved all the same, and whether
+ *     what is there works is the engine's to say before a turn;
+ *   - anything, once it is gone. A session that removes it makes a box that
+ *     did not hear say the attempt signed nobody in, which is the mistake
+ *     that asks for a new code and not the one that reports a sign-in
+ *     nobody made.
+ * What a session cannot do is know the word of an attempt before this
+ * runner writes it, so it cannot make an attempt nobody approved look
+ * approved.
+ */
+export const ATTEMPT = 'auth.json.attempt';
+/** What an attempt's word is: sixteen bytes in hex, which is what the box makes (src/core/engine-signin.js). Anything else is not one. */
+const ATTEMPT_RE = /^[0-9a-f]{32}$/;
+
+/**
  * Whether the member's pasted item is another sign-in than the one a home
  * holds: for Codex a file renewed later, by its own `last_refresh`, which is
  * how the box itself tells two copies apart; for OpenCode another token.
@@ -1448,6 +1481,11 @@ export async function run(args, io = {}) {
 // engine prints on its error output is not passed on at all here, as it is
 // in a session: before a sign-in exists there is nothing of it to take out,
 // and afterwards nothing is said but the second line.
+//
+// AND A SIGN-IN IT MAKES IS MARKED AS THIS ATTEMPT'S, with the word its box
+// gave this container and nothing else (ATTEMPT), so that a box which did
+// not hear the second line can tell that sign-in from any other file a
+// session may have left in the home.
 
 /** How long a device code lasts, in minutes. Codex's own bound (codex-rs/login/src/device_code_auth.rs); GitHub's codes last the same. */
 export const SIGNIN_MINUTES = 15;
@@ -1562,6 +1600,8 @@ export async function signin(args, io = {}) {
   const at = engineHome && spec ? homePaths(engine, engineHome) : null;
   /** The home the engine is started on, once it is made: this run's own, and gone when the run is. @type {{ root: string, home: string, work: string, dir: string, file: string, env: Record<string, string> }|null} */
   let own = null;
+  /** The word the box made up for this attempt, to be left beside a sign-in it makes (ATTEMPT). None from a box that gives none, and none for a sign out. */
+  const attempt = !args.out && typeof env.FLEETWRIGHT_SIGNIN_ATTEMPT === 'string' && ATTEMPT_RE.test(env.FLEETWRIGHT_SIGNIN_ATTEMPT) ? env.FLEETWRIGHT_SIGNIN_ATTEMPT : null;
   /**
    * The second line: how it ended. THE LINE ITSELF IS NOT PASSED THROUGH
    * `hide`, and nothing the member's home holds is withheld here at all.
@@ -1607,6 +1647,24 @@ export async function signin(args, io = {}) {
     return 0;
   };
   const failed = (/** @type {unknown} */ detail, /** @type {Record<string, unknown>} */ extra = {}) => done('failed', { detail: quiet(detail) ?? 'the engine gave no reason', ...extra });
+  /**
+   * Leave this attempt's word beside the sign-in it is about to put in the
+   * home (ATTEMPT), or take away the one an earlier attempt left when this
+   * one was given none: a mark beside a sign-in it was not written for
+   * would be a false statement.
+   *
+   * BEFORE THE SIGN-IN, NOT AFTER. Stopped between the two, the home holds
+   * this attempt's word beside whatever was there before, and a box that
+   * asks takes that for this attempt's sign-in: wrong about which file, in
+   * a moment two renames wide, of an attempt whose code a person did
+   * approve. The other order leaves a sign-in sessions run on that the box
+   * says nobody made, and nothing on any screen to sign it out.
+   */
+  const mark = () => {
+    const beside = path.join(/** @type {NonNullable<typeof at>} */ (at).dir, ATTEMPT);
+    if (attempt) writeWhole(beside, `${attempt}\n`);
+    else rmSync(beside, { force: true });
+  };
   if (!spec) return failed(`${line(engine, 40) ?? 'that'} is not an engine this runner signs in`);
   if (!at) return failed('this container was given no engine home to keep a sign-in in');
   try {
@@ -1714,6 +1772,7 @@ export async function signin(args, io = {}) {
       await peer.request('account/logout', undefined, startMs);
       rmSync(at.file, { force: true });
       rmSync(path.join(at.dir, PASTED), { force: true });
+      rmSync(path.join(at.dir, ATTEMPT), { force: true });
       return existsSync(at.file) ? failed('its sign-in could not be removed from this machine') : done('signed_out');
     }
     // HOW IT ENDED arrives as a notice, and can arrive before the answer that
@@ -1790,6 +1849,7 @@ export async function signin(args, io = {}) {
     const made = signedInAt(engine, mine.home);
     if (!made) return failed('it said it was signed in and kept no sign-in this runner can read');
     withhold(made.text);
+    mark();
     writeWhole(at.file, made.text);
     // Made on this machine: no copy of the box's, so nothing to hand back.
     rmSync(path.join(at.dir, PASTED), { force: true });
@@ -1815,6 +1875,7 @@ export async function signin(args, io = {}) {
       // entry out of this file and write the rest back (auth/index.ts,
       // `remove`): it tells GitHub nothing. So that is done here, and
       // OpenCode is not started on a home it could be steered from.
+      rmSync(path.join(at.dir, ATTEMPT), { force: true });
       if (textOf(at.file) === null) return done('signed_out');
       const held = there();
       delete held[OPENCODE_SIGNIN_PROVIDER];
@@ -1878,6 +1939,7 @@ export async function signin(args, io = {}) {
       const entry = made ? JSON.parse(made.text)[OPENCODE_SIGNIN_PROVIDER] : null;
       if (!entry) return failed('it said it was signed in and kept no sign-in this runner can read');
       withhold(made.text);
+      mark();
       writeWhole(at.file, `${JSON.stringify({ ...there(), [OPENCODE_SIGNIN_PROVIDER]: { type: 'oauth', refresh: entry.refresh, access: entry.access, expires: entry.expires } })}\n`);
       return done('signed_in', { who: null });
     }
@@ -1904,7 +1966,7 @@ export async function signin(args, io = {}) {
 // box must not say "not signed in" of something it did not hear, so it asks
 // (src/core/engine-signin.js, #ask). One line of JSON:
 //
-//   {"signin":"is","engine":"codex","signedIn":true,"pasted":false,"writtenAt":1764000001000}
+//   {"signin":"is","engine":"codex","signedIn":true,"pasted":false,"writtenAt":1764000001000,"attempt":"<the attempt's word>"}
 //
 // NO ENGINE IS STARTED, AND NOTHING IS WRITTEN. A sign-in is made on an
 // empty home of the run's own because nothing in a member's home can be
@@ -1921,10 +1983,14 @@ export async function signin(args, io = {}) {
 //              and no sign-in on this machine made: for Codex the mark
 //              beside the file (PASTED), for OpenCode the shape `stage`
 //              writes, a token with no access token beside it
-//   writtenAt  when the file was last written, by this machine's clock, so a
-//              box can tell a sign-in an attempt just made from one that was
-//              there before it. A session that renews rewrites the file too,
-//              so "written since" is "may be another sign-in", not "is"
+//   writtenAt  when the file was last written, by this machine's clock: the
+//              "since" a box says of a sign-in it learns of this way. NOT
+//              whose it is. A session that renews rewrites the file, and a
+//              session can write any file here with any time on it
+//   attempt    the word beside the sign-in that names the attempt which made
+//              it (ATTEMPT), or null for none that reads as one. This is
+//              what a box tells an attempt's own sign-in by, and what it
+//              does and does not prove is said where ATTEMPT is
 //
 // AND WHEN IT CANNOT READ THE HOME IT SAYS SO: `signedIn: null`, with why.
 // No file is "no". A file that is there and would not read, or does not read
@@ -1961,14 +2027,19 @@ export function signedIn(args, io = {}) {
   let pasted = false;
   /** @type {number|null} */
   let writtenAt = null;
+  /** @type {string|null} */
+  let attempt = null;
   if (held) {
     try {
       pasted = engine === 'codex' ? existsSync(path.join(at.dir, PASTED)) : JSON.parse(held.text)?.[OPENCODE_SIGNIN_PROVIDER]?.access === '';
       writtenAt = Math.round(statSync(held.file).mtimeMs);
     } catch { /* read a moment ago and gone now: said as it was read, with no time */ }
+    // Only a word shaped as the box's own is repeated: this file is one a session can write.
+    const word = (textOf(path.join(at.dir, ATTEMPT)) ?? '').trim();
+    attempt = ATTEMPT_RE.test(word) ? word : null;
   }
-  // Nothing of the file is in the line, so nothing is withheld from it.
-  write(`${JSON.stringify({ engine, signin: 'is', signedIn: Boolean(held), pasted, writtenAt })}\n`);
+  // Nothing of the engine's file is in the line, so nothing is withheld from it.
+  write(`${JSON.stringify({ engine, signin: 'is', signedIn: Boolean(held), pasted, writtenAt, attempt })}\n`);
   return 0;
 }
 

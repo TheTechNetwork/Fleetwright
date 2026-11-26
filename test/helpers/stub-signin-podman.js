@@ -153,7 +153,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --name) name="$2"; shift ;;
     -v) case "$2" in *:/engine-home) vol="\${2%%:*}" ;; esac; shift ;;
-    -e) shift ;;
+    # What the box gives a sign-in container and nothing else: the attempt's own word.
+    -e) case "$2" in FLEETWRIGHT_SIGNIN_ATTEMPT=*) export "$2" ;; esac; shift ;;
     img) shift; break ;;
   esac
   shift

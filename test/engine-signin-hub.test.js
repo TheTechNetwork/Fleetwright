@@ -78,7 +78,8 @@ test('a start runs the runner with the member’s engine home and nothing of a s
   const [first, second] = await Promise.all([b.ask('start'), b.ask('start')]);
   // One container, whichever of the two arrived first.
   assert.equal(b.runs().length, 1);
-  assert.equal(b.runs()[0], `run --rm --name fw-signin-codex-debbie -v fw-engine-debbie:${ENGINE_HOME} -e FLEETWRIGHT_ENGINE_HOME=${ENGINE_HOME} img fleetwright-engine --signin codex`);
+  // With the home, and a word of this attempt's own that no other container is given.
+  assert.match(b.runs()[0], new RegExp(`^run --rm --name fw-signin-codex-debbie -v fw-engine-debbie:${ENGINE_HOME} -e FLEETWRIGHT_ENGINE_HOME=${ENGINE_HOME} -e FLEETWRIGHT_SIGNIN_ATTEMPT=[0-9a-f]{32} img fleetwright-engine --signin codex$`));
   const waiting = first.already ? second : first;
   assert.deepEqual(
     { ...waiting, text: '', startedAt: 0, expiresAt: 0 },
@@ -94,8 +95,9 @@ test('a start runs the runner with the member’s engine home and nothing of a s
   assert.deepEqual([(await b.ask('status')).state, (await b.ask('status')).code], ['waiting', 'ABCD-EFGH']);
   assert.equal(b.runs().length, 1);
 
-  // WHILE IT WAITS, what is on disk is a mark that an attempt is out, and no page or code.
-  assert.deepEqual(JSON.parse(b.kept()).signins['debbie/codex'], { member: 'debbie', engine: 'codex', volume: 'fw-engine-debbie', signedIn: null, last: null, attempt: { startedAt: waiting.startedAt, by: 'eli@example.com' } });
+  // WHILE IT WAITS, what is on disk is a mark that an attempt is out, with the word its container was given, and no page or code.
+  const word = /FLEETWRIGHT_SIGNIN_ATTEMPT=(\S+)/.exec(b.runs()[0])?.[1];
+  assert.deepEqual(JSON.parse(b.kept()).signins['debbie/codex'], { member: 'debbie', engine: 'codex', volume: 'fw-engine-debbie', signedIn: null, last: null, attempt: { startedAt: waiting.startedAt, by: 'eli@example.com', word } });
   // And the box reports nobody signed in.
   assert.deepEqual(b.signins.report(), [{ member: 'debbie', engine: 'codex', state: null, at: null, since: null }]);
 
@@ -122,6 +124,10 @@ test('a start runs the runner with the member’s engine home and nothing of a s
     assert.ok(!text.includes(waiting.code) && !text.includes(new URL(waiting.url).host), `the code or its page is in ${where}`);
   }
   assert.match(said(), /engines: codex sign-in for debbie, asked by eli@example\.com: signed_in/);
+  // THE ATTEMPT'S WORD is the record's and its container's: in no answer, no log line and nothing reported.
+  for (const [where, text] of [['an answer', JSON.stringify(b.answers)], ['a log line', said()], ['what the box reports', JSON.stringify(b.signins.report())]]) {
+    assert.ok(!text.includes(String(word)), `the attempt’s word is in ${where}`);
+  }
 });
 
 test('a person’s engine home is named by a hash of their address, an agent’s by its id, and neither can be the other’s', (t) => {
@@ -573,8 +579,9 @@ case "$1" in
 esac
 name=''
 asked=''
-while [ $# -gt 0 ]; do case "$1" in --name) name="$2"; shift ;; --signedin) asked=1 ;; esac; shift; done
-if [ -n "$asked" ]; then cat "$D/home" 2>/dev/null; exit 0; fi
+while [ $# -gt 0 ]; do case "$1" in --name) name="$2"; shift ;; --signedin) asked=1 ;; FLEETWRIGHT_SIGNIN_ATTEMPT=*) printf '%s' "\${1#*=}" > "$D/word" ;; esac; shift; done
+# The home answers with the word of the attempt that was last run where a test wrote @word@: what the runner would have left beside its sign-in.
+if [ -n "$asked" ]; then sed "s/@word@/$(cat "$D/word" 2>/dev/null)/" "$D/home" 2>/dev/null; exit 0; fi
 echo $$ > "$D/ctr-$name.pid"
 cat "$D/lines"
 ${ends ? 'exit 0' : 'exec sleep 30'}
@@ -679,7 +686,8 @@ test('an ending the runner did not say, with a code out, is asked of the home be
   };
   // THE CONTAINER DIED AFTER THE CODE WAS OUT, having written the sign-in:
   // the box said "was not signed in", of something it had not heard.
-  const died = sayingBox(t, [code], {}, { ends: true, home: { signin: 'is', engine: 'codex', signedIn: true, pasted: false, writtenAt: later() } });
+  // Its word is beside it, which is how the box knows this attempt made it (`@word@`, sayingBox).
+  const died = sayingBox(t, [code], {}, { ends: true, home: { signin: 'is', engine: 'codex', signedIn: true, pasted: false, writtenAt: later(), attempt: '@word@' } });
   await died.ask('start');
   const signedIn = await state(died);
   assert.deepEqual([signedIn.state, signedIn.signedIn.who, signedIn.signedIn.since > 0], ['signed_in', null, true]);
@@ -690,14 +698,25 @@ test('an ending the runner did not say, with a code out, is asked of the home be
   const not = await state(empty);
   assert.deepEqual([not.state, not.signedIn], ['failed', null]);
   assert.equal(not.text, 'Codex was not signed in for debbie on ops-box: the sign-in container stopped before it said how the sign-in ended.');
-  // WHAT IS THERE IS THE BOX'S COPY OF A PASTED ONE, or was written before the attempt began: the attempt signed nobody in.
-  for (const home of [{ signedIn: true, pasted: true, writtenAt: later() }, { signedIn: true, pasted: false, writtenAt: 1_000 }]) {
+  // WHAT IS THERE IS NOT THIS ATTEMPT'S: the box's copy of a pasted one, a
+  // file from before, and A FILE WRITTEN SINCE THE ATTEMPT BEGAN WITH NO WORD
+  // OF ITS, OR ANOTHER ATTEMPT'S, BESIDE IT. The last two were taken for the
+  // code approved, on the time alone, and a member's sessions write this
+  // home. The attempt signed nobody in, and a file it did not make is not
+  // recorded as a sign-in either: this box says nobody is signed in whom it
+  // did not already say.
+  for (const home of [
+    { signedIn: true, pasted: true, writtenAt: later(), attempt: '@word@' },
+    { signedIn: true, pasted: false, writtenAt: 1_000 },
+    { signedIn: true, pasted: false, writtenAt: later() },
+    { signedIn: true, pasted: false, writtenAt: later(), attempt: null },
+    { signedIn: true, pasted: false, writtenAt: later(), attempt: '0123456789abcdef0123456789abcdef' },
+  ]) {
     const b = sayingBox(t, [code], {}, { ends: true, home: { signin: 'is', engine: 'codex', ...home } });
     await b.ask('start');
     const s = await state(b);
-    assert.equal(s.state, 'failed', JSON.stringify(home));
-    // A sign-in from before, which this box had not been told of, is now known and is said beside the attempt that failed.
-    assert.equal(Boolean(s.signedIn), !home.pasted, JSON.stringify(home));
+    assert.deepEqual([s.state, s.signedIn], ['failed', null], JSON.stringify(home));
+    assert.equal(b.signins.report()?.[0].since, null, JSON.stringify(home));
   }
   // THE HOME DOES NOT ANSWER: cannot tell, and not "was not signed in".
   const mute = sayingBox(t, [code], {}, { ends: true });
@@ -708,7 +727,7 @@ test('an ending the runner did not say, with a code out, is asked of the home be
   assert.equal(blind.text, 'ops-box did not hear how the last Codex sign-in for debbie ended (the container stopped without saying), and has not been able to ask whether the code was approved first. So it cannot tell whether Codex is signed in for debbie there. Ask again in a moment, and it looks again.');
   assert.equal(mute.signins.report()?.[0].since, null);
   // A CANCEL THAT RACED AN APPROVAL: stopped before the runner answered, with the sign-in written. The cancel's own answer says what is true.
-  const raced = sayingBox(t, [code], { stopMs: 300 }, { home: { signin: 'is', engine: 'codex', signedIn: true, pasted: false, writtenAt: later() } });
+  const raced = sayingBox(t, [code], { stopMs: 300 }, { home: { signin: 'is', engine: 'codex', signedIn: true, pasted: false, writtenAt: later(), attempt: '@word@' } });
   assert.equal((await raced.ask('start')).state, 'waiting');
   const cancelled = await raced.ask('cancel');
   assert.deepEqual([cancelled.state, cancelled.signedIn?.who], ['signed_in', null]);
@@ -716,6 +735,72 @@ test('an ending the runner did not say, with a code out, is asked of the home be
   const early = sayingBox(t, [], {}, { ends: true, home: { signin: 'is', engine: 'codex', signedIn: true, pasted: false, writtenAt: later() } });
   assert.equal((await early.ask('start')).error?.code, 'signin_failed');
   assert.ok(!early.calls().some((l) => l.includes('--signedin')), 'a home was asked about an attempt that never had a code');
+});
+
+// ── A file in the home that the attempt did not make ────────────────────────
+//
+// A member's sessions write the engine home. What a box finds there after an
+// ending it did not hear is the attempt's sign-in only by the attempt's own
+// word beside it (src/core/engine-signin.js, #ask), and each of these three
+// was once recorded as the code approved, or as somebody signed in.
+
+/** A box whose member was signed in on the machine once, as debbie@example.com, with nothing left running. */
+async function signedInOnce(/** @type {import('node:test').TestContext} */ t) {
+  const b = box(t);
+  await b.ask('start');
+  b.provider('approved');
+  await until(async () => (await b.ask('status')).state === 'signed_in', 'the first sign-in');
+  b.set('provider-approved', false);
+  await until(() => !b.running('fw-signin-codex-debbie'), 'the first container gone');
+  return b;
+}
+
+test('a sign-in a session found ended is not reported again after an ending this box did not hear', async (t) => {
+  // The box stops reporting it (`ended`); the file that no longer works
+  // stays in the home. After the next ending this box did not hear, with
+  // nobody having approved anything, it took that file for "a sign-in it had
+  // not been told of" and said the member was signed in.
+  const b = await signedInOnce(t);
+  assert.equal(b.signins.ended('debbie', 'codex'), true);
+  assert.deepEqual([(await b.ask('status')).state, (await b.ask('status')).signedIn], ['ended', null]);
+  assert.equal((await hubThatDies(b)).state, 'waiting');
+  const after = await b.ask('status');
+  assert.deepEqual([after.state, after.signedIn], ['lost', null]);
+  assert.deepEqual(b.signins.report().map((r) => [r.state, r.since]), [['lost', null]]);
+});
+
+test('a sign-in a session renewed while a code was out is not recorded as the code approved, and whose it is stays said', async (t) => {
+  // Codex rewrites its file when it renews, so the file is newer than the
+  // attempt and is not the attempt's. It was recorded as the new code
+  // approved, and the account the record held was dropped.
+  const r = await signedInOnce(t);
+  const first = (await r.ask('status')).signedIn;
+  assert.equal(first.who.email, 'debbie@example.com');
+  assert.equal((await hubThatDies(r)).state, 'waiting');
+  const file = r.volume('fw-engine-debbie', 'codex', 'auth.json');
+  await new Promise((done) => setTimeout(done, 30));
+  writeFileSync(file, readFileSync(file, 'utf8'));
+  const back = await r.ask('status');
+  assert.deepEqual([back.state, back.signedIn], ['lost', first]);
+  assert.match(back.text, /^ops-box restarted while a Codex sign-in for debbie was waiting, so that attempt is gone\. Start again for a new code\. Codex is still signed in as debbie@example\.com there, since /);
+});
+
+test('a file a session left in the home, with a piece of the runner’s own line in it, does not make this box record a sign-in nobody approved', async (t) => {
+  // Shaped as a sign-in (any account's), with one more string in it. The
+  // runner cut that string out of what it said, the box could not read the
+  // line, asked the home, found the session's file written since the
+  // attempt began, and recorded a sign-in for a code nobody had approved.
+  const p = box(t);
+  const theirs = p.volume('fw-engine-debbie', 'codex', 'auth.json');
+  const planted = JSON.stringify({ ...JSON.parse(codexSignIn({ refresh: 'rt-of-some-other-account-0123', access: 'at-of-some-other-account-0123' })), note: 'done","state":"cancelled' });
+  mkdirSync(path.dirname(theirs), { recursive: true });
+  writeFileSync(theirs, planted);
+  assert.equal((await p.ask('start')).state, 'waiting');
+  // The session goes on writing its home, as sessions do.
+  writeFileSync(theirs, planted);
+  const cancelled = await p.ask('cancel');
+  assert.deepEqual([cancelled.state, cancelled.signedIn], ['cancelled', null]);
+  assert.deepEqual(p.signins.report().map((row) => [row.state, row.since]), [['cancelled', null]]);
 });
 
 // ── A record that cannot be written, or does not read ───────────────────────

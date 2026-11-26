@@ -20,12 +20,22 @@
 // the sign-in may be in the home. So the box asks, with a short container
 // that looks in the home and starts no engine (#ask), and records what it
 // learns. Until it has asked it says it cannot tell (`cannot_tell`).
+//
+// AND WHAT IS IN THE HOME IS NOT, BY ITSELF, WHAT THE ATTEMPT MADE. A
+// member's sessions write that home. So each attempt is given a word of its
+// own, made here and handed to its sign-in container and to nothing else,
+// which the runner leaves beside a sign-in only once the engine has said
+// the code was approved. Asked afterwards, a home that does not hold this
+// attempt's word did not get its sign-in from this attempt, whatever file
+// is in it and whenever that was written (#ask).
 //   on disk     `engine-signins.json` in the state directory: for each member
 //               and engine, how the last attempt ended, who is signed in and
-//               since when, who asked, a mark while an attempt is out, and
-//               the name of the volume the sign-in is in, which is what a
-//               removal finds it by (forget, keepMembers).
-//               No token, no code and no page.
+//               since when, who asked, a mark while an attempt is out with
+//               that attempt's word, and the name of the volume the sign-in
+//               is in, which is what a removal finds it by (forget,
+//               keepMembers).
+//               No token, no code and no page. An attempt's word is none of
+//               those: it opens nothing, and is in no answer and no report.
 //
 // A FILE THAT CANNOT BE READ, OR DOES NOT READ AS ONE, IS CANNOT TELL. It is
 // never nothing: a box that cannot say who is signed in does not say nobody
@@ -59,6 +69,7 @@
 // says Podman does.
 
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -149,11 +160,12 @@ function after(ms, value) {
  * @typedef {{ email: string|null, plan: string|null }} Who  the account, as the engine itself says
  * @typedef {{ since: number, who: Who|null, by: string|null }} SignedIn
  * @typedef {{ state: string, at: number, detail: string|null, by: string|null }} Last
- * @typedef {{ member: string, engine: string, volume?: string, signedIn: SignedIn|null, last: Last|null, attempt: { startedAt: number, by: string|null }|null,
- *   unheard?: { startedAt: number } }} Entry
+ * @typedef {{ member: string, engine: string, volume?: string, signedIn: SignedIn|null, last: Last|null, attempt: { startedAt: number, by: string|null, word?: string }|null,
+ *   unheard?: { startedAt: number, word?: string } }} Entry
  *   `volume` is the engine home the sign-in is in; an entry written before it was kept has none.
  *   `unheard` is an attempt, begun then, whose ending the runner did not say and the home has not yet been asked about (#ask)
- * @typedef {{ key: string, member: string, engine: string, volume: string, by: string|null, box: string, startedAt: number, expiresAt: number,
+ *   `word` is the attempt's own, which a sign-in it made has beside it (#ask); a mark written before attempts had one has none
+ * @typedef {{ key: string, member: string, engine: string, volume: string, by: string|null, box: string, startedAt: number, expiresAt: number, word: string,
  *   url: string|null, code: string|null, child: any, stopped: 'cancelled'|'lost'|'removed'|null, over: boolean,
  *   first: Promise<Record<string, any>>, ended: Promise<void>, end: (state: string) => void, timers: any[] }} Attempt
  *   `end` writes down how it ended and lets go of everything it held, whatever state it is in (#run)
@@ -495,8 +507,8 @@ export class EngineSignins {
     // ending could not be written.
     const orphan = Boolean(entry.attempt) && !this.owed.has(key);
     if (!orphan && !entry.unheard) return;
-    const startedAt = orphan ? Number(entry.attempt?.startedAt) : Number(entry.unheard?.startedAt);
-    return this.#ask(key, { member: entry.member, engine: entry.engine, volume: volume ?? homeOf(entry), startedAt, orphan });
+    const begun = orphan ? entry.attempt : entry.unheard;
+    return this.#ask(key, { member: entry.member, engine: entry.engine, volume: volume ?? homeOf(entry), startedAt: Number(begun?.startedAt), word: typeof begun?.word === 'string' ? begun.word : null, orphan });
   }
 
   /**
@@ -523,30 +535,60 @@ export class EngineSignins {
    * writing, then a short container from the session image looks in the
    * home (`fleetwright-engine --signedin`, sandbox/engine.mjs). It starts no
    * engine and has no network. It says whether a sign-in the engine would
-   * start on is there, whether that is the box's copy of a pasted one, and
-   * when the file was last written.
+   * start on is there, whether that is the box's copy of a pasted one, when
+   * the file was last written, and the attempt's word it found beside it.
    *
    * WHAT IS RECORDED, once it has answered:
-   *  - a sign-in made here, written since the attempt began: the attempt
+   *  - a sign-in made here with THIS attempt's word beside it: the attempt
    *    signed in. `signed_in`, since when it was written. WHO is not known:
    *    the engine was not asked, and the account the record had is no longer
    *    this sign-in's, so it is not said;
-   *  - one written before the attempt began: the attempt changed nothing,
-   *    and what the record said of who is signed in stands (or is now known,
-   *    for a sign-in this box had not been told of);
+   *  - a sign-in with another word beside it, or none: the attempt changed
+   *    nothing, and the record of who is signed in stands exactly as it
+   *    was, somebody or nobody;
    *  - none, or only a pasted copy: nobody is signed in on this machine, and
    *    the record stops saying somebody is.
    * UNTIL THEN, AND WHEN IT CANNOT ASK (no Podman, no image, no home it can
-   * name, a container that would not run), the entry is marked `unheard`
-   * and every answer about it is cannot tell (#view). Asked again, it looks
-   * again.
+   * name, a container that would not run, a home the runner could not
+   * read), the entry is marked `unheard` and every answer about it is cannot
+   * tell (#view). Asked again, it looks again.
+   *
+   * THE WORD, AND NOT THE TIME ON THE FILE. "Written since the attempt
+   * began" was the test, and it said three things that were not so:
+   *  - a member's session writes this home. One left a file shaped as a
+   *    sign-in, with a string in it that broke the old runner's second line,
+   *    and the box recorded a sign-in for a code nobody had approved;
+   *  - a session that renews a sign-in rewrites the file. An older sign-in
+   *    renewed while a code was out was recorded as that code approved, and
+   *    whose it was dropped;
+   *  - and a file from before the attempt was taken for a sign-in "this box
+   *    had not been told of" and recorded, when what it had been told was
+   *    that a session found that sign-in ended (`ended`): the box reported
+   *    it again after any ending it did not hear.
+   * So a file here is this attempt's only by the word the attempt was given
+   * (#start), and a file that is not this attempt's never makes this box
+   * say somebody is signed in whom it did not already say.
+   *
+   * WHAT THAT LEAVES. The home is the member's sessions' to write, so:
+   *  - a session can remove the word, or the sign-in. Then an attempt that
+   *    did sign in and was not heard is recorded as having signed nobody
+   *    in, and somebody starts again. That way round and never the other;
+   *  - after a code was approved, a session can put another file where the
+   *    sign-in was, keep the word, and this box says the attempt signed in.
+   *    It did; what is there now is the session's doing, as it could always
+   *    be a moment after any sign-in, and who is not said;
+   *  - a session cannot know an attempt's word before the runner writes it,
+   *    and the runner writes it only for an approved code.
+   * A runner too old to say a word (a session image from before this), and
+   * a mark an earlier release left with none in it, never read as this
+   * attempt's: an approval this box did not hear is then recorded as lost.
    *
    * One asking a member and engine at a time; whoever needs the answer waits
    * on it (#heard), and a start and a sign out wait for it before they run.
    * Never throws.
    *
    * @param {string} key
-   * @param {{ member: string, engine: string, volume: string|null, startedAt: number, orphan?: boolean }} t
+   * @param {{ member: string, engine: string, volume: string|null, startedAt: number, word: string|null, orphan?: boolean }} t  `word` is the attempt's own (#start)
    * @returns {Promise<void>}
    */
   #ask(key, t) {
@@ -555,7 +597,7 @@ export class EngineSignins {
     const asking = (async () => {
       // Nothing of the attempt is left running, and so nothing is still writing the home.
       await this.#remove(containerFor(t.member, t.engine));
-      /** @type {{ signedIn: boolean, pasted: boolean, writtenAt: number|null }|null} */
+      /** @type {{ signedIn: boolean, pasted: boolean, writtenAt: number|null, word: string|null }|null} */
       let learned = null;
       try {
         if (t.volume && podmanAvailable(this.cfg) && sandboxImageExists(this.cfg)) {
@@ -564,7 +606,11 @@ export class EngineSignins {
             try {
               const line = JSON.parse(text);
               if (line?.signin === 'is' && typeof line.signedIn === 'boolean') {
-                learned = { signedIn: line.signedIn, pasted: line.pasted === true, writtenAt: Number.isFinite(line.writtenAt) && line.writtenAt > 0 ? Math.round(line.writtenAt) : null };
+                learned = {
+                  signedIn: line.signedIn, pasted: line.pasted === true,
+                  writtenAt: Number.isFinite(line.writtenAt) && line.writtenAt > 0 ? Math.round(line.writtenAt) : null,
+                  word: typeof line.attempt === 'string' ? line.attempt : null,
+                };
               }
             } catch { /* not the runner's line */ }
           }
@@ -580,26 +626,23 @@ export class EngineSignins {
           e.attempt = null;
         }
         if (!learned) {
-          e.unheard = { startedAt: t.startedAt };
+          e.unheard = { startedAt: t.startedAt, ...(t.word ? { word: t.word } : {}) };
           said += ', and whether it had signed in could not be asked';
           return;
         }
         delete e.unheard;
         const here = learned.signedIn && !learned.pasted;
-        // Written since the attempt began, by the one clock this machine
-        // has. No grace either way: a code is approved by a person, seconds
-        // at the least after the attempt began, and a sign-in from before it
-        // may have been written only moments before. A time that could not
-        // be read counts as since: the account the record held is then not
-        // said of a sign-in it may not be, which is the safer mistake.
-        const anew = here && (learned.writtenAt === null || learned.writtenAt >= t.startedAt);
+        // This attempt's, by its word and by nothing else (above).
+        const anew = here && t.word !== null && learned.word === t.word;
         if (anew) {
           e.signedIn = { since: learned.writtenAt ?? at, who: null, by: e.last?.by ?? null };
           e.last = { state: 'signed_in', at, detail: null, by: e.last?.by ?? null };
           said += ', and the code had been approved: signed in';
         } else if (here) {
-          if (!e.signedIn) e.signedIn = { since: learned.writtenAt ?? at, who: null, by: null };
-          said += ', and the sign-in from before it is as it was';
+          // NOTHING IS RECORDED OF A FILE THIS ATTEMPT DID NOT MAKE. Who the
+          // record says is signed in stays, with whose it is; and where it
+          // says nobody, it goes on saying nobody.
+          said += ', and what the home holds is not this attempt’s: the record is as it was';
         } else {
           e.signedIn = null;
           said += ', and no sign-in made here is in the home';
@@ -676,8 +719,13 @@ export class EngineSignins {
     return done;
   }
 
-  /** The `podman run` for one sign-in or sign out. @param {{ member: string, engine: string, account: string, volume: string }} a @param {'--signin'|'--signout'} mode @param {import('./egress.js').EgressRoute|null} route */
-  #argv(a, mode, route) {
+  /**
+   * The `podman run` for one sign-in or sign out.
+   *
+   * @param {{ member: string, engine: string, account: string, volume: string }} a @param {'--signin'|'--signout'} mode @param {import('./egress.js').EgressRoute|null} route
+   * @param {string|null} [word]  a sign-in attempt's own word (#start), which its container alone is given
+   */
+  #argv(a, mode, route, word = null) {
     const cfg = this.cfg;
     return [
       'run', '--rm', '--name', containerFor(a.member, a.engine),
@@ -685,6 +733,11 @@ export class EngineSignins {
       ...usernsArgs(cfg),
       '-v', `${a.volume}:${ENGINE_HOME}`,
       '-e', `FLEETWRIGHT_ENGINE_HOME=${ENGINE_HOME}`,
+      // In this container's environment and no session's. While the attempt
+      // runs it is also in Podman's own arguments on this box, which whoever
+      // can list this machine's processes can read. A session cannot: it is
+      // in a container, with that container's processes and no others.
+      ...(word ? ['-e', `FLEETWRIGHT_SIGNIN_ATTEMPT=${word}`] : []),
       // Behind an egress list, the member's own way out, as their sessions have.
       ...egressArgs(cfg, route),
       ...(cfg.sandboxMemory ? [`--memory=${cfg.sandboxMemory}`] : []),
@@ -728,6 +781,9 @@ export class EngineSignins {
     /** @type {Attempt} */
     const attempt = {
       key: a.key, member: a.member, engine: a.engine, volume: a.volume, by: a.by, box: a.box, startedAt, expiresAt: startedAt + this.capMs,
+      // THIS ATTEMPT'S OWN WORD: what a sign-in it makes will have beside
+      // it, and what tells that sign-in from any other file in the home (#ask).
+      word: randomBytes(16).toString('hex'),
       url: null, code: null, child: null, stopped: null, over: false,
       first: /** @type {any} */ (null), ended: /** @type {any} */ (null), end: () => {}, timers: [],
     };
@@ -785,7 +841,7 @@ export class EngineSignins {
         this.#record(a.key, (e) => {
           e.last = { state, at, detail: state === 'failed' ? (said.detail ?? null) : null, by: a.by };
           e.attempt = null;
-          if (unheard) e.unheard = { startedAt: attempt.startedAt };
+          if (unheard) e.unheard = { startedAt: attempt.startedAt, word: attempt.word };
           else delete e.unheard;
           if (state === 'signed_in') e.signedIn = { since: at, who: said.who ?? null, by: a.by };
         }, a.volume);
@@ -796,7 +852,7 @@ export class EngineSignins {
         attempt.child?.kill?.('SIGTERM');
       } catch { /* gone already */ }
       void this.#remove(containerFor(a.member, a.engine));
-      if (unheard) void this.#ask(a.key, { member: a.member, engine: a.engine, volume: a.volume, startedAt: attempt.startedAt });
+      if (unheard) void this.#ask(a.key, { member: a.member, engine: a.engine, volume: a.volume, startedAt: attempt.startedAt, word: attempt.word });
       finished();
     };
     attempt.end = end;
@@ -828,7 +884,7 @@ export class EngineSignins {
     // restarted, long after the disk was fine.
     try {
       this.#write(a.key, (e) => {
-        e.attempt = { startedAt: attempt.startedAt, by: a.by };
+        e.attempt = { startedAt: attempt.startedAt, by: a.by, word: attempt.word };
       }, a.volume);
     } catch (e) {
       neverBegan();
@@ -850,7 +906,7 @@ export class EngineSignins {
       try {
         // Its own process group, as every long Podman call here has
         // (podman.js, podmanAsync): what ends it is this box, by name.
-        child = spawn(this.cfg.podmanBin, this.#argv(a, '--signin', ready.route), { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+        child = spawn(this.cfg.podmanBin, this.#argv(a, '--signin', ready.route, attempt.word), { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
       } catch (e) {
         end('failed', { detail: `the sign-in container could not be started: ${oneLine(/** @type {Error} */ (e).message) ?? 'no reason given'}` });
         return answer(refused('signin_failed', this.#view(a.key, a.box)));
