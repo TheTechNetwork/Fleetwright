@@ -820,10 +820,34 @@ secrets through the coordinator, so they are accounted for here
   phone puts the comparison beside the button, and nothing else in this design
   rests on the coordinator's word for a key.
 - **A box's request** is signed by that key and answered sealed to a key the
-  box made for it. The coordinator checks the key is the one the box enrolled
-  with, and the minter checks the signature and the approval; a replay gets an
-  answer only the box can open. What the coordinator can do is deny: drop the
-  request, and the box keeps what it holds until it runs out.
+  box made for it, **and the answer is signed by the minter**. The coordinator
+  checks the key is the one the box enrolled with, and the minter checks the
+  signature and the approval; a replay gets an answer only the box can open.
+  What the coordinator can do is deny: drop the request, and the box keeps
+  what it holds until it runs out.
+
+  *Until the second outside review this said less than it claimed.* The
+  answer was sealed and not signed, and a box's request carries the key the
+  answer is sealed to in the clear, so the coordinator could write the answer
+  itself: sealing to a public key says who can read, never who wrote. The
+  review did it twice against the merged code. A box nobody had approved for
+  a member's vault was told it was approved, and took a custodian's
+  `enginesignin start`; and a box was handed a `codex` item for a member that
+  no custodian had kept, which that member's next Codex session there would
+  have run on. So "deny" was wrong by the whole of a vault: a compromised
+  coordinator could put credentials of its own choosing on any box that asks
+  the vault, for any person or member, and make any box believe any
+  approval. **Now** the minter signs each answer with the signing key a box
+  pins from the fleet's own address (the key the signed key list is checked
+  with, [signed-intents.md](./signed-intents.md)), over the box's key id, the
+  request's `at` and `reply`, and a digest of the sealed part
+  (`src/fleet/protocol/vault-answer.js`), and a box
+  sets no approval, hands its hub nothing and forgets nothing on an answer
+  whose signature does not hold (`sidecar.js`, `#askVault`;
+  `test/vault.test.js`). **Still open:** a box from before the check opens
+  whatever is sealed to it, until it is updated; and the coordinator's own
+  `not_this_box` still makes a box forget what it holds, which only takes
+  away.
 - **What a box holds** is access tokens, a Claude setup-token and named
   secrets, never a refresh token, in 0600 files the box's own sessions are
   given through the broker. That is less than a box holding a linked

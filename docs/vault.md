@@ -256,11 +256,43 @@ exact key (the whole SHA-256 of the key, not the sixteen characters shown),
 sealed to a one-request key the box made. Replaying a box's request gets an
 answer sealed to the box's own key.
 
+**And the answer is signed, because sealed says only who can read it.** A
+box's request is signed, not sealed, so the one-request key travels in it in
+the clear, and the coordinator carries it. Anybody holding a public key can
+seal to it. Until this was fixed a box checked the answer by opening it and
+by nothing else, so a coordinator could answer a box's request itself, and
+an outside review did: a box nobody had approved for a member's vault
+believed it was approved for it, and a box filed a Codex sign-in for a
+member that no custodian had kept. Now the minter signs every answer it
+gives a box, with the signing key a box already pins from the fleet's own
+address for the signed key list ([signed-intents.md](./signed-intents.md)),
+over
+
+```
+signingInput('vault-box-answer', { v: 1, host, at, reply, sealed })
+```
+
+where `host` is the whole SHA-256 of the box's key in hex, `at` and `reply`
+are the box's own request's, and `sealed` is the SHA-256, in hex, of the
+sealed part: its three strings joined by full stops, `epk.iv.ct`
+(`src/fleet/protocol/vault-answer.js`, the one function both sides build the
+bytes with). Naming the box means one box's answer is not another's; `at`
+and `reply` tie it to one request, so an older genuine answer is not an
+answer to a newer one; the digest ties it to what was sealed. The signature
+rides inside `sealed`, as `signature` beside `epk`, `iv` and `ct`, because
+`sealed` is the one part of the minter's answer every coordinator passes on
+untouched: a coordinator from before the signature carries it, and a box
+from before it opens `sealed` by the three strings it knows. A box takes
+nothing from an answer whose signature does not hold ("On the box", below).
+A minter whose signing key does not load still answers, unsigned, and says
+so in the sentence beside the seal.
+
 ```
 phone ── sealed to the minter's own key: { github, email, op, at, reply } ──┐
                                                          POST /api/vault     │
 box ──── signed by the box key: { hostKey, at, reply } ──┐                   │
-                                         `vault` frame   │                   │
+         answered sealed to `reply`, and signed by the   │                   │
+         minter's signing key       `vault` frame        │                   │
                                                          ▼                   ▼
                                     coordinator: relays, adds who sent it,
                                     checks the box key is the one it enrolled,
@@ -513,6 +545,15 @@ the phone to sign vault requests with a key of its own, which it does not yet.
 **A box you did not check.** Approving without comparing the fingerprint trusts
 the coordinator's list for which key that box has, which is the one thing this
 design otherwise never does.
+
+**A box older than the signature.** A box from before the minter signed its
+answers checks nothing but that the answer opens, so a coordinator can still
+answer that box in the vault's place, with approvals and items of its own
+making. Updating the box closes it; nothing the minter does can. And a box
+that checks is only as sure as the key it pinned: it fetches the minter's
+signing key from the fleet's own address the first time and keeps it
+([signed-intents.md](./signed-intents.md)), so the first fetch trusts the
+route that serves it, as a phone's does (below).
 
 **The minter's own bound** is the Cloudflare account and whoever can deploy to
 it: new code there runs with the deposit key and the client secrets, and can
