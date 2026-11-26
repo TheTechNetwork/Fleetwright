@@ -190,6 +190,9 @@ struct DelegationsView: View {
 /// same sentence as Android.
 let mcpMembersSentence = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member."
 
-/// What to do when a machine refuses a start as a member under such a grant.
+/// What an older machine does with a grant that names members, and what to
+/// do first. It rebuilds the signed bytes without the field, so the whole
+/// grant fails its check there: every stop and read the client sends that
+/// machine, where this used to say only a start as a member was refused.
 /// The same sentence as Android.
-let mcpMembersOlderMachine = "If a machine refuses a start as a member, update that machine: an older one does not take a grant that names members."
+let mcpMembersOlderMachine = "A machine from before members could be named refuses everything sent under a grant that names one, not only a start as a member. Update that machine before turning a member on."

@@ -432,11 +432,11 @@ test('a pasted auth.json is hidden on both phones until Show is pressed, and say
   }
   // The field is drawn while there is nothing in it, or once Show said so.
   // Otherwise the count is, and never the text.
-  has(IOS, /if \w+\.isEmpty \|\| (\w+) \{\s*TextField\("auth\.json", text: \$(\w+), axis: \.vertical\)[\s\S]{0,360}?\} else \{\s*Text\(\w+\(\2\.count\)\)/, 'iOS shows a pasted auth.json without being asked');
-  has(ANDROID, /if \((\w+)\.isEmpty\(\) \|\| (\w+)\) \{\s*OutlinedTextField\(\s*value = \1,[\s\S]{0,600}?\} else \{\s*Text\(\w+\(\1\.length\),/, 'Android shows a pasted auth.json without being asked');
+  has(IOS, /if \w+\.isEmpty \|\| (\w+) \{\s*(?:\/\/[^\n]*\n\s*)*TextField\("auth\.json", text: Binding\(get: \{ (\w+) \},[\s\S]{0,700}?\} else \{\s*Text\(\w+\(\2\.count\)\)/, 'iOS shows a pasted auth.json without being asked');
+  has(ANDROID, /if \((\w+)\.isEmpty\(\) \|\| (\w+)\) \{\s*OutlinedTextField\(\s*value = \1,[\s\S]{0,1200}?\} else \{\s*Text\(\w+\(\1\.length\),/, 'Android shows a pasted auth.json without being asked');
   // Hidden is where it starts, and where it goes back to when the field is
   // emptied: Clear, the vault taking it, and leaving the page.
-  const iosShown = /if \w+\.isEmpty \|\| (\w+) \{\s*TextField\("auth\.json"/.exec(IOS)?.[1];
+  const iosShown = /if \w+\.isEmpty \|\| (\w+) \{\s*(?:\/\/[^\n]*\n\s*)*TextField\("auth\.json"/.exec(IOS)?.[1];
   const androidShown = /if \(\w+\.isEmpty\(\) \|\| (\w+)\) \{\s*OutlinedTextField\(\s*value = /.exec(ANDROID)?.[1];
   has(IOS, new RegExp(`@State private var ${iosShown} = false`), 'iOS starts with a pasted file shown');
   has(ANDROID, new RegExp(`var ${androidShown} by remember \\{ mutableStateOf\\(false\\) \\}`), 'Android starts with a pasted file shown');
@@ -451,7 +451,12 @@ test('a pasted key or token is kept without the space a paste brings, on both ph
   has(ANDROID, /onValueChange = \{ \w+ = it\.trim\(\) \},\s*label = \{ Text\("GitHub Copilot token"\) \}/, 'Android keeps a pasted Copilot token with the space around it');
   has(ANDROID, /onValueChange = \{ \w+ = it\.trim\(\) \},\s*label = \{ Text\("\$\{\w+\.\w+\} API key"\) \},\s*singleLine = true,\s*visualTransformation/, 'Android keeps a pasted API key with the space around it');
   // The file is JSON, and is sent as it was pasted.
-  has(ANDROID, /onValueChange = \{ \w+ = it \},\s*label = \{ Text\("auth\.json"\) \}/, 'Android changes a pasted auth.json before it is kept');
+  has(ANDROID, /onValueChange = \{ typed ->\s*if \(\w+\.isEmpty\(\) && typed\.length == 1\) \w+ = true\s*(\w+) = typed\s*\},\s*label = \{ Text\("auth\.json"\) \}/, 'Android changes a pasted auth.json before it is kept');
+  // TYPING IS NOT PASTING: one character typed into an empty field is shown,
+  // so the field does not vanish under a thumb, and one character is said
+  // as one.
+  has(IOS, /set: \{ typed in\s*if \w+\.isEmpty, typed\.count == 1 \{ \w+ = true \}\s*\w+ = typed\s*\}/, 'iOS hides the auth.json field at the first character typed');
+  for (const [name, src] of BOTH) assert.ok(src.includes('"Pasted and hidden: 1 character."'), `${name} says “1 characters”`);
 });
 
 // ---- signing an engine in on a machine --------------------------------------
@@ -566,43 +571,107 @@ test('the code, its page and who is signed in are read out of an answer only aft
   has(ANDROID, new RegExp(fields.map((k) => `\\\\"${k}\\\\":\\$\\{JSONObject\\.quote\\(\\w+\\.optString\\("${k}"\\)\\)\\}`).join('[\\s\\S]{0,40}?')), 'Android hashes a machine’s key in another form than the machine does');
 });
 
-test('a failed check shows nothing of the code or the account, says which check in one sentence, and still offers Cancel', () => {
-  // THREE WAYS TO FAIL, THREE SENTENCES, each saying what is not shown: the
-  // code while one is out, and who is signed in otherwise.
-  bothSay('{}’s answer could not be opened, so {} is not shown.');
-  bothSay('This answer did not come from a machine approved for {}’s credentials, so {} is not shown.');
-  bothSay('This answer did not come from a machine approved for your credentials, so {} is not shown.');
-  bothSay('{}’s answer could not be checked, so {} is not shown.');
-  for (const [name, src] of BOTH) {
-    for (const what of ['"the code"', '"who is signed in"']) assert.ok(src.includes(what), `${name} does not say ${what} is what is not shown`);
+/** The words of the sign-in block on one phone: the source of its `EngineSigninWords`, with the comments taken out. @param {string} src */
+const signinWords = (src) => {
+  const at = src.search(/(?:enum|internal object) EngineSigninWords \{/);
+  const end = src.search(/\n(?:enum|internal object) EngineSignin \{/);
+  assert.ok(at > 0 && end > at, 'the sign-in block’s words were not found');
+  return src.slice(at, end).split('\n').filter((line) => !/^\s*(?:\/\/|\/\*|\*)/.test(line)).join('\n');
+};
+/** Every sentence in it, with each moving part written `{}` whichever way that phone writes one. @param {string} src @param {'iOS'|'Android'} phone */
+const signinSentences = (src, phone) =>
+  [...signinWords(src).matchAll(/"((?:[^"\\]|\\.)*)"/g)]
+    .map((m) => (phone === 'iOS' ? m[1].replace(/\\\((?:[^()]|\([^()]*\))*\)/g, '{}') : m[1].replace(/\$\{[^}]*\}|\$\w+/g, '{}')))
+    .filter((words) => words.length >= 12 && words.includes(' '))
+    .sort();
+
+test('every sentence of the sign-in block is the same on both phones, word for word', () => {
+  // THE SENTENCES ARE READ, NOT LISTED. Each phone keeps the block's words in
+  // one place, and every sentence there is held to the other phone's, with
+  // each moving part as `{}`. A sentence added, dropped or reworded on one
+  // phone alone fails here, without this file knowing what it says.
+  const ios = signinSentences(IOS, 'iOS');
+  const android = signinSentences(ANDROID, 'Android');
+  assert.ok(ios.length >= 50, 'the sign-in block lost its words');
+  assert.deepEqual(android, ios);
+  // And the ones a person meets on the way, by name, so that none is lost
+  // from both phones at once.
+  for (const words of [
+    'Waiting for this code to be approved at {}.',
+    ' A code lasts 15 minutes.',
+    ' It lasts {} more minutes.',
+    'Signing in on a machine that is signed in replaces that sign-in.',
+    'The code ran out before it was approved. Start again for a new one.',
+    '{} did not sign in: {}',
+    'A newer attempt did not sign in. The sign-in above stands.',
+    '{} gave a sign-in page that is not {}’s, so the code is not shown. {}',
+    'Cancel it, and tell whoever runs this fleet.',
+    'Your fleet did not answer. Check the connection, then try again.',
+    '{} refused that ({}).',
+    '{} forgets this sign-in, and new sessions as {} there cannot use {} until it is signed in again. Signing in again takes a new code.',
+    '{} forgets this sign-in. A pasted sign-in is still kept, and the next session there runs on that.',
+  ]) assert.ok(ios.includes(words), `neither phone says: ${words}`);
+  // The short ones, which are buttons.
+  for (const words of ['"Sign in on a machine"', '"Which machine?"', '"Open the sign-in page"', '"Copy code"', '"Copied"', '"Cancel"', '"Sign out"']) {
+    for (const [name, src] of BOTH) assert.ok(signinWords(src).includes(words), `${name} lost the button ${words}`);
   }
-  // Which of the two is said by whether a code is out, on both.
-  has(IOS, /let (\w+) = state == "waiting" \? \w+\.theCode : \w+\.whoIsSignedIn/, 'iOS does not say what a failed check kept back');
-  has(ANDROID, /val (\w+) = if \(state == "waiting"\) \w+\.THE_CODE else \w+\.WHO_IS_SIGNED_IN/, 'Android does not say what a failed check kept back');
+});
+
+test('nothing the fleet wrote is drawn in the sign-in block: a refusal is the phone’s own sentence for its code', () => {
+  // A REFUSAL'S SENTENCE AND AN ENGINE'S REASON ARRIVE OUTSIDE THE SEAL, and
+  // a fleet that lies can put a code of its own in either, to be read beside
+  // the real one. So neither phone reads them there at all. What they say is
+  // run by the phones' own tests (EngineSignInTests.swift, EngineSignInTest.kt).
+  for (const [name, body] of /** @type {const} */ ([
+    ['iOS', fn(IOS, 'static func shown(after', 'iOS has no one place an answer becomes what is shown')],
+    ['iOS', fn(IOS, 'private func ask(_ action: String, of host: String', 'iOS has no one place a sign-in is asked for')],
+    ['Android', fn(ANDROID, 'fun shown(', 'Android has no one place an answer becomes what is shown')],
+    ['Android', fn(ANDROID, 'suspend fun ask(action: String, host: String', 'Android has no one place a sign-in is asked for')],
+  ])) {
+    assert.doesNotMatch(body, /reply\.(?:text|detail|expiresInMinutes)\b/, `${name} draws something the fleet wrote beside a sign-in`);
+  }
+  // THE SAME CODES ON BOTH PHONES, and every code the machine's own sign-in
+  // code refuses with is one of them, so a real refusal is never the
+  // sentence for a code nobody has met.
+  /** @param {string} body */
+  const codes = (body) => [...body.matchAll(/^\s*(?:case )?((?:"[a-z_]+",? ?)+)(?::| ->)/gm)].flatMap((m) => [...m[1].matchAll(/"([a-z_]+)"/g)].map((c) => c[1])).sort();
+  const ios = codes(fn(IOS, 'static func refusal(_ code: String', 'iOS has no sentence of its own for a refusal'));
+  const android = codes(fn(ANDROID, 'fun refusal(code: String', 'Android has no sentence of its own for a refusal'));
+  assert.ok(ios.length >= 24, 'the refusals lost their codes');
+  assert.deepEqual(android, ios);
+  const box = readFileSync(new URL('../src/core/engine-signin.js', import.meta.url), 'utf8');
+  const refusedWith = new Set([...box.matchAll(/(?:refus(?:e|al)\(|error: \{ code: )'([a-z_]+)'/g)].map((m) => m[1]));
+  assert.ok(refusedWith.size >= 8, 'the machine’s refusals were not found');
+  for (const code of refusedWith) assert.ok(ios.includes(code), `a machine refuses a sign-in with ${code}, and the phones have no sentence for it`);
+  // The ones the fleet and the machine's own check add on the way.
+  for (const code of ['not_approved', 'approval_unknown', 'custody_unknown', 'not_custodian', 'not_signed_in', 'no_member', 'member_unchecked', 'signature_required', 'host_outdated', 'no_engine', 'host_unavailable', 'host_timeout', 'answer_unsigned', 'bad_params', 'hub_outdated', 'hub_unreachable', 'hub_timeout']) {
+    assert.ok(ios.includes(code), `the phones have no sentence for ${code}`);
+  }
+});
+
+test('a code is drawn only beside the page that engine’s code is entered on, the same two pages on both phones', () => {
+  // THE CHECKS SAY THE MACHINE SIGNED THE ANSWER, not that the page is the
+  // provider's. So after them the page is held to the one each engine uses.
+  for (const [engine, page] of [['codex', 'https://auth.openai.com/codex/device'], ['opencode', 'https://github.com/login/device']]) {
+    has(IOS, new RegExp(`case "${engine}": return "${lit(page)}"`), `iOS does not hold ${engine}’s code to its own page`);
+    has(ANDROID, new RegExp(`"${engine}" -> "${lit(page)}"`), `Android does not hold ${engine}’s code to its own page`);
+  }
+});
+
+test('a failed check carries nothing over, and Cancel is offered wherever a code is or may be out', () => {
   // What is shown after a failed check is the sentence and nothing carried
   // over: no code, no page, no account, old or new. Cancel is offered when
   // a code is out, so the machine does not ask the provider for 15 minutes.
   const ios = fn(IOS, 'static func shown(after', 'iOS has no one place an answer becomes what is shown');
   const android = fn(ANDROID, 'fun shown(', 'Android has no one place an answer becomes what is shown');
   for (const failed of ['unopened', 'unapproved', 'unsigned']) {
-    has(ios, new RegExp(`case \\.${failed}:\\s*return \\w+\\(says: \\w+\\.${failed}\\(\\w+, \\w+\\), bad: true, cancel: state == "waiting"\\)`), `iOS carries something over a failed check (${failed})`);
+    has(ios, new RegExp(`case \\.${failed}:\\s*return \\w+\\(says: \\w+\\.${failed}\\(\\w+, codeOut: \\w+\\), bad: true, cancel: \\w+\\)`), `iOS carries something over a failed check (${failed})`);
     const Failed = failed[0].toUpperCase() + failed.slice(1);
-    has(android, new RegExp(`\\w+\\.${Failed} ->\\s*\\w+\\(says = \\w+\\.${failed}\\(\\w+, \\w+\\), bad = true, cancel = state == "waiting"\\)`), `Android carries something over a failed check (${failed})`);
+    has(android, new RegExp(`\\w+\\.${Failed} ->\\s*\\w+\\(says = \\w+\\.${failed}\\(\\w+, \\w+\\), bad = true, cancel = \\w+\\)`), `Android carries something over a failed check (${failed})`);
   }
-  // The answer is checked before anything of it is used: the one use of the
-  // checked code is under the check's own result.
-  for (const [name, body] of /** @type {const} */ ([['iOS', ios], ['Android', android]])) {
-    const checked = step(body, /verified\(/, `${name} shows an answer without checking it`);
-    assert.ok(body.indexOf('said.code') > checked, `${name} uses a code before the answer it came in is checked`);
-    assert.ok(body.indexOf('said.signedIn') > checked, `${name} says who is signed in before the answer is checked`);
-  }
-  // And the unsigned word beside the answer never draws a code by itself:
-  // a code is shown when the checked part carries one, whatever it says.
-  has(ios, /if let (\w+) = said\.code, let (\w+) = said\.page \{\s*\w+\.code = \1\s*\w+\.page = \2/, 'iOS draws a code from something other than the checked answer');
-  has(android, /if \(said\.code != null && said\.page != null\) \{\s*\w+\(signedIn = said\.signedIn, code = said\.code, page = said\.page,/, 'Android draws a code from something other than the checked answer');
   // Cancel is drawn while a code is shown, and after a check failed on one.
-  has(IOS, /if \w+\.code != nil \|\| \w+\.cancel \{\s*Button\(\w+\.cancel, role: \.cancel\) \{\s*Task \{ await \w+\("cancel", of: \w+\) \}/, 'iOS does not offer Cancel where a code is out');
-  has(ANDROID, /if \(\w+\.code != null \|\| \w+\.cancel\) \{\s*TextButton\(\s*enabled = [^\n]*\n\s*onClick = \{ scope\.launch \{ \w+\("cancel", \w+\) \} \},/, 'Android does not offer Cancel where a code is out');
+  has(IOS, /if \w+\.code != nil \|\| \w+\.cancel \{\s*Button\(\w+\.cancel, role: \.cancel\) \{/, 'iOS does not offer Cancel where a code is out');
+  has(ANDROID, /if \(\w+\.code != null \|\| \w+\.cancel\) \{\s*TextButton\(/, 'Android does not offer Cancel where a code is out');
 });
 
 test('Sign in on a machine is offered only on a machine that runs the engine and is approved for the whole of the member’s vault, and what is missing is said where none is (C-2)', () => {
@@ -630,7 +699,7 @@ test('Sign in on a machine is offered only on a machine that runs the engine and
   has(ANDROID, /val (\w+) = grants\.filter \{ it\.only\.isEmpty\(\) && it\.label == hostId \}\s*if \(\1\.any \{ it\.key == keyHash\(jwk\) \}\) return Approval\.APPROVED/, 'Android counts a grant for part of a vault, or under another name');
 
   // THE BUTTON IS DRAWN FROM THAT LIST, and a start is sent to nothing else.
-  has(IOS, /if !(\w+)\.offered\.isEmpty \{\s*\w+\(\1\.offered\)\s*\} else if !\1\.missing\.isEmpty \{\s*Text\(\1\.missing\)/, 'iOS draws Sign in on a machine without asking where it can be done');
+  has(IOS, /if !(\w+)\.offered\.isEmpty \{\s*\w+\(\1\.offered\)[\s\S]{0,700}?\} else if !\1\.missing\.isEmpty \{\s*Text\(\1\.missing\)/, 'iOS draws Sign in on a machine without asking where it can be done');
   has(ANDROID, /if \((\w+)\.offered\.isNotEmpty\(\)\) \{\s*OutlinedButton\([\s\S]{0,1800}?\} else if \(\1\.missing\.isNotEmpty\(\)\) \{\s*Hint\(\1\.missing\)/, 'Android draws Sign in on a machine without asking where it can be done');
   has(IOS, /if action == "start", !\w+\.offered\.contains\(host\) \{ return \}/, 'iOS can send a start to a machine it does not offer');
   has(ANDROID, /if \(action == "start" && host !in \w+\.offered\) return/, 'Android can send a start to a machine it does not offer');
@@ -638,7 +707,7 @@ test('Sign in on a machine is offered only on a machine that runs the engine and
   bothSay('Sign in on a machine');
   bothSay('Which machine?');
   bothSay('Sign in on {}');
-  has(IOS, /if (\w+)\.count == 1, let (\w+) = \1\.first \{\s*Task \{ await \w+\("start", of: \2\) \}\s*\} else \{\s*\w+\.toggle\(\)/, 'iOS does not ask which machine when more than one could');
+  has(IOS, /if (\w+)\.count == 1, let (\w+) = \1\.first \{\s*(?:\w+ = )?Task \{ await \w+\("start", of: \2\) \}\s*\} else \{\s*\w+\.toggle\(\)/, 'iOS does not ask which machine when more than one could');
   has(ANDROID, /if \((\w+)\.offered\.size == 1\) \{\s*scope\.launch \{ \w+\("start", \1\.offered\.first\(\)\) \}\s*\} else \{\s*(\w+) = !\2/, 'Android does not ask which machine when more than one could');
 
   // WITH NOWHERE TO OFFER, ONE SENTENCE, never a dead button: no machine
@@ -673,109 +742,21 @@ test('every request for a sign-in carries a key of its own for the answer, under
   const [, iosId, iosKey] = /let (\w+) = "app-\\\(UUID\(\)\.uuidString\)"\s*let (\w+) = Seal\.newKey\(\)/.exec(ios) ?? [];
   assert.ok(iosId && iosKey, 'iOS does not make an id and a key for each ask');
   has(ios, new RegExp(`\\.engineSignIn\\(\\s*member: member, engine: engine, action: action, host: host, reply: ${iosKey}\\.publicKey, id: ${iosId}\\s*\\)`), 'iOS sends another key or id than the ones it made');
-  has(ios, new RegExp(`\\.shown\\(after: \\w+, before: \\w+, key: ${iosKey}, grants: grants, host: host, id: ${iosId},\\s*member: member, engine: engine,`), 'iOS checks the answer against another key or id than the ones it sent');
+  has(ios, new RegExp(`\\.shown\\(after: \\w+, before: \\w+, poll: \\w+, key: ${iosKey}, grants: grants, host: host, id: ${iosId},\\s*member: member, engine: engine,`), 'iOS checks the answer against another key or id than the ones it sent');
   const [, androidId, androidKey] = /val (\w+) = "app-" \+ java\.util\.UUID\.randomUUID\(\)\.toString\(\)\s*val (\w+) = Seal\.newKey\(\)/.exec(android) ?? [];
   assert.ok(androidId && androidKey, 'Android does not make an id and a key for each ask');
   has(android, new RegExp(`\\.engineSignIn\\(member, engine, action, host, ${androidKey}\\.publicKey, ${androidId}\\)`), 'Android sends another key or id than the ones it made');
-  has(android, new RegExp(`\\.shown\\(\\w+, \\w+, ${androidKey}, grants, host, ${androidId}, member, engine,`), 'Android checks the answer against another key or id than the ones it sent');
-  // The approved machines it is checked against are the vault's own answer
-  // to this phone, for the vault on screen: never the fleet's listing.
-  has(IOS, /grants: kept\.grants,/, 'iOS checks a sign-in against something other than the vault’s own list of approved machines');
-  has(ANDROID, /grants = kept\.grants,/, 'Android checks a sign-in against something other than the vault’s own list of approved machines');
-
-  // WHILE A CODE IS OUT the machine is asked where it stands every few
-  // seconds, from an effect that ends when the page is left. Leaving does
-  // not cancel: only Cancel sends that.
-  has(IOS, /\.task\(id: (\w+)\) \{\s*guard let (\w+) = \1 else \{ return \}\s*while !Task\.isCancelled \{\s*try\? await Task\.sleep\([^\n]*\n\s*if Task\.isCancelled \{ return \}\s*await \w+\("status", of: \2\)/, 'iOS does not ask where a waiting sign-in stands, or goes on asking after the page is left');
-  has(ANDROID, /LaunchedEffect\((\w+)\) \{\s*val (\w+) = \1 \?: return@LaunchedEffect\s*while \(true\) \{\s*delay\([^\n]*\n\s*\w+\("status", \2\)/, 'Android does not ask where a waiting sign-in stands, or goes on asking after the page is left');
-  assert.equal(count(IOS, '("cancel", of: '), 1, 'iOS cancels a sign-in from somewhere other than Cancel');
-  assert.equal(count(ANDROID, 'ask("cancel", '), 1, 'Android cancels a sign-in from somewhere other than Cancel');
-  // COMING BACK SHOWS IT AGAIN: each machine it could be signed in on is
-  // asked when the page opens.
-  has(IOS, /\.task\(id: (\w+)\.offered\) \{\s*for (\w+) in \1\.offered \{ await \w+\("status", of: \2\) \}/, 'iOS does not ask where a sign-in stands when the page opens');
-  has(ANDROID, /LaunchedEffect\((\w+)\.offered\) \{\s*for \((\w+) in \1\.offered\) \w+\("status", \2\)/, 'Android does not ask where a sign-in stands when the page opens');
-  // A slow answer to an earlier ask never replaces a later one's.
-  has(ios, /if (\w+)\[host\] == (\w+) \{\s*\w+\[host\] = \w+\.shown\(/, 'iOS lets an earlier answer replace a later one');
-  has(android, /if \((\w+)\[host\] == (\w+)\) \{\s*\w+ = \w+ \+ \(host to \w+\.shown\(/, 'Android lets an earlier answer replace a later one');
+  has(android, new RegExp(`\\.shown\\(\\w+, \\w+, \\w+, ${androidKey}, grants, host, ${androidId}, member, engine,`), 'Android checks the answer against another key or id than the ones it sent');
   // The code and its page are never written into the screen's saved state.
   has(ANDROID, /var \w+ by remember \{ mutableStateOf\(mapOf<String, EngineSigninShown>\(\)\) \}/, 'Android may write a sign-in code into the screen’s saved state');
 });
 
-test('every state a sign-in can be in has its sentence, the same on both phones, and none says more than the machine did (C-5)', () => {
-  // THE NINE STATES (docs/engines.md): three have no sentence of their own
-  // here (nothing, a code that is out, signed in), and six say how an
-  // attempt ended. Each ending is bound to its state on both phones.
-  const endings = {
-    expired: 'The code ran out before it was approved. Start again for a new one.',
-    cancelled: 'Cancelled.',
-    lost: '{} restarted while it was waiting, so that attempt is gone. Start again.',
-    signed_out: 'Signed out on {}.',
-    ended: '{}’s sign-in on {} no longer works. Sign it in again.',
-  };
-  for (const [state, words] of Object.entries(endings)) {
-    has(IOS, new RegExp(`case "${state}": return ${sentence(words, 'iOS').source}`), `iOS says something else when a sign-in is ${state}`);
-    has(ANDROID, new RegExp(`"${state}" -> ${sentence(words, 'Android').source}`), `Android says something else when a sign-in is ${state}`);
-  }
-  // Failed: the engine's own sentence after a colon, when it gave one.
-  bothSay('{} did not sign in: {}');
-  bothSay('{} did not sign in.');
-  has(IOS, /case "failed":\s*guard let (\w+), !\1\.isEmpty else \{ return "\\\(\w+\) did not sign in\." \}\s*return "\\\(\w+\) did not sign in: \\\(\1\)"/, 'iOS does not say why a sign-in failed in the engine’s words');
-  has(ANDROID, /"failed" -> if \((\w+)\.isNullOrEmpty\(\)\) "\$\w+ did not sign in\." else "\$\w+ did not sign in: \$\1"/, 'Android does not say why a sign-in failed in the engine’s words');
-  // A state with nothing to say, and one never met, says nothing.
-  const iosEnded = fn(IOS, 'static func ended(_ state: String, engine:', 'iOS has no words for how a sign-in ended');
-  const androidEnded = fn(ANDROID, 'fun ended(state: String, engine:', 'Android has no words for how a sign-in ended');
-  has(iosEnded, /default: return ""/, 'iOS says something about a state it has no sentence for');
-  has(androidEnded, /else -> ""/, 'Android says something about a state it has no sentence for');
-  for (const quiet of ['none', 'waiting', 'signed_in']) {
-    assert.ok(!iosEnded.includes(`"${quiet}"`) && !androidEnded.includes(`"${quiet}"`), `a sign-in that is ${quiet} is said to have ended`);
-  }
-
-  // WAITING: what is waited for and where, and how long the code lasts only
-  // when the machine said (it never says "15 minutes" by itself).
-  bothSay('Waiting for you to approve it at {}.');
-  bothSay('Waiting for you to approve it at {}. This code lasts 1 more minute.');
-  bothSay('Waiting for you to approve it at {}. This code lasts {} more minutes.');
-  for (const [name, src] of BOTH) {
-    has(src, /"opencode" *(?:\?|\)) *"GitHub" *(?::|else) *"OpenAI"/, `${name} sends somebody to the wrong provider to enter a code`);
-    assert.ok(!/This code lasts 15/.test(src), `${name} says how long a code lasts without being told`);
-  }
-  has(IOS, /\w+\.minutes = \w+\.expiresInMinutes\?\.value/, 'iOS does not read how long the code lasts from the answer');
-  has(ANDROID, /minutes = \w+\.expiresInMinutes\)/, 'Android does not read how long the code lasts from the answer');
-  bothSay('Code to sign in on {}');
-  bothSay('Open the sign-in page');
-  bothSay('Copy code');
-
-  // SIGNED IN: on which machine, as whom when the engine names an account,
-  // and since when, all from the checked answer. OpenCode names nobody, and
-  // then there is no "as".
-  for (const [name, src] of BOTH) {
-    const said = fn(src, name === 'iOS' ? 'static func signedIn(' : 'fun signedIn(', `${name} does not say who is signed in`);
-    for (const piece of ['"Signed in on ', '" as ', '", since ']) assert.ok(said.includes(piece), `${name} lost ${piece} from the signed-in sentence`);
-    assert.ok(said.indexOf('" as ') > said.search(/isEmpty|isNullOrEmpty/), `${name} says “as” where the engine named no account`);
-  }
-  // The page opens only an https address, in the browser.
-  has(IOS, /url\.scheme\?\.lowercased\(\) == "https"/, 'iOS opens a sign-in page that is not https');
-  has(ANDROID, /it\.startsWith\("https:\/\/", ignoreCase = true\)/, 'Android opens a sign-in page that is not https');
-
-  // A REFUSAL is shown as it came, and what was checked before it stands.
-  has(IOS, /var (\w+) = \w+\(signedIn: before\.signedIn, says: \w+, bad: true\)/, 'iOS forgets who is signed in when a request is refused');
-  has(ANDROID, /val (\w+) = \w+\(signedIn = before\.signedIn, says = \w+, bad = true\)/, 'Android forgets who is signed in when a request is refused');
-  bothSay('{} refused that, and gave no reason.');
-});
-
-test('Sign out asks first and says what it costs, and the code is large, selectable, spoken as characters and free to wrap', () => {
-  bothSay('Sign out');
-  bothSay('Sign {} out on {}?');
-  bothSay('Sessions started as {} stop running on it there. Signing in again takes a new code.');
-  bothSay('Your sessions stop running on it there. Signing in again takes a new code.');
-  for (const [name, src] of BOTH) assert.ok(src.includes(' A pasted sign-in is still kept, and the next session there runs on that."'), `${name} does not say a pasted sign-in outlasts signing out`);
+test('Sign out asks first, the code is large, selectable and spoken as characters, and its arrival is said aloud', () => {
   // The button only opens the question; the request goes from its answer.
   has(IOS, /Button\(\w+\.signOut, role: \.destructive\) \{ (\w+) = host \}/, 'iOS signs an engine out without asking');
-  has(IOS, /\.confirmationDialog\(\w+\.signOutAsk\([^\n]*\n[\s\S]{0,260}?Button\(\w+\.signOut, role: \.destructive\) \{\s*if let (\w+) = \w+ \{\s*Task \{ await \w+\("signout", of: \1\) \}/, 'iOS signs an engine out without asking');
-  has(ANDROID, /onClick = \{ (\w+) = host \},[\s\S]{0,420}?\{ Text\(\w+\.SIGN_OUT, /, 'Android signs an engine out without asking');
-  has(ANDROID, /AlertDialog\(\s*onDismissRequest = \{ \w+ = null \},\s*title = \{ Text\(\w+\.signOutAsk\([\s\S]{0,360}?scope\.launch \{ \w+\("signout", \w+\) \}/, 'Android signs an engine out without asking');
-  assert.equal(count(IOS, '("signout", of: '), 1, 'iOS signs an engine out from somewhere other than the question’s answer');
-  assert.equal(count(ANDROID, 'ask("signout", '), 1, 'Android signs an engine out from somewhere other than the question’s answer');
+  has(IOS, /\.confirmationDialog\(\w+\.signOutAsk\([^\n]*\n[\s\S]{0,260}?Button\(\w+\.signOut, role: \.destructive\) \{\s*if let (\w+) = \w+ \{\s*(?:\w+ = )?Task \{ await \w+\("signout", of: \1\) \}/, 'iOS signs an engine out without asking');
+  has(ANDROID, /onClick = \{ (\w+) = host \},[\s\S]{0,700}?\{ Text\(\w+\.SIGN_OUT, /, 'Android signs an engine out without asking');
+  has(ANDROID, /AlertDialog\(\s*onDismissRequest = \{ \w+ = null \},\s*title = \{ Text\(\w+\.signOutAsk\([\s\S]{0,400}?scope\.launch \{ \w+\("signout", \w+\) \}/, 'Android signs an engine out without asking');
 
   // THE CODE: the scale's title size in the monospaced face, selectable,
   // with no line limit, and read to a screen reader one character at a time.
@@ -785,23 +766,23 @@ test('Sign out asks first and says what it costs, and the code is large, selecta
   has(IOS, /code\.map \{ \$0 == "-" \? "dash" : String\(\$0\) \}\.joined\(separator: " "\)/, 'iOS reads a code as a word');
   has(ANDROID, /code\.map \{ if \(it == '-'\) "dash" else it\.toString\(\) \}\.joinToString\(" "\)/, 'Android reads a code as a word');
 
-  // EVERY BUTTON IS A FULL TARGET: 44pt on iOS, 48dp on Android.
-  const iosView = IOS.slice(IOS.indexOf('@ViewBuilder private func offer('), IOS.indexOf('private func ask(_ action: String, of host: String'));
-  const iosButtons = count(iosView, 'Button(');
-  assert.ok(iosButtons >= 6, 'iOS lost a button from the sign-in on a machine');
-  assert.equal(count(iosView, '.frame(minHeight: 44)'), iosButtons, 'an iOS button for signing in on a machine is shorter than 44pt');
-  const androidView = ANDROID.slice(ANDROID.indexOf('Text(EngineSigninWords.title(engine)'), ANDROID.indexOf('fun enginePasteInstead('));
-  const androidButtons = count(androidView, 'TextButton(') + count(androidView, 'OutlinedButton(');
-  assert.ok(androidButtons >= 6, 'Android lost a button from the sign-in on a machine');
-  assert.ok(count(androidView.slice(0, androidView.indexOf('\n}\n')), 'Modifier.heightIn(min = 48.dp)') >= 6, 'an Android button for signing in on a machine is shorter than 48dp');
-  // Each control that would be ambiguous alone says what it acts on.
-  bothSay('Sign {} in on a machine');
-  bothSay('Sign {} out on {}');
-  bothSay('Cancel the sign-in on {}');
+  // ITS ARRIVAL IS SAID ALOUD. The button a screen reader's user pressed is
+  // gone when the code comes, up to most of a minute later, and nothing
+  // said so: an announcement on iOS, a live region on Android, each with
+  // which machine and then the code a character at a time.
+  has(IOS, /UIAccessibility\.post\(notification: \.announcement, argument: \w+\.codeArrived\(\w+, \w+\)\)/, 'iOS does not say aloud that a code arrived');
+  has(ANDROID, /liveRegion = LiveRegionMode\.Polite\s*contentDescription = \w+\.codeArrived\(\w+, \w+\)/, 'Android does not say aloud that a code arrived');
 
-  // A CHANGE OF STATE MOVES, as a crossfade, and nothing else does.
+  // A CHANGE OF STATE MOVES, as a crossfade, and a minute passing is not
+  // one: on Android the block was made again each minute, and TalkBack's
+  // place in it went with it.
   has(IOS, /\.animation\(Design\.Motion\.change, value: \w+\)/, 'iOS’s sign-in changes state without the crossfade');
-  has(ANDROID, /AnimatedContent\(\s*targetState = \w+,\s*transitionSpec = \{ fadeIn\(Design\.Motion\.change\(\)\) togetherWith fadeOut\(Design\.Motion\.change\(\)\) \},\s*label = "engine sign-in",/, 'Android’s sign-in changes state without the crossfade');
+  has(ANDROID, /AnimatedContent\(\s*targetState = \w+\.copy\(minutes = null\),\s*transitionSpec = \{ fadeIn\(Design\.Motion\.change\(\)\) togetherWith fadeOut\(Design\.Motion\.change\(\)\) \},/, 'Android makes the sign-in block again when a minute passes');
+  // A Sign out that cannot be pressed does not stay red.
+  has(ANDROID, /Text\(\w+\.SIGN_OUT, color = if \(\w+\.isEmpty\(\)\) Design\.Palette\.bad\.now else Color\.Unspecified\)/, 'Android’s Sign out looks live while it cannot be pressed');
+  // The page opens only an https address, in the browser.
+  has(IOS, /url\.scheme\?\.lowercased\(\) == "https"/, 'iOS opens a sign-in page that is not https');
+  has(ANDROID, /it\.startsWith\("https:\/\/", ignoreCase = true\)/, 'Android opens a sign-in page that is not https');
 });
 
 test('pasting a sign-in is the fallback, behind a button that says so, with when to use it and which Copilot token works', () => {

@@ -996,10 +996,13 @@ internal fun describeDelegation(d: Fleet.Delegation): String = when {
 const val MCP_MEMBERS_SENTENCE = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member."
 
 /**
- * What to do when a machine refuses a start as a member under such a grant.
- * The same sentence as iOS.
+ * What an older machine does with a grant that names members, and what to do
+ * first. It rebuilds the signed bytes without the field, so the whole grant
+ * fails its check there: every stop and read the client sends that machine,
+ * where this used to say only a start as a member was refused. The same
+ * sentence as iOS.
  */
-const val MCP_MEMBERS_OLDER_MACHINE = "If a machine refuses a start as a member, update that machine: an older one does not take a grant that names members."
+const val MCP_MEMBERS_OLDER_MACHINE = "A machine from before members could be named refuses everything sent under a grant that names one, not only a start as a member. Update that machine before turning a member on."
 
 /**
  * Whom a delegation may start sessions as, for the end of its row: by name

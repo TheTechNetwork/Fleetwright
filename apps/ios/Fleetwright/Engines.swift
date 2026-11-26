@@ -462,7 +462,14 @@ struct EngineSignInRow: View {
             // Many lines when it is shown, because the file is: a one-line
             // field would show its first forty characters and no more.
             if pasted.isEmpty || revealed {
-                TextField("auth.json", text: $pasted, axis: .vertical)
+                // TYPING IS NOT PASTING. The field hid itself at the first
+                // character, so somebody typing lost the field under their
+                // thumb and read "1 characters". What arrives one character
+                // at a time into an empty field is shown; a paste is hidden.
+                TextField("auth.json", text: Binding(get: { pasted }, set: { typed in
+                    if pasted.isEmpty, typed.count == 1 { revealed = true }
+                    pasted = typed
+                }), axis: .vertical)
                     .lineLimit(3...8)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -565,7 +572,7 @@ let copilotTokenLine = "It is the refresh value under github-copilot in ~/.local
 /// What stands in the field's place while a pasted auth.json is hidden. The
 /// same sentence as Android.
 func pastedHiddenLine(_ count: Int) -> String {
-    "Pasted and hidden: \(count) characters."
+    count == 1 ? "Pasted and hidden: 1 character." : "Pasted and hidden: \(count) characters."
 }
 
 /// A member's engines, on its form: an ordered list to add to, remove from

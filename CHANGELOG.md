@@ -69,6 +69,18 @@ when that version is cut.
   credentials; where none is, the page says which of those is missing.
   Pasting is still there, behind "Paste a sign-in instead", and the Copilot
   field now says which token works.
+- **Signing in on a machine shows only what the machine signed.** A
+  refusal is now the app's own sentence and says what to do next, so
+  nothing a fleet could have written sits beside a code. A code is shown
+  only with OpenAI's or GitHub's own sign-in page. One refused check no
+  longer takes the code off the screen, Sign out's answer is no longer
+  lost behind a check, and VoiceOver and TalkBack say the code when it
+  arrives. On Android, approving a machine from a member's Credentials
+  now brings Sign in on a machine without closing the page.
+- **Removing a member checks with the fleet's list first.** A member
+  something reports to is refused before the vault forgets anything, with
+  who to move. If the fleet still says no afterwards, the page says what
+  the vault has already forgotten and how to put the member back.
 - **A session says why its turn ended.** A limit, a sign-in that ended, the
   wrong model or an error is named on the session, with when the limit lifts
   if the engine said.

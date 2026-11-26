@@ -149,4 +149,196 @@ final class EngineSignInTests: XCTestCase {
         XCTAssertEqual(input, f["signingInput"] as? String)
         XCTAssertTrue(XOSetupKey.holds(input, sig: try XCTUnwrap(f["signature"] as? String), hostKey: hostKey))
     }
+
+    // MARK: - what the screen shows of an answer (EngineSignin.shown)
+    //
+    // WHAT IS PINNED is what a person reads. Nothing the fleet wrote is
+    // drawn: a refusal is this phone's own sentence for its code, and how
+    // an attempt ended, why, and how long a code lasts come from inside the
+    // checked answer or are not said. Each test hands `shown` an answer and
+    // reads what comes out, with a lie where a fleet could put one.
+
+    /// One of the further sealed answers under `more`, by its name
+    /// (test/helpers/make-engine-signin-vectors.mjs made them).
+    private func made(_ name: String) throws -> Vector {
+        let all = try XCTUnwrap(try whole()["more"] as? [[String: Any]])
+        let part = try XCTUnwrap(all.first { $0["name"] as? String == name }, "no vector called \(name)")
+        let recipient = try XCTUnwrap(part["recipient"] as? [String: String])
+        let secret = try XCTUnwrap(Seal.unb64(try XCTUnwrap(recipient["d"])))
+        return Vector(
+            key: Seal.OneUseKey(privateKey: try P256.KeyAgreement.PrivateKey(rawRepresentation: secret)),
+            sealed: try XCTUnwrap(part["sealed"] as? [String: String]),
+            opened: try XCTUnwrap(part["opened"] as? [String: Any]),
+            keyId: try XCTUnwrap(part["host"] as? String),
+            signingInput: try XCTUnwrap(part["signingInput"] as? String),
+            changed: []
+        )
+    }
+
+    /// What a fleet that lies would have somebody read: a code and a page.
+    private let lie = "Enter ZZZZ-9999 at https://example.test/device"
+
+    /// An answer as it arrives, from its JSON.
+    private func reply(_ fields: [String: Any]) throws -> Fleet.Reply {
+        try JSONDecoder().decode(Fleet.Reply.self, from: JSONSerialization.data(withJSONObject: fields))
+    }
+
+    private func shown(_ v: Vector, _ fields: [String: Any], before: EngineSigninShown = EngineSigninShown(), poll: Bool = false,
+                       now: Double = 0) throws -> EngineSigninShown {
+        EngineSignin.shown(after: try reply(fields), before: before, poll: poll, key: v.key, grants: [grant(v)], host: "ops-box",
+                           id: v.id, member: v.member, engine: v.engine, memberName: "Debbie", now: now)
+    }
+
+    /// Every word the block would draw for one machine.
+    private func drawn(_ s: EngineSigninShown) -> String {
+        [s.code ?? "", s.page ?? "", s.says, s.signedIn.map { EngineSigninWords.signedIn("ops-box", $0) } ?? ""].joined(separator: " ")
+    }
+
+    private let codexPage = "https://auth.openai.com/codex/device"
+
+    func testARefusalIsThisPhonesOwnSentenceAndNothingTheFleetWroteIsDrawn() throws {
+        let v = try vector()
+        let before = EngineSigninShown(code: "WXYZ-1234", page: codexPage)
+        for (code, poll) in [("host_timeout", true), ("not_approved", false), ("made_up_code", false), ("ZZZZ-9999", false)] {
+            let got = try shown(v, ["ok": false, "error": ["code": code], "text": lie, "detail": lie, "state": "failed"], before: before, poll: poll)
+            XCTAssertFalse(drawn(got).contains("ZZZZ"), "a refusal with \(code) drew the fleet’s code")
+            XCTAssertFalse(drawn(got).contains("example.test"), "a refusal with \(code) drew the fleet’s page")
+            XCTAssertTrue(got.bad)
+            XCTAssertFalse(got.says.isEmpty)
+        }
+        // A code it knows says what to do; one it does not names the machine
+        // and the code; one that is not shaped like a code is not printed.
+        XCTAssertEqual(try shown(v, ["ok": false, "error": ["code": "host_timeout"], "text": lie]).says, "ops-box did not answer in time. Try again.")
+        XCTAssertEqual(try shown(v, ["ok": false, "error": ["code": "made_up_code"], "text": lie]).says, "ops-box refused that (made_up_code).")
+        XCTAssertEqual(try shown(v, ["ok": false, "error": ["code": "ZZZZ-9999"], "text": lie]).says, "ops-box refused that.")
+        // No code at all is the fleet not answering: one fixed sentence, and
+        // what was checked before stands.
+        let unreached = try shown(v, ["ok": false, "text": lie], before: before)
+        XCTAssertEqual(unreached.says, EngineSigninWords.notReached)
+        XCTAssertEqual(unreached.code, "WXYZ-1234")
+    }
+
+    func testARefusedAskOfWhereItStandsKeepsTheCodeAndARefusedButtonDoesNot() throws {
+        let v = try vector()
+        let before = EngineSigninShown(signedIn: EngineSignedIn(since: 1, email: nil, plan: nil), code: "WXYZ-1234", page: codexPage, minutes: 9)
+        // The asking every few seconds, refused once: everything stays.
+        let polled = try shown(v, ["ok": false, "error": ["code": "host_timeout"]], before: before, poll: true)
+        XCTAssertEqual([polled.code, polled.page], ["WXYZ-1234", codexPage])
+        XCTAssertEqual(polled.minutes, 9)
+        XCTAssertEqual(polled.signedIn, before.signedIn)
+        XCTAssertTrue(polled.bad)
+        // A button refused: the code goes unless the refusal says one is out.
+        let pressed = try shown(v, ["ok": false, "error": ["code": "busy"]], before: before)
+        XCTAssertNil(pressed.code)
+        XCTAssertEqual(pressed.signedIn, before.signedIn)
+        let still = try shown(v, ["ok": false, "error": ["code": "answer_unsigned"], "state": "waiting"], before: before)
+        XCTAssertEqual(still.code, "WXYZ-1234")
+    }
+
+    func testACodeIsDrawnOnlyFromACheckedAnswerAndOnlyBesideTheEnginesOwnPage() throws {
+        // The machine's own page: the code and its page, and nothing of the
+        // lies beside the seal.
+        let v = try vector()
+        let got = try shown(v, ["ok": true, "state": "failed", "detail": lie, "text": lie, "expiresInMinutes": 99, "sealed": v.sealed])
+        XCTAssertEqual([got.code, got.page], ["WXYZ-1234", codexPage])
+        XCTAssertFalse(drawn(got).contains("ZZZZ"))
+        // A machine from before it signed when the code runs out: how long a
+        // code lasts, and no count.
+        XCTAssertNil(got.minutes)
+        XCTAssertTrue(got.fixedLife)
+        XCTAssertEqual(EngineSigninWords.waiting("OpenAI", minutes: got.minutes, fixedLife: got.fixedLife),
+                       "Waiting for this code to be approved at OpenAI. A code lasts 15 minutes.")
+        // Signed, and beside a page that is not OpenAI's: no code, no page,
+        // one sentence, and Cancel.
+        let f = try made("foreign-page")
+        let foreign = try shown(f, ["ok": true, "state": "waiting", "sealed": f.sealed])
+        XCTAssertNil(foreign.code)
+        XCTAssertNil(foreign.page)
+        XCTAssertTrue(foreign.cancel)
+        XCTAssertEqual(foreign.says, "ops-box gave a sign-in page that is not OpenAI’s, so the code is not shown. Cancel it, and tell whoever runs this fleet.")
+        XCTAssertFalse(drawn(foreign).contains("LMNO"))
+        // And the word beside an answer never makes a code or a sign-in.
+        let none = try made("none")
+        for state in ["waiting", "signed_in"] {
+            let said = try shown(none, ["ok": true, "state": state, "signedIn": ["since": 5], "sealed": none.sealed])
+            XCTAssertNil(said.code)
+            XCTAssertNil(said.signedIn)
+            XCTAssertEqual(said.says, "")
+        }
+    }
+
+    func testTheMinutesAreWorkedOutFromTheCheckedEndAgainstThisPhonesClock() throws {
+        let v = try made("next-waiting")
+        let ends = try XCTUnwrap((v.opened["expiresAt"] as? NSNumber)?.doubleValue)
+        let answer: [String: Any] = ["ok": true, "state": "waiting", "expiresInMinutes": 99, "sealed": v.sealed]
+        let midway = try shown(v, answer, now: ends - 7.5 * 60_000)
+        XCTAssertEqual(midway.code, "QRST-5678")
+        XCTAssertEqual(midway.minutes, 8)
+        XCTAssertFalse(midway.fixedLife)
+        XCTAssertEqual(try shown(v, answer, now: ends - 15 * 60_000).minutes, 15)
+        // More than a code lasts, or already past: no number is said.
+        XCTAssertNil(try shown(v, answer, now: ends - 16 * 60_000).minutes)
+        XCTAssertNil(try shown(v, answer, now: ends + 1).minutes)
+        XCTAssertEqual(EngineSigninWords.waiting("OpenAI", minutes: nil, fixedLife: false), "Waiting for this code to be approved at OpenAI.")
+        XCTAssertEqual(EngineSigninWords.waiting("OpenAI", minutes: 8, fixedLife: false), "Waiting for this code to be approved at OpenAI. It lasts 8 more minutes.")
+    }
+
+    func testHowItEndedIsTheMachinesCheckedWordWhereItSignedOne() throws {
+        // The next shape: the checked state and reason, whatever is beside it.
+        let failed = try made("next-failed")
+        let got = try shown(failed, ["ok": true, "state": "cancelled", "detail": lie, "sealed": failed.sealed])
+        XCTAssertEqual(got.says, "Codex did not sign in: device auth failed with status 403 Forbidden")
+        XCTAssertTrue(got.bad)
+        // A machine from before that: this phone's fixed sentence for the
+        // word beside the answer, and no reason at all.
+        let none = try made("none")
+        let old = try shown(none, ["ok": true, "state": "failed", "detail": lie, "sealed": none.sealed])
+        XCTAssertEqual(old.says, "Codex did not sign in.")
+        XCTAssertEqual(try shown(none, ["ok": true, "state": "expired", "sealed": none.sealed]).says,
+                       "The code ran out before it was approved. Start again for a new one.")
+        // Beside a sign-in the machine signed for, "did not sign in" is said
+        // of a newer attempt, and "signed out" is not said at all.
+        let signedIn = try made("opencode-signed-in")
+        let standing = try shown(signedIn, ["ok": true, "state": "failed", "detail": lie, "sealed": signedIn.sealed])
+        XCTAssertNotNil(standing.signedIn)
+        XCTAssertNil(standing.signedIn?.email)
+        XCTAssertEqual(standing.says, "A newer attempt did not sign in. The sign-in above stands.")
+        XCTAssertEqual(try shown(signedIn, ["ok": true, "state": "signed_out", "sealed": signedIn.sealed]).says, "")
+        XCTAssertEqual(EngineSigninWords.signedIn("ops-box", EngineSignedIn(since: 0, email: "debbie@example.com", plan: "plus")),
+                       "Signed in on ops-box as debbie@example.com, on the plus plan.")
+    }
+
+    // MARK: - where it is offered (EngineSignin.places)
+
+    private func machine(_ health: String, takes: Bool = true) throws -> Fleet.FleetHost {
+        let json = #"{"hostId":"ops-box","state":"healthy","takesSessions":"# + (takes ? "true" : "false") + #","health":"# + health + "}"
+        return try JSONDecoder().decode(Fleet.FleetHost.self, from: Data(json.utf8))
+    }
+
+    func testSignInIsOfferedOnlyOnAMachineThatWouldTakeItAndWhatIsMissingIsSaid() throws {
+        let v = try vector()
+        let jwk = try XCTUnwrap(v.opened["hostKey"] as? [String: String])
+        let keyJSON = #"{"hostId":"ops-box","fingerprint":"0000000000000000","publicJwk":{"kty":"EC","crv":"P-256","x":""# + (jwk["x"] ?? "") + #"","y":""# + (jwk["y"] ?? "") + #""}}"#
+        let keys = [try JSONDecoder().decode(Fleet.Host.self, from: Data(keyJSON.utf8))]
+        let runs = #"{"protocol":22,"engines":["claude-code","codex"]}"#
+        func places(_ host: Fleet.FleetHost?, grants: [PhoneVault.Grant]) -> EngineSigninPlaces {
+            EngineSignin.places(engine: "codex", hosts: host.map { [$0] } ?? [], keys: keys, grants: grants, member: "Debbie")
+        }
+        XCTAssertEqual(places(try machine(runs), grants: [grant(v)]), EngineSigninPlaces(offered: ["ops-box"]))
+        // One protocol too old: not offered, and said.
+        XCTAssertEqual(places(try machine(#"{"protocol":21,"engines":["claude-code","codex"]}"#), grants: [grant(v)]),
+                       EngineSigninPlaces(missing: "ops-box runs Codex and is too old to sign it in. Update fleetwright on ops-box."))
+        // Not approved for the whole vault under its own name.
+        let short: [[PhoneVault.Grant]] = [[], [grant(v, only: ["codex"])], [grant(v, label: "other-box")]]
+        for grants in short {
+            XCTAssertEqual(places(try machine(runs), grants: grants),
+                           EngineSigninPlaces(missing: "ops-box runs Codex and is not approved for Debbie’s credentials. Approve it below, then sign in."))
+        }
+        // Does not run it, or cannot take a session now.
+        let nowhere = EngineSigninPlaces(missing: "No machine that can take a session now runs Codex.")
+        XCTAssertEqual(places(try machine(#"{"protocol":22,"engines":["claude-code"]}"#), grants: [grant(v)]), nowhere)
+        XCTAssertEqual(places(try machine(runs, takes: false), grants: [grant(v)]), nowhere)
+        // No machine heard from: nothing is said, which is not "none".
+        XCTAssertEqual(places(nil, grants: [grant(v)]), EngineSigninPlaces())
+    }
 }

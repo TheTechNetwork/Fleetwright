@@ -507,9 +507,14 @@ struct Fleet {
         /// its page and who is signed in come out of `sealed`, checked
         /// (EngineSignin.verified). Nil on every other reply.
         var state: Said?
-        /// The engine's own sentence for a sign-in that failed. Nil otherwise.
+        /// The engine's own sentence for a sign-in that failed, as it arrives
+        /// beside the seal. NOT DRAWN: a fleet that lies can write a code of
+        /// its own here, so the sign-in block reads the reason from inside
+        /// the checked answer or says none (EngineSignin.shown). Nil otherwise.
         var detail: Said?
-        /// How many minutes a code that is out still lasts. Nil otherwise.
+        /// How many minutes a code that is out still lasts, as it arrives
+        /// beside the seal. Not drawn, for the same reason: the minutes are
+        /// worked out from the checked answer. Nil otherwise.
         var expiresInMinutes: Count?
 
         /// A word or a sentence of a reply, read as text or not at all.
