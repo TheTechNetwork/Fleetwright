@@ -369,7 +369,15 @@ export class HubClient {
    */
   async engineSignin(ask) {
     const r = await this.#json('POST', '/api/engine-signin', ask, 90_000, { allowStatus: [400, 404] });
-    if (r.__status === 404) return { ok: false, error: { code: 'hub_outdated' }, text: 'fleetwright here is older than signing an engine in; update it' };
+    // NAMED, AND WITH WHAT TO DO. This said "fleetwright here is older than
+    // signing an engine in; update it", to a person on a phone, for whom
+    // "here" is the phone. The sidecar on a machine is updated with its
+    // fleetwright, so the two differ only when the hub has not restarted
+    // since: the fix is on that machine, and is said as that.
+    if (r.__status === 404) {
+      const box = typeof ask?.box === 'string' && ask.box ? ask.box : 'This machine';
+      return { ok: false, error: { code: 'hub_outdated' }, text: `${box} is running a fleetwright from before engines were signed in on a machine. Update fleetwright on ${box === 'This machine' ? 'it' : box} and restart it, then ask again.` };
+    }
     const { __status: _status, ...answer } = r;
     return { ...answer, ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '' };
   }

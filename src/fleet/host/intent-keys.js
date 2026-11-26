@@ -256,6 +256,30 @@ export class IntentKeys {
   }
 
   /**
+   * The minter's signing key this box keeps, for the one other thing it
+   * signs for a box: its answer to a vault request (sidecar.js, #askVault;
+   * protocol/vault-answer.js). The same key the key list is checked with, so
+   * a box has one pin and not two.
+   *
+   * THE KEPT KEY, WITHOUT ASKING AGAIN, once there is one: the address is
+   * asked on every key list, which is where a changed key is noticed and
+   * said (#pin). Until one is kept it is fetched now, because a box's first
+   * vault answer can arrive before its first key list. Null when there is
+   * none to be had, and `problem` then says why. Never throws.
+   *
+   * @returns {Promise<{ kty: string, crv: string, x: string, y: string }|null>}
+   */
+  async minterKey() {
+    if (this.pinned) return this.pinned;
+    try {
+      await this.#pin();
+    } catch (e) {
+      this.problem = `the minter’s signing key could not be kept: ${/** @type {Error} */ (e).message}`;
+    }
+    return this.pinned;
+  }
+
+  /**
    * Ask for the key list and keep it if it is the minter's. Never throws.
    *
    * @returns {Promise<boolean>} whether a list was taken

@@ -883,12 +883,17 @@ which is exactly when a retry arrives — waits for that attempt instead of
 starting a second session. Read-only verbs are never cached: a stale session
 list is worse than a re-read.
 
-**One reply is not kept: an engine sign-in's page and code.** For an
-`enginesignin` answer that carried them, in the clear or sealed, the host
-remembers the id and nothing of the answer, and a retry of that id is
-answered with where the sign-in stands now, sealed to the retry's own
-`reply`, which is the attempt in flight while there is one and never a
-second attempt ([engines.md](./engines.md), "Signing in on the machine").
+**One verb's replies are not kept: an engine sign-in's.** For every
+`enginesignin` answer, whatever it said, the host remembers the id and
+nothing of the answer, and a retry of that id is answered with where the
+sign-in stands now for the member and engine the retry names, sealed to
+the retry's own `reply`, which is the attempt in flight while there is one
+and never a second attempt ([engines.md](./engines.md), "Signing in on the
+machine"). Only an answer that carried a code or was sealed used to be
+left out, so a clear answer with no code, the account among it, was
+replayed to any later sign-in request under that id, for whichever member
+it named. And an id is one request's: another verb under a sign-in's id,
+or a sign-in under another verb's, is refused with `id_reused`.
 A code a person types at a provider has no business outliving its use in
 a cache.
 
