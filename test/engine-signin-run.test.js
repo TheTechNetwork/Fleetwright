@@ -18,7 +18,7 @@
 //
 // The box's side, through a stand-in Podman, is test/engine-signin-hub.test.js.
 
-import test from 'node:test';
+import nodeTest, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
@@ -28,11 +28,73 @@ import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync, mkdirSyn
 import os from 'node:os';
 import path from 'node:path';
 
-import { signin, signedIn, signedInAt, stage, homePaths, PASTED, SIGNIN_MINUTES, SIGNIN_PAGES } from '../sandbox/engine.mjs';
+import { signin as runnerSignin, signedIn, signedInAt, stage, homePaths, PASTED, SIGNIN_MINUTES, SIGNIN_PAGES } from '../sandbox/engine.mjs';
 import { codexSignIn, copilotEntry, fakeJwt } from './helpers/engine-files.js';
 
 /** A token as an engine would write it into its sign-in file: found anywhere else, it leaked. */
 const TOKEN = 'rt-LEAKCANARY-0123456789abcdef';
+
+// ── A test here fails by its name, in seconds ───────────────────────────────
+//
+// A SIGN-IN THAT IS NOT WHAT A TEST EXPECTED IS STILL A SIGN-IN THAT IS
+// WAITING, on a clock of fifteen minutes. With a fix taken out (the engine
+// started on the member's home again, a page that is not the provider's own
+// let through, the page cut out of the first line), no test here failed. The
+// file sat until whoever ran it gave up, a minute or two later, and named
+// nothing. Two things end that:
+//
+//   - every test has a bound of its own, far above what any of them takes,
+//     so one that waits on a sign-in that never ends fails as itself;
+//   - every sign-in a test began is told to stop when the test is over, as a
+//     box cancels one (SIGTERM), and its engine is given seconds to answer
+//     and not thirty. So nothing a failed test left behind keeps the file
+//     from ending, and the tests after it still run.
+//
+// And where a sign-in must end with nothing more said to it, a test waits on
+// it through `ends`, which fails in three seconds and says what it waited for.
+
+/** Far above the slowest test here, which takes under two seconds. */
+const TEST_MS = 15_000;
+/** How long a stand-in engine is given to answer: it is in this process, and answers at once. */
+const START_MS = 5_000;
+/** The sign-ins the test that is running began. @type {EventEmitter[]} */
+const begun = [];
+
+/** @param {string} name @param {(t: import('node:test').TestContext) => unknown} fn */
+const test = (name, fn) => nodeTest(name, { timeout: TEST_MS }, fn);
+afterEach(() => {
+  for (const signals of begun.splice(0)) signals.emit('SIGTERM');
+});
+
+/**
+ * How a sign-in ended that should end by itself, or a failure that says it
+ * did not: a code was given and is being waited on.
+ *
+ * @param {Promise<number>} done @param {string} what
+ */
+async function ends(done, what) {
+  /** @type {any} */
+  let timer = null;
+  const late = new Promise((resolve) => {
+    timer = setTimeout(() => resolve('late'), 3000);
+  });
+  const how = await Promise.race([done, late]);
+  clearTimeout(timer);
+  if (how === 'late') assert.fail(`the sign-in was still waiting after 3000 ms: ${what}`);
+  return how;
+}
+
+/**
+ * The runner's `signin`, with this file's bounds on it. A test's own
+ * `signals`, `startMs` and `capMs` are used where it gives them.
+ *
+ * @param {Parameters<typeof runnerSignin>[0]} args @param {NonNullable<Parameters<typeof runnerSignin>[1]>} [io]
+ */
+function signin(args, io = {}) {
+  const signals = /** @type {EventEmitter} */ (io.signals ?? new EventEmitter());
+  begun.push(signals);
+  return runnerSignin(args, { startMs: START_MS, ...io, signals });
+}
 
 /** An engine home, as the box mounts one. */
 function engineHome(/** @type {import('node:test').TestContext} */ t) {
@@ -170,7 +232,7 @@ test('Codex: nothing a session left in the member’s home reaches the sign-in, 
   for (const page of ['https://auth.openai.com.example/codex/device', 'https://auth.openai.com/codex/device?next=https://example.com', 'http://auth.openai.com/codex/device']) {
     const other = codexLogin({ page });
     const said = printed();
-    assert.equal(await signin({ engine: 'codex' }, { env: { FLEETWRIGHT_ENGINE_HOME: engineHome(t) }, out: said.out, spawnEngine: other.spawn }), 0);
+    assert.equal(await ends(signin({ engine: 'codex' }, { env: { FLEETWRIGHT_ENGINE_HOME: engineHome(t) }, out: said.out, spawnEngine: other.spawn }), `a code was given for ${page}`), 0);
     assert.deepEqual(said.lines(), [{ engine: 'codex', signin: 'done', state: 'failed', detail: "it named a page that is not OpenAI's own sign-in page, so no code is shown" }], page);
   }
   assert.equal(SIGNIN_PAGES.codex, 'https://auth.openai.com/codex/device');
@@ -439,7 +501,7 @@ test('OpenCode: a page that is not GitHub’s own gets no code, and an OpenCode 
   for (const page of ['https://github.com.login-device.example/login/device', 'https://github.com/login/device?next=https://example.com', 'http://github.com/login/device']) {
     const server = await openCodeServe(t, { page });
     const p = printed();
-    assert.equal(await signin({ engine: 'opencode' }, { env: { FLEETWRIGHT_ENGINE_HOME: engineHome(t) }, out: p.out, spawnEngine: server.spawn }), 0);
+    assert.equal(await ends(signin({ engine: 'opencode' }, { env: { FLEETWRIGHT_ENGINE_HOME: engineHome(t) }, out: p.out, spawnEngine: server.spawn }), `a code was given for ${page}`), 0);
     assert.deepEqual(p.lines(), [{ engine: 'opencode', signin: 'done', state: 'failed', detail: "it named a page that is not GitHub's own sign-in page, so no code is shown" }], page);
   }
   assert.equal(SIGNIN_PAGES.opencode, 'https://github.com/login/device');
