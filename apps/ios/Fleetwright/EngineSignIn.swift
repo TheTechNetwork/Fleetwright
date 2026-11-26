@@ -92,10 +92,13 @@ struct EngineSigninShown: Equatable {
     var signedIn: EngineSignedIn? = nil
     var code: String? = nil
     var page: String? = nil
-    /// How many minutes the code still lasts, worked out from when the
-    /// machine's checked answer says it runs out. Nil when it did not say,
-    /// or said something a code's life cannot be.
-    var minutes: Int? = nil
+    /// When the code runs out, in milliseconds, from the machine's checked
+    /// answer. Nil when it did not say, or said a time a code's life cannot
+    /// come to against this phone's clock. THE MINUTES LEFT ARE NOT KEPT:
+    /// a count worked out when the answer came went on being drawn while
+    /// the machine could not be asked, past the code's end. They are
+    /// counted from this each time they are drawn (`EngineSignin.at`).
+    var expiresAt: Double? = nil
     /// The machine did not say when the code runs out: one from before it
     /// signed that. Then the sentence says how long a code lasts and no more.
     var fixedLife: Bool = false
@@ -171,6 +174,16 @@ enum EngineSigninWords {
         guard let minutes, minutes > 0 else { return fixedLife ? said + " A code lasts 15 minutes." : said }
         if minutes == 1 { return said + " It lasts 1 more minute." }
         return said + " It lasts \(minutes) more minutes."
+    }
+
+    /// A code whose time is over by this phone's clock, with no checked
+    /// answer since to say how the attempt ended. ONLY WHAT IS KNOWN IS
+    /// SAID: the time has passed. Whether it was approved before that is
+    /// the machine's to say and it has not, so "ran out before it was
+    /// approved" would be a guess here (C-5). The machine goes on being
+    /// asked, and what it answers takes this sentence's place.
+    static func ranOut(_ box: String) -> String {
+        "This code has run out, so it is not shown. \(box) has not said whether it was approved in time, and is asked again in a moment, by itself. Start again for a new code."
     }
 
     /// "Signed in on ops-box as debbie@example.com, on the plus plan, since
@@ -355,6 +368,15 @@ enum EngineSignin {
     /// How long to leave a machine that was approved a moment ago before
     /// asking it once more: it hears of an approval about two seconds on.
     static let approvalSettles: UInt64 = 3_000_000_000
+    /// How often this phone's clock is read while a machine is waited on,
+    /// in nanoseconds, for the minutes a code still lasts.
+    static let clockEvery: UInt64 = 5_000_000_000
+    /// How long past its end a code is left on screen, in milliseconds,
+    /// for the machine to say itself that it ran out: two asks and the
+    /// time one takes. Without it the phone's sentence came first each
+    /// time a code ran out, then the code again for one ask where the
+    /// machine's clock was a second behind, then the machine's sentence.
+    static let endSlack: Double = 10_000
 
     /// The engine a machine can sign in for one of the vault's two pasted
     /// items, or nil for any other item: `codex` is Codex's own, and
@@ -479,6 +501,32 @@ enum EngineSignin {
         return Int(left)
     }
 
+    /// What is drawn of a machine at one moment of this phone's clock.
+    ///
+    /// A CODE PAST ITS END IS NOT DRAWN AS ONE TO ENTER (C-5). While the
+    /// machine answers, it says itself that a code ran out, within one ask.
+    /// While it cannot be asked, what was checked stays, and the code
+    /// stayed with it for as long as that went on, under a count of
+    /// minutes that no longer moved. So once the end the machine signed
+    /// has passed, with `endSlack` for the machine to say so first, the
+    /// code and its page are not drawn, and one sentence says what this
+    /// phone knows: the time is over, and the machine has not said how it
+    /// ended. Who is signed in stays, since that was checked.
+    ///
+    /// NOTHING KEPT IS CHANGED. The code is still what the asking goes by,
+    /// so the machine is asked until it answers, and its checked answer
+    /// then takes this sentence's place.
+    static func at(_ one: EngineSigninShown, box: String, now: Double) -> EngineSigninShown {
+        guard one.code != nil, let ends = one.expiresAt, now >= ends + endSlack else { return one }
+        var over = one
+        over.code = nil
+        over.page = nil
+        over.expiresAt = nil
+        over.says = EngineSigninWords.ranOut(box)
+        over.bad = true
+        return over
+    }
+
     /// Where `engine` can be signed in for a member, from what the machines
     /// report and what the member's vault approves (C-2).
     ///
@@ -555,8 +603,13 @@ enum EngineSignin {
     /// not signed, so it picks among this phone's sentences and is never
     /// the reason a code or a sign-in is drawn.
     ///
-    /// `now` is this phone's clock in milliseconds, which the minutes a
-    /// code still lasts are worked out against.
+    /// `now` is this phone's clock in milliseconds. The end a machine signed
+    /// for its code is kept only where it can be right against it: at
+    /// least a minute off and at most the fifteen a code lasts. The
+    /// machine has just said, checked, that the code is out, so an end
+    /// that has passed already, or is further off than a code lasts, is
+    /// two clocks disagreeing, and then no count is said and nothing is
+    /// taken off the screen for the time.
     static func shown(after reply: Fleet.Reply, before: EngineSigninShown, poll: Bool, key: Seal.OneUseKey, grants: [PhoneVault.Grant],
                       host: String, id: String, member: String, engine: String, memberName: String?,
                       now: Double = Date().timeIntervalSince1970 * 1000) -> EngineSigninShown {
@@ -588,7 +641,7 @@ enum EngineSignin {
             if state == "waiting" {
                 next.code = before.code
                 next.page = before.page
-                next.minutes = before.minutes
+                next.expiresAt = before.expiresAt
                 next.fixedLife = before.fixedLife
                 next.cancel = before.code == nil
             }
@@ -613,7 +666,7 @@ enum EngineSignin {
                 }
                 next.code = code
                 next.page = page
-                next.minutes = minutesLeft(said.expiresAt, now: now)
+                next.expiresAt = minutesLeft(said.expiresAt, now: now) == nil ? nil : said.expiresAt
                 next.fixedLife = said.expiresAt == nil
                 return next
             }
@@ -684,6 +737,11 @@ struct EngineMachineSignIn: View {
     @State private var copiedCode = ""
     /// What a button here last started, so that leaving the page ends it.
     @State private var acting: Task<Void, Never>?
+    /// This phone's clock in milliseconds, read again every few seconds
+    /// while a machine is waited on. The minutes a code still lasts are
+    /// counted against it where they are drawn, and so is whether the code
+    /// has run out, whether or not the machine is answering.
+    @State private var clock: Double = Date().timeIntervalSince1970 * 1000
     @Environment(\.openURL) private var openURL
 
     private var places: EngineSigninPlaces {
@@ -697,9 +755,11 @@ struct EngineMachineSignIn: View {
     }
 
     /// The machine a code is out on. While there is one, the next step is
-    /// that code, and a second start is not offered beside it.
+    /// that code, and a second start is not offered beside it. A code that
+    /// has run out on this phone's clock is not one: the sentence in its
+    /// place says to start again, so the button to do it with is there.
     private var codeOutOn: String? {
-        shown.keys.sorted().first { shown[$0]?.code != nil }
+        shown.keys.sorted().first { EngineSignin.at(shown[$0] ?? EngineSigninShown(), box: $0, now: clock).code != nil }
     }
 
     /// Whether there is anything to say about this engine yet. With no
@@ -722,7 +782,7 @@ struct EngineMachineSignIn: View {
                 .fleetType(.body)
                 .foregroundStyle(Design.Palette.ink)
             ForEach(shown.keys.sorted(), id: \.self) { host in
-                if let one = shown[host] { stands(host, one) }
+                if let one = shown[host] { stands(host, EngineSignin.at(one, box: host, now: clock)) }
             }
             // ONE THING AT A TIME: while a code is out, the next step is
             // that code, and a second start is not offered beside it.
@@ -747,10 +807,22 @@ struct EngineMachineSignIn: View {
         }
         .buttonStyle(.borderless)
         // A CHANGE OF STATE MOVES, and nothing else: a crossfade, which is
-        // the one animation Reduce Motion keeps.
+        // the one animation Reduce Motion keeps. A code running out on this
+        // phone's clock is one, and changes nothing that is kept, so it is
+        // watched for by what it does change. A minute passing is not one.
         .animation(Design.Motion.change, value: shown)
+        .animation(Design.Motion.change, value: codeOutOn)
         .task(id: places.offered) {
             for host in places.offered { await ask("status", of: host) }
+        }
+        // THE CLOCK IS READ BY ITSELF, not when an answer comes: the count
+        // went stale exactly while no answer came.
+        .task(id: waitingOn) {
+            guard waitingOn != nil else { return }
+            while !Task.isCancelled {
+                clock = Date().timeIntervalSince1970 * 1000
+                try? await Task.sleep(nanoseconds: EngineSignin.clockEvery)
+            }
         }
         .task(id: waitingOn) {
             guard let host = waitingOn else { return }
@@ -805,7 +877,8 @@ struct EngineMachineSignIn: View {
     }
 
     /// One machine: who is signed in there, the code while one is out, and
-    /// how the last attempt ended.
+    /// how the last attempt ended. `one` is what is drawn of it at this
+    /// moment (`EngineSignin.at`), not what is kept.
     @ViewBuilder private func stands(_ host: String, _ one: EngineSigninShown) -> some View {
         if let signedIn = one.signedIn {
             Text(EngineSigninWords.signedIn(host, signedIn))
@@ -841,7 +914,7 @@ struct EngineMachineSignIn: View {
                 copiedCode = code
             }
             .frame(minHeight: 44)
-            Text(EngineSigninWords.waiting(EngineSigninWords.provider(engine), minutes: one.minutes, fixedLife: one.fixedLife))
+            Text(EngineSigninWords.waiting(EngineSigninWords.provider(engine), minutes: EngineSignin.minutesLeft(one.expiresAt, now: clock), fixedLife: one.fixedLife))
                 .fleetType(.label)
                 .foregroundStyle(Design.Palette.ink)
                 .fixedSize(horizontal: false, vertical: true)

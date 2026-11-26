@@ -235,11 +235,11 @@ class EngineSignInTest {
 
     @Test
     fun aRefusedAskOfWhereItStandsKeepsTheCodeAndARefusedButtonDoesNot() {
-        val before = EngineSigninShown(signedIn = EngineSignedIn(1L, null, null), code = "WXYZ-1234", page = codexPage, minutes = 9)
+        val before = EngineSigninShown(signedIn = EngineSignedIn(1L, null, null), code = "WXYZ-1234", page = codexPage, expiresAt = 540_000L)
         // The asking every few seconds, refused once: everything stays.
         val polled = shown(first, refused("host_timeout"), before, poll = true)
         assertEquals(listOf<String?>("WXYZ-1234", codexPage), listOf(polled.code, polled.page))
-        assertEquals(9, polled.minutes)
+        assertEquals(540_000L, polled.expiresAt)
         assertEquals(before.signedIn, polled.signedIn)
         assertTrue(polled.bad)
         // A button refused: the code goes unless the refusal says one is out.
@@ -254,12 +254,12 @@ class EngineSignInTest {
         // It did not hear how the last sign-in ended. That is not "nobody is
         // signed in" and not a fault: whatever asked, what was checked
         // stays, the sentence says it is asked again, and it is.
-        val before = EngineSigninShown(signedIn = EngineSignedIn(1L, "debbie@example.com", null), code = "WXYZ-1234", page = codexPage, minutes = 9)
+        val before = EngineSigninShown(signedIn = EngineSignedIn(1L, "debbie@example.com", null), code = "WXYZ-1234", page = codexPage, expiresAt = 540_000L)
         for (poll in listOf(true, false)) {
             val got = shown(first, refused("cannot_tell"), before, poll)
             assertEquals(before.signedIn, got.signedIn)
             assertEquals(listOf<String?>("WXYZ-1234", codexPage), listOf(got.code, got.page))
-            assertEquals(9, got.minutes)
+            assertEquals(540_000L, got.expiresAt)
             assertTrue("a machine that cannot tell yet is not asked again", got.unsure)
             assertFalse(got.bad)
             assertEquals(
@@ -286,11 +286,11 @@ class EngineSignInTest {
         assertFalse(drawn(got).contains("ZZZZ"))
         // A machine from before it signed when the code runs out: how long a
         // code lasts, and no count.
-        assertNull(got.minutes)
+        assertNull(got.expiresAt)
         assertTrue(got.fixedLife)
         assertEquals(
             "Waiting for this code to be approved at OpenAI. A code lasts 15 minutes.",
-            EngineSigninWords.waiting("OpenAI", got.minutes, got.fixedLife),
+            EngineSigninWords.waiting("OpenAI", EngineSignin.minutesLeft(got.expiresAt, 0L), got.fixedLife),
         )
         // Signed, and beside a page that is not OpenAI's: no code, no page,
         // one sentence, and Cancel.
@@ -312,19 +312,68 @@ class EngineSignInTest {
     }
 
     @Test
-    fun theMinutesAreWorkedOutFromTheCheckedEndAgainstThisPhonesClock() {
+    fun theEndOfACodeIsKeptOnlyWhereItCanBeRightAgainstThisPhonesClock() {
         val v = made("next-waiting")
         val ends = v.opened.getLong("expiresAt")
         val midway = shown(v, answered(v, "waiting"), now = ends - 450_000L)
         assertEquals("QRST-5678", midway.code)
-        assertEquals(8, midway.minutes)
+        assertEquals(ends, midway.expiresAt)
         assertFalse(midway.fixedLife)
-        assertEquals(15, shown(v, answered(v, "waiting"), now = ends - 15 * 60_000L).minutes)
-        // More than a code lasts, or already past: no number is said.
-        assertNull(shown(v, answered(v, "waiting"), now = ends - 16 * 60_000L).minutes)
-        assertNull(shown(v, answered(v, "waiting"), now = ends + 1L).minutes)
+        assertEquals(8, EngineSignin.minutesLeft(midway.expiresAt, ends - 450_000L))
+        assertEquals(ends, shown(v, answered(v, "waiting"), now = ends - 15 * 60_000L).expiresAt)
+        // More than a code lasts, or already past, by a machine that has
+        // just said the code is out: two clocks disagree. No end is kept, so
+        // no number is said, and the code is not taken off the screen for it.
+        for (now in listOf(ends - 16 * 60_000L, ends + 1L, ends + 60 * 60_000L)) {
+            val got = shown(v, answered(v, "waiting"), now = now)
+            assertNull(got.expiresAt)
+            assertEquals("QRST-5678", EngineSignin.at(got, "ops-box", now).code)
+        }
         assertEquals("Waiting for this code to be approved at OpenAI.", EngineSigninWords.waiting("OpenAI", null, false))
         assertEquals("Waiting for this code to be approved at OpenAI. It lasts 8 more minutes.", EngineSigninWords.waiting("OpenAI", 8, false))
+    }
+
+    @Test
+    fun theMinutesAreCountedAsTheyAreDrawnAndACodePastItsEndIsNotDrawn() {
+        // A checked answer twelve minutes before the code's end, and from
+        // then on the asking is refused: what is kept does not change, and
+        // the count used to stay at twelve, past the end.
+        val v = made("next-waiting")
+        val ends = v.opened.getLong("expiresAt")
+        val first = shown(v, answered(v, "waiting"), now = ends - 12 * 60_000L)
+        val kept = shown(v, refused("host_timeout"), first, poll = true, now = ends - 60_000L)
+        assertEquals(listOf<String?>("QRST-5678", codexPage), listOf(kept.code, kept.page))
+        assertEquals(ends, kept.expiresAt)
+        fun said(now: Long): String {
+            val one = EngineSignin.at(kept, "ops-box", now)
+            return if (one.code == null) one.says else EngineSigninWords.waiting("OpenAI", EngineSignin.minutesLeft(one.expiresAt, now), one.fixedLife)
+        }
+        assertEquals("Waiting for this code to be approved at OpenAI. It lasts 12 more minutes.", said(ends - 12 * 60_000L))
+        assertEquals("Waiting for this code to be approved at OpenAI. It lasts 3 more minutes.", said(ends - 3 * 60_000L))
+        assertEquals("Waiting for this code to be approved at OpenAI. It lasts 1 more minute.", said(ends - 20_000L))
+        // Just past its end, the machine is left to say so itself: the code
+        // is there for those seconds, with no count.
+        assertEquals("Waiting for this code to be approved at OpenAI.", said(ends + 1L))
+        // Then it is not drawn, nor its page, and the sentence says only
+        // what this phone knows.
+        val over = EngineSignin.at(kept, "ops-box", ends + EngineSignin.END_SLACK_MS)
+        assertNull(over.code)
+        assertNull(over.page)
+        assertTrue(over.bad)
+        assertEquals(
+            "This code has run out, so it is not shown. ops-box has not said whether it was approved in time, and is asked again in a moment, by itself. Start again for a new code.",
+            over.says,
+        )
+        assertFalse(drawn(over).contains("QRST"))
+        // Nothing kept is changed, so the machine goes on being asked.
+        assertEquals("QRST-5678", kept.code)
+        // Who is signed in was checked, and stays.
+        val standing = kept.copy(signedIn = EngineSignedIn(1L, "debbie@example.com", null))
+        assertEquals(standing.signedIn, EngineSignin.at(standing, "ops-box", ends + 60_000L).signedIn)
+        // A machine that did not say when its code runs out is never taken
+        // off the screen by a clock.
+        val old = EngineSigninShown(code = "WXYZ-1234", page = codexPage, fixedLife = true)
+        assertEquals(old, EngineSignin.at(old, "ops-box", ends * 2))
     }
 
     @Test

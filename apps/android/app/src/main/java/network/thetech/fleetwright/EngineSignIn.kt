@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -128,12 +129,15 @@ internal data class EngineSigninPlaces(val offered: List<String> = emptyList(), 
 
 /**
  * What the screen shows of one machine. Everything about a code or an
- * account in it came through [EngineSignin.verified]. [minutes] is how many
- * minutes the code still lasts, worked out from when the machine's checked
- * answer says it runs out, and null when it did not say or said something a
- * code's life cannot be. [fixedLife] is a machine that did not say at all,
- * one from before it signed that: then the sentence says how long a code
- * lasts and no more. [says] is where the
+ * account in it came through [EngineSignin.verified]. [expiresAt] is when
+ * the code runs out, in milliseconds, from the machine's checked answer, and
+ * null when it did not say or said a time a code's life cannot come to
+ * against this phone's clock. THE MINUTES LEFT ARE NOT KEPT: a count worked
+ * out when the answer came went on being drawn while the machine could not
+ * be asked, past the code's end. They are counted from this each time they
+ * are drawn ([EngineSignin.at]). [fixedLife] is a machine that did not say
+ * at all, one from before it signed that: then the sentence says how long a
+ * code lasts and no more. [says] is where the
  * last attempt stands, or a refusal as it came. [cancel] is an answer about
  * a code that is out failing a check: the code is not shown, and Cancel
  * still is, so the machine does not go on asking the provider for the rest
@@ -143,7 +147,7 @@ internal data class EngineSigninShown(
     val signedIn: EngineSignedIn? = null,
     val code: String? = null,
     val page: String? = null,
-    val minutes: Int? = null,
+    val expiresAt: Long? = null,
     val fixedLife: Boolean = false,
     /**
      * The machine said it cannot tell yet how the last sign-in ended
@@ -222,6 +226,17 @@ internal object EngineSigninWords {
             else -> said + " It lasts $minutes more minutes."
         }
     }
+
+    /**
+     * A code whose time is over by this phone's clock, with no checked answer
+     * since to say how the attempt ended. ONLY WHAT IS KNOWN IS SAID: the
+     * time has passed. Whether it was approved before that is the machine's
+     * to say and it has not, so "ran out before it was approved" would be a
+     * guess here (C-5). The machine goes on being asked, and what it answers
+     * takes this sentence's place.
+     */
+    fun ranOut(box: String): String =
+        "This code has run out, so it is not shown. $box has not said whether it was approved in time, and is asked again in a moment, by itself. Start again for a new code."
 
     /**
      * "Signed in on ops-box as debbie@example.com, on the plus plan, since 25
@@ -419,6 +434,21 @@ internal object EngineSignin {
     const val APPROVAL_SETTLES_MS = 3_000L
 
     /**
+     * How often this phone's clock is read while a machine is waited on, in
+     * milliseconds, for the minutes a code still lasts.
+     */
+    const val CLOCK_EVERY_MS = 5_000L
+
+    /**
+     * How long past its end a code is left on screen, in milliseconds, for
+     * the machine to say itself that it ran out: two asks and the time one
+     * takes. Without it the phone's sentence came first each time a code ran
+     * out, then the code again for one ask where the machine's clock was a
+     * second behind, then the machine's sentence.
+     */
+    const val END_SLACK_MS = 10_000L
+
+    /**
      * The engine a machine can sign in for one of the vault's two pasted
      * items, or null for any other item: `codex` is Codex's own, and
      * `copilot` is OpenCode's.
@@ -552,6 +582,29 @@ internal object EngineSignin {
     }
 
     /**
+     * What is drawn of a machine at one moment of this phone's clock.
+     *
+     * A CODE PAST ITS END IS NOT DRAWN AS ONE TO ENTER (C-5). While the
+     * machine answers, it says itself that a code ran out, within one ask.
+     * While it cannot be asked, what was checked stays, and the code stayed
+     * with it for as long as that went on, under a count of minutes that no
+     * longer moved. So once the end the machine signed has passed, with
+     * [END_SLACK_MS] for the machine to say so first, the code and its page
+     * are not drawn, and one sentence says what this phone knows: the time
+     * is over, and the machine has not said how it ended. Who is signed in
+     * stays, since that was checked.
+     *
+     * NOTHING KEPT IS CHANGED. The code is still what the asking goes by, so
+     * the machine is asked until it answers, and its checked answer then
+     * takes this sentence's place.
+     */
+    fun at(one: EngineSigninShown, box: String, now: Long): EngineSigninShown {
+        val ends = one.expiresAt
+        if (one.code == null || ends == null || now < ends + END_SLACK_MS) return one
+        return one.copy(code = null, page = null, expiresAt = null, says = EngineSigninWords.ranOut(box), bad = true)
+    }
+
+    /**
      * Where [engine] can be signed in for a member, from what the machines
      * report and what the member's vault approves (C-2).
      *
@@ -637,8 +690,13 @@ internal object EngineSignin {
      * picks among this phone's sentences and is never the reason a code or a
      * sign-in is drawn.
      *
-     * [now] is this phone's clock in milliseconds, which the minutes a code
-     * still lasts are worked out against.
+     * [now] is this phone's clock in milliseconds. The end a machine signed
+     * for its code is kept only where it can be right against it: at least a
+     * minute off and at most the fifteen a code lasts. The machine has just
+     * said, checked, that the code is out, so an end that has passed
+     * already, or is further off than a code lasts, is two clocks
+     * disagreeing, and then no count is said and nothing is taken off the
+     * screen for the time.
      */
     fun shown(
         reply: Fleet.Reply,
@@ -667,7 +725,7 @@ internal object EngineSignin {
             if (poll || unsure) return before.copy(says = says, bad = !unsure, unsure = unsure)
             val next = EngineSigninShown(signedIn = before.signedIn, says = says, bad = true)
             return if (state == "waiting") {
-                next.copy(code = before.code, page = before.page, minutes = before.minutes, fixedLife = before.fixedLife, cancel = before.code == null)
+                next.copy(code = before.code, page = before.page, expiresAt = before.expiresAt, fixedLife = before.fixedLife, cancel = before.code == null)
             } else {
                 next
             }
@@ -694,7 +752,7 @@ internal object EngineSignin {
                         signedIn = said.signedIn,
                         code = said.code,
                         page = said.page,
-                        minutes = minutesLeft(said.expiresAt, now),
+                        expiresAt = said.expiresAt.takeIf { minutesLeft(it, now) != null },
                         fixedLife = said.expiresAt == null,
                     )
                 } else {
@@ -766,13 +824,20 @@ internal fun EngineMachineSignIn(
     var signingOut by remember { mutableStateOf<String?>(null) }
     // The code Copy was last pressed for.
     var copiedCode by remember { mutableStateOf("") }
+    // This phone's clock in milliseconds, read again every few seconds while
+    // a machine is waited on. The minutes a code still lasts are counted
+    // against it where they are drawn, and so is whether the code has run
+    // out, whether or not the machine is answering.
+    var clock by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val places = EngineSignin.places(engine, hosts, keys, grants, memberName)
     // The machine that is asked every few seconds: one a code is out on, or
     // one that said it cannot tell yet how the last sign-in ended.
     val waitingOn = shown.keys.sorted().firstOrNull { shown[it]?.code != null || shown[it]?.unsure == true }
     // The machine a code is out on. While there is one, the next step is
-    // that code, and a second start is not offered beside it.
-    val codeOutOn = shown.keys.sorted().firstOrNull { shown[it]?.code != null }
+    // that code, and a second start is not offered beside it. A code that
+    // has run out on this phone's clock is not one: the sentence in its
+    // place says to start again, so the button to do it with is there.
+    val codeOutOn = shown.keys.sorted().firstOrNull { EngineSignin.at(shown[it] ?: EngineSigninShown(), it, clock).code != null }
 
     /**
      * Ask one machine one thing, and show what its answer may show.
@@ -827,6 +892,15 @@ internal fun EngineMachineSignIn(
             ask("status", host)
         }
     }
+    // THE CLOCK IS READ BY ITSELF, not when an answer comes: the count went
+    // stale exactly while no answer came.
+    LaunchedEffect(waitingOn) {
+        if (waitingOn == null) return@LaunchedEffect
+        while (true) {
+            clock = System.currentTimeMillis()
+            delay(EngineSignin.CLOCK_EVERY_MS)
+        }
+    }
 
     // SIGN OUT ASKS FIRST, with what it costs, as Forget does.
     val leaving = signingOut
@@ -856,19 +930,22 @@ internal fun EngineMachineSignIn(
     Column(verticalArrangement = Arrangement.spacedBy(Design.Space.insideTight)) {
         Text(EngineSigninWords.title(engine), style = Design.Style.body, color = Design.Palette.ink.now)
         for (host in shown.keys.sorted()) {
-            val one = shown[host] ?: EngineSigninShown()
+            // What is drawn of it at this moment, not what is kept: a code
+            // past its end is not drawn ([EngineSignin.at]).
+            val one = EngineSignin.at(shown[host] ?: EngineSigninShown(), host, clock)
             key(host) {
                 // A CHANGE OF STATE MOVES, and nothing else: a crossfade,
-                // which is the one animation "Remove animations" keeps.
+                // which is the one animation "Remove animations" keeps. A
+                // code running out on this phone's clock is one.
                 //
-                // A MINUTE PASSING IS NOT A CHANGE OF STATE. Keyed on all
-                // that is shown, the block was taken away and made again
-                // each time the minutes changed, and TalkBack's place on
-                // Copy code or Cancel went with it. So the minutes are left
-                // out of what the crossfade watches, and read where they are
-                // said.
+                // A MINUTE PASSING IS NOT A CHANGE OF STATE. Keyed on a count
+                // of minutes, the block was taken away and made again each
+                // time the count changed, and TalkBack's place on Copy code
+                // or Cancel went with it. So what the crossfade watches
+                // holds when the code runs out and no count, and the minutes
+                // are counted from the clock where they are said.
                 AnimatedContent(
-                    targetState = one.copy(minutes = null),
+                    targetState = one,
                     transitionSpec = { fadeIn(Design.Motion.change()) togetherWith fadeOut(Design.Motion.change()) },
                     label = "engine sign-in",
                 ) { now ->
@@ -932,7 +1009,7 @@ internal fun EngineMachineSignIn(
                                 modifier = Modifier.heightIn(min = 48.dp),
                             ) { Text(if (copiedCode == code) EngineSigninWords.COPIED else EngineSigninWords.COPY) }
                             Text(
-                                EngineSigninWords.waiting(EngineSigninWords.provider(engine), one.minutes, now.fixedLife),
+                                EngineSigninWords.waiting(EngineSigninWords.provider(engine), EngineSignin.minutesLeft(now.expiresAt, clock), now.fixedLife),
                                 style = Design.Style.bodySmall,
                                 color = Design.Palette.ink.now,
                             )

@@ -608,6 +608,8 @@ test('every sentence of the sign-in block is the same on both phones, word for w
     'Cancel it, and tell whoever runs this fleet.',
     'Your fleet did not answer. Check the connection, then try again.',
     '{} refused that ({}).',
+    '{} refused that.',
+    'This code has run out, so it is not shown. {} has not said whether it was approved in time, and is asked again in a moment, by itself. Start again for a new code.',
     '{} forgets this sign-in, and new sessions as {} there cannot use {} until it is signed in again. Signing in again takes a new code.',
     '{} forgets this sign-in. A pasted sign-in is still kept, and the next session there runs on that.',
   ]) assert.ok(ios.includes(words), `neither phone says: ${words}`);
@@ -816,12 +818,56 @@ test('Sign out asks first, the code is large, selectable and spoken as character
   // one: on Android the block was made again each minute, and TalkBack's
   // place in it went with it.
   has(IOS, /\.animation\(Design\.Motion\.change, value: \w+\)/, 'iOS’s sign-in changes state without the crossfade');
-  has(ANDROID, /AnimatedContent\(\s*targetState = \w+\.copy\(minutes = null\),\s*transitionSpec = \{ fadeIn\(Design\.Motion\.change\(\)\) togetherWith fadeOut\(Design\.Motion\.change\(\)\) \},/, 'Android makes the sign-in block again when a minute passes');
+  // What the crossfade watches has no count of minutes in it: only when the
+  // code runs out, which does not change as a minute passes.
+  has(ANDROID, /AnimatedContent\(\s*targetState = \w+,\s*transitionSpec = \{ fadeIn\(Design\.Motion\.change\(\)\) togetherWith fadeOut\(Design\.Motion\.change\(\)\) \},/, 'Android’s sign-in changes state without the crossfade');
+  for (const [name, src] of BOTH) {
+    const kept = /(?:struct EngineSigninShown: Equatable \{|internal data class EngineSigninShown\()[\s\S]*?\n[})]\n/.exec(src)?.[0] ?? '';
+    has(kept, /\bexpiresAt\b *: *(?:Double|Long)\?/, `${name} does not keep when a code runs out in what is shown of a machine`);
+    assert.doesNotMatch(kept, /\bminutes\b *:/, `${name} keeps a count of minutes in what is shown, which is made again, or goes stale, as they pass`);
+  }
   // A Sign out that cannot be pressed does not stay red.
   has(ANDROID, /Text\(\w+\.SIGN_OUT, color = if \(\w+\.isEmpty\(\)\) Design\.Palette\.bad\.now else Color\.Unspecified\)/, 'Android’s Sign out looks live while it cannot be pressed');
   // The page opens only an https address, in the browser.
   has(IOS, /url\.scheme\?\.lowercased\(\) == "https"/, 'iOS opens a sign-in page that is not https');
   has(ANDROID, /it\.startsWith\("https:\/\/", ignoreCase = true\)/, 'Android opens a sign-in page that is not https');
+});
+
+test('the minutes a code still lasts are counted as they are drawn, and a code past its end is not drawn as one to enter (C-5)', () => {
+  // THE COUNT WENT STALE. It was worked out once, when a checked answer
+  // came, and kept. While the machine could not be asked, "It lasts 12 more
+  // minutes." and the code stayed as they were, past the code's end. So what
+  // is kept is when the code runs out, and the minutes are counted from that
+  // against the phone's clock where the sentence is drawn.
+  has(IOS, /Text\(\w+\.waiting\(\w+\.provider\(engine\), minutes: \w+\.minutesLeft\(\w+\.expiresAt, now: (\w+)\), fixedLife: \w+\.fixedLife\)\)/, 'iOS says a count of minutes it worked out earlier');
+  has(ANDROID, /\w+\.waiting\(\w+\.provider\(engine\), \w+\.minutesLeft\(\w+\.expiresAt, (\w+)\), \w+\.fixedLife\),/, 'Android says a count of minutes it worked out earlier');
+  // THAT CLOCK IS READ AGAIN every few seconds for as long as a machine is
+  // waited on, whether or not the machine answers: a clock read only when
+  // an answer came would be the same stale count.
+  const iosClock = found(IOS, /minutesLeft\(\w+\.expiresAt, now: (\w+)\), fixedLife/, 'iOS has no clock for the minutes');
+  has(IOS, new RegExp(`\\.task\\(id: waitingOn\\) \\{\\s*guard waitingOn != nil else \\{ return \\}\\s*while !Task\\.isCancelled \\{\\s*${iosClock} = Date\\(\\)\\.timeIntervalSince1970 \\* 1000\\s*try\\? await Task\\.sleep\\(`), 'iOS does not read its clock again while a code is out');
+  const androidClock = found(ANDROID, /minutesLeft\(\w+\.expiresAt, (\w+)\), \w+\.fixedLife/, 'Android has no clock for the minutes');
+  has(ANDROID, new RegExp(`LaunchedEffect\\(waitingOn\\) \\{\\s*if \\(waitingOn == null\\) return@LaunchedEffect\\s*while \\(true\\) \\{\\s*${androidClock} = System\\.currentTimeMillis\\(\\)\\s*delay\\(`), 'Android does not read its clock again while a code is out');
+
+  // PAST ITS END, A CODE IS NOT DRAWN, and neither are its page, Copy and
+  // the waiting sentence, which are drawn only beside a code. What takes
+  // their place says only what the phone knows: the time is over, and the
+  // machine has not said how it ended. Each machine is drawn through the one
+  // function that decides that, by the same clock, and Sign in on a machine
+  // is offered again by it, since the sentence says to start again (C-2).
+  bothSay('This code has run out, so it is not shown. {} has not said whether it was approved in time, and is asked again in a moment, by itself. Start again for a new code.');
+  has(IOS, new RegExp(`if let (\\w+) = shown\\[host\\] \\{ stands\\(host, EngineSignin\\.at\\(\\1, box: host, now: ${iosClock}\\)\\) \\}`), 'iOS draws a machine without asking whether its code has run out');
+  has(IOS, new RegExp(`private var codeOutOn: String\\? \\{\\s*shown\\.keys\\.sorted\\(\\)\\.first \\{ EngineSignin\\.at\\(shown\\[\\$0\\] \\?\\? EngineSigninShown\\(\\), box: \\$0, now: ${iosClock}\\)\\.code != nil \\}`), 'iOS holds back Sign in on a machine for a code that has run out');
+  has(ANDROID, new RegExp(`val one = EngineSignin\\.at\\(shown\\[host\\] \\?: EngineSigninShown\\(\\), host, ${androidClock}\\)`), 'Android draws a machine without asking whether its code has run out');
+  has(ANDROID, new RegExp(`val codeOutOn = shown\\.keys\\.sorted\\(\\)\\.firstOrNull \\{ EngineSignin\\.at\\(shown\\[it\\] \\?: EngineSigninShown\\(\\), it, ${androidClock}\\)\\.code != null \\}`), 'Android holds back Sign in on a machine for a code that has run out');
+  // The asking goes on by what is kept, not by what is drawn, so the
+  // machine's own checked word takes the sentence's place when it comes.
+  has(IOS, /private var waitingOn: String\? \{\s*shown\.keys\.sorted\(\)\.first \{ shown\[\$0\]\?\.code != nil \|\| shown\[\$0\]\?\.unsure == true \}/, 'iOS stops asking a machine whose code ran out on the phone’s clock');
+  has(ANDROID, /val waitingOn = shown\.keys\.sorted\(\)\.firstOrNull \{ shown\[it\]\?\.code != null \|\| shown\[it\]\?\.unsure == true \}/, 'Android stops asking a machine whose code ran out on the phone’s clock');
+  // The same two numbers on both phones: how long past its end a code is
+  // left for the machine to say so itself, and how often the clock is read.
+  assert.equal(Number(found(IOS, /static let endSlack: Double = ([\d_]+)/, 'iOS has no slack past a code’s end').replaceAll('_', '')), Number(found(ANDROID, /const val END_SLACK_MS = ([\d_]+)L/, 'Android has no slack past a code’s end').replaceAll('_', '')));
+  assert.equal(Number(found(IOS, /static let clockEvery: UInt64 = ([\d_]+)/, 'iOS does not say how often its clock is read').replaceAll('_', '')) / 1e6, Number(found(ANDROID, /const val CLOCK_EVERY_MS = ([\d_]+)L/, 'Android does not say how often its clock is read').replaceAll('_', '')));
 });
 
 test('pasting a sign-in is the fallback, behind a button that says so, with when to use it and which Copilot token works', () => {

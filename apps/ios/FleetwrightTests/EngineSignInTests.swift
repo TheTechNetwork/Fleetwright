@@ -235,11 +235,11 @@ final class EngineSignInTests: XCTestCase {
 
     func testARefusedAskOfWhereItStandsKeepsTheCodeAndARefusedButtonDoesNot() throws {
         let v = try vector()
-        let before = EngineSigninShown(signedIn: EngineSignedIn(since: 1, email: nil, plan: nil), code: "WXYZ-1234", page: codexPage, minutes: 9)
+        let before = EngineSigninShown(signedIn: EngineSignedIn(since: 1, email: nil, plan: nil), code: "WXYZ-1234", page: codexPage, expiresAt: 540_000)
         // The asking every few seconds, refused once: everything stays.
         let polled = try shown(v, ["ok": false, "error": ["code": "host_timeout"]], before: before, poll: true)
         XCTAssertEqual([polled.code, polled.page], ["WXYZ-1234", codexPage])
-        XCTAssertEqual(polled.minutes, 9)
+        XCTAssertEqual(polled.expiresAt, 540_000)
         XCTAssertEqual(polled.signedIn, before.signedIn)
         XCTAssertTrue(polled.bad)
         // A button refused: the code goes unless the refusal says one is out.
@@ -255,12 +255,12 @@ final class EngineSignInTests: XCTestCase {
         // signed in" and not a fault: whatever asked, what was checked
         // stays, the sentence says it is asked again, and it is.
         let v = try vector()
-        let before = EngineSigninShown(signedIn: EngineSignedIn(since: 1, email: "debbie@example.com", plan: nil), code: "WXYZ-1234", page: codexPage, minutes: 9)
+        let before = EngineSigninShown(signedIn: EngineSignedIn(since: 1, email: "debbie@example.com", plan: nil), code: "WXYZ-1234", page: codexPage, expiresAt: 540_000)
         for poll in [true, false] {
             let got = try shown(v, ["ok": false, "error": ["code": "cannot_tell"], "text": lie], before: before, poll: poll)
             XCTAssertEqual(got.signedIn, before.signedIn)
             XCTAssertEqual([got.code, got.page], ["WXYZ-1234", codexPage])
-            XCTAssertEqual(got.minutes, 9)
+            XCTAssertEqual(got.expiresAt, 540_000)
             XCTAssertTrue(got.unsure, "a machine that cannot tell yet is not asked again")
             XCTAssertFalse(got.bad)
             XCTAssertEqual(got.says, "It is not known yet whether Codex is signed in on ops-box: ops-box did not hear how the last sign-in ended. It is asked again in a moment, by itself.")
@@ -284,9 +284,9 @@ final class EngineSignInTests: XCTestCase {
         XCTAssertFalse(drawn(got).contains("ZZZZ"))
         // A machine from before it signed when the code runs out: how long a
         // code lasts, and no count.
-        XCTAssertNil(got.minutes)
+        XCTAssertNil(got.expiresAt)
         XCTAssertTrue(got.fixedLife)
-        XCTAssertEqual(EngineSigninWords.waiting("OpenAI", minutes: got.minutes, fixedLife: got.fixedLife),
+        XCTAssertEqual(EngineSigninWords.waiting("OpenAI", minutes: EngineSignin.minutesLeft(got.expiresAt, now: 0), fixedLife: got.fixedLife),
                        "Waiting for this code to be approved at OpenAI. A code lasts 15 minutes.")
         // Signed, and beside a page that is not OpenAI's: no code, no page,
         // one sentence, and Cancel.
@@ -307,20 +307,67 @@ final class EngineSignInTests: XCTestCase {
         }
     }
 
-    func testTheMinutesAreWorkedOutFromTheCheckedEndAgainstThisPhonesClock() throws {
+    func testTheEndOfACodeIsKeptOnlyWhereItCanBeRightAgainstThisPhonesClock() throws {
         let v = try made("next-waiting")
         let ends = try XCTUnwrap((v.opened["expiresAt"] as? NSNumber)?.doubleValue)
         let answer: [String: Any] = ["ok": true, "state": "waiting", "expiresInMinutes": 99, "sealed": v.sealed]
         let midway = try shown(v, answer, now: ends - 7.5 * 60_000)
         XCTAssertEqual(midway.code, "QRST-5678")
-        XCTAssertEqual(midway.minutes, 8)
+        XCTAssertEqual(midway.expiresAt, ends)
         XCTAssertFalse(midway.fixedLife)
-        XCTAssertEqual(try shown(v, answer, now: ends - 15 * 60_000).minutes, 15)
-        // More than a code lasts, or already past: no number is said.
-        XCTAssertNil(try shown(v, answer, now: ends - 16 * 60_000).minutes)
-        XCTAssertNil(try shown(v, answer, now: ends + 1).minutes)
+        XCTAssertEqual(EngineSignin.minutesLeft(midway.expiresAt, now: ends - 7.5 * 60_000), 8)
+        XCTAssertEqual(try shown(v, answer, now: ends - 15 * 60_000).expiresAt, ends)
+        // More than a code lasts, or already past, by a machine that has
+        // just said the code is out: two clocks disagree. No end is kept, so
+        // no number is said, and the code is not taken off the screen for it.
+        for now in [ends - 16 * 60_000, ends + 1, ends + 60 * 60_000] {
+            let got = try shown(v, answer, now: now)
+            XCTAssertNil(got.expiresAt)
+            XCTAssertEqual(EngineSignin.at(got, box: "ops-box", now: now).code, "QRST-5678")
+        }
         XCTAssertEqual(EngineSigninWords.waiting("OpenAI", minutes: nil, fixedLife: false), "Waiting for this code to be approved at OpenAI.")
         XCTAssertEqual(EngineSigninWords.waiting("OpenAI", minutes: 8, fixedLife: false), "Waiting for this code to be approved at OpenAI. It lasts 8 more minutes.")
+    }
+
+    func testTheMinutesAreCountedAsTheyAreDrawnAndACodePastItsEndIsNotDrawn() throws {
+        // A checked answer twelve minutes before the code's end, and from
+        // then on the asking is refused: what is kept does not change, and
+        // the count used to stay at twelve, past the end.
+        let v = try made("next-waiting")
+        let ends = try XCTUnwrap((v.opened["expiresAt"] as? NSNumber)?.doubleValue)
+        let first = try shown(v, ["ok": true, "state": "waiting", "sealed": v.sealed], now: ends - 12 * 60_000)
+        let kept = try shown(v, ["ok": false, "error": ["code": "host_timeout"]], before: first, poll: true, now: ends - 60_000)
+        XCTAssertEqual([kept.code, kept.page], ["QRST-5678", codexPage])
+        XCTAssertEqual(kept.expiresAt, ends)
+        func said(_ now: Double) -> String {
+            let one = EngineSignin.at(kept, box: "ops-box", now: now)
+            return one.code == nil ? one.says
+                : EngineSigninWords.waiting("OpenAI", minutes: EngineSignin.minutesLeft(one.expiresAt, now: now), fixedLife: one.fixedLife)
+        }
+        XCTAssertEqual(said(ends - 12 * 60_000), "Waiting for this code to be approved at OpenAI. It lasts 12 more minutes.")
+        XCTAssertEqual(said(ends - 3 * 60_000), "Waiting for this code to be approved at OpenAI. It lasts 3 more minutes.")
+        XCTAssertEqual(said(ends - 20_000), "Waiting for this code to be approved at OpenAI. It lasts 1 more minute.")
+        // Just past its end, the machine is left to say so itself: the code
+        // is there for those seconds, with no count.
+        XCTAssertEqual(said(ends + 1), "Waiting for this code to be approved at OpenAI.")
+        // Then it is not drawn, nor its page, and the sentence says only
+        // what this phone knows.
+        let over = EngineSignin.at(kept, box: "ops-box", now: ends + EngineSignin.endSlack)
+        XCTAssertNil(over.code)
+        XCTAssertNil(over.page)
+        XCTAssertTrue(over.bad)
+        XCTAssertEqual(over.says, "This code has run out, so it is not shown. ops-box has not said whether it was approved in time, and is asked again in a moment, by itself. Start again for a new code.")
+        XCTAssertFalse(drawn(over).contains("QRST"))
+        // Nothing kept is changed, so the machine goes on being asked.
+        XCTAssertEqual(kept.code, "QRST-5678")
+        // Who is signed in was checked, and stays.
+        var standing = kept
+        standing.signedIn = EngineSignedIn(since: 1, email: "debbie@example.com", plan: nil)
+        XCTAssertEqual(EngineSignin.at(standing, box: "ops-box", now: ends + 60_000).signedIn, standing.signedIn)
+        // A machine that did not say when its code runs out is never taken
+        // off the screen by a clock.
+        let old = EngineSigninShown(code: "WXYZ-1234", page: codexPage, fixedLife: true)
+        XCTAssertEqual(EngineSignin.at(old, box: "ops-box", now: ends * 2), old)
     }
 
     func testCodexSignedInNamesItsAccountAndAReasonKeepsItsQuotesAndSlashes() throws {
