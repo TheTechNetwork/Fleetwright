@@ -209,6 +209,23 @@ class EngineSignInTest {
         assertEquals("ops-box did not answer in time. Try again.", shown(first, refused("host_timeout")).says)
         assertEquals("ops-box refused that (made_up_code).", shown(first, refused("made_up_code")).says)
         assertEquals("ops-box refused that.", shown(first, refused("ZZZZ-9999")).says)
+        // BESIDE A CODE TO ENTER, a code it has not met is not printed
+        // either: letters and underscores are enough to spell a code of the
+        // fleet's own under the real one. Whether the asking was refused or
+        // a button was.
+        for (poll in listOf(true, false)) {
+            val beside = shown(first, refused("enter_wdjb_mjht_instead", "waiting"), before, poll)
+            assertEquals("WXYZ-1234", beside.code)
+            assertEquals("ops-box refused that.", beside.says)
+        }
+        // The box's own faults are not refusals, and none is printed as a
+        // code: each says what a box that does not answer says.
+        for (code in listOf("hub_unreachable", "hub_error", "hub_unauthorised", "internal")) {
+            assertEquals(
+                "fleetwright on ops-box is not answering. Try again, and if it goes on, whoever runs ops-box restarts it.",
+                shown(first, refused(code)).says,
+            )
+        }
         // No code at all is the fleet not answering: one fixed sentence, and
         // what was checked before stands.
         val unreached = shown(first, refused(null), before)

@@ -331,8 +331,13 @@ internal object EngineSigninWords {
      *
      * [provider] is whose page that engine's code is entered on, for the one
      * refusal that is about a page that was not theirs.
+     *
+     * [codeOut] IS A CHECKED CODE ON SCREEN AS THE ANSWER CAME. Then a code
+     * this build has not met is not printed at all. It is the fleet's to
+     * write, and forty letters and underscores are enough to spell a code of
+     * its own under the real one: "(enter_wdjb_mjht_instead)".
      */
-    fun refusal(code: String, box: String, engine: String, provider: String, member: String?): String {
+    fun refusal(code: String, box: String, engine: String, provider: String, member: String?, codeOut: Boolean = false): String {
         val whose = if (member == null) "your" else "${member}’s"
         val whom = member ?: "you"
         val named = member ?: "your own member"
@@ -349,7 +354,13 @@ internal object EngineSigninWords {
             "no_engine" -> "$box does not run $engine. Sign it in on a machine that does."
             "host_unavailable" -> "$box is not connected, or does not act for you. Try again when it is back, or use another machine."
             "host_timeout", "hub_timeout" -> "$box did not answer in time. Try again."
-            "hub_unreachable" -> "fleetwright on $box is not answering. Try again, and if it goes on, whoever runs $box restarts it."
+            // `hub_error`, `hub_unauthorised` and `internal` are the box's
+            // own faults, passed on as they are: fleetwright there answered
+            // wrongly, turned its own sidecar away, or fell over on the
+            // request. None is a refusal, and each read "refused that
+            // (hub_error)." So they say what an unreachable one says, which
+            // is what to do about all four.
+            "hub_unreachable", "hub_error", "hub_unauthorised", "internal" -> "fleetwright on $box is not answering. Try again, and if it goes on, whoever runs $box restarts it."
             "answer_unsigned" -> "$box could not sign its answer, so nothing of it is shown. Try again, or cancel the sign-in."
             "bad_params" -> "$box did not take the request as this app sent it. Update this app and fleetwright on $box."
             "no_image" -> "$box has not fetched its session image yet. Start a session there first, then sign in."
@@ -368,7 +379,7 @@ internal object EngineSigninWords {
             "id_reused" -> "$box refused a repeated request. Try again."
             "in_flight" -> "The same request is still on its way to $box. Wait for its answer."
             "member_not_delegated" -> "$box takes this only under a delegation that names $named. Allow one under You, Delegations, with that member turned on."
-            else -> if (printable(code)) "$box refused that ($code)." else "$box refused that."
+            else -> if (!codeOut && printable(code)) "$box refused that ($code)." else "$box refused that."
         }
     }
 
@@ -645,7 +656,7 @@ internal object EngineSignin {
         val state = reply.state.orEmpty()
         if (!reply.ok) {
             val code = reply.code ?: return before.copy(says = EngineSigninWords.NOT_REACHED, bad = true)
-            val says = EngineSigninWords.refusal(code, host, engineName(engine), EngineSigninWords.provider(engine), memberName)
+            val says = EngineSigninWords.refusal(code, host, engineName(engine), EngineSigninWords.provider(engine), memberName, codeOut = before.code != null)
             // A MACHINE THAT CANNOT TELL YET has said nothing about the
             // sign-in: it did not hear how the last one ended, and looks
             // again when asked. So whatever asked, a button included,

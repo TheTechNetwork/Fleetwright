@@ -211,6 +211,21 @@ final class EngineSignInTests: XCTestCase {
         XCTAssertEqual(try shown(v, ["ok": false, "error": ["code": "host_timeout"], "text": lie]).says, "ops-box did not answer in time. Try again.")
         XCTAssertEqual(try shown(v, ["ok": false, "error": ["code": "made_up_code"], "text": lie]).says, "ops-box refused that (made_up_code).")
         XCTAssertEqual(try shown(v, ["ok": false, "error": ["code": "ZZZZ-9999"], "text": lie]).says, "ops-box refused that.")
+        // BESIDE A CODE TO ENTER, a code it has not met is not printed
+        // either: letters and underscores are enough to spell a code of the
+        // fleet's own under the real one. Whether the asking was refused
+        // or a button was.
+        for poll in [true, false] {
+            let beside = try shown(v, ["ok": false, "error": ["code": "enter_wdjb_mjht_instead"], "state": "waiting"], before: before, poll: poll)
+            XCTAssertEqual(beside.code, "WXYZ-1234")
+            XCTAssertEqual(beside.says, "ops-box refused that.")
+        }
+        // The box's own faults are not refusals, and none is printed as a
+        // code: each says what a box that does not answer says.
+        for code in ["hub_unreachable", "hub_error", "hub_unauthorised", "internal"] {
+            XCTAssertEqual(try shown(v, ["ok": false, "error": ["code": code], "text": lie]).says,
+                           "fleetwright on ops-box is not answering. Try again, and if it goes on, whoever runs ops-box restarts it.")
+        }
         // No code at all is the fleet not answering: one fixed sentence, and
         // what was checked before stands.
         let unreached = try shown(v, ["ok": false, "text": lie], before: before)

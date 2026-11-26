@@ -272,7 +272,12 @@ enum EngineSigninWords {
     ///
     /// `provider` is whose page that engine's code is entered on, for the
     /// one refusal that is about a page that was not theirs.
-    static func refusal(_ code: String, box: String, engine: String, provider: String, member: String?) -> String {
+    ///
+    /// `codeOut` IS A CHECKED CODE ON SCREEN AS THE ANSWER CAME. Then a
+    /// code this build has not met is not printed at all. It is the fleet's
+    /// to write, and forty letters and underscores are enough to spell a
+    /// code of its own under the real one: "(enter_wdjb_mjht_instead)".
+    static func refusal(_ code: String, box: String, engine: String, provider: String, member: String?, codeOut: Bool = false) -> String {
         let whose = member.map { "\($0)’s" } ?? "your"
         let whom = member ?? "you"
         let named = member ?? "your own member"
@@ -289,7 +294,12 @@ enum EngineSigninWords {
         case "no_engine": return "\(box) does not run \(engine). Sign it in on a machine that does."
         case "host_unavailable": return "\(box) is not connected, or does not act for you. Try again when it is back, or use another machine."
         case "host_timeout", "hub_timeout": return "\(box) did not answer in time. Try again."
-        case "hub_unreachable": return "fleetwright on \(box) is not answering. Try again, and if it goes on, whoever runs \(box) restarts it."
+        // `hub_error`, `hub_unauthorised` and `internal` are the box's own
+        // faults, passed on as they are: fleetwright there answered wrongly,
+        // turned its own sidecar away, or fell over on the request. None is
+        // a refusal, and each read "refused that (hub_error)." So they say
+        // what an unreachable one says, which is what to do about all four.
+        case "hub_unreachable", "hub_error", "hub_unauthorised", "internal": return "fleetwright on \(box) is not answering. Try again, and if it goes on, whoever runs \(box) restarts it."
         case "answer_unsigned": return "\(box) could not sign its answer, so nothing of it is shown. Try again, or cancel the sign-in."
         case "bad_params": return "\(box) did not take the request as this app sent it. Update this app and fleetwright on \(box)."
         case "no_image": return "\(box) has not fetched its session image yet. Start a session there first, then sign in."
@@ -308,7 +318,7 @@ enum EngineSigninWords {
         case "id_reused": return "\(box) refused a repeated request. Try again."
         case "in_flight": return "The same request is still on its way to \(box). Wait for its answer."
         case "member_not_delegated": return "\(box) takes this only under a delegation that names \(named). Allow one under You, Delegations, with that member turned on."
-        default: return printable(code) ? "\(box) refused that (\(code))." : "\(box) refused that."
+        default: return !codeOut && printable(code) ? "\(box) refused that (\(code))." : "\(box) refused that."
         }
     }
 
@@ -559,7 +569,7 @@ enum EngineSignin {
                 return kept
             }
             let says = EngineSigninWords.refusal(code, box: host, engine: engineName(engine), provider: EngineSigninWords.provider(engine),
-                                                  member: memberName)
+                                                  member: memberName, codeOut: before.code != nil)
             // A MACHINE THAT CANNOT TELL YET has said nothing about the
             // sign-in: it did not hear how the last one ended, and looks
             // again when asked. So whatever asked, a button included,
@@ -913,9 +923,14 @@ struct EngineMachineSignIn: View {
                 if !quiet { busy = "" }
                 return
             }
+            // A REQUEST THAT FAILED IS NO ANSWER, and says what no answer
+            // says on Android, where it comes back as one: the fixed
+            // sentence. The system's own description of the error was drawn
+            // here, in whatever words the system had, under a code that was
+            // still out.
             if turns[host] == turn {
                 var next = before
-                next.says = error.localizedDescription
+                next.says = EngineSigninWords.notReached
                 next.bad = true
                 shown[host] = next
             }

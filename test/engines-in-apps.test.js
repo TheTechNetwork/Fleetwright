@@ -629,7 +629,14 @@ test('nothing the fleet wrote is drawn in the sign-in block: a refusal is the ph
     ['Android', fn(ANDROID, 'suspend fun ask(action: String, host: String', 'Android has no one place a sign-in is asked for')],
   ])) {
     assert.doesNotMatch(body, /reply\.(?:text|detail|expiresInMinutes)\b/, `${name} draws something the fleet wrote beside a sign-in`);
+    // NOR WHAT THE SYSTEM SAYS OF A REQUEST THAT FAILED. Android's request
+    // comes back as no answer and reads "Your fleet did not answer…"; iOS's
+    // throws, and drew the system's own description of the error where the
+    // other phone has that sentence, under a code that was still out.
+    assert.doesNotMatch(body, /localizedDescription|\.message\b/, `${name} draws the system’s description of a failed request beside a sign-in`);
   }
+  has(fn(IOS, 'private func ask(_ action: String, of host: String', 'iOS has no one place a sign-in is asked for'),
+    /\} catch \{[\s\S]*?\.says = \w+\.notReached\n/, 'iOS does not say “Your fleet did not answer…” for a request that failed, as Android does');
   // THE SAME CODES ON BOTH PHONES, and every code the machine's own sign-in
   // code refuses with is one of them, so a real refusal is never the
   // sentence for a code nobody has met.
@@ -645,16 +652,38 @@ test('nothing the fleet wrote is drawn in the sign-in block: a refusal is the ph
   // `refusal(` never read those.
   const refusedWith = new Set([...box.matchAll(/(?:refus(?:e|al|ed)\(|error: \{ code: )'([a-z_]+)'/g)].map((m) => m[1]));
   assert.ok(refusedWith.size >= 8, 'the machine’s refusals were not found');
+  for (const code of ['no_code', 'signin_failed']) assert.ok(refusedWith.has(code), `the machine’s refusal ${code} was not read out of its code`);
   for (const code of refusedWith) assert.ok(ios.includes(code), `a machine refuses a sign-in with ${code}, and the phones have no sentence for it`);
   // The ones the fleet and the machine's own check add on the way.
   for (const code of ['not_approved', 'approval_unknown', 'custody_unknown', 'not_custodian', 'not_signed_in', 'no_member', 'member_unchecked', 'signature_required', 'host_outdated', 'no_engine', 'host_unavailable', 'host_timeout', 'answer_unsigned', 'bad_params', 'hub_outdated', 'hub_unreachable', 'hub_timeout',
     // Settled after the table was first written, by the machine's and the
     // fleet's own lanes. Named here so the table is held to them before the
     // machine's code on this branch has them, and after.
-    'unreadable_code', 'wrong_page', 'state_unwritable', 'state_unreadable', 'id_reused', 'in_flight', 'member_not_delegated', 'cannot_tell']) {
+    'unreadable_code', 'wrong_page', 'state_unwritable', 'state_unreadable', 'id_reused', 'in_flight', 'member_not_delegated', 'cannot_tell',
+    // The box's own faults, passed on by its sidecar (src/fleet/host/hub-client.js
+    // and sidecar.js). Each read "ops-box refused that (hub_error).", which
+    // printed a code and called a fault a refusal.
+    'hub_error', 'hub_unauthorised', 'internal']) {
     assert.ok(ios.includes(code), `the phones have no sentence for ${code}`);
   }
-  for (const code of ['no_code', 'signin_failed']) assert.ok(refusedWith.has(code), `the machine’s refusal ${code} was not read out of its code`);
+  // Those three say what `hub_unreachable` says, on both phones: fleetwright
+  // on the box is what failed, and whoever runs the box is who mends it.
+  for (const [name, src] of BOTH) {
+    const line = signinWords(src).split('\n').find((l) => l.includes('"hub_unreachable"')) ?? '';
+    for (const code of ['hub_error', 'hub_unauthorised', 'internal']) assert.ok(line.includes(`"${code}"`), `${name} has another sentence than hub_unreachable’s for ${code}`);
+    has(line, name === 'iOS' ? /"fleetwright on \\\(box\) is not answering\. Try again, and if it goes on, whoever runs \\\(box\) restarts it\."/ : /"fleetwright on \$box is not answering\. Try again, and if it goes on, whoever runs \$box restarts it\."/, `${name} does not say what to do about a fault on the box`);
+  }
+
+  // A CODE NOBODY HAS MET IS NOT PRINTED BESIDE A CODE TO ENTER. It is the
+  // fleet's to write, up to 40 lower-case letters and underscores, which is
+  // enough to spell a device code ("enter_wdjb_mjht_instead") under the real
+  // one. So "ops-box refused that (some_code)." is said only when no checked
+  // code was on screen as the answer came, and "ops-box refused that."
+  // otherwise.
+  const iosBeside = found(IOS, /default: return !(\w+) && printable\(code\) \? "\\\(box\) refused that \(\\\(code\)\)\." : "\\\(box\) refused that\."/, 'iOS prints a code it has not met whether or not a code to enter is on screen');
+  has(fn(IOS, 'static func shown(after', 'iOS has no one place an answer becomes what is shown'), new RegExp(`\\.refusal\\(code,[\\s\\S]{0,200}?${iosBeside}: before\\.code != nil\\)`), 'iOS does not tell a refusal’s sentence that a code is on screen');
+  const androidBeside = found(ANDROID, /else -> if \(!(\w+) && printable\(code\)\) "\$box refused that \(\$code\)\." else "\$box refused that\."/, 'Android prints a code it has not met whether or not a code to enter is on screen');
+  has(fn(ANDROID, 'fun shown(', 'Android has no one place an answer becomes what is shown'), new RegExp(`\\.refusal\\(code,[\\s\\S]{0,200}?${androidBeside} = before\\.code != null\\)`), 'Android does not tell a refusal’s sentence that a code is on screen');
 });
 
 test('a code is drawn only beside the page that engine’s code is entered on, the same two pages on both phones', () => {
