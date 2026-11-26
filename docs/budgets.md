@@ -81,7 +81,9 @@ that start's: counted from nothing, like any session the fleet started, and
 no longer unknown. One session a start. Like every unknown it blocks
 nothing, in `ask` and in `refuse`: what stops the next start is the figure
 once the box reports it. A start nobody ever answers stays unknown for the
-month.
+month. A start the coordinator could not send at all, because the machine's
+connection closed as it was written to, is not one of these: nothing left,
+so nothing ran, and the row says nothing of it.
 
 One row a member (`spend:<id>`): the month, the total, the last figure
 seen for at most 60 of its sessions, and the starts nobody answered. One row a member for who may start as

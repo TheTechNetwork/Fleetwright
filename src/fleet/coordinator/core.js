@@ -4120,8 +4120,11 @@ export class CoordinatorCore {
     // send one id to every host, and the last set() won while the first
     // waiter starved to timeout. The fan-out now mints per-host ids, and this
     // makes the invariant structural instead of a habit.
+    // `notSent`, here and where the socket refuses the write below: nothing
+    // left this coordinator, so whoever asked is not told the box may have
+    // acted (dispatch). A wait that runs out carries no such mark.
     if (this.pending.has(intent.id)) {
-      return Promise.reject(new Error(`an intent with id ${intent.id} is already in flight`));
+      return Promise.reject(Object.assign(new Error(`an intent with id ${intent.id} is already in flight`), { notSent: true }));
     }
     const answer = new Promise((resolve, reject) => {
       const timer = this.setTimer(() => {
@@ -4136,7 +4139,7 @@ export class CoordinatorCore {
       } catch (e) {
         this.clearTimer(timer);
         this.pending.delete(intent.id);
-        reject(e);
+        reject(Object.assign(e instanceof Error ? e : new Error(String(e)), { notSent: true }));
       }
     });
     // AND WHEN THE BOX REFUSES IT FOR WANT OF ONE, what would have carried it.
@@ -4787,8 +4790,18 @@ export class CoordinatorCore {
 
     const sentAt = this.now();
     try {
+      // A send that throws before it returns (an intent that cannot be built
+      // for this box) sent nothing either, and is marked as the two inside
+      // `send` are.
+      /** @type {Promise<any>} */
+      let sending;
+      try {
+        sending = this.send(placement.host, spec);
+      } catch (e) {
+        throw Object.assign(e instanceof Error ? e : new Error(String(e)), { notSent: true });
+      }
       const answer = explainUnsupportedVersion(
-        explainUnknownVerb(await this.send(placement.host, spec), placement.host),
+        explainUnknownVerb(await sending, placement.host),
         placement.host,
       );
       if (onTask) {
@@ -4869,7 +4882,15 @@ export class CoordinatorCore {
       // $0.00 because nothing here had heard it start. It is kept as a start
       // whose spend is unknown, which the member's row says, until that box
       // speaks of the session and it is counted from nothing.
-      if (spec.verb === 'start' && typeof spec.params?.member === 'string' && lockedOn && this.org.get(spec.params.member)) {
+      //
+      // NOT WHEN NOTHING WAS SENT (`notSent`, from `send`). A send that
+      // failed before anything left, a socket closing as it was written to
+      // or an id already in flight, started nothing, and was kept all the
+      // same: the member's month read "at least", and "one start got no
+      // answer from its machine", until the month turned, about a start
+      // this coordinator knew it never sent. Anything else is taken as a
+      // box that may have acted, which is the side to be wrong on.
+      if (/** @type {any} */ (e)?.notSent !== true && spec.verb === 'start' && typeof spec.params?.member === 'string' && lockedOn && this.org.get(spec.params.member)) {
         this.budgets.unanswered(spec.params.member, lockedOn, sentAt);
         this.onStateChanged?.();
       }

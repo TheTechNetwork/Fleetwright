@@ -146,6 +146,19 @@ test('a start as a member that its box never answers is spend the fleet cannot t
   g.answers((spec) => ({ ok: true, text: 'Started.', sessions: [{ name: 'cc-2', status: 'running', member: spec.params.member }] }));
   assert.equal((await g.start(dana, 'debbie')).ok, true);
   assert.equal(g.spendOf('debbie').unknownSessions, 1);
+
+  // A START THAT NEVER LEFT is not one nobody answered. The box's connection
+  // closes as the start is written to it: nothing was sent, so nothing ran,
+  // and the member's month says nothing of it. It was kept as unknown like
+  // the rest, and the row read "at least" until the month turned.
+  const h = fleet();
+  await h.reports();
+  delete (/** @type {any} */ (h.core)).send; // the coordinator's own send, onto a socket that refuses the write
+  /** @type {any} */ (h.core.registry.get('deb132')).send = () => { throw new Error('the socket is closed'); };
+  const unsent = await h.start(dana, 'debbie');
+  assert.equal(unsent.ok, false);
+  assert.equal(unsent.text, 'the socket is closed');
+  assert.deepEqual([h.spendOf('debbie').unknownSessions, h.spendOf('debbie').words], [0, '$0.00 of $50.00 this month, at API prices as each session counted it.']);
 });
 
 test('with enforcing off, a member past its budget starts as before and nobody is asked', async () => {
