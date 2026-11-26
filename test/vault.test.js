@@ -11,11 +11,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { newDepositKey, importDepositKey, newSealKey, seal, open, atRestAad, ENGINE_SIGNIN_AAD, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
+import { newDepositKey, newSealKey, seal, open, atRestAad, ENGINE_SIGNIN_AAD, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, signingInput, fingerprint, verify } from '../src/fleet/crypto.js';
 import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
-import { boxKeyHash, answerVaultBox } from '../src/fleet/minter/vault.js';
-import { vaultBoxAnswerInput, sealedDigest } from '../src/fleet/protocol/vault-answer.js';
+import { boxKeyHash } from '../src/fleet/minter/vault.js';
+import { vaultBoxAnswerInput } from '../src/fleet/protocol/vault-answer.js';
 import { describeRenewals, renewalVerdict, freshClaude, claudeRenewals as renewalsKept, CLAUDE_USAGE_URL } from '../src/fleet/minter/claude-login.js';
 import { USAGE_URL } from '../src/core/usage.js';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
@@ -39,6 +39,12 @@ import { RESULT_FOOTER } from '../src/fleet/protocol/tasks.js';
 import { startStubHub } from './helpers/stub-hub.js';
 import { signinBox, TOKEN } from './helpers/stub-signin-podman.js';
 import { standInClaude, revokeClaude, forbidClaude, claudeRenewals, claudeSignInFor, cancelClaudeSignIns, claudeUsageAsks } from './helpers/stand-in-claude.js';
+// What the minter's own test of its signed answer to a box needs, on lines of
+// their own: the host layer's tests add the two imports above as well, and
+// the same line changed two ways is a merge nobody can take.
+import { answerVaultBox } from '../src/fleet/minter/vault.js';
+import { sealedDigest } from '../src/fleet/protocol/vault-answer.js';
+import { importDepositKey } from '../src/fleet/seal.js';
 
 const json = (/** @type {number} */ status, /** @type {any} */ body) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
