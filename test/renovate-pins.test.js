@@ -68,6 +68,18 @@ test('every `# renovate:` comment in a workflow is read by a manager', () => {
   }
 });
 
+test('every `# renovate:` comment in the session image’s Containerfile is read by a manager, the two engines’ included', () => {
+  // The Codex and OpenCode pins were annotated like Claude Code's and no
+  // manager matched them: the same comment nothing read that had left Claude
+  // Code forty-eight releases behind. The adapters are written against an
+  // engine's own protocol, so a pin that never moves is a box running an
+  // engine nobody has looked at since.
+  const file = 'sandbox/Containerfile';
+  const written = [...read(file).matchAll(/# renovate: datasource=(\S+) depName=(\S+)[^\n]*\n(?:ARG \w+=|[^\n]*@)(\S+)/g)].map((m) => ({ datasource: m[1], depName: m[2], currentValue: m[3] }));
+  assert.deepEqual(found(file).sort((a, b) => String(a.depName).localeCompare(String(b.depName))), written.sort((a, b) => a.depName.localeCompare(b.depName)));
+  assert.deepEqual(found(file).filter((d) => ['@openai/codex', 'opencode-ai'].includes(d.depName)).map((d) => [d.datasource, d.depName, /^\d+\.\d+\.\d+$/.test(String(d.currentValue))]), [['npm', '@openai/codex', true], ['npm', 'opencode-ai', true]]);
+});
+
 test('the iOS app’s Swift packages and the sandbox’s Node line are read where they are written', () => {
   // EVERY PINNED PACKAGE IS ONE RENOVATE SEES: as many found as there are
   // exactVersion lines, each with its own version, so a package added without

@@ -34,7 +34,19 @@ permissions:
   packages: write
 
 jobs:
+  # PUBLISHED ONLY ONCE IT HAS BEEN RUN. This job pushed `latest`, `web` and
+  # `engines` as it built them, and `smoke` came after it: on main a smoke
+  # that failed left the image it had just failed under the name every box
+  # pulls. It now waits for `smoke`, and a run whose smoke fails publishes
+  # nothing.
+  #
+  # WHAT WAS RUN IS NOT BYTE FOR BYTE WHAT IS PUSHED. `smoke` builds its own
+  # copies for one architecture and this job builds for two, minutes apart,
+  # from the same Containerfile at the same commit with the same pins. What
+  # can differ between the two is what a pin does not hold: a package Debian
+  # moved in those minutes. The arm64 half is run nowhere, here or there.
   image:
+    needs: smoke
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1
@@ -147,11 +159,13 @@ jobs:
   # amd64 only and `load: true` rather than push: the arm64 leg is emulated
   # under QEMU and takes minutes to produce an answer that cannot differ for any
   # of this — every check below is about whether a file is present and runs, not
-  # about machine code. cache-from is the same GHA cache the job above filled,
-  # so this rebuilds nothing.
+  # about machine code. cache-from is the GHA cache the last run's `image` job
+  # filled, so this rebuilds only what changed since.
+  #
+  # FIRST, AND THE JOB ABOVE WAITS FOR IT (it says why): it is written below
+  # `image` because it was once run after it.
   smoke:
     name: the image actually runs
-    needs: image
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7.0.1

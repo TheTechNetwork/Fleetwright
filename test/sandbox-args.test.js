@@ -117,6 +117,25 @@ test('the browser is a variant, not a bigger default', () => {
   assert.match(workflow, /type=raw,value=web/);
 });
 
+test('the session image is run before it is published, under any of its three names', () => {
+  // `latest`, `web` and `engines` were pushed by the job that built them, and
+  // the job that runs the image came after it: on main a smoke that failed
+  // left the image it had just failed under the name every box pulls.
+  const workflow = readFileSync(new URL('../.github/workflows/sandbox.yml', import.meta.url), 'utf8');
+  /** One job's text, from its name to the next job's or the end. */
+  const job = (/** @type {string} */ name) => {
+    const from = workflow.indexOf(`\n  ${name}:\n`);
+    assert.ok(from > 0, `no job called ${name}`);
+    const next = /\n {2}[a-z][\w-]*:\n/.exec(workflow.slice(from + 1));
+    return workflow.slice(from, next ? from + 1 + next.index : undefined);
+  };
+  assert.match(job('image'), /^ {4}needs: smoke$/m, 'the job that publishes waits for the job that runs it');
+  assert.doesNotMatch(job('smoke'), /^ {4}needs:/m, 'and the job that runs it waits for nothing');
+  // Every push is in the job that waits: no other job publishes.
+  const pushes = (/** @type {string} */ text) => (text.match(/^ {10}push: /gm) ?? []).length;
+  assert.deepEqual([pushes(job('image')), pushes(workflow)], [3, 3]);
+});
+
 test('the image points the browser drivers at the browser it has', () => {
   // Playwright and Puppeteer download their own copy otherwise — inside a
   // container that is discarded, so it downloads again next session, which is

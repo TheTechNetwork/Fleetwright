@@ -362,6 +362,30 @@
     },
     {
       "description": [
+        "The Codex and OpenCode the engines image bakes in (sandbox/Containerfile,",
+        "WITH_ENGINES=1). Both ARGs were annotated like Claude Code's and nothing",
+        "read the comments: the manager above matches CLAUDE_VERSION alone, which",
+        "is the mistake its own description records. So the two pins had never",
+        "moved, and nothing said so.",
+        "",
+        "A bump here is a pull request somebody reads, not one that merges by",
+        "itself: the runner speaks each engine's own protocol and was written",
+        "against these versions (sandbox/engine.mjs). What CI then asks of the new",
+        "version is in sandbox.yml: each engine is started in the built image with",
+        "no network, signed in and out through the runner, Codex's sandbox runs a",
+        "command, and OpenCode is asked what a session that asks first resolves.",
+        "No turn is sent to either, which needs a provider."
+      ],
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^sandbox/Containerfile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG (?:CODEX|OPENCODE)_VERSION=(?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "description": [
         "The Node the deb carries in /usr/lib/fleetwright/node. Shipping a runtime",
         "is only better than nvm or NodeSource if it moves, and this is what moves",
         "it: a Node security release arrives as a PR like any other dependency,",
