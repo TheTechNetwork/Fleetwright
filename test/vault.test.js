@@ -11,10 +11,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { newDepositKey, newSealKey, seal, open, atRestAad, ENGINE_SIGNIN_AAD, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
+import { newDepositKey, importDepositKey, newSealKey, seal, open, atRestAad, ENGINE_SIGNIN_AAD, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, GITHUB_REQUEST_AAD, GITHUB_REPLY_AAD, DEPOSIT_AAD } from '../src/fleet/seal.js';
 import { generateKeyPair, sign, signingInput, fingerprint, verify } from '../src/fleet/crypto.js';
 import minterWorker, { ClaudeLogins, KEY_PATH } from '../worker/src/minter.js';
-import { boxKeyHash } from '../src/fleet/minter/vault.js';
+import { boxKeyHash, answerVaultBox } from '../src/fleet/minter/vault.js';
+import { vaultBoxAnswerInput, sealedDigest } from '../src/fleet/protocol/vault-answer.js';
 import { describeRenewals, renewalVerdict, freshClaude, claudeRenewals as renewalsKept, CLAUDE_USAGE_URL } from '../src/fleet/minter/claude-login.js';
 import { USAGE_URL } from '../src/core/usage.js';
 import { mkdtempSync, rmSync, readFileSync, statSync, existsSync } from 'node:fs';
@@ -268,6 +269,75 @@ test('a person keeps their credentials once, and only a box they approved by its
   assert.equal((await m.phone({ op: 'revoke', key })).ok, true);
   assert.deepEqual((await m.box(office)).answer.accounts, []);
   assert.equal((await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office-box' }, { at: grantedAt })).error?.code, 'stale');
+});
+
+test('the vault signs each answer it makes to a box, over that box, that request and that sealed part, with the key a box pins', async (t) => {
+  // What an outside review did: a box's request carries the key its answer is
+  // sealed to in the clear, so whoever carried the request could seal an
+  // answer of their own, and a box that only opened it took that for the
+  // vault's. A seal says who can read; this is what says who wrote.
+  const m = await minter();
+  t.after(m.restore);
+  const office = await generateKeyPair();
+  const hostKey = { kty: 'EC', crv: 'P-256', x: String(office.publicJwk.x), y: String(office.publicJwk.y) };
+  assert.equal((await m.phone({ op: 'put', name: 'secret:NPM_TOKEN', value: 'npm_abc' })).ok, true);
+  assert.equal((await m.phone({ op: 'grant', hostKey: office.publicJwk, label: 'office-box' })).ok, true);
+  /** One request from the box, as its sidecar makes it, and the minter's answer as the coordinator is handed it. */
+  const ask = async () => {
+    const reply = await newSealKey();
+    const request = { v: 1, hostKey, at: Date.now(), reply: reply.publicKey, accepts: ['members'] };
+    const answer = await m.binding.vault('box', { request, signature: await sign(office.privateJwk, signingInput('vault-box', request)), members: [ELI] });
+    return { reply, request, answer };
+  };
+  const { reply, request, answer } = await ask();
+  assert.equal(answer.ok, true, answer.text);
+  // THE KEY A BOX PINS, from the fleet's own address, and the one its key list is signed with.
+  const pinned = (await m.lookup()).signing;
+  const host = await boxKeyHash(hostKey);
+  const over = { host, at: request.at, reply: request.reply, sealed: answer.sealed };
+  assert.match(String(answer.sealed.signature), /^[A-Za-z0-9_-]{86}$/);
+  assert.equal(await verify(pinned, answer.sealed.signature, await vaultBoxAnswerInput(over)), true);
+  // THE BYTES, spelled out once so a box written elsewhere can be held to them.
+  assert.equal(
+    await vaultBoxAnswerInput(over),
+    `agent-fleet/v1/vault-box-answer\n{"at":${request.at},"host":"${host}","reply":"${request.reply}","sealed":"${await sealedDigest(answer.sealed)}","v":1}`,
+  );
+  assert.match(await sealedDigest(answer.sealed), /^[0-9a-f]{64}$/);
+  // EVERY PART OF IT COUNTS: another box, another request, another sealed part.
+  const stranger = await generateKeyPair();
+  const other = await newSealKey();
+  for (const [what, changed] of /** @type {Array<[string, any]>} */ ([
+    ['host', { ...over, host: await boxKeyHash({ kty: 'EC', crv: 'P-256', x: String(stranger.publicJwk.x), y: String(stranger.publicJwk.y) }) }],
+    ['at', { ...over, at: request.at + 1 }],
+    ['reply', { ...over, reply: other.publicKey }],
+    ['sealed', { ...over, sealed: { ...answer.sealed, ct: `${String(answer.sealed.ct).slice(0, -2)}AA` } }],
+    ['sealed', { ...over, sealed: await seal({ to: request.reply, aad: VAULT_BOX_AAD, payload: { at: Date.now(), accounts: [] } }) }],
+  ])) {
+    assert.equal(await verify(pinned, answer.sealed.signature, await vaultBoxAnswerInput(changed)), false, `a changed ${what} still passes`);
+  }
+  // AN ANSWER TO ONE REQUEST IS NOT AN ANSWER TO THE NEXT, though both are this box's and both are genuine.
+  const next = await ask();
+  assert.equal(await verify(pinned, answer.sealed.signature, await vaultBoxAnswerInput({ host, at: next.request.at, reply: next.request.reply, sealed: answer.sealed })), false);
+  // A BOX FROM BEFORE THE SIGNATURE opens what it is sent by the three strings it knows, and is given what it was.
+  const inside = /** @type {any} */ (await open({ privateKey: reply.privateKey, publicKey: reply.publicKey, aad: VAULT_BOX_AAD, sealed: answer.sealed }));
+  assert.deepEqual(inside.accounts[0].items.map((/** @type {any} */ i) => [i.name, i.value]), [['secret:NPM_TOKEN', 'npm_abc']]);
+  // AND THE SENTENCE BESIDE IT says nothing of a signature while there is one.
+  assert.equal(answer.text, 'This box holds credentials for 1 person.');
+
+  // A MINTER THAT CANNOT SIGN STILL ANSWERS, and says the answer is unsigned,
+  // so a box from before the check is served and one that checks knows why
+  // it was not.
+  const deposit = await newDepositKey();
+  const rows = new Map();
+  const store = { get: async (/** @type {string} */ k) => structuredClone(rows.get(k)), put: async (/** @type {string} */ k, /** @type {any} */ v) => { rows.set(k, structuredClone(v)); } };
+  const bare = { depositKey: () => importDepositKey(deposit.secret), store: /** @type {any} */ (store) };
+  const signed = { request, signature: await sign(office.privateJwk, signingInput('vault-box', request)) };
+  const none = /** @type {any} */ (await answerVaultBox(signed, bare));
+  assert.deepEqual([none.ok, none.sealed.signature], [true, undefined]);
+  assert.equal(none.text, 'Nobody has approved this box to hold their credentials. This answer is not signed, because this minter holds no signing key. A box that checks the vault’s signature will not use it.');
+  const broken = /** @type {any} */ (await answerVaultBox(signed, { ...bare, signingKey: async () => { throw new Error('the row is not a key'); } }));
+  assert.deepEqual([broken.ok, broken.sealed.signature], [true, undefined]);
+  assert.match(String(broken.text), /This answer is not signed, because its signing key does not load: the row is not a key\. /);
 });
 
 test('only the person changes their vault, and not by replaying what they sent', async (t) => {

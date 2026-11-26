@@ -51,6 +51,16 @@
 // sign as a box, short of getting the person to finish a GitHub sign-in it
 // started with a verifier of its own. See docs/vault.md and security.md §4.1.
 //
+// NOR ANSWER A BOX IN THIS VAULT'S PLACE, which it could until an outside
+// review did it. A box's request is signed and not sealed, so the key its
+// answer is sealed to reaches the coordinator in the clear, and sealing to a
+// public key says nothing about who sealed: a coordinator answered a box
+// itself, and the box filed what it was handed. So every answer to a box is
+// signed here as well, with the key a box already pins for the signed key
+// list, over which box, which request and which sealed part
+// (protocol/vault-answer.js, answerVaultBox), and a box takes nothing from
+// an answer whose signature does not hold (sidecar.js, #askVault).
+//
 // WHAT A BOX IS GIVEN is never a refresh token. An OAuth item is renewed here
 // and only here, under a lock, so one rotation happens however many boxes ask
 // at once; a box gets the access token, which lasts hours, and asks again
@@ -73,6 +83,7 @@ import { API_PROVIDERS, API_KEY_ITEMS, ENGINES, ENGINE_IDS, DEFAULT_ENGINE } fro
 import { SANDBOX_PROVIDER_NAMES, sandboxProviderOf, sandboxDepositProblem } from '../protocol/sandboxes.js';
 import { SEAL_KEY_RE, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, atRestAad, vaultAtRestAad, seal, open } from '../seal.js';
 import { verify, sign, signingInput } from '../crypto.js';
+import { vaultBoxAnswerInput } from '../protocol/vault-answer.js';
 import { githubUser } from '../../core/repo-tokens.js';
 import { refreshGithubToken, refreshCloudflareToken, exchangeCode } from '../../core/oauth-refresh.js';
 import { DEPOSIT_MAX_AGE_MS, checkBeforeKeeping } from './claude.js';
@@ -1220,6 +1231,8 @@ async function describe(row, store, userId) {
  * @param {unknown} ask  `{ request: { v: 1, hostKey, at, reply }, signature, members? }`,
  *   the signature being the box's key over signingInput('vault-box', request)
  * @param {VaultConfig} config
+ * @returns {Promise<Record<string, any>>}  a refusal, or `{ ok: true, sealed: { epk, iv, ct, signature }, text }`,
+ *   `signature` being this minter's over vaultBoxAnswerInput (protocol/vault-answer.js)
  */
 export async function answerVaultBox(ask, config) {
   const missing = notConfigured(config);
@@ -1283,7 +1296,37 @@ export async function answerVaultBox(ask, config) {
     if (one) accounts.push(one);
   }
   const sealed = await seal({ to: String(req.reply), aad: VAULT_BOX_AAD, payload: { at: now(), accounts } });
-  return { ok: true, sealed, text: accounts.length ? `This box holds credentials for ${accounts.length} ${accounts.length === 1 ? 'person' : 'people'}.` : 'Nobody has approved this box to hold their credentials.' };
+  const said = accounts.length ? `This box holds credentials for ${accounts.length} ${accounts.length === 1 ? 'person' : 'people'}.` : 'Nobody has approved this box to hold their credentials.';
+  // SIGNED, BECAUSE SEALED IS NOT ENOUGH. `reply` came here in the clear,
+  // through the coordinator, so anybody who carried the request could seal an
+  // answer of their own to it, and a box that only opened what it was sent
+  // could not tell that answer from this one. Signed with the key a box pins
+  // for the key list (answerVaultKeys), over the box this is for, the
+  // request it answers and the digest of the sealed part
+  // (protocol/vault-answer.js).
+  //
+  // INSIDE `sealed`, beside its three strings: the coordinator passes on
+  // `sealed` and this sentence and nothing else (core.js, #onHostVault), so
+  // one from before the signature carries it all the same, and a box from
+  // before it opens `sealed` by the three it knows.
+  //
+  // A MINTER THAT CANNOT SIGN STILL ANSWERS, unsigned and saying so. A box
+  // that checks refuses that answer and keeps what it holds; a box from
+  // before the signature is served as it always was. Refusing here instead
+  // would take the vault from every box for want of a key only some check.
+  /** @type {string|null} */
+  let signed = null;
+  let unsigned = 'this minter holds no signing key';
+  if (config.signingKey) {
+    try {
+      const signing = await config.signingKey();
+      signed = await sign(signing.privateJwk, await vaultBoxAnswerInput({ host: hash, at, reply: String(req.reply), sealed }));
+    } catch (e) {
+      unsigned = `its signing key does not load: ${/** @type {Error} */ (e).message}`;
+    }
+  }
+  if (!signed) return { ok: true, sealed, text: `${said} This answer is not signed, because ${unsigned}. A box that checks the vault’s signature will not use it.` };
+  return { ok: true, sealed: { ...sealed, signature: signed }, text: said };
 }
 
 /**
