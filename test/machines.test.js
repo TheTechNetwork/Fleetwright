@@ -384,6 +384,54 @@ test('a machine that stopped by itself is removed with how its log ended kept fo
   assert.deepEqual(gone.ok && gone.ended, []);
 });
 
+test('how a stopped machine’s log ended is read by the time on each line, as Podman prints a time', async (t) => {
+  const { podman, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 60 });
+  // FOUR LINES IN ONE SECOND, with the time as Podman prints it: the fraction
+  // with its trailing zeros dropped, and `Z` on a box whose clock is on UTC.
+  // The warning is the last thing the machine said before its entrypoint's
+  // own last line. Read as text, `.1234Z` sorts before `.12Z` and `.1Z`, so
+  // the line said to be how the log ended was the first one printed.
+  const s = podman.state();
+  s.containers[0].state = 'exited';
+  s.containers[0].log = [
+    { at: '2026-11-24T10:00:03.1Z', line: 'fleetwright-machine: joining https://fleet.example as its owner\'s temporary machine' },
+    { at: '2026-11-24T10:00:03.12Z', line: '2026-11-24T10:00:03.120Z INFO  http: listening' },
+    { at: '2026-11-24T10:00:03.1234Z', err: true, line: '2026-11-24T10:00:03.123Z WARN  sidecar: the fleet refused this machine, so this is over' },
+    { at: '2026-11-24T10:00:03.5Z', line: 'fleetwright-machine: the sidecar ended with status 1, so this machine is ending' },
+  ];
+  podman.set({ containers: s.containers });
+  const seen = await machines.list();
+  assert.equal(seen.ok && seen.ended[0]?.text, `This machine found ${VM} stopped just now and removed it with its disk. Its log ends: sidecar: the fleet refused this machine, so this is over`);
+});
+
+test('a secret too short to be known by its length is kept out of a stopped machine’s last words by where it stands', async (t) => {
+  const { podman, cfg, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 60 });
+  let journal = '';
+  setLogStream(/** @type {any} */ ({ write: (/** @type {string} */ l) => { journal += l; return true; } }));
+  t.after(() => setLogStream(null));
+  // Each is under the 32 characters that mark a value of no known shape.
+  const PASSWORD = 'hunter2-Sup3rSecret';
+  const KEY = 'sk-proj-AbCdEfGhIjKlMnOpQrStUv';
+  const ASSIGNED = 'Zx9-short';
+  const s = podman.state();
+  s.containers[0].state = 'exited';
+  s.containers[0].log = [
+    { at: '2026-11-24T10:00:01Z', line: `archive: fatal: bad key ${KEY} rejected` },
+    { at: '2026-11-24T10:00:02Z', line: `archive: tried with {"api_key": "${ASSIGNED}"} and TOKEN=${ASSIGNED}` },
+    { at: '2026-11-24T10:00:03Z', err: true, line: `sidecar: the token was refused at https://deploy:${PASSWORD}@git.example.com/fleet.git` },
+  ];
+  podman.set({ containers: s.containers });
+  const seen = await machines.list();
+  // WHAT A SENTENCE SAYS IS KEPT: "the token was refused" names no value.
+  assert.equal(seen.ok && seen.ended[0]?.text, `This machine found ${VM} stopped just now and removed it with its disk. Its log ends: sidecar: the token was refused at https://[removed]@git.example.com/fleet.git`);
+  assert.match(journal, /archive: fatal: bad key \[removed\] rejected/);
+  assert.match(journal, /tried with \{"api_key": "\[removed\]"\} and TOKEN=\[removed\]/);
+  const kept = readdirSync(cfg.stateDir, { recursive: true, withFileTypes: true }).filter((f) => f.isFile()).map((f) => readFileSync(path.join(f.parentPath, f.name), 'utf8')).join('\n');
+  for (const secret of [PASSWORD, KEY, ASSIGNED]) assert.equal(`${journal}${kept}${JSON.stringify(seen)}`.includes(secret), false, secret);
+});
+
 test('a stopped machine whose log cannot be read, or is empty, is said as that and not as a reason', async (t) => {
   const { podman, machines } = await box(t);
   await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET });
