@@ -640,7 +640,10 @@ test('nothing the fleet wrote is drawn in the sign-in block: a refusal is the ph
   assert.ok(ios.length >= 24, 'the refusals lost their codes');
   assert.deepEqual(android, ios);
   const box = readFileSync(new URL('../src/core/engine-signin.js', import.meta.url), 'utf8');
-  const refusedWith = new Set([...box.matchAll(/(?:refus(?:e|al)\(|error: \{ code: )'([a-z_]+)'/g)].map((m) => m[1]));
+  // `refused(` too: it is how a start that ended before its code is refused
+  // (`no_code`, `signin_failed`), and a pattern that stopped at `refuse(` and
+  // `refusal(` never read those.
+  const refusedWith = new Set([...box.matchAll(/(?:refus(?:e|al|ed)\(|error: \{ code: )'([a-z_]+)'/g)].map((m) => m[1]));
   assert.ok(refusedWith.size >= 8, 'the machine’s refusals were not found');
   for (const code of refusedWith) assert.ok(ios.includes(code), `a machine refuses a sign-in with ${code}, and the phones have no sentence for it`);
   // The ones the fleet and the machine's own check add on the way.
@@ -651,6 +654,7 @@ test('nothing the fleet wrote is drawn in the sign-in block: a refusal is the ph
     'unreadable_code', 'wrong_page', 'state_unwritable', 'state_unreadable', 'id_reused', 'in_flight', 'member_not_delegated', 'cannot_tell']) {
     assert.ok(ios.includes(code), `the phones have no sentence for ${code}`);
   }
+  for (const code of ['no_code', 'signin_failed']) assert.ok(refusedWith.has(code), `the machine’s refusal ${code} was not read out of its code`);
 });
 
 test('a code is drawn only beside the page that engine’s code is entered on, the same two pages on both phones', () => {
