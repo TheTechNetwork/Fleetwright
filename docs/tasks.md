@@ -93,7 +93,9 @@ work in flight is released or comes back first.
 lock before it sends the start to a box, so of two people who press Start at
 once the second is refused, in words that name the session, the box and since
 when. The lock is confirmed with the session's name when the box answers, and
-dropped if the box refuses. A box that does not answer in time leaves it held
+dropped if the box refuses, or if the start could not be sent to it at all
+(its connection closed as the start was written), so the task is not held
+for a box that was never asked. A box that does not answer in time leaves it held
 for five minutes past the time its answer was waited for: its session is
 taken up the moment the box speaks of it. When the hold runs out the
 coordinator looks at that box's own list of sessions, the one in every report

@@ -149,7 +149,11 @@ approval is given, the same start is sent again and goes through.
 - **An approval is for one start.** It covers the member, the task if there
   was one, and the reasons it names, for the person who asked, once, within
   an hour of being given. A start that has since gained a reason (the member
-  went over budget while a risky-work approval waited) needs a new one.
+  went over budget while a risky-work approval waited) needs a new one. A
+  start its machine refused, and one the coordinator could not send at all
+  (the machine's connection closed as it was written to), started nothing,
+  and the approval is good again within its hour. One that was sent and
+  never answered keeps it: the machine may have started the session.
 - **And for what its session is to be told.** The coordinator keeps a
   SHA-256 digest of the words the start carried when the approval was asked
   for (or of the profile it named), and the approval covers only a start

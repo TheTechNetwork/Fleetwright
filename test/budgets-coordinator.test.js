@@ -159,6 +159,28 @@ test('a start as a member that its box never answers is spend the fleet cannot t
   assert.equal(unsent.ok, false);
   assert.equal(unsent.text, 'the socket is closed');
   assert.deepEqual([h.spendOf('debbie').unknownSessions, h.spendOf('debbie').words], [0, '$0.00 of $50.00 this month, at API prices as each session counted it.']);
+
+  // AND IT HOLDS NOTHING. Only the spend was spared: the task stayed locked
+  // "deb132 has not answered yet" for the wait and five minutes more, about
+  // a box that was never asked, and the approval the start went ahead on
+  // stayed used, so the same start a moment later was sent to ask again.
+  const k = fleet();
+  k.set({ workTypes: ['deploy'] });
+  await k.reports();
+  const task = /** @type {any} */ (k.core.createTask(dana, { title: 'Ship it', brief: 'Deploy the API.', assignee: 'debbie', workType: 'deploy' }));
+  assert.equal((await k.start(sam, 'debbie', task.start)).approval.id, 'a1');
+  assert.equal(/** @type {any} */ (await k.core.answerApproval(dana, 'a1', 'approve')).ok, true);
+  const state = () => [/** @type {any} */ (k.core.tasks.get('t1')).lock, /** @type {any} */ (k.core.approvalsFor(admin)).approvals.find((/** @type {any} */ a) => a.id === 'a1').state];
+  const kept = k.core.send;
+  delete (/** @type {any} */ (k.core)).send;
+  /** @type {any} */ (k.core.registry.get('deb132')).send = () => { throw new Error('the socket is closed'); };
+  assert.equal((await k.start(sam, 'debbie', task.start)).error.code, 'host_timeout');
+  assert.deepEqual(state(), [null, 'approved']);
+  assert.notEqual(/** @type {any} */ (k.core.taskFor(sam, 't1')).start, null, 'the task is still offered to start');
+  // The same start with the socket open goes through, on the same approval.
+  k.core.send = kept;
+  assert.equal((await k.start(sam, 'debbie', task.start)).ok, true);
+  assert.deepEqual([state()[0].session, state()[1]], ['cc-1', 'used']);
 });
 
 test('with enforcing off, a member past its budget starts as before and nobody is asked', async () => {

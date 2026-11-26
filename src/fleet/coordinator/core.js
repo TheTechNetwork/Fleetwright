@@ -4900,8 +4900,9 @@ export class CoordinatorCore {
       const said = enginesNote && answer?.ok !== false ? { ...answer, text: `${answer?.text ? `${answer.text}\n` : ''}${enginesNote}` } : answer;
       return withArchiveNote(said, spec, placement.host);
     } catch (e) {
-      // NOT GIVEN BACK: a box that did not answer may have started the
-      // session all the same, and an approval is for one start.
+      // NOT GIVEN BACK, where the start may have left: a box that did not
+      // answer may have started the session all the same, and an approval
+      // is for one start.
       //
       // AND FOR THE SAME REASON ITS SPEND IS NOT KNOWN (docs/budgets.md). A
       // start as a member that got no answer was never counted: the session
@@ -4917,8 +4918,23 @@ export class CoordinatorCore {
       // answer from its machine", until the month turned, about a start
       // this coordinator knew it never sent. Anything else is taken as a
       // box that may have acted, which is the side to be wrong on.
-      if (/** @type {any} */ (e)?.notSent !== true && spec.verb === 'start' && typeof spec.params?.member === 'string' && lockedOn && this.org.get(spec.params.member)) {
+      const notSent = /** @type {any} */ (e)?.notSent === true;
+      if (!notSent && spec.verb === 'start' && typeof spec.params?.member === 'string' && lockedOn && this.org.get(spec.params.member)) {
         this.budgets.unanswered(spec.params.member, lockedOn, sentAt);
+        this.onStateChanged?.();
+      }
+      // AND WHAT THIS START TOOK FOR ITSELF GOES BACK, when nothing was
+      // sent: the task's lock and the approval. Only the spend was spared,
+      // so a start onto a socket that had just closed left its task saying
+      // "deb132 has not answered yet" for the wait and five minutes more,
+      // about a box that was never asked, and its approval used, so the
+      // person who pressed Start again was sent to ask for another. Both
+      // were taken by this start a few lines up, so nobody else's is undone
+      // here: `unlock` leaves a lock that has a session, and `giveBack` an
+      // approval that is not `used`.
+      if (notSent && (onTask || spec.approvalId)) {
+        if (onTask) this.tasks.unlock(onTask, lockedOn);
+        if (spec.approvalId) this.budgets.giveBack(spec.approvalId);
         this.onStateChanged?.();
       }
       return { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
