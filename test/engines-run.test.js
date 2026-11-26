@@ -19,7 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { codexSignIn } from './helpers/engine-files.js';
-import { Peer, codexAdapter, acpAdapter, run, parseArgs, stage, providerOf, acpModel, reasonFromCodexError, codexResetsAt, ERROR_LINE_MAX, OPENCODE_ASKS } from '../sandbox/engine.mjs';
+import { Peer, codexAdapter, acpAdapter, run, parseArgs, stage, ended, providerOf, acpModel, reasonFromCodexError, codexResetsAt, ERROR_LINE_MAX, OPENCODE_ASKS } from '../sandbox/engine.mjs';
 
 /** Wait until `said()` is true, or say what never happened. */
 async function until(/** @type {() => boolean} */ said, /** @type {string} */ what, ms = 3000) {
@@ -498,6 +498,18 @@ test('an OpenCode sign-in is staged as its Copilot provider’s, and the runner�
   assert.equal(stage('gemini', 'x', home).ok, false);
   assert.deepEqual(parseArgs(['--engine', 'opencode', '--model', 'github-copilot/gpt-5', '--mode', 'dangerous', '--', '--not-a-flag: fix it\nplease']), { engine: 'opencode', model: 'github-copilot/gpt-5', mode: 'dangerous', prompt: '--not-a-flag: fix it\nplease' });
   assert.equal(parseArgs(['--engine', 'codex', '--mode', 'anything-else']).mode, 'safe', 'only the word dangerous is dangerous');
+});
+
+test('a sign-in that cannot be written is said with its apostrophe, as every sentence in a turn’s detail is', (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'engine-stage-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  // A home that is a file: nothing can be made inside it.
+  const home = path.join(dir, 'home');
+  writeFileSync(home, '');
+  const staged = stage('codex', '{}', home);
+  assert.equal(staged.ok, false);
+  // It read "could not write codexs sign-in": a detail keeps printable characters only, and the apostrophe was not one.
+  assert.match(String(ended('codex', 'error', { detail: /** @type {any} */ (staged).text }).detail), /^could not write codex's sign-in: /);
 });
 
 test('an engine this runner does not speak to is said, and nothing is asked of the socket', async (t) => {

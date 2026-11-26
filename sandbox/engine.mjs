@@ -39,14 +39,16 @@
 // engine's own device-code sign-in in a container that has the engine home
 // and nothing else of a session, prints the page and the code as one line
 // of JSON, waits for the engine to say how it ended, and prints that as a
-// second. `--signout <engine>` has the engine remove its sign-in. See
-// "Signing in on the machine", below and in docs/engines.md.
+// second. `--signout <engine>` removes the sign-in. The engine itself is
+// started on an empty home of that run's own, never on the member's, which
+// the member's sessions write. See "Signing in on the machine", below and in
+// docs/engines.md.
 
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { request } from 'node:http';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, renameSync, rmSync, existsSync, statSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
@@ -168,10 +170,17 @@ export function hide(text) {
   return said;
 }
 
-/** One printable line, bounded. An engine's error is its own words and could be anything. */
+/**
+ * One printable line, bounded. An engine's error is its own words and could be anything.
+ *
+ * A TYPOGRAPHIC QUOTE BECOMES THE PLAIN ONE, and is not dropped with the
+ * rest that is not printable: two of this file's own sentences read
+ * "OpenCodes server did not start" and "could not write codexs sign-in" by
+ * the time a person saw them.
+ */
 export function line(value, max = 200) {
   if (value === undefined || value === null) return null;
-  const s = hide(value).split('\n')[0].replace(/[^\x20-\x7e]/g, '').trim();
+  const s = hide(value).split('\n')[0].replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[^\x20-\x7e]/g, '').trim();
   return s ? s.slice(0, max) : null;
 }
 
@@ -1105,8 +1114,8 @@ export async function run(args, io = {}) {
 // runs, in a short container with one member's engine home mounted and no
 // session's socket, when a custodian asks it to sign an engine in
 // (docs/engines.md, "Signing in on the machine"). It asks the engine itself
-// for a device code, and the engine writes its own sign-in into the home.
-// This file never speaks to OpenAI or GitHub and holds no client id.
+// for a device code, and the engine writes its own sign-in. This file never
+// speaks to OpenAI or GitHub and holds no client id.
 //
 // WHAT IT PRINTS IS TWO LINES OF JSON, AND NOTHING ELSE. The first is the
 // page to open and the code to enter, as soon as the engine gives them:
@@ -1118,17 +1127,51 @@ export async function run(args, io = {}) {
 //   {"signin":"done","engine":"codex","state":"signed_in","who":{"email":"…","plan":"plus"}}
 //
 // `state` is `signed_in`, `expired`, `failed`, `cancelled`, or for a sign
-// out `signed_out`. A failure carries the engine's own sentence as `detail`,
-// and `why: "device_code_off"` when Codex says device code is not enabled.
+// out `signed_out`. A failure carries a `detail`, and `why:
+// "device_code_off"` when Codex says device code is not enabled. The detail
+// is a clause with no subject and no full stop, because both places it is
+// shown put the engine's name in front and a box puts the full stop after:
+// "OpenCode did not sign in: " on a phone, and "OpenCode was not signed in
+// for debbie on ops-box: " from the machine. It read "OpenCode did not sign
+// in: OpenCode did not complete the sign-in (…)".
 //
-// NO TOKEN, EVER. The engine's sign-in file is read only to withhold what is
-// in it from these two lines. What the engine prints on its error output is
+// THE ENGINE IS STARTED ON A HOME OF ITS OWN, EMPTY, AND THROWN AWAY. It was
+// started on the member's engine home, which that member's sessions write.
+// So a session could leave something there for the sign-in to read: an
+// entry in OpenCode's `auth.json` naming a server to fetch settings from,
+// and a plugin file beside it that answers the request for a code. The real
+// OpenCode 1.19.6 was seen to load both and to answer with a page and a code
+// of the plugin's choosing, which the box then showed a custodian as its
+// own. Codex reads `config.toml` from its home the same way, which names
+// where a new sign-in's token is first sent, and what else to start. Nothing
+// in a home can be trusted to leave a login alone, so the login reads none:
+// the engine runs in a fresh directory, and this runner copies the one
+// thing it made, the sign-in, into the home. A sign out runs the same way.
+//
+// AND THE PAGE IS THE ENGINE'S OWN OR NO CODE IS SHOWN. Each engine builds
+// its page from a constant in its source. Whatever else an engine names,
+// for whatever reason, is refused here before a box can pass it on.
+//
+// NO TOKEN, EVER. A sign-in file is read to copy it and to withhold what is
+// in it from the second line. What the engine prints on its error output is
 // not passed on at all here, as it is in a session: before a sign-in exists
-// there is nothing of it to take out, and afterwards nothing is said but the
-// second line.
+// there is nothing of it to take out, and afterwards nothing is said but
+// the second line.
 
 /** How long a device code lasts, in minutes. Codex's own bound (codex-rs/login/src/device_code_auth.rs); GitHub's codes last the same. */
 export const SIGNIN_MINUTES = 15;
+
+/**
+ * The one page each engine sends a person to, as its own source builds it:
+ * Codex from its issuer (`{issuer}/codex/device`, login/src/device_code_auth.rs,
+ * with DEFAULT_ISSUER `https://auth.openai.com`), and GitHub's
+ * `verification_uri` for github.com, which OpenCode passes on
+ * (plugin/github-copilot/copilot.ts).
+ */
+export const SIGNIN_PAGES = Object.freeze({
+  codex: 'https://auth.openai.com/codex/device',
+  opencode: 'https://github.com/login/device',
+});
 
 /** OpenCode's name for the provider a subscription sign-in is to. */
 const OPENCODE_SIGNIN_PROVIDER = 'github-copilot';
@@ -1183,6 +1226,22 @@ export function askServer(base, method, pathname, body, authorization, timeoutMs
   return { answer, abort: () => req?.destroy(new Error('given up')) };
 }
 
+/** A file's text, or null when there is none to read. */
+function textOf(/** @type {string} */ file) {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** A sign-in file written whole or not at all: beside where it goes, private, then moved over it. */
+function writeWhole(/** @type {string} */ file, /** @type {string} */ text) {
+  const beside = `${file}.${process.pid}.new`;
+  writeFileSync(beside, text, { mode: 0o600 });
+  renameSync(beside, file);
+}
+
 /**
  * Sign one engine in, or out, in this container's engine home.
  *
@@ -1200,15 +1259,23 @@ export async function signin(args, io = {}) {
   const spec = RUNS[engine];
   const engineHome = typeof env.FLEETWRIGHT_ENGINE_HOME === 'string' && env.FLEETWRIGHT_ENGINE_HOME ? env.FLEETWRIGHT_ENGINE_HOME : null;
   const at = engineHome && spec ? homePaths(engine, engineHome) : null;
-  /** Everything said passes here, with whatever the engine home holds taken out first. */
+  /** The home the engine is started on, once it is made: this run's own, and gone when the run is. @type {{ root: string, home: string, work: string, dir: string, file: string, env: Record<string, string> }|null} */
+  let own = null;
+  /** Everything said passes here, with whatever either home holds taken out first. */
   const say = (/** @type {Record<string, unknown>} */ what) => {
-    if (at) {
-      try {
-        withhold(readFileSync(at.file, 'utf8'));
-      } catch { /* no sign-in there: nothing of one to take out */ }
+    for (const file of [at?.file, own?.file]) {
+      const held = file ? textOf(file) : null;
+      if (held !== null) withhold(held);
     }
     write(`${hide(JSON.stringify({ engine, ...what }))}\n`);
   };
+  /**
+   * The first line: the page and the code. NOT THROUGH `hide`. The page is
+   * this file's own constant and the code has matched the pattern a code
+   * has, so there is nothing in either to take out, and taking something out
+   * is what broke it: a page that came back as "[withheld]/codex/device".
+   */
+  const sayCode = (/** @type {string} */ code) => void write(`${JSON.stringify({ engine, signin: 'code', url: SIGNIN_PAGES[/** @type {keyof typeof SIGNIN_PAGES} */ (engine)], code, expiresInMinutes: Math.round(capMs / 60_000) })}\n`);
   const done = (/** @type {string} */ state, /** @type {Record<string, unknown>} */ extra = {}) => {
     say({ signin: 'done', state, ...extra });
     return 0;
@@ -1237,8 +1304,30 @@ export async function signin(args, io = {}) {
   let child = null;
   /** @type {string|null} */
   let spawnError = null;
-  const start = (/** @type {string[]} */ argv, /** @type {Record<string, string>} */ more) => {
-    child = (io.spawnEngine ?? spawn)(command, argv, { env: { ...env, ...at.env, ...more }, stdio: ['pipe', 'pipe', 'pipe'] });
+  /**
+   * A home of this run's own for the engine to be started on. Everything an
+   * engine reads of a person's is pointed into it: Codex's `CODEX_HOME`, the
+   * four directories OpenCode keeps its data, settings, state and cache in,
+   * the home directory both fall back to, and the directory it is started
+   * in, which OpenCode reads a project's settings from.
+   */
+  const fresh = () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'fleetwright-engine-signin-'));
+    const home = path.join(root, 'engine-home');
+    const mine = /** @type {NonNullable<ReturnType<typeof homePaths>>} */ (homePaths(engine, home));
+    own = {
+      root, home, work: path.join(root, 'work'), dir: mine.dir, file: mine.file,
+      env: {
+        ...mine.env,
+        HOME: path.join(root, 'home'),
+        XDG_DATA_HOME: home, XDG_CONFIG_HOME: path.join(root, 'config'), XDG_STATE_HOME: path.join(root, 'state'), XDG_CACHE_HOME: path.join(root, 'cache'),
+      },
+    };
+    for (const dir of [own.dir, own.work, own.env.HOME]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    return own;
+  };
+  const start = (/** @type {NonNullable<typeof own>} */ mine, /** @type {string[]} */ argv, /** @type {Record<string, string>} */ more) => {
+    child = (io.spawnEngine ?? spawn)(command, argv, { cwd: mine.work, env: { ...env, ...mine.env, ...more }, stdio: ['pipe', 'pipe', 'pipe'] });
     child.on?.('error', (e) => {
       spawnError = e?.code === 'ENOENT' ? `${command} is not installed in this machine's session image` : String(e?.message ?? e);
     });
@@ -1248,6 +1337,12 @@ export async function signin(args, io = {}) {
   const leave = () => {
     clearTimeout(capTimer);
     child?.kill?.();
+    // The run's own home goes with the run: the sign-in in it first, then
+    // the rest, which an engine that is still ending may be writing.
+    if (own) {
+      rmSync(own.file, { force: true });
+      rmSync(own.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
   };
 
   try {
@@ -1255,13 +1350,23 @@ export async function signin(args, io = {}) {
   } catch (e) {
     return failed(spawnError ?? e?.message ?? e);
   } finally {
-    leave();
+    try {
+      leave();
+    } catch { /* a directory that would not go is the container's to lose */ }
   }
 
   // Codex, through the app server a session's turns go through
   // (codex-rs/app-server-protocol, v2, at rust-v0.171.0).
   async function codex() {
-    start(['app-server'], {});
+    const mine = fresh();
+    if (args.out) {
+      // CODEX SIGNS OUT A COPY. Its sign out tells OpenAI the tokens are
+      // done with and then removes the file, so it is given the file before
+      // it starts, and nothing else of the home: not the settings beside it.
+      const held = textOf(at.file);
+      if (held !== null) writeFileSync(mine.file, held, { mode: 0o600 });
+    }
+    start(mine, ['app-server'], {});
     const peer = new Peer(child, { version: null });
     /** @type {Promise<'closed'>} */
     const closed = new Promise((resolve) => {
@@ -1270,9 +1375,11 @@ export async function signin(args, io = {}) {
     await peer.request('initialize', { clientInfo: { name: 'fleetwright', title: 'Fleetwright', version: '1' }, capabilities: null }, startMs);
     peer.notify('initialized');
     if (args.out) {
-      // `account/logout` removes the file and answers an empty object.
+      // `account/logout` answers an empty object. The home's own file is
+      // this runner's to remove, once Codex has said it is signed out.
       await peer.request('account/logout', undefined, startMs);
-      return done('signed_out');
+      rmSync(at.file, { force: true });
+      return existsSync(at.file) ? failed('its sign-in could not be removed from this machine') : done('signed_out');
     }
     // HOW IT ENDED arrives as a notice, and can arrive before the answer that
     // says which sign-in is this one, so every one is kept until that is known.
@@ -1286,11 +1393,11 @@ export async function signin(args, io = {}) {
     const completed = new Promise((resolve) => {
       settle = resolve;
     });
-    const mine = (/** @type {any} */ params) => loginId !== null && (params?.loginId === loginId || params?.loginId === null || params?.loginId === undefined);
+    const mineToo = (/** @type {any} */ params) => loginId !== null && (params?.loginId === loginId || params?.loginId === null || params?.loginId === undefined);
     peer.onNotification = (method, params) => {
       if (method !== 'account/login/completed') return;
       if (loginId === null) heard.push(params);
-      else if (mine(params)) settle(params);
+      else if (mineToo(params)) settle(params);
     };
     let begun;
     try {
@@ -1301,29 +1408,54 @@ export async function signin(args, io = {}) {
       const off = /device code login is not enabled/i.test(String(e?.message ?? ''));
       return failed(e?.message, off ? { why: 'device_code_off' } : {});
     }
-    const url = line(begun?.verificationUrl, 300);
-    const code = line(begun?.userCode, 40);
-    if (begun?.type !== 'chatgptDeviceCode' || typeof begun?.loginId !== 'string' || !url || !/^https:\/\//.test(url) || !code) {
-      return failed('Codex answered the sign-in with no page and code to give');
+    const code = typeof begun?.userCode === 'string' && /^[A-Za-z0-9-]{4,40}$/.test(begun.userCode) ? begun.userCode : null;
+    if (begun?.type !== 'chatgptDeviceCode' || typeof begun?.loginId !== 'string' || typeof begun?.verificationUrl !== 'string' || !code) {
+      return failed('it gave no page and code');
     }
+    if (begun.verificationUrl !== SIGNIN_PAGES.codex) return failed("it named a page that is not OpenAI's own sign-in page, so no code is shown");
     loginId = begun.loginId;
-    for (const params of heard) if (mine(params)) settle(params);
-    say({ signin: 'code', url, code, expiresInMinutes: Math.round(capMs / 60_000) });
+    for (const params of heard) if (mineToo(params)) settle(params);
+    sayCode(code);
     const how = await Promise.race([completed, closed, cap, stopped]);
     if (how === 'stopped' || how === 'cap') {
       // Told, so Codex stops asking OpenAI for a sign-in nobody is waiting on.
       await peer.request('account/login/cancel', { loginId }, 3000).catch(() => {});
       return done(how === 'cap' ? 'expired' : 'cancelled');
     }
-    if (how === 'closed') return failed(spawnError ?? 'Codex stopped before it said how the sign-in ended');
+    if (how === 'closed') return failed(spawnError ?? 'it stopped before it said how the sign-in ended');
     if (how?.success !== true) {
       // Codex gives up by itself after the same 15 minutes, in these words.
       if (/timed out/i.test(String(how?.error ?? ''))) return done('expired');
-      return failed(how?.error ?? 'Codex said the sign-in did not complete');
+      const wrote = textOf(mine.file);
+      if (wrote === null) return failed(how?.error ?? 'it said the sign-in did not complete');
+      // FAILED, WITH THE SIGN-IN WRITTEN. Codex exchanges the code, writes
+      // its file, and only then asks chatgpt.com which workspace the account
+      // is in (GET /backend-api/wham/accounts/check). When that fails it
+      // says the sign-in failed and leaves the file
+      // (app-server/src/request_processors/account_processor.rs,
+      // `send_account_login_notifications`). In the member's home that was a
+      // sign-in the box had recorded as none and the next session ran on.
+      // Here it is in this run's own home, which is thrown away, so nothing
+      // is kept: Codex is asked to sign it out, which tells OpenAI the
+      // tokens are done with, and the detail says what happened in this
+      // runner's words, because Codex's four name nothing a person can do.
+      withhold(wrote);
+      await peer.request('account/logout', undefined, startMs).catch(() => {});
+      rmSync(mine.file, { force: true });
+      if (existsSync(mine.file)) return failed('OpenAI approved the code, Codex then said the sign-in failed, and what it wrote could not be removed from this machine');
+      const why = String(how?.error ?? '');
+      return failed(/workspace routing discovery/i.test(why)
+        ? 'OpenAI approved the code, but Codex could not reach chatgpt.com to finish, so no sign-in was kept. Let this machine reach chatgpt.com, then sign in again'
+        : `OpenAI approved the code, but Codex did not finish${why ? ` (${line(why, 70)})` : ''}, so no sign-in was kept. Sign in again`);
     }
     // WHO, as Codex says: an address and a plan. Never anything from the file.
     const read = await peer.request('account/read', { refreshToken: false }, startMs).catch(() => null);
     const account = read?.account?.type === 'chatgpt' ? read.account : null;
+    // INTO THE HOME, the file and nothing else this run made.
+    const made = signedInAt(engine, mine.home);
+    if (!made) return failed('it said it was signed in and kept no sign-in this runner can read');
+    withhold(made.text);
+    writeWhole(at.file, made.text);
     return done('signed_in', { who: account ? { email: line(account.email, 120), plan: line(account.planType, 40) } : null });
   }
 
@@ -1332,13 +1464,34 @@ export async function signin(args, io = {}) {
   // reach one process, which holds what is pending in memory
   // (packages/opencode/src/provider/auth.ts, at v1.19.6).
   async function opencode() {
+    /** What the home's file holds, as the entries OpenCode would read: none for no file or one that does not read. @returns {Record<string, unknown>} */
+    const there = () => {
+      try {
+        const held = JSON.parse(readFileSync(at.file, 'utf8'));
+        return held && typeof held === 'object' && !Array.isArray(held) ? held : {};
+      } catch {
+        return {};
+      }
+    };
+    if (args.out) {
+      // NO ENGINE IS STARTED FOR A SIGN OUT. OpenCode's own is to take the
+      // entry out of this file and write the rest back (auth/index.ts,
+      // `remove`): it tells GitHub nothing. So that is done here, and
+      // OpenCode is not started on a home it could be steered from.
+      if (textOf(at.file) === null) return done('signed_out');
+      const held = there();
+      delete held[OPENCODE_SIGNIN_PROVIDER];
+      writeWhole(at.file, `${JSON.stringify(held)}\n`);
+      return done('signed_out');
+    }
     // A PASSWORD FOR THIS ONE RUN, so the server answers this runner and
     // nothing else in the container (server/auth.ts; the user is `opencode`).
     const password = randomBytes(24).toString('hex');
     withhold(password);
     const authorization = `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`;
     withhold(authorization.slice('Basic '.length));
-    start(['serve', '--hostname', '127.0.0.1', '--port', '0'], { OPENCODE_SERVER_PASSWORD: password });
+    const mine = fresh();
+    start(mine, ['serve', '--hostname', '127.0.0.1', '--port', '0'], { OPENCODE_SERVER_PASSWORD: password });
     // It says where it listens on its own output (cli/cmd/serve.ts).
     /** @type {Promise<string|null>} */
     const listening = new Promise((resolve) => {
@@ -1357,21 +1510,22 @@ export async function signin(args, io = {}) {
       startTimer = setTimeout(() => resolve(null), startMs);
     })]);
     clearTimeout(startTimer);
-    if (!base) return failed(spawnError ?? 'OpenCode’s server did not start');
-    if (args.out) {
-      // OpenCode's own route for removing a provider's entry (auth.remove).
-      const gone = await askServer(base, 'DELETE', `/auth/${OPENCODE_SIGNIN_PROVIDER}`, undefined, authorization, startMs).answer;
-      return gone.status === 200 ? done('signed_out') : failed(`OpenCode would not remove its sign-in (HTTP ${gone.status})`);
-    }
+    if (!base) return failed(spawnError ?? 'its server did not start');
     const asked = await askServer(base, 'POST', `/provider/${OPENCODE_SIGNIN_PROVIDER}/oauth/authorize`, { method: 0, inputs: { deploymentType: 'github.com' } }, authorization, startMs).answer;
-    const url = line(asked.body?.url, 300);
+    if (asked.status !== 200) {
+      const name = line(asked.body?.name, 60);
+      // WHEN OPENCODE CANNOT REACH GITHUB it answers 500 "UnknownError" and
+      // writes no reason anywhere, its own log included. That one word was
+      // all a person was shown.
+      return failed(asked.status === 500 && name === 'UnknownError'
+        ? 'it could not ask GitHub for a code, and gave no reason. This machine must be able to reach github.com'
+        : `it refused to start the sign-in (${name ?? `HTTP ${asked.status}`})`);
+    }
     // "Enter code: XXXX-XXXX" (plugin/github-copilot/copilot.ts).
     const code = /code:\s*([A-Za-z0-9-]{4,40})\s*$/.exec(String(asked.body?.instructions ?? ''))?.[1] ?? null;
-    if (asked.status !== 200 || asked.body?.method !== 'auto' || !url || !/^https:\/\//.test(url) || !code) {
-      const name = line(asked.body?.name, 60);
-      return failed(asked.status === 200 ? 'OpenCode answered the sign-in with no page and code to give' : `OpenCode refused to start the sign-in (${name ?? `HTTP ${asked.status}`})`);
-    }
-    say({ signin: 'code', url, code, expiresInMinutes: Math.round(capMs / 60_000) });
+    if (asked.body?.method !== 'auto' || typeof asked.body?.url !== 'string' || !code) return failed('it gave no page and code');
+    if (asked.body.url !== SIGNIN_PAGES.opencode) return failed("it named a page that is not GitHub's own sign-in page, so no code is shown");
+    sayCode(code);
     // Held open while OpenCode asks GitHub, for as long as that takes.
     const waiting = askServer(base, 'POST', `/provider/${OPENCODE_SIGNIN_PROVIDER}/oauth/callback`, { method: 0 }, authorization, 0);
     const how = await Promise.race([waiting.answer.catch((e) => ({ status: 0, body: null, lost: String(e?.message ?? e) })), closed, cap, stopped]);
@@ -1379,14 +1533,22 @@ export async function signin(args, io = {}) {
       waiting.abort();
       return done(how === 'cap' ? 'expired' : 'cancelled');
     }
-    if (how === 'closed') return failed(spawnError ?? 'OpenCode stopped before it said how the sign-in ended');
-    if (how.status === 200 && how.body === true) return done('signed_in', { who: null });
+    if (how === 'closed') return failed(spawnError ?? 'it stopped before it said how the sign-in ended');
+    if (how.status === 200 && how.body === true) {
+      // INTO THE HOME, the one entry and nothing else this run made: what
+      // the home's file already holds for other providers stays as it is.
+      const made = signedInAt(engine, mine.home);
+      const entry = made ? JSON.parse(made.text)[OPENCODE_SIGNIN_PROVIDER] : null;
+      if (!entry) return failed('it said it was signed in and kept no sign-in this runner can read');
+      withhold(made.text);
+      writeWhole(at.file, `${JSON.stringify({ ...there(), [OPENCODE_SIGNIN_PROVIDER]: { type: 'oauth', refresh: entry.refresh, access: entry.access, expires: entry.expires } })}\n`);
+      return done('signed_in', { who: null });
+    }
     // OpenCode says only that it failed: GitHub's reason, a code that ran out
     // or a request somebody declined, does not reach its answer.
     const name = line(how.body?.name, 60);
-    return failed(name
-      ? `OpenCode did not complete the sign-in (${name}). It does not pass on GitHub's reason: the code may have run out, or the request was declined`
-      : `OpenCode did not complete the sign-in (${/** @type {any} */ (how).lost ?? `HTTP ${how.status}`})`);
+    if (name === 'ProviderAuthOauthCallbackFailed') return failed(`GitHub declined the code or it ran out, and OpenCode does not say which (${name})`);
+    return failed(name ? `it did not complete the sign-in (${name})` : `its answer was lost (${/** @type {any} */ (how).lost ?? `HTTP ${how.status}`})`);
   }
 }
 

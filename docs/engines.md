@@ -377,8 +377,8 @@ session runs. The box keeps the copy that was renewed later, by the file's
 own `last_refresh`, and refuses an older one. A later session finds the
 home signed in, asks for nothing and hands nothing back.
 
-**Signing out does not forget a pasted item.** `signout` has the engine
-remove what it holds in the home. A pasted item the vault still keeps for
+**Signing out does not forget a pasted item.** `signout` removes what the
+home holds. A pasted item the vault still keeps for
 the member is handed to its next session as above, so a member that is to
 stop running on an account has the item forgotten in its Credentials too.
 
@@ -567,9 +567,12 @@ In a sealed answer `who` is inside `sealed`, signed with the rest, and the
 clear `signedIn` says only `since`. No token is in any answer.
 
 **`cancel`** stops the container. **`signout`** cancels an attempt that is
-waiting, then has the engine sign out in a container of the same kind
-(`--signout`): Codex is asked `account/logout`, and OpenCode's server is
-asked to remove its `github-copilot` entry (`DELETE /auth/github-copilot`).
+waiting, then signs the engine out in a container of the same kind
+(`--signout`). Codex is asked `account/logout` on a copy of its sign-in,
+which tells OpenAI the tokens are done with, and the runner then removes
+the file from the home. For OpenCode the runner takes the `github-copilot`
+entry out of the home's file itself and starts nothing: OpenCode's own sign
+out is exactly that, and tells GitHub nothing.
 
 **What the box keeps** is in memory for an attempt that is waiting, and in
 `engine-signins.json` in its state directory for the rest: for each member
@@ -594,6 +597,13 @@ image pins:
   A workspace or account with device code switched off answers the start
   with "device code login is not enabled", which is refused as
   `device_code_off` in Codex's words.
+  When OpenAI approves and Codex then cannot finish, it has already
+  written its sign-in: it asks `chatgpt.com` which workspace the account
+  is in only afterwards, and calls the sign-in failed when that question
+  fails ("workspace routing discovery failed"). That sign-in is not kept.
+  Codex is asked to sign it out, and the detail says in the runner's words
+  that OpenAI approved the code, that Codex could not reach `chatgpt.com`,
+  and to let this machine reach it and sign in again.
 - **OpenCode** (`opencode serve` on loopback inside the container, behind a
   password made for that one run; `opencode acp` has no sign-in and its
   command-line login needs a terminal):
@@ -603,10 +613,42 @@ image pins:
   after four idle seconds, which ended every sign-in before the code
   could be typed), and answers `true` or
   `ProviderAuthOauthCallbackFailed`. That failure does not say why, so it
-  is reported as `failed` in those words, and only the runner's own 15
-  minutes are reported as `expired`. This is OpenCode's own login in its
-  own binary. Fleetwright does not speak GitHub's device flow itself and
-  uses no other app's client id.
+  is reported as `failed`, "GitHub declined the code or it ran out, and
+  OpenCode does not say which", and only the runner's own 15 minutes are
+  reported as `expired`. The runner's clock starts before OpenCode asks
+  GitHub for the code, so it runs out a second or so before GitHub's does
+  and a code that ran out is `expired`. When OpenCode cannot reach GitHub
+  at all it answers the request for a code with `UnknownError` and no
+  reason; the detail then says that this machine must be able to reach
+  `github.com`. This is OpenCode's own login in its own binary. Fleetwright
+  does not speak GitHub's device flow itself and uses no other app's client
+  id.
+
+**Neither engine is started on the member's engine home.** A member's
+sessions write that home, and both engines read more from their home than a
+sign-in. OpenCode reads `auth.json` for entries that name a server to fetch
+settings from, and loads the plugins those settings list; a plugin answers
+the request for a code. The real OpenCode 1.19.6 was seen to do this from a
+file and a plugin a session could have left, and to answer with a page and
+a code of the plugin's choosing, which a box would have shown a custodian
+as its own. Codex reads `config.toml`, which names where a new sign-in's
+token is first sent and what else to start. So the engine is started on an
+empty directory of that run's own, with everything it reads pointed into
+it (`CODEX_HOME`, the four XDG directories, `HOME`, and where it starts),
+and the runner copies the one thing it made into the home: Codex's
+`auth.json`, or OpenCode's `github-copilot` entry beside whatever the
+home's file already holds. The directory is removed when the run ends.
+
+**The page is the engine's own, or no code is shown.** Each engine builds
+its page from a constant in its source: `https://auth.openai.com/codex/device`
+and `https://github.com/login/device`. The runner prints only that page,
+and refuses any other an engine names, whatever made it name one.
+
+**A failure's `detail` is a clause.** Both places it is shown put the
+engine's name in front ("OpenCode did not sign in: " on a phone, and "… was
+not signed in for debbie on ops-box: " from the machine, which adds the
+full stop), so the runner's own sentences have no subject and no full
+stop. An engine's own words are passed on as they are.
 
 **Refused before anything is sent**, by the coordinator, where it can
 tell: no member named at all (`bad_params`, in words that say whose to
