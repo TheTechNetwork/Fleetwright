@@ -111,8 +111,18 @@ test('a session is handed a key only for a provider its member’s engines name 
   // A provider its member does not name.
   assert.equal(/** @type {any} */ (answerEngineCredential(cfg, rec, 'apikey:ai-gateway')).error, 'not_granted');
   // A provider the member names and this box's operator has not turned on, whatever the vault left here.
+  // Said with the provider's name and what turns it on, under a code of its
+  // own: it read "that API provider", and nothing in it said what to do.
   const off = /** @type {any} */ (answerEngineCredential({ ...cfg, apiProviders: [] }, rec, 'apikey:openrouter'));
-  assert.deepEqual([off.error, off.message], ['not_granted', 'The operator of this machine has not turned that API provider on.']);
+  assert.deepEqual([off.error, off.message], ['provider_off', 'The operator of this machine has not turned OpenRouter on, so no session here runs on its API key. It is turned on in FLEETWRIGHT_API_PROVIDERS on this machine.']);
+  // A MEMBER WITH NO KEY KEPT HERE is told so as a person would say it: a
+  // key, by its provider's name, and where one is kept. It was "this machine
+  // holds no apikey:openrouter sign-in for this member", the vault's own
+  // name for the item, called a sign-in, with nothing to do next.
+  const none = /** @type {any} */ (answerEngineCredential(cfg, { ...rec, createdBy: 'jason@members.invalid' }, 'apikey:openrouter'));
+  assert.deepEqual([none.error, none.message], ['not_held', "This machine holds no OpenRouter API key for this member. To keep one: this member's Credentials in the Fleetwright app, OpenRouter API key."]);
+  // What a turn's detail keeps of either: one line of plain characters, 200 at most (sandbox/engine.mjs, line).
+  for (const said of [off.message, none.message]) assert.match(said, /^[\x20-\x7e]{1,200}$/);
   // A session whose member has no such engine at all.
   assert.equal(/** @type {any} */ (answerEngineCredential(cfg, { ...rec, engines: [{ engine: 'claude-code' }] }, 'apikey:openrouter')).error, 'not_granted');
   // And a key is never "handed back": nothing a session sends replaces one.

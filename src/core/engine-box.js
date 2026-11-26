@@ -100,17 +100,35 @@ export function answerEngineCredential(cfg, rec, kind, value = null) {
   // A KEY, only for a provider this box's operator turned on. A box that was
   // told to stop billing a provider stops handing its key out, whatever the
   // vault left here before.
-  if (API_KEY_ITEMS.includes(kind)) {
-    const provider = API_PROVIDER_IDS.find((id) => API_PROVIDERS[/** @type {keyof typeof API_PROVIDERS} */ (id)].item === kind);
-    if (!provider || !boxApiProviders(cfg).includes(provider)) {
-      return { ok: false, error: 'not_granted', message: 'The operator of this machine has not turned that API provider on.' };
-    }
+  //
+  // SAID AS WHAT IT IS, with the provider's name and what turns it on. It
+  // was "not granted" and "that API provider", which reached a person as
+  // the turn's reason with nothing in it to act on. It has a code of its
+  // own because nothing about the session is wrong: the box's operator has
+  // a line to add.
+  const provider = API_KEY_ITEMS.includes(kind) ? API_PROVIDER_IDS.find((id) => API_PROVIDERS[/** @type {keyof typeof API_PROVIDERS} */ (id)].item === kind) : undefined;
+  const key = provider ? `${API_PROVIDERS[/** @type {keyof typeof API_PROVIDERS} */ (provider)].says} API key` : null;
+  if (API_KEY_ITEMS.includes(kind) && (!provider || !boxApiProviders(cfg).includes(provider))) {
+    const says = provider ? API_PROVIDERS[/** @type {keyof typeof API_PROVIDERS} */ (provider)].says : 'that API provider';
+    return { ok: false, error: 'provider_off', message: `The operator of this machine has not turned ${says} on, so no session here runs on its API key. It is turned on in FLEETWRIGHT_API_PROVIDERS on this machine.` };
   }
   const who = emailFromActor(rec.createdBy ?? null) ?? String(rec.createdBy || '').toLowerCase();
   if (!who) return { ok: false, error: 'no_owner', message: 'Nobody was identified as this session’s owner, so there is no vault to read.' };
   if (value === null) {
     const held = vaultEngineItem(cfg, who, kind);
-    if (!held) return { ok: false, error: 'not_held', message: `this machine holds no ${kind} sign-in for this member` };
+    if (!held) {
+      // A KEY IS NOT A SIGN-IN, and its item's name is the vault's and nobody
+      // else's: "holds no apikey:openrouter sign-in" was what a person read
+      // on the session. So a key is called a key, by its provider's name,
+      // with where one is kept, since the runner adds its "To sign it in"
+      // only for an engine on a sign-in. What this box knows is what it
+      // holds; whether the vault keeps a key this box was not handed is not
+      // something it can say. In plain characters and under 200 of them:
+      // the runner keeps nothing else of a turn's detail (engine.mjs, line).
+      return key
+        ? { ok: false, error: 'not_held', message: `This machine holds no ${key} for this member. To keep one: this member's Credentials in the Fleetwright app, ${key}.` }
+        : { ok: false, error: 'not_held', message: `this machine holds no ${kind} sign-in for this member` };
+    }
     return { ok: true, kind, value: held };
   }
   return keepEngineItem(cfg, who, kind, value)

@@ -67,6 +67,17 @@ on that provider ([engines.md](./engines.md), "Credentials"). The runner
 writes it where OpenCode reads its keys, inside the container, and for
 OpenRouter also sets the variable OpenCode's documentation names.
 
+**A session with no key to be handed is told which of two things it is**,
+in the words its turn ends with. The box holds none for the member: *"This
+machine holds no OpenRouter API key for this member. To keep one: this
+member's Credentials in the Fleetwright app, OpenRouter API key."* Or the
+box's operator has not turned the provider on, whatever the vault left
+there (`provider_off`): *"The operator of this machine has not turned
+OpenRouter on, so no session here runs on its API key. It is turned on in
+FLEETWRIGHT_API_PROVIDERS on this machine."* A box says what it holds and
+not what the vault keeps: a key kept there that this box was not handed is
+the first sentence too.
+
 **A key is never said back.** How a turn ended is the engine's own words,
 and a provider that quotes a key in its refusal would otherwise put it in a
 notification. The runner takes any value it was handed out of everything it
