@@ -12,7 +12,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseLcov, judge, skippedCount, whatFailed, SLACK_LINES } from '../scripts/coverage-verdict.mjs';
+import { parseLcov, judge, skippedCount, whatFailed, unreadCoverageFile, scriptsIn, SLACK_LINES } from '../scripts/coverage-verdict.mjs';
 
 /** One lcov record. Only SF/LF/LH are read, so only those are written. */
 const record = (file, found, hit) => `TN:\nSF:${file}\nLF:${found}\nLH:${hit}\nend_of_record\n`;
@@ -165,4 +165,33 @@ test('whatever a failed run was, something is said of it', () => {
     const said = whatFailed(run);
     assert.ok(said.length && said.every((l) => typeof l === 'string') && said.join('').trim(), JSON.stringify(run));
   }
+});
+
+test('a run where every test passed and the coverage report could not be built says that', () => {
+  // AS IT WAS CAUGHT, word for word but for the directory: 4327 passing, 0
+  // failing, exit 1. The warning is nine lines from the end, one more than
+  // the tail that is printed, so without its own line it was never seen.
+  const stdout = [
+    '\u2714 the last test (2ms)',
+    '\u2139 Warning: Could not report code coverage. Error [ERR_OPERATION_FAILED]: Operation failed: failed to parse coverage file /tmp/cov-Ab12Cd/t/node-coverage-n7vuWZ/coverage-25390-1795674076758-0.json: Unterminated string in JSON at position 524288 (line 1 column 524289)',
+    '\u2139 tests 4333', '\u2139 suites 0', '\u2139 pass 4327', '\u2139 fail 0', '\u2139 cancelled 0', '\u2139 skipped 6', '\u2139 todo 0', '\u2139 duration_ms 201234.5',
+  ].join('\n');
+  const said = whatFailed({ status: 1, stdout, stderr: '' }).join('\n');
+  assert.match(said, /exited 1 and named no failing test/);
+  assert.match(said, /Could not report code coverage/);
+  assert.match(said, /Unterminated string in JSON at position 524288/);
+  assert.equal(unreadCoverageFile(stdout), '/tmp/cov-Ab12Cd/t/node-coverage-n7vuWZ/coverage-25390-1795674076758-0.json');
+  assert.equal(unreadCoverageFile('\u2139 pass 12\n'), null);
+});
+
+test('a cut-short coverage file still says which program it was', () => {
+  // The start of a V8 coverage file, cut in the middle of a string, as the
+  // real one was. A dependency is not what names a process; its own files are.
+  const cut = '{"result":[{"scriptId":"7","url":"file:///home/x/fleet/node_modules/ws/index.js","functions":[]},'
+    + '{"scriptId":"8","url":"file:///home/x/fleet/bin/fleetwright","functions":[]},'
+    + '{"scriptId":"9","url":"file:///home/x/fleet/src/index.js","functions":[]},'
+    + '{"scriptId":"9","url":"file:///home/x/fleet/src/index.js","functions":[]},'
+    + '{"scriptId":"10","url":"file:///home/x/fleet/src/core/regis';
+  assert.deepEqual(scriptsIn(cut), ['bin/fleetwright', 'src/index.js']);
+  assert.deepEqual(scriptsIn(''), []);
 });

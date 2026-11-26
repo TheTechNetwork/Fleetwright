@@ -51,7 +51,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { globSync } from 'node:fs';
 
-import { parseLcov, judge, skippedCount, whatFailed } from './coverage-verdict.mjs';
+import { parseLcov, judge, skippedCount, whatFailed, unreadCoverageFile, scriptsIn } from './coverage-verdict.mjs';
 
 const FLOORS = 'test/coverage-floor.json';
 const update = process.argv.includes('--update');
@@ -142,6 +142,21 @@ if (run.status !== 0) {
   // read there: `not ok` is TAP, `\u2716` is the spec reporter node emits now.
   console.error('the suite did not pass, so there is no coverage to judge:');
   console.error(whatFailed(run).join('\n'));
+  // WHICH PROCESS'S COVERAGE WAS CUT SHORT, read out of the file before this
+  // run's directory goes (coverage-verdict.mjs, scriptsIn). It is still
+  // there: the suite's temporary directory is this run's own.
+  const unread = unreadCoverageFile(run.stdout || '');
+  if (unread) {
+    let ran = [];
+    try {
+      ran = scriptsIn(readFileSync(unread, 'utf8'));
+    } catch {
+      // Gone already, or never readable: say only what is known.
+    }
+    console.error(ran.length
+      ? `the process whose coverage was cut short had loaded, first: ${ran.join(', ')}. A test left it running, or ended it, while it was still writing.`
+      : 'which process that file was could not be read from it.');
+  }
   rmSync(work, { recursive: true, force: true });
   process.exit(1);
 }

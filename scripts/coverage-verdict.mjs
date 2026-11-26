@@ -144,6 +144,14 @@ export function whatFailed(run) {
     said.push(`the test runner was ended by ${run.signal}, and named no failing test.${run.signal === 'SIGKILL' ? ' That is what running out of memory looks like: is another suite running on this machine?' : ''}`);
   }
   if (!said.length) said.push(`the test runner exited ${run.status === null ? 'with no status' : run.status} and named no failing test.`);
+  // WHAT THE RUNNER WARNED OF, which is the whole story when every test
+  // passed: node prints a failure to build the coverage report as a warning
+  // among its closing lines and exits 1 for it. Caught once, after three
+  // people had rerun past it: one process's coverage file was cut short
+  // ("Unterminated string in JSON at position 524288"), so there was no
+  // report, so the run "failed" with 4327 passing and 0 failing.
+  const warned = (run.stdout || '').split('\n').filter((l) => /^(\u2139|#) Warning: /.test(l)).map((l) => l.slice(0, 600));
+  if (warned.length) said.push('every test may have passed; the runner warned:', ...warned.slice(0, 5));
   const stderr = (run.stderr || '').trim();
   if (stderr) said.push('what it wrote last:', stderr.slice(-2000));
   else {
@@ -151,4 +159,44 @@ export function whatFailed(run) {
     if (last.join('').trim()) said.push('the last lines of its output:', ...last);
   }
   return said;
+}
+
+/**
+ * The coverage file a run could not read, if it said so, and null otherwise.
+ *
+ * @param {string} stdout  the suite's output
+ * @returns {string|null}
+ */
+export function unreadCoverageFile(stdout) {
+  const m = /failed to parse coverage file (\S+\.json)/.exec(stdout || '');
+  return m ? m[1] : null;
+}
+
+/**
+ * Which process a cut-short coverage file was, as far as the file says: the
+ * first few of this repository's own files it had loaded, in the order V8
+ * listed them. The file cannot be parsed, which is the fault being reported,
+ * so the names are picked out of its text.
+ *
+ * A PROCESS IS NAMED BY WHAT IT RAN. The file's own name holds only a process
+ * id, long gone by the time anybody reads the message. Its first scripts are
+ * the program's entry and what that imported first, which is enough to say
+ * "the hub a test started" or "the stand-in Podman", and so which tests to
+ * look at for a process still writing as the run ended.
+ *
+ * @param {string} text  what could be read of the file
+ * @param {number} [most]
+ * @returns {string[]}  paths, shortened to what follows the repository's root where they are in it
+ */
+export function scriptsIn(text, most = 6) {
+  /** @type {string[]} */
+  const out = [];
+  for (const m of String(text || '').matchAll(/"url":"file:\/\/([^"]+)"/g)) {
+    const file = m[1];
+    if (file.includes('/node_modules/')) continue;
+    const short = file.replace(/^.*\/(src|test|bin|scripts|sandbox|worker|install|tools)\//, '$1/');
+    if (!out.includes(short)) out.push(short);
+    if (out.length >= most) break;
+  }
+  return out;
 }
