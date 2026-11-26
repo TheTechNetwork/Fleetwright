@@ -37,7 +37,7 @@ Nothing here runs unless somebody makes a task.
 | `result` | what came back: `{ outcome, summary, session, hostId, member, at, truncated }` | the summary is at most 4000 bytes |
 | `routing` | this task's own routing mode, `auto`, `manual` or `off` ([routing.md](./routing.md)) | optional; absent follows the fleet's |
 | `route` | the last routing decision about it: how, who, among whom, and why | set by the coordinator |
-| `handoffs` | every change of hands, oldest first, every change of the kind of work (`work-type`, where `from` and `to` are kinds of work), and every change of the title or brief (`words`, where `note` says which) | the last 50 |
+| `handoffs` | every change of hands, oldest first, every change of the kind of work (`work-type`, where `from` and `to` are kinds of work), and every change of the title, brief or repository (`words`, where `note` says which) | the last 50 |
 | `createdBy`, `createdAt`, `updatedAt` | who made it, and when | set by the coordinator |
 
 **No credential is ever in a task.** A brief and a result are words a person
@@ -67,14 +67,16 @@ and `test/tasks.test.js` measures that they do.
   standing over the member, because an assignment is the step before a start.
 - **Changes, reassigns, releases, accepts, reopens or cancels it**: the same
   people who see it.
-- **Its title and brief do not change while it is being worked on**
-  (`task_locked`), from the start until what came back is accepted or
+- **Its title, brief and repository do not change while it is being worked
+  on** (`task_locked`), from the start until what came back is accepted or
   reopened: they are what its session was told. A start carries the task's
   own words, and that was true at the start only. A brief was started,
   rewritten while its session worked, and the result came back under words
-  the session had never seen, with nothing in the history to say so. At any
-  other time a change to them is a line in `handoffs` (`words`, with which
-  of the two changed).
+  the session had never seen, with nothing in the history to say so. The
+  repository was left out of this at first, and a task started in one
+  repository was moved to another under its session: the result then said
+  "in" the second, "as the session was told". At any other time a change to
+  any of them is a line in `handoffs` (`words`, with which of them changed).
 - **Changes its kind of work, where the fleet asks about that kind**
   ([budgets.md](./budgets.md), `risky-work`): somebody who manages its
   assignee, or a fleet admin, which is who could approve a start on it. With

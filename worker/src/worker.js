@@ -4017,7 +4017,7 @@ const OPENAPI = JSON.stringify({
           "identity"
         ],
         "summary": "Change a task, or hand it to another member",
-        "description": "Only the fields sent change. A new `assignee` is a handoff, written down with who did it and `note`, and is refused while a session holds the task. So is a new `title` or `brief`, 409 `task_locked`, from the start until what came back is accepted or reopened: they are what its session was told. At any other time a change to them is written down as `words`. A new `workType` is written down too. On a task whose kind of work the fleet asks about before a start, or was, changing it takes somebody who manages the assignee or a fleet admin, and anybody else is answered 403 `not_manager`.",
+        "description": "Only the fields sent change. A new `assignee` is a handoff, written down with who did it and `note`, and is refused while a session holds the task. So is a new `title`, `brief` or `repo`, 409 `task_locked`, from the start until what came back is accepted or reopened: they are what its session was told. At any other time a change to them is written down as `words`. A new `workType` is written down too. On a task whose kind of work the fleet asks about before a start, or was, changing it takes somebody who manages the assignee or a fleet admin, and anybody else is answered 403 `not_manager`.",
         "parameters": [
           {
             "name": "id",

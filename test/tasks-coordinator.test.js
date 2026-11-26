@@ -277,7 +277,7 @@ test('a start nobody answered keeps its lock while its box is away: away is cann
   assert.deepEqual([task('t3').lock, task('t3').handoffs.at(-1).kind, Boolean(/** @type {any} */ (core.taskFor(dana, 't3')).start)], [null, 'released', true]);
 });
 
-test('a task’s title and brief are what its session was told: they do not change while it is held, and a change at any other time is written down', async () => {
+test('a task’s title, brief and repository are what its session was told: they do not change while it is held, and a change at any other time is written down', async () => {
   // The other order of the first review's finding. A start carries the
   // task's own words; rewritten while the session worked, the record and
   // its history showed words the session was never told.
@@ -289,9 +289,19 @@ test('a task’s title and brief are what its session was told: they do not chan
   assert.equal(held.error?.code, 'task_locked');
   assert.match(held.text, /^t1’s title and brief cannot change while it is being worked on, because they are what its session was told: cc-1 on deb132 has been working on it since .* Release it, or wait for it to come back\.$/);
   assert.match(/** @type {any} */ (core.changeTask(dana, 't1', { brief: rewrite.brief })).text, /^t1’s brief cannot change while it is being worked on, because it is what its session was told/);
-  // A form sent back whole, with the words as they are, changes what it changed.
-  assert.equal(/** @type {any} */ (core.changeTask(dana, 't1', { title: 'Clean up', brief: 'Reset the staging database.', repo: 'acme/app' })).ok, true);
-  assert.equal(task('t1').repo, 'acme/app');
+  // THE REPOSITORY IS WHAT THE SESSION WAS TOLD TOO, in the first line of
+  // its first message. This very line used to assert the change went
+  // through: a third review moved a held task from acme/docs to
+  // acme/production-infra, nothing was written down, and the result read
+  // "in acme/production-infra, as the session was told".
+  const moved = /** @type {any} */ (core.changeTask(dana, 't1', { title: 'Clean up', brief: 'Reset the staging database.', repo: 'acme/app' }));
+  assert.equal(moved.error?.code, 'task_locked');
+  assert.match(moved.text, /^t1’s repository cannot change while it is being worked on, because it is what its session was told: cc-1 on deb132 /);
+  assert.match(/** @type {any} */ (core.changeTask(dana, 't1', { ...rewrite, repo: 'acme/app' })).text, /^t1’s title, brief and repository cannot change while it is being worked on, because they are what its session was told/);
+  assert.equal(task('t1').repo, undefined);
+  // A form sent back whole, with those as they are, changes what it changed.
+  assert.equal(/** @type {any} */ (core.changeTask(dana, 't1', { title: 'Clean up', brief: 'Reset the staging database.', repo: '', workType: 'chore' })).ok, true);
+  assert.equal(task('t1').workType, 'chore');
 
   // BACK WITH A RESULT, the words are still the ones that result is for.
   await says('deb132', { event: 'session.ready', name: 'cc-1', taskId: 't1', result: { text: 'DONE\nDone as asked.' } });
@@ -307,6 +317,9 @@ test('a task’s title and brief are what its session was told: they do not chan
   assert.deepEqual(task('t1').handoffs.slice(-1).map((/** @type {any} */ h) => [h.kind, h.by, h.note]), [['words', dana.email, 'title and brief']]);
   assert.equal(/** @type {any} */ (core.changeTask(dana, 't1', { title: 'Tidy the docs again' })).ok, true);
   assert.equal(task('t1').handoffs.at(-1).note, 'title');
+  // And so does the repository, written down the same way.
+  assert.equal(/** @type {any} */ (core.changeTask(dana, 't1', { repo: 'acme/docs' })).ok, true);
+  assert.deepEqual([task('t1').repo, task('t1').handoffs.at(-1).kind, task('t1').handoffs.at(-1).note], ['acme/docs', 'words', 'repository']);
   // Sent the same words again, nothing is written.
   const lines = task('t1').handoffs.length;
   assert.equal(/** @type {any} */ (core.changeTask(dana, 't1', { title: 'Tidy the docs again', brief: rewrite.brief })).ok, true);

@@ -276,8 +276,14 @@ export function lockWords(/** @type {Task} */ task) {
  * history to say they had changed. While a lock is held, and until what
  * came back is accepted or reopened, the words are the ones the session was
  * told. At any other time a change to them is a line in `handoffs`
- * (`words`, with which of the two changed), as a change of the kind of work
+ * (`words`, with which of them changed), as a change of the kind of work
  * is.
+ *
+ * AND SO IS THE REPOSITORY, which is in the first line of what a session is
+ * told ("Task t12. Branch … in acme/docs.") and in what its result says of
+ * itself. It was left free: a task started in acme/docs was moved to
+ * acme/production-infra while its session worked, with no line anywhere,
+ * and the result read "in acme/production-infra, as the session was told".
  *
  * @param {Task} task
  * @param {{ title?: string, brief?: string, workType?: string, repo?: string, assignee?: string|null, routing?: 'off'|'manual'|'auto'|null }} fields  already through checkTask
@@ -294,13 +300,16 @@ export function changeTask(task, fields, { by, at, note = '' }) {
   const reworded = [
     ...(fields.title !== undefined && fields.title !== task.title ? ['title'] : []),
     ...(fields.brief !== undefined && fields.brief !== task.brief ? ['brief'] : []),
+    ...(fields.repo !== undefined && (fields.repo || '') !== (task.repo ?? '') ? ['repository'] : []),
   ];
+  /** "title", "title and brief", "title, brief and repository". */
+  const which = reworded.length > 2 ? `${reworded.slice(0, -1).join(', ')} and ${reworded.at(-1)}` : reworded.join(' and ');
   if (reworded.length && task.lock) {
-    return refuse('task_locked', `${task.id}’s ${reworded.join(' and ')} cannot change while it is being worked on, because ${reworded.length === 1 ? 'it is' : 'they are'} what its session was told: ${lockWords(task)}. ${task.state === 'returned' ? 'Accept what came back, or reopen it, and change it then.' : 'Release it, or wait for it to come back.'}`);
+    return refuse('task_locked', `${task.id}’s ${which} cannot change while it is being worked on, because ${reworded.length === 1 ? 'it is' : 'they are'} what its session was told: ${lockWords(task)}. ${task.state === 'returned' ? 'Accept what came back, or reopen it, and change it then.' : 'Release it, or wait for it to come back.'}`);
   }
   if (fields.title !== undefined) next.title = fields.title;
   if (fields.brief !== undefined) next.brief = fields.brief;
-  if (reworded.length) next.handoffs = handed(next, { at, by, kind: 'words', note: reworded.join(' and ') });
+  if (reworded.length) next.handoffs = handed(next, { at, by, kind: 'words', note: which });
   if (fields.workType !== undefined && (fields.workType || '') !== (task.workType ?? '')) {
     if (fields.workType) next.workType = fields.workType;
     else delete next.workType;
