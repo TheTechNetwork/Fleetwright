@@ -493,13 +493,42 @@ test('a resumed session counts from the first figure heard, and removing a membe
   assert.equal(f.core.setMember(dana, 'debbie', record).ok, true);
   assert.deepEqual([f.spendOf('debbie').usd, f.spendOf('debbie').over], [51, true]);
   assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
-  // Until the month turns: then a removed member's row is nobody's, and goes when the rows are next read.
+  // AND ITS BUDGET, which the same two steps took away. Made again with no
+  // budget named, as the tool an agent holds for a member's record makes
+  // one, she had none, and nothing is past no budget: the start went through.
   assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  const { budgetUsdMonth: _was, ...bare } = record;
+  const again = /** @type {any} */ (f.core.setMember(dana, 'debbie', bare));
+  assert.equal(again.ok, true, again.text);
+  assert.match(again.text, /Debbie was removed with a budget of \$50\.00 a month, and has it again: a budget is changed by a person, in the app\.$/);
+  assert.deepEqual([again.member.budgetUsdMonth, f.core.org.get('debbie').budgetUsdMonth, f.spendOf('debbie').over], [50, 50, true]);
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
+  // From a file too, which is the other way that tool makes one.
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  const file = /** @type {any} */ (f.core.importMember(dana, '---\nid: debbie\nname: Debbie\nkind: agent\nrole: software engineer\nreportsTo: dana\n---\n'));
+  assert.equal(file.ok, true, file.text);
+  assert.equal(f.core.org.get('debbie').budgetUsdMonth, 50);
+  // A request that names a budget is a person's, and is taken as sent. And a
+  // person who wants none takes it off the record that is there.
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  assert.equal(/** @type {any} */ (f.core.setMember(dana, 'debbie', { ...bare, budgetUsdMonth: 80 })).member.budgetUsdMonth, 80);
+  assert.equal(/** @type {any} */ (f.core.setMember(dana, 'debbie', bare)).member.budgetUsdMonth ?? null, null);
+  assert.equal(/** @type {any} */ (f.core.setMember(dana, 'debbie', { ...bare, budgetUsdMonth: 80 })).ok, true);
+
+  // Until the month turns: then what a removed member spent is nobody's.
+  // Its budget is kept, because the gate it stands for does not turn with
+  // the month. A removed member that had none leaves nothing, as before.
+  f.core.budgets.started('loose', 'deb132\ncc-loose');
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  assert.equal(f.core.removeMember(admin, 'loose').ok, true);
   const kept = f.core.budgets.serialise();
   f.tick(8 * 86_400_000);
   const next = new CoordinatorCore({ now: () => Date.UTC(2026, 11, 2) });
   next.budgets.restore(kept);
-  assert.deepEqual([next.budgets.spend.has('debbie'), next.budgets.takeChanges().del], [false, ['spend:debbie']]);
+  assert.deepEqual([next.budgets.spend.has('loose'), next.budgets.takeChanges().del], [false, ['spend:loose']]);
+  assert.equal(next.budgets.spendOf('debbie'), null, 'last month’s spend is not this month’s');
+  assert.equal(next.budgets.back('debbie'), 80);
+  assert.equal(next.budgets.spend.has('debbie'), false, 'the row held only the budget, and it has been handed back');
 });
 
 test('who sees whose spend: an admin everybody, a manager their team, a person their own member', async () => {

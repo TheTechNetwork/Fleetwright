@@ -79,6 +79,7 @@ export const monthOf = (/** @type {number} */ t) => new Date(t).toISOString().sl
  * @property {Record<string, number>} seen   the last figure seen for each session, by key, newest last
  * @property {{ warn?: boolean, over?: boolean }} told  which of the month's two notices went out
  * @property {boolean} [gone]                its member was removed this month; the row is kept so the month's spend is not reset by removing and adding back (org-budgets.js, forget)
+ * @property {number} [budget]               on a row whose member is gone: the monthly budget it had when it was removed, which a member made under the id again takes back (org-budgets.js, back)
  * @typedef {{ kind: 'over-budget'|'dangerous'|'risky-work'|'paid-api', text: string }} Reason
  * @typedef {object} Approval
  * @property {string} id
@@ -149,7 +150,9 @@ function inMonth(/** @type {Spend} */ row, /** @type {number} */ now) {
   const month = monthOf(now);
   if (row.month === month) return row;
   const unanswered = (row.unanswered ?? []).filter((u) => now - u.at < UNANSWERED_KEPT_MS);
-  return { month, usd: 0, unknown: [], ...(unanswered.length ? { unanswered } : {}), seen: row.seen, told: {} };
+  // A removed member's budget is kept across the turn, with what says the row is nobody's now.
+  const left = row.gone && typeof row.budget === 'number' ? { gone: true, budget: row.budget } : {};
+  return { month, usd: 0, unknown: [], ...(unanswered.length ? { unanswered } : {}), ...left, seen: row.seen, told: {} };
 }
 
 /** `seen` with this session's figure newest, and no more than the row keeps. */
@@ -534,5 +537,6 @@ export function readSpend(row) {
     .filter((/** @type {any} */ u) => u && typeof u.host === 'string' && u.host.length <= 200 && Number(u.at) > 0)
     .map((/** @type {any} */ u) => ({ host: u.host, at: Number(u.at) }))
     .slice(-MAX_SESSIONS_SEEN);
-  return { month: row.month, usd, unknown, ...(capped.length ? { capped } : {}), ...(unanswered.length ? { unanswered } : {}), ...(row.gone === true ? { gone: true } : {}), seen, told: { ...(row.told?.warn === true ? { warn: true } : {}), ...(row.told?.over === true ? { over: true } : {}) } };
+  const budget = row.gone === true && typeof row.budget === 'number' && Number.isFinite(row.budget) && row.budget >= 0 ? { budget: row.budget } : {};
+  return { month: row.month, usd, unknown, ...(capped.length ? { capped } : {}), ...(unanswered.length ? { unanswered } : {}), ...(row.gone === true ? { gone: true } : {}), ...budget, seen, told: { ...(row.told?.warn === true ? { warn: true } : {}), ...(row.told?.over === true ? { over: true } : {}) } };
 }

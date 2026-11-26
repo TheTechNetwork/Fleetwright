@@ -148,25 +148,43 @@ export class OrgBudgets {
    * it. A row from an earlier month is nobody's, and is dropped here and
    * when the rows are next read back (`restore`).
    *
-   * @param {string} member
+   * AND SO DOES ITS BUDGET, for as long as nobody is made under the id. The
+   * spend was kept and the budget was not, so a member past a budget that
+   * refuses was removed and made again with no budget at all: nothing is
+   * past no budget. That took two calls of the one tool an agent holds for
+   * a member's record, which carries a budget and may not set one. The
+   * budget is the record's, and a record that is gone has nowhere to keep
+   * it but here. A row that holds one is kept past the month's turn, since
+   * the gate it stands for does not turn with the month.
+   *
+   * @param {string} member @param {number|null|undefined} [budget]  the monthly budget its record had
    */
-  forget(member) {
+  forget(member, budget) {
     const row = this.spend.get(member);
-    if (row) {
-      if (row.month === monthOf(this.now())) this.#keepSpend(member, { ...row, gone: true });
-      else if (this.spend.delete(member)) this.dirtySpend.add(member);
-    }
+    const kept = typeof budget === 'number' ? { budget } : {};
+    if (row && row.month === monthOf(this.now())) this.#keepSpend(member, { ...row, gone: true, ...kept });
+    else if (typeof budget === 'number') this.#keepSpend(member, { ...newSpend(this.now()), gone: true, budget });
+    else if (row && this.spend.delete(member)) this.dirtySpend.add(member);
     for (const a of this.approvals.values()) {
       if (a.member === member && (a.state === 'waiting' || a.state === 'approved')) this.#keepApproval({ ...a, state: 'expired' });
     }
   }
 
-  /** A member was made under this id: a row kept from one removed this month is its own again. @param {string} member */
+  /**
+   * A member was made under this id: a row kept from one removed this month
+   * is its own again.
+   *
+   * @param {string} member
+   * @returns {number|null} the budget the removed member had, for the caller to put on the new record when the request names none (core.js), or null when it had none
+   */
   back(member) {
     const row = this.spend.get(member);
-    if (!row?.gone) return;
-    const { gone: _was, ...rest } = row;
-    this.#keepSpend(member, rest);
+    if (!row?.gone) return null;
+    const { gone: _was, budget, ...rest } = row;
+    // A row kept only for its budget, from a month that has turned, is done.
+    if (rest.month === monthOf(this.now())) this.#keepSpend(member, rest);
+    else if (this.spend.delete(member)) this.dirtySpend.add(member);
+    return typeof budget === 'number' ? budget : null;
   }
 
   /** @param {Approval} a */
@@ -317,8 +335,9 @@ export class OrgBudgets {
       const member = String(key).startsWith(SPEND_PREFIX) ? String(key).slice(SPEND_PREFIX.length) : String(key);
       const read = readSpend(row);
       if (!read || !member) continue;
-      // A removed member's row is kept for its month and no longer (`forget`).
-      if (read.gone && read.month !== monthOf(this.now())) this.dirtySpend.add(member);
+      // A removed member's row is kept for its month and no longer, unless
+      // it holds the budget that member had (`forget`).
+      if (read.gone && read.month !== monthOf(this.now()) && typeof read.budget !== 'number') this.dirtySpend.add(member);
       else this.spend.set(member, read);
     }
     /** @type {Approval[]} */

@@ -168,6 +168,14 @@ approval is given, the same start is sent again and goes through.
   the same month, it has spent what it had: removing a member is not how its
   month starts again. A member made later that month under the same id
   starts with that figure too, which is the price of the first.
+- **Its budget stays under its id too, until somebody is made under it.**
+  A member removed and made again has the budget it had, unless the request
+  that makes it names another, which only a person's does. The spend was
+  kept and the budget was not: a member past a budget that refuses was
+  removed and made again with none, by the one tool an agent holds for a
+  member's record, and nothing is past no budget. The answer says the
+  budget came back. A person who wants it gone takes it off the record
+  afterwards, in the app.
 - **The figure is for whoever may see it.** What a member has spent is read
   by an admin, its managers and the person it is. Somebody else whose start
   is refused is told that the member is past its budget and who can approve,

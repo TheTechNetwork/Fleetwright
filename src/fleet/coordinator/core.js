@@ -5975,13 +5975,35 @@ export class CoordinatorCore {
   setMember(requester, id, input) {
     const saved = this.org.set(requester, id, input);
     if (!saved.ok) return saved;
-    // Added back under an id removed this month, it has spent what that id
-    // had: removing a member is not how its month starts again (budgets.forget).
-    if (saved.created) this.budgets.back(saved.member.id);
+    const made = this.#madeAgain(requester, saved);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
-    this.record({ event: 'member.saved', actor: by, text: `${by} ${saved.created ? 'added' : 'changed'} the member ${saved.member.id} (${oneLine(saved.member.role, 60)})` });
-    return saved;
+    this.record({ event: 'member.saved', actor: by, text: `${by} ${made.created ? 'added' : 'changed'} the member ${made.member.id} (${oneLine(made.member.role, 60)})` });
+    return made;
+  }
+
+  /**
+   * A member just made, under an id one was removed from. It has spent what
+   * that id had this month: removing a member is not how its month starts
+   * again (budgets.forget). AND IT HAS THE BUDGET THAT ONE HAD, unless this
+   * request names one: removing a member is not how it stops having a
+   * budget either (docs/budgets.md, "An approval"). A request that names a
+   * budget is a person's, since the tools an agent holds send none, and it
+   * is taken as sent. One that names none gets the old one back, said in
+   * the answer, and a person who wants it gone takes it off the record
+   * afterwards.
+   *
+   * @template {{ ok: true, created?: boolean, member: import('../protocol/members.js').Member, text: string }} S
+   * @param {{ email?: string|null, admin?: boolean }|null} requester @param {S} saved
+   * @returns {S}
+   */
+  #madeAgain(requester, saved) {
+    if (!saved.created) return saved;
+    const kept = this.budgets.back(saved.member.id);
+    if (typeof kept !== 'number' || typeof saved.member.budgetUsdMonth === 'number') return saved;
+    const again = this.org.set(requester, saved.member.id, { ...saved.member, budgetUsdMonth: kept });
+    if (!again.ok) return saved;
+    return { ...saved, member: again.member, text: `${saved.text} ${saved.member.name} was removed with a budget of ${dollars(kept)} a month, and has it again: a budget is changed by a person, in the app.` };
   }
 
   /**
@@ -5994,7 +6016,8 @@ export class CoordinatorCore {
     // Its open approvals go with it: a member made later under the same id
     // is not the one somebody approved a start as. What it spent this month
     // stays under its id until the month turns.
-    this.budgets.forget(gone.member.id);
+    // And its budget is kept with them, for a member made under the id again.
+    this.budgets.forget(gone.member.id, gone.member.budgetUsdMonth);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
     this.record({ event: 'member.removed', actor: by, text: `${by} removed the member ${gone.member.id}` });
@@ -6013,11 +6036,11 @@ export class CoordinatorCore {
   importMember(requester, text) {
     const read = this.org.importFile(requester, text);
     if (!read.ok) return read;
-    if (read.created) this.budgets.back(read.member.id);
+    const made = this.#madeAgain(requester, read);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
-    this.record({ event: 'member.saved', actor: by, text: `${by} ${read.created ? 'added' : 'changed'} the member ${read.member.id} from a file` });
-    return read;
+    this.record({ event: 'member.saved', actor: by, text: `${by} ${made.created ? 'added' : 'changed'} the member ${made.member.id} from a file` });
+    return made;
   }
 
   // ── Tasks (docs/tasks.md) ─────────────────────────────────────────────────
