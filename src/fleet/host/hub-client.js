@@ -374,6 +374,25 @@ export class HubClient {
     return { ...answer, ok: r.ok === true, text: typeof r.text === 'string' ? r.text : '' };
   }
 
+  /**
+   * Tell fleetwright which members the vault lists now, off the list the
+   * minter signed, so it forgets the engine sign-ins and the engine home of
+   * a member who has left it (src/core/engine-signin.js, keepMembers).
+   *
+   * ONLY EVER A LIST THAT WAS CHECKED. Whoever calls this passes the ids of
+   * a list they hold and may still use, never an empty stand-in for one they
+   * could not fetch: a member missing from what is passed loses its sign-in
+   * on this box. A hub from before the route keeps everything, and says so.
+   *
+   * @param {string[]} members  every member id on the list
+   * @returns {Promise<{ ok: boolean, gone: string[], text: string }>}
+   */
+  async engineMembers(members) {
+    const r = await this.#json('POST', '/api/engine-members', { members }, this.commandTimeoutMs, { allowStatus: [400, 404] });
+    if (r.__status === 404) return { ok: false, gone: [], text: 'fleetwright here is older than forgetting a removed member’s engine sign-ins; update it' };
+    return { ok: r.ok === true, gone: Array.isArray(r.gone) ? r.gone.map(String) : [], text: typeof r.text === 'string' ? r.text : '' };
+  }
+
   /** Liveness only. @returns {Promise<boolean>} */
   async alive() {
     try {

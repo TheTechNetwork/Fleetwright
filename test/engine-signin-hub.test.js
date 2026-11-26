@@ -19,7 +19,8 @@ import { Writable } from 'node:stream';
 import path from 'node:path';
 
 import { EngineSignins, SIGNIN_PAGES, containerFor } from '../src/core/engine-signin.js';
-import { engineHomeVolume, engineHomeArgs, ENGINE_HOME } from '../src/core/engine-home.js';
+import { engineHomeVolume, engineHomeArgs, memberOfEngineHome, ENGINE_HOME } from '../src/core/engine-home.js';
+import { forgetPerson } from '../src/core/forget-person.js';
 import { buildCommand } from '../src/core/claude.js';
 import { ownerTag } from '../src/core/accounts.js';
 import { Registry } from '../src/core/registry.js';
@@ -390,9 +391,9 @@ test('a sign-in a session finds ended is no longer reported, and an engine on a 
 test('the hub itself answers on that route for whoever holds its token, tells a session’s ending to the same store, and says in its state who is signed in', async (t) => {
   const b = signinBox(t);
   const cfg = b.cfg({ bind: '127.0.0.1', port: 0, token: '', workdir: path.join(b.dir, 'work'), maxSessions: 5, loginEnabled: true, sandboxCredentialsFile: '', sandboxImagePinned: false, releaseChannel: '', rulesFile: path.join(b.dir, 'CLAUDE.md') });
-  const sessions = /** @type {any} */ ({ list: () => [], running: () => [], binned: () => [] });
+  const sessions = /** @type {any} */ ({ list: () => [], running: () => [], binned: () => [], forgetOwner: () => [] });
   const token = ensureApiToken(cfg);
-  const adapter = new HttpAdapter(cfg, { sessions, login: /** @type {any} */ ({ status: () => ({ loggedIn: true }), isPending: () => false, pending: null }), token });
+  const adapter = new HttpAdapter(cfg, { sessions, login: /** @type {any} */ ({ status: () => ({ loggedIn: true }), isPending: () => false, pending: null, forget: () => false }), token });
   await adapter.start();
   t.after(() => adapter.stop());
   const baseUrl = `http://127.0.0.1:${/** @type {any} */ (adapter.server).address().port}`;
@@ -413,6 +414,21 @@ test('the hub itself answers on that route for whoever holds its token, tells a 
   assert.ok(!JSON.stringify(state).includes('ABCD-EFGH') && !JSON.stringify(state).includes('LEAKCANARY'), 'the hub’s state carries the code or a token');
   // The store a session's ending is told to is this one.
   assert.equal(sessions.engineSignins, adapter.engineSignins);
+
+  // AND IT IS THE STORE A REMOVAL REACHES, on the two routes the sidecar has for one.
+  // A person removed from the fleet (forget-person.js):
+  const eli = { ...ELI, engine: 'codex', action: 'start' };
+  assert.equal((await hub.engineSignin(eli)).state, 'waiting');
+  const forgot = await hub.forgetPerson('eli@example.com');
+  assert.deepEqual([forgot.ok, forgot.forgot?.engines?.attempts], [true, 1]);
+  assert.equal(adapter.engineSignins.attempts.size, 0);
+  // A member the vault no longer lists (keepMembers), which only the hub's own token may say.
+  const anybodyAgain = await fetch(`${baseUrl}/api/engine-members`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ members: [] }) });
+  assert.equal(anybodyAgain.status, 401);
+  assert.deepEqual((await hub.state()).engineSignins.map((/** @type {any} */ e) => e.member), ['debbie']);
+  assert.deepEqual(await hub.engineMembers(['debbie']), { ok: true, gone: [], text: 'Every member this machine holds an engine sign-in for is still listed.' });
+  assert.deepEqual((await hub.engineMembers([])).gone, ['debbie']);
+  assert.deepEqual((await hub.state()).engineSignins, []);
 });
 
 test('the sidecar asks its hub on a route of its own, says so when the hub is older, reports only who is signed in, and says when an attempt ends', async (t) => {
@@ -420,6 +436,8 @@ test('the sidecar asks its hub on a route of its own, says so when the hub is ol
   const old = await startStubHub({ host: 'ops-box', without: ['/api/engine-signin'] });
   t.after(() => old.close());
   assert.deepEqual(await new HubClient({ baseUrl: old.baseUrl, token: null }).engineSignin({ ...DEBBIE, engine: 'codex', action: 'start' }), { ok: false, error: { code: 'hub_outdated' }, text: 'fleetwright here is older than signing an engine in; update it' });
+  // And none for who is still a member: it keeps everything, and says it is not done.
+  assert.deepEqual(await new HubClient({ baseUrl: old.baseUrl, token: null }).engineMembers(['debbie']), { ok: false, gone: [], text: 'fleetwright here is older than forgetting a removed member’s engine sign-ins; update it' });
 
   const at = Date.UTC(2026, 10, 25, 10);
   const hub = await startStubHub({ host: 'ops-box', facts: { engines: ['claude-code', 'codex'], engineSignins: [
@@ -645,4 +663,129 @@ test('a record that does not read as one is cannot tell, never nobody: not repor
   // Moved aside, as the sentence says, the record starts again.
   rmSync(b.signins.file);
   assert.deepEqual([b.signins.report(), (await b.ask('status')).state], [[], 'none']);
+});
+
+// ── Somebody who is gone ────────────────────────────────────────────────────
+
+/**
+ * The stand-in Podman, with the two things a removal asks of it: which
+ * volumes there are, and removing one. Everything else is the stand-in's own
+ * (test/helpers/stub-signin-podman.js), which keeps a volume as a directory.
+ */
+function withVolumes(/** @type {ReturnType<typeof signinBox>} */ b) {
+  const podmanBin = path.join(b.dir, 'podman-volumes');
+  writeFileSync(podmanBin, `#!/bin/sh
+D='${b.dir}'
+if [ "$1" = volume ]; then
+  printf '%s\\n' "$*" >> "$D/podman.log"
+  for last; do :; done
+  case "$2" in
+    ls) ls "$D/volumes" 2>/dev/null; exit 0 ;;
+    exists) [ -d "$D/volumes/$last" ]; exit $? ;;
+    rm) [ -e "$D/keep-volumes" ] && { echo 'Error: volume is being used' >&2; exit 2; }
+        [ -d "$D/volumes/$last" ] || { echo "Error: no such volume $last" >&2; exit 1; }
+        rm -rf "$D/volumes/$last"; exit 0 ;;
+  esac
+fi
+exec "$D/podman" "$@"
+`);
+  chmodSync(podmanBin, 0o755);
+  return podmanBin;
+}
+
+const ELI = { member: 'eli', account: 'eli@example.com', by: 'eli@example.com', box: 'ops-box' };
+
+test('a person removed from the fleet has their engine sign-ins here stopped, dropped and removed with their engine home, and nobody else’s', async (t) => {
+  const b = signinBox(t);
+  const cfg = b.cfg({ podmanBin: withVolumes(b) });
+  const signins = new EngineSignins(cfg);
+  t.after(() => signins.close());
+  const home = String(engineHomeVolume('eli@example.com'));
+  // Eli is signed in to Copilot, has a Codex sign-in waiting for its code, and Debbie is signed in beside them.
+  for (const who of [{ ...ELI, engine: 'opencode' }, { ...DEBBIE, engine: 'codex' }]) {
+    await signins.ask({ ...who, action: 'start' });
+    b.provider('approved');
+    await until(async () => (await signins.ask({ ...who, action: 'status' })).state === 'signed_in', `${who.member} signed in`);
+    b.set('provider-approved', false);
+    await until(() => !b.running(`fw-signin-${who.engine}-${who.member}`), 'that container gone');
+  }
+  assert.equal((await signins.ask({ ...ELI, engine: 'codex', action: 'start' })).state, 'waiting');
+  assert.ok(readFileSync(b.volume(home, 'opencode', 'auth.json'), 'utf8').includes(TOKEN));
+
+  const sessions = { forgetOwner: () => [] };
+  const forgot = await forgetPerson(cfg, sessions, 'Eli@Example.com', null, signins);
+  assert.equal(forgot.ok, true);
+  assert.deepEqual(forgot.forgot?.engines, { entries: 2, attempts: 1, removed: true });
+  assert.equal(forgot.text, 'Forgot eli@example.com, who was removed from the fleet: 0 sessions stopped and put in the bin, an engine sign-in in their name that was waiting for a code stopped, the engines signed in for them here signed out by removing their engine home.');
+  // The token is gone with the volume, the box reports only Debbie, and the attempt is not waiting.
+  assert.equal(existsSync(b.volume(home)), false, 'their engine home is still on the box');
+  assert.deepEqual(signins.report()?.map((e) => [e.member, e.engine, e.state]), [['debbie', 'codex', 'signed_in']]);
+  assert.deepEqual([b.running('fw-signin-codex-eli'), signins.attempts.size], [false, 0]);
+  assert.ok(readFileSync(b.volume('fw-engine-debbie', 'codex', 'auth.json'), 'utf8').includes(TOKEN), 'somebody else’s sign-in went with theirs');
+  // A CODE APPROVED AFTER THEY HAD GONE signs nobody in: it used to, and was reported.
+  b.provider('approved');
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(existsSync(b.volume(home)), false);
+  assert.deepEqual(signins.report()?.map((e) => e.member), ['debbie']);
+  // ASKED AGAIN, there is nothing of theirs and it says so with a yes.
+  const again = await forgetPerson(cfg, sessions, 'eli@example.com', null, signins);
+  assert.deepEqual([again.ok, again.forgot?.engines], [true, { entries: 0, attempts: 0, removed: false }]);
+
+  // A VOLUME PODMAN WILL NOT REMOVE is a sign-in of theirs still here: not a yes, so the coordinator asks again.
+  await signins.ask({ ...ELI, engine: 'opencode', action: 'start' });
+  await until(async () => (await signins.ask({ ...ELI, engine: 'opencode', action: 'status' })).state === 'signed_in', 'eli signed in again');
+  b.set('keep-volumes');
+  const stuck = await forgetPerson(cfg, sessions, 'eli@example.com', null, signins);
+  assert.equal(stuck.ok, false);
+  assert.match(stuck.text, /Their engine sign-ins on this box may still be here: the volume fw-engine-person\.[0-9a-f]{16} could not be removed \(Error: volume is being used\)\. Asked again, it is tried again\.$/);
+  b.set('keep-volumes', false);
+  assert.equal((await forgetPerson(cfg, sessions, 'eli@example.com', null, signins)).ok, true);
+  assert.equal(existsSync(b.volume(home)), false);
+  // An agent's account is nobody removed from the fleet, and is not forgotten this way.
+  assert.deepEqual(await signins.forget('debbie@members.invalid'), { ok: true, entries: 0, attempts: 0, removed: false });
+  assert.equal(existsSync(b.volume('fw-engine-debbie')), true);
+});
+
+test('a member the vault no longer lists is no longer reported, its attempt is stopped and its engine home removed; a list that says nothing removes nothing', async (t) => {
+  assert.deepEqual(['fw-engine-debbie', 'fw-engine-person', `fw-engine-person.${ownerTag('eli@example.com')}`, 'cache-0123456789abcdef', 'fw-engine-', 'fw-engine-Debbie'].map(memberOfEngineHome), ['debbie', 'person', null, null, null, null]);
+  const b = signinBox(t);
+  const cfg = b.cfg({ podmanBin: withVolumes(b) });
+  const signins = new EngineSignins(cfg);
+  t.after(() => signins.close());
+  const JASON = { ...DEBBIE, member: 'jason', account: 'jason@members.invalid' };
+  // Debbie and Eli (a person, under their own record) are signed in; Jason's code is out;
+  // Ada has a home a pasted sign-in was staged into, which this box recorded nothing of.
+  for (const who of [{ ...DEBBIE, engine: 'codex' }, { ...ELI, engine: 'codex' }]) {
+    await signins.ask({ ...who, action: 'start' });
+    b.provider('approved');
+    await until(async () => (await signins.ask({ ...who, action: 'status' })).state === 'signed_in', `${who.member} signed in`);
+    b.set('provider-approved', false);
+    await until(() => !b.running(`fw-signin-codex-${who.member}`), 'that container gone');
+  }
+  assert.equal((await signins.ask({ ...JASON, engine: 'codex', action: 'start' })).state, 'waiting');
+  mkdirSync(b.volume('fw-engine-ada', 'codex'), { recursive: true });
+  writeFileSync(b.volume('fw-engine-ada', 'codex', 'auth.json'), JSON.stringify({ tokens: { refresh_token: TOKEN } }));
+  const eliHome = String(engineHomeVolume('eli@example.com'));
+  const reported = () => signins.report()?.map((e) => e.member).sort();
+
+  // WHAT IS NOT A LIST removes nothing: a caller that could not check one has nothing to say.
+  for (const not of [null, undefined, 'debbie', [null], ['Debbie'], ['debbie', '../ada']]) {
+    assert.deepEqual([(await signins.keepMembers(not)).ok, reported()], [false, ['debbie', 'eli', 'jason']], JSON.stringify(not));
+  }
+  // EVERYBODY STILL LISTED: nothing goes.
+  const all = await signins.keepMembers(['ada', 'debbie', 'eli', 'jason', 'zed']);
+  assert.deepEqual([all.ok, all.gone, all.text], [true, [], 'Every member this machine holds an engine sign-in for is still listed.']);
+  assert.deepEqual([reported(), existsSync(b.volume('fw-engine-ada')), b.running('fw-signin-codex-jason')], [['debbie', 'eli', 'jason'], true, true]);
+
+  // DEBBIE STAYS. Jason, Ada and Eli's record have left the list.
+  const some = await signins.keepMembers(['debbie']);
+  assert.deepEqual([some.ok, some.gone], [true, ['ada', 'eli', 'jason']]);
+  assert.equal(some.text, 'Forgot the engine sign-ins of ada, eli, jason, no longer listed by the vault.');
+  assert.deepEqual(reported(), ['debbie']);
+  assert.deepEqual([b.running('fw-signin-codex-jason'), signins.attempts.size], [false, 0]);
+  assert.deepEqual(['fw-engine-debbie', 'fw-engine-jason', 'fw-engine-ada'].map((v) => existsSync(b.volume(v))), [true, false, false]);
+  // A PERSON'S HOME IS THEIRS while they are in the fleet, whatever became of a record of them.
+  assert.ok(readFileSync(b.volume(eliHome, 'codex', 'auth.json'), 'utf8').includes(TOKEN));
+  // A member filed again under an id that went starts with nothing of the last one's.
+  assert.deepEqual([(await signins.ask({ ...JASON, engine: 'codex', action: 'status' })).state, (await signins.ask({ ...JASON, engine: 'codex', action: 'status' })).signedIn], ['none', null]);
 });

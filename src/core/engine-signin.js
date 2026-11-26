@@ -17,7 +17,7 @@
 //               and engine, how the last attempt ended, who is signed in and
 //               since when, who asked, a mark while an attempt is out, and
 //               the name of the volume the sign-in is in, which is what a
-//               removal finds it by.
+//               removal finds it by (forget, keepMembers).
 //               No token, no code and no page.
 //
 // A FILE THAT CANNOT BE READ, OR DOES NOT READ AS ONE, IS CANNOT TELL. It is
@@ -44,7 +44,10 @@
 // stands in for Podman and runs the real runner (test/engine-signin-hub.test.js).
 // That rootless Podman mounts the volume as written, forwards the signal a
 // cancel sends, and removes the container when it ends is read from its
-// documentation and has not been seen.
+// documentation and has not been seen. Nor has what it answers when asked
+// whether a volume exists, to list them, or to remove one (#forgetHome,
+// keepMembers): a test's own script answers there, as the documentation
+// says Podman does.
 
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -52,10 +55,10 @@ import path from 'node:path';
 
 import { log } from '../log.js';
 import { ENGINES, SIGNIN_ENGINES } from '../fleet/protocol/engines.js';
-import { MEMBER_ID_RE, memberOfAccount } from '../fleet/protocol/members.js';
+import { MEMBER_ID_RE, accountOfMember, memberOfAccount } from '../fleet/protocol/members.js';
 import { normaliseEmail } from './accounts.js';
 import { boxEngines } from './engine-box.js';
-import { ENGINE_HOME, engineHomeVolume } from './engine-home.js';
+import { ENGINE_HOME, engineHomeVolume, memberOfEngineHome } from './engine-home.js';
 import { ensureEgress, egressArgs } from './egress.js';
 import { podmanAsync, podmanAvailable, sandboxImageExists } from './podman.js';
 import { sessionImage } from './sandbox-variant.js';
@@ -579,8 +582,9 @@ export class EngineSignins {
      * memory until it can be written (#record), and the rest runs whatever
      * became of the write.
      *
-     * `removed` is whoever it was for being forgotten here: its entry is
-     * dropped by what removes it, so nothing is written of how it ended.
+     * `removed` is whoever it was for being forgotten here (forget,
+     * keepMembers): its entry is dropped by what removes it, so nothing is
+     * written of how it ended.
      *
      * @param {string} state @param {{ detail?: string|null, who?: Who|null }} [said]
      */
@@ -911,6 +915,180 @@ export class EngineSignins {
       .map((key) => /** @type {Entry} */ (this.#entry(key)))
       .filter((e) => e && MEMBER_ID_RE.test(String(e.member)) && SIGNIN_ENGINES.includes(String(e.engine)))
       .map((e) => ({ member: e.member, engine: e.engine, state: e.last?.state ?? null, at: e.last?.at ?? null, since: e.signedIn?.since ?? null }));
+  }
+
+  // ── Somebody who is gone ──────────────────────────────────────────────────
+
+  /**
+   * Everything here that is in one engine home, ended and dropped, and the
+   * home itself removed: the attempts that are out for it, the entries that
+   * name it, and the volume with whatever an engine kept in it.
+   *
+   * IN THAT ORDER. An attempt still out would write its ending back into the
+   * record after its entry was dropped, and an engine still running would be
+   * writing into a volume as it was removed.
+   *
+   * AN ENTRY FROM BEFORE VOLUMES WERE WRITTEN DOWN names none, and is found
+   * by `also`, which says whether an entry that names no volume is this
+   * home's all the same. Where nothing can say (a person's, from that one
+   * release), the entry stays until a session of theirs finds the sign-in
+   * gone, and the volume is removed regardless: it is named by who it
+   * belongs to, not by what the record says.
+   *
+   * @param {string} volume
+   * @param {(entry: Entry) => boolean} [also]
+   * @param {boolean} [whatever]  `also` decides for every entry, one that names another volume included
+   * @returns {Promise<{ ok: boolean, entries: number, attempts: number, removed: boolean, why?: string }>}
+   *   `removed` is whether there was a volume and it is gone; `ok` false when
+   *   something of theirs may still be here, with why
+   */
+  async #forgetHome(volume, also = () => false, whatever = false) {
+    const theirs = (/** @type {Entry} */ e) => (e?.volume && !whatever ? e.volume === volume : also(e));
+    const live = [...this.attempts.values()].filter((attempt) => attempt.volume === volume);
+    await Promise.all(live.map((attempt) => this.#stop(attempt, 'removed')));
+    let entries = 0;
+    try {
+      this.#writeAll((all) => {
+        for (const [key, entry] of Object.entries(all)) {
+          if (!theirs(entry)) continue;
+          delete all[key];
+          this.owed.delete(key);
+          entries += 1;
+        }
+      });
+    } catch (e) {
+      // A record that cannot be read or written still names them, or may.
+      return { ok: false, entries: 0, attempts: live.length, removed: false, why: `its record of engine sign-ins could not be changed (${oneLine(/** @type {Error} */ (e).message) ?? 'no reason given'})` };
+    }
+    // NO PODMAN IS NO VOLUME: a box that runs nothing in containers has no
+    // engine home to remove, and must not owe a removal it can never make.
+    if (!this.#podman()) return { ok: true, entries, attempts: live.length, removed: false };
+    // ASKED WHETHER IT IS THERE, so that "removed" is said only of a volume
+    // that was: most people a box forgets never signed an engine in on it.
+    // `podman volume exists` answers 1 and says nothing for one that is not;
+    // anything else it says is Podman failing, which is not a no.
+    const there = await podmanAsync(this.cfg, ['volume', 'exists', volume], { timeout: 30_000 });
+    const said = (/** @type {{ status: number, stderr: string }} */ r) => oneLine(r.stderr.trim().split('\n').pop()) ?? `exit ${r.status}`;
+    if (there.status === 1 && !there.stderr.trim()) return { ok: true, entries, attempts: live.length, removed: false };
+    if (there.status !== 0) return { ok: false, entries, attempts: live.length, removed: false, why: `Podman could not say whether the volume ${volume} is there (${said(there)})` };
+    // `-f`, because a container that still mounts it must not keep it: by
+    // now that is only one this box lost track of.
+    const gone = await podmanAsync(this.cfg, ['volume', 'rm', '-f', volume], { timeout: 60_000 });
+    if (gone.status === 0) return { ok: true, entries, attempts: live.length, removed: true };
+    if (/no such volume/i.test(gone.stderr)) return { ok: true, entries, attempts: live.length, removed: false };
+    return { ok: false, entries, attempts: live.length, removed: false, why: `the volume ${volume} could not be removed (${said(gone)})` };
+  }
+
+  /** Whether there is a Podman to ask about volumes. A box set up with none, or with nothing named as one, has none: never thrown. */
+  #podman() {
+    try {
+      return typeof this.cfg.podmanBin === 'string' && this.cfg.podmanBin !== '' && podmanAvailable(this.cfg);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Somebody removed from the fleet (forget-person.js): the engines signed in
+   * for them on this box are theirs no longer.
+   *
+   * It was not among what a box forgot. A person removed kept a ChatGPT
+   * sign-in and a GitHub token in a volume here, this box went on reporting
+   * them signed in, and a sign-in of theirs that was waiting for its code
+   * went on waiting: approved afterwards, it signed them in again.
+   *
+   * BY THE ACCOUNT, which names the volume (engine-home.js). Not for an agent
+   * member's account, which nobody is removed from the fleet under: an agent
+   * goes when the vault's list stops naming it (keepMembers).
+   *
+   * @param {unknown} account  the address they were in the fleet under
+   * @returns {Promise<{ ok: boolean, entries: number, attempts: number, removed: boolean, why?: string }>}
+   */
+  async forget(account) {
+    const who = normaliseEmail(account);
+    const volume = who && !memberOfAccount(who) ? engineHomeVolume(who) : null;
+    if (!volume) return { ok: true, entries: 0, attempts: 0, removed: false };
+    const forgot = await this.#forgetHome(volume);
+    if (forgot.entries || forgot.attempts || forgot.removed) {
+      log.info(`engines: forgot the engine sign-ins of somebody removed from the fleet: ${forgot.entries} recorded, ${forgot.attempts} that were waiting${forgot.removed ? ', and their engine home' : ''}`);
+    }
+    return forgot;
+  }
+
+  /**
+   * The members the vault lists now, as the sidecar read them off the list
+   * the minter signed (intent-keys.js): whoever this box holds a sign-in or
+   * an engine home for and the list no longer names is gone, and so is what
+   * was theirs here.
+   *
+   * WHY THE LIST, AND NOT A WORD FROM THE COORDINATOR. Removing a member told
+   * a box nothing, so `fw-engine-<id>` stayed, this box went on reporting the
+   * member signed in, and a member filed later under the same id was handed
+   * the first one's sign-in. The coordinator already treats those as two
+   * members (core.js, removeMember). The list is the one account of who is a
+   * member that this box checks for itself, and it is what a start as a
+   * member is already held to.
+   *
+   * GONE CAN BE TOLD FROM NOT LISTED YET. Nothing is signed in, and no home
+   * is made, for a member the list did not name at the time (sidecar.js,
+   * #actingAs). So an id this box holds something under, missing from a list
+   * it could check, was on an earlier one and has left. A list that could not
+   * be checked is not passed here at all: the caller says nothing, and
+   * nothing is removed.
+   *
+   * NO SECOND LOOK. One list without the id removes what was its. Waiting for
+   * a second would leave the hour in which an id filed again finds the last
+   * member's sign-in, which is the thing this exists to stop. What a wrong
+   * list costs is signing in again.
+   *
+   * WHAT GOES, for an id the list does not name:
+   *  - every entry under it, so it is no longer reported, and any attempt out;
+   *  - `fw-engine-<id>`, the agent's home, whether or not this box recorded a
+   *    sign-in in it (a pasted item is staged there with no entry).
+   * A PERSON'S HOME STAYS: it is named by their address and is theirs while
+   * they are in the fleet, whatever member records there are (forget).
+   *
+   * @param {unknown} listed  every member id on the list
+   * @returns {Promise<{ ok: boolean, gone: string[], text: string }>}
+   */
+  async keepMembers(listed) {
+    if (!Array.isArray(listed) || listed.some((id) => typeof id !== 'string' || !MEMBER_ID_RE.test(id))) {
+      return { ok: false, gone: [], text: 'That is not a list of member ids, so nothing was removed.' };
+    }
+    const named = new Set(listed);
+    this.#settle();
+    const kept = this.#read();
+    if (!kept) return { ok: false, gone: [], text: 'This machine cannot read its own record of engine sign-ins, so nothing was removed.' };
+    /** @type {Set<string>} */
+    const gone = new Set();
+    for (const entry of Object.values(kept)) {
+      if (entry && MEMBER_ID_RE.test(String(entry.member)) && !named.has(entry.member)) gone.add(entry.member);
+    }
+    for (const attempt of this.attempts.values()) if (!named.has(attempt.member)) gone.add(attempt.member);
+    // And the homes with no entry: what a pasted sign-in was staged into.
+    if (this.#podman()) {
+      const volumes = await podmanAsync(this.cfg, ['volume', 'ls', '--format', '{{.Name}}'], { timeout: 30_000 });
+      if (volumes.status === 0) {
+        for (const name of volumes.stdout.split('\n')) {
+          const id = memberOfEngineHome(name.trim());
+          if (id && !named.has(id)) gone.add(id);
+        }
+      }
+    }
+    /** @type {string[]} */
+    const failed = [];
+    for (const id of gone) {
+      // Attempts by member, not by volume: one for a person's record that is gone is stopped too, and their home is left.
+      await Promise.all([...this.attempts.values()].filter((attempt) => attempt.member === id).map((attempt) => this.#stop(attempt, 'removed')));
+      // The agent's home, and every entry under the id whatever volume it names:
+      // a person's entries under a record that is gone are dropped, and their own volume is left.
+      const forgot = await this.#forgetHome(/** @type {string} */ (engineHomeVolume(accountOfMember(id))), (entry) => entry?.member === id, true);
+      if (!forgot.ok) failed.push(`${id}: ${forgot.why}`);
+      else log.info(`engines: ${id} is no longer a member the vault lists, so its engine sign-ins here are forgotten${forgot.removed ? ' and its engine home removed' : ''}`);
+    }
+    const ids = [...gone].sort();
+    if (failed.length) return { ok: false, gone: ids, text: `Not everything of ${failed.length} removed member${failed.length === 1 ? '' : 's'} could be removed: ${failed.join('; ')}. Asked again with the next list.` };
+    return { ok: true, gone: ids, text: ids.length ? `Forgot the engine sign-ins of ${ids.join(', ')}, no longer listed by the vault.` : 'Every member this machine holds an engine sign-in for is still listed.' };
   }
 
   /**

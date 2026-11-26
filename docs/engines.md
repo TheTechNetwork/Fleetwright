@@ -650,7 +650,8 @@ code within 45 seconds (`no_code`) or the container ended before one
 (`signin_failed`); what the container gave as the page and the code did
 not read as them (`unreadable_code`), or the page was not the provider's
 own (`wrong_page`); device code is off for the account (`device_code_off`);
-a sign out is under way (`busy`) or the engine would not sign out
+a sign out is under way (`busy`, said to a start and to a second sign
+out, each with when to ask again) or the engine would not sign out
 (`signout_failed`, which changes nothing the machine reports); the machine
 cannot read its own record (`state_unreadable`, which is cannot tell and
 is never answered as nobody signed in) or cannot write to it
@@ -679,7 +680,9 @@ on ops-box* and offer the sign-in only on a machine whose `engines` names
 the engine (C-2). **Absent is cannot tell**, never signed out: a machine
 older than protocol 22 sends no list, and so does one that cannot read
 its own record. A sign-in pasted into the vault is not in it either,
-because no machine was told it works (C-5).
+because no machine was told it works (C-5). A person removed from the
+fleet is no longer in it, on any of the fleet's machines that forgot them
+("What it does not stop" says what stays for a member).
 
 ### Turning them on, on a box
 
@@ -833,12 +836,35 @@ the engines this machine does not run.
   the session had on its screen. It is quoted in a fence the text cannot
   close, so it stays a quotation, and it is still the session's own words in
   a file the next engine is told to read.
-- **A removed member's engine home stays on the box.** Removing an agent
-  empties its vault ([members.md](./members.md)); nothing removes
-  `fw-engine-<id>` from each machine it was signed in on. It is mounted
-  only into a session started as that member, which a removed member has
-  none of, and a new member filed under the same id on that machine would
-  find it. An operator removes it with `podman volume rm`.
+- **A person removed from the fleet loses their engine sign-ins on each
+  machine that forgets them**, with everything else it kept in their name
+  (`src/core/forget-person.js`): an attempt of theirs that is waiting is stopped, their entries are
+  dropped, and their engine home (`fw-engine-person.<tag>`) is removed with
+  the sign-ins in it. A volume Podman will not remove, or a record that
+  cannot be changed, makes the machine's answer a no, and the coordinator
+  asks it again. One thing stays: an entry written by the one release
+  before the volume's name was kept beside it names nobody's address, so
+  it is still reported until a session finds the sign-in gone. The volume
+  is removed all the same.
+- **A removed agent member's engine home still stays on the box, because
+  nothing tells the box yet.** The hub knows what to do when it is told
+  which members the vault lists now (`POST /api/engine-members`,
+  `keepMembers` in `src/core/engine-signin.js`): for an id it holds
+  something under and the list no longer names, it stops any attempt,
+  drops every entry so the member is no longer reported, and removes
+  `fw-engine-<id>`, including a home a pasted sign-in was staged into
+  that it recorded nothing of. That list is the minter's signed one, which
+  the sidecar already checks a member start against, so it is not the
+  coordinator's word, and gone can be told from not listed yet: nothing is
+  signed in, and no home is made, for a member the list did not name at
+  the time. **The sidecar does not send the list to its hub yet.** Until
+  it does, removing an agent empties its vault
+  ([members.md](./members.md)) and leaves `fw-engine-<id>` and its entry
+  on each machine: it is mounted only into a session started as that
+  member, which a removed member has none of, a new member filed under
+  the same id on that machine would find it, and an operator removes it
+  with `podman volume rm`. A person's home is never removed this way: it
+  is theirs while they are in the fleet, whatever member records name them.
 - **A session on OpenCode or Codex that sits still is not restarted**, and
   nothing says it is stuck. An engine waiting out a provider's rate limit
   looks the same from the pane.
