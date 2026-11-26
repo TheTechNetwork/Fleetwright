@@ -387,6 +387,13 @@ struct YourVault: View {
                         .listRowBackground(Design.Palette.card)
                         .navigationTitle(box.hostId)
                         .navigationBarTitleDisplayMode(.inline)
+                        // COMING BACK ASKS THE VAULT AGAIN. The page under
+                        // this one is a list, and its rows do not appear
+                        // again for having been covered, so the one row
+                        // that asks on appearing may not. The page said
+                        // "Approve it below, then sign in", and must know
+                        // of the approval when the person is back on it.
+                        .onDisappear { Task { await reload() } }
                     }
                 }
             } else {

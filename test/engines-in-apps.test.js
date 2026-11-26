@@ -240,7 +240,7 @@ test('the two rows are offered only where an engine runs on them, or one is alre
   // (Between the question and the row is the sign-in on a machine, for the
   // two items an engine signs in itself: the test further down.)
   has(IOS, /ForEach\(\w+\(engines: \w+, kept: kept\.items\.map\(\\\.name\)\), id: \\\.self\) \{ name in\s[\s\S]{0,1200}?\b(\w+)\(\s*name: name,/, 'iOS draws an engine’s row without asking whether it is offered');
-  has(ANDROID, /\w+\(\w+, kept\.items\.map \{ it\.name \}\)\.forEach \{ name ->\s[\s\S]{0,1200}?\b(\w+)\(\s*name = name,/, 'Android draws an engine’s row without asking whether it is offered');
+  has(ANDROID, /\w+\(\w+, kept\.items\.map \{ it\.name \}\)\.forEach \{ name ->\s[\s\S]{0,2400}?\b(\w+)\(\s*name = name,/, 'Android draws an engine’s row without asking whether it is offered');
   has(IOS, /ForEach\(kept\.items\.filter \{ !\w+\.contains\(\$0\.name\) \}, id: \\\.name\)/, 'iOS draws an engine’s sign-in twice');
   has(ANDROID, /kept\.items\.filter \{ it\.name !in \w+ \}\.forEach \{ item ->/, 'Android draws an engine’s sign-in twice');
   // Whose engines: the member the screen is pointed at, or the person's own.
@@ -455,6 +455,26 @@ test('a pasted key or token is kept without the space a paste brings, on both ph
 });
 
 // ---- signing an engine in on a machine --------------------------------------
+
+test('approving a machine from a member’s Credentials is known to the page when the person is back on it', () => {
+  // THE PAGE SAYS "Approve it below, then sign in." On Android the approval
+  // is a sheet over the page, which never leaves the screen, and closing it
+  // asked the vault nothing: the page went on saying "not approved" and
+  // never drew Sign in on a machine. On iOS the page under a pushed one is
+  // a list whose rows need not appear again. Both now ask the vault again
+  // as the approval is left.
+  has(ANDROID, /FullScreen\(\s*title = opened\.hostId,\s*onDismiss = \{\s*approving = null\s*scope\.launch \{ reload\(\) \}\s*\},\s*\) \{\s*VaultApproval\(/, 'Android closes a member’s machine approval without asking the vault again');
+  has(IOS, /VaultApproval\(settings: settings, host: box, member: member\)[\s\S]{0,900}?\.onDisappear \{ Task \{ await reload\(\) \} \}/, 'iOS comes back from a member’s machine approval without asking the vault again');
+});
+
+test('on Android each engine item’s rows are keyed by its name, so what one remembers never moves to another', () => {
+  // WHAT A ROW REMEMBERS FOLLOWS ITS PLACE IN A LOOP unless it is keyed. A
+  // person's own list grows from the front when their engines arrive after
+  // what is kept, and the block headed Codex then showed what OpenCode's
+  // had been told. iOS's ForEach has always named each row by its item.
+  has(ANDROID, /\.forEach \{ name ->\s*(?:\/\/[^\n]*\n\s*)*key\(name\) \{[\s\S]{0,1600}?EngineMachineSignIn\([\s\S]{0,900}?EngineSignInRow\(/, 'Android draws an engine item’s rows without a key of their own');
+  has(IOS, /ForEach\(\w+\(engines: \w+, kept: kept\.items\.map\(\\\.name\)\), id: \\\.self\) \{ name in/, 'iOS draws an engine item’s rows without naming each by its item');
+});
 
 /** What a machine's answer to a sign-in is sealed under, signed over and named by: made by the machine's own code, and checked against it by test/engine-signin-answer.test.js where that code is. */
 const ANSWER = JSON.parse(readFileSync(new URL('./fixtures/parity/engine-signin-answer.json', import.meta.url), 'utf8'));
