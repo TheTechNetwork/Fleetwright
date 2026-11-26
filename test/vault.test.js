@@ -3309,4 +3309,28 @@ test('a Claude login kept before any key is a vault the person already had, and 
   assert.equal((await as(ELI, { op: 'orgmember', id: 'sam', remove: true })).ok, true);
   const back = await as(ELI, { op: 'orgmember', id: 'sam', kind: 'person', address: SAM, reportsTo: 'eli' });
   assert.deepEqual(back.answer.may, [SAM], back.text);
+
+  // UNDER ANOTHER ID, which is the filer's to choose. Dana, a manager, adds
+  // Pat, and an org admin takes that custody away. She removes the record
+  // and files the same address as somebody else: the address is what is
+  // remembered, so it gives her nothing.
+  const PAT = 'pat@example.com';
+  assert.deepEqual((await as(DANA, { op: 'orgmember', id: 'pat', kind: 'person', address: PAT, reportsTo: 'dana' })).answer.may, [PAT, DANA]);
+  assert.equal((await as(ELI, { op: 'custodian', member: 'pat', address: DANA, remove: true })).ok, true);
+  assert.equal((await as(DANA, { op: 'orgmember', id: 'pat', remove: true })).ok, true);
+  const renamed = await as(DANA, { op: 'orgmember', id: 'pat2', kind: 'person', address: PAT, reportsTo: 'dana' });
+  assert.deepEqual(renamed.answer.may, [PAT], renamed.text);
+  assert.match(renamed.text, /Their managers hold their credentials only once pat@example\.com allows it\./);
+  // NOR AFTER THE OLD ID IS SOMEBODY ELSE'S: a member filed over the removed
+  // record takes its tombstone with it, and the address is still remembered.
+  assert.equal((await as(DANA, { op: 'orgmember', id: 'pat2', remove: true })).ok, true);
+  for (const id of ['pat', 'pat2']) assert.equal((await as(DANA, { op: 'orgmember', id, kind: 'person', address: `${id}-other@example.com`, reportsTo: 'dana' })).ok, true);
+  assert.deepEqual((await as(DANA, { op: 'orgmember', id: 'pat3', kind: 'person', address: PAT, reportsTo: 'dana' })).answer.may, [PAT]);
+  // NOR BY POINTING A RECORD AWAY AND BACK, which only an org admin can do:
+  // the record left the address, so coming back to it adds nobody new.
+  assert.equal((await as(ELI, { op: 'orgmember', id: 'pat3', kind: 'person', address: 'parked@example.com', reportsTo: 'dana' })).ok, true);
+  assert.deepEqual((await as(ELI, { op: 'orgmember', id: 'pat3', kind: 'person', address: PAT, reportsTo: 'dana' })).answer.may, [PAT]);
+  // So when Pat signs in and keeps something, it is Pat's alone.
+  assert.equal((await as(PAT, { op: 'devicekey', key: (await generateKeyPair()).publicJwk, label: 'p' })).ok, true);
+  assert.equal((await as(DANA, { op: 'list', for: 'pat3' })).error?.code, 'custody_not_allowed');
 });

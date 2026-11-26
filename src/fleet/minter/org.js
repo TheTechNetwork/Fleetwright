@@ -30,6 +30,9 @@
 // The address is that account's for good (vault.js, `devicekey`), and the one
 // way it becomes somebody else's is an org admin releasing it here
 // (`releaseaddress`), written in every vault the address could open.
+// WHICH ADDRESSES HAVE HAD A RECORD is kept too (`orgl:<address>`), by the
+// address and not by the member's id, because that is what "somebody new"
+// is asked of (`orgmember`).
 //
 // WHOEVER ADDS A PERSON MANAGES THEIR CREDENTIALS, and nobody else does until
 // the person says so. Asked for in so many words, after the first build made
@@ -69,6 +72,13 @@ export const ORG_ADMINS_ROW = 'org:admins';
 export const ORG_MEMBER_PREFIX = 'orgm:';
 /** What custodians did to a vault, for its owner to read. */
 export const CUSTODY_LOG_PREFIX = 'clog:';
+/**
+ * An address a person record was filed at and then taken off, by removal or
+ * by pointing the record at somebody else. One small row an address, kept for
+ * good: it is what makes filing that address again not adding somebody new,
+ * under whatever id it is filed.
+ */
+export const ORG_LEFT_PREFIX = 'orgl:';
 /** Org admins a fleet keeps, and explicit custodians one agent member keeps. */
 export const MAX_ORG_ADMINS = 8;
 export const MAX_CUSTODIANS = 8;
@@ -139,6 +149,29 @@ export async function isBound(store, email, userId) {
 async function addressMet(store, email) {
   const row = await store.get(`dk:${lower(email)}`);
   return Boolean(row && typeof row.github === 'string');
+}
+
+/**
+ * Whether a person record at this address was filed before and taken off.
+ *
+ * BY THE ADDRESS, UNDER ANY ID. It used to be read off the tombstone at the
+ * id being filed, and an id is the filer's to choose: a manager whose custody
+ * of somebody an org admin had taken away removed the record and filed the
+ * same address as `sam2`, and was "whoever added" them again. A tombstone is
+ * also written over by the next member filed under its id, so the address is
+ * remembered in a row of its own (`orgl:`), written when a record leaves it.
+ * The tombstones are still read, for a removal made before that row existed.
+ *
+ * @param {Store} store @param {string} email
+ */
+async function addressLeft(store, email) {
+  const address = lower(email);
+  if (await store.get(`${ORG_LEFT_PREFIX}${address}`)) return true;
+  if (!store.list) return false;
+  for (const row of (await store.list({ prefix: ORG_MEMBER_PREFIX })).values()) {
+    if (row?.removed && row.kind === 'person' && lower(row.email) === address) return true;
+  }
+  return false;
 }
 
 /**
@@ -434,6 +467,8 @@ export async function runOrgOp(inside, ctx) {
       // WHAT THE TOMBSTONE REMEMBERS. Whose address a person was, so filing
       // them again is not adding somebody new (below, `again`).
       await store.put(`${ORG_MEMBER_PREFIX}${id}`, { id, at, removed: true, kind: prior.kind, ...(prior.kind === 'person' ? { email: lower(prior.email) } : {}) });
+      // AND THE ADDRESS REMEMBERS IT, apart from the id (addressLeft).
+      if (prior.kind === 'person') await store.put(`${ORG_LEFT_PREFIX}${lower(prior.email)}`, { at });
       // AN AGENT'S VAULT GOES WITH IT (`empty`, done by vault.js under the
       // vault's own lock). It used to stay "until a custodian forgets it",
       // and that could not happen: nobody is the custodian of a member that
@@ -484,10 +519,10 @@ export async function runOrgOp(inside, ctx) {
     // old one's custodians held must not follow it to them.
     const met = kind === 'person' ? await addressMet(store, address) : false;
     const samePerson = Boolean(prior && prior.kind === 'person' && lower(prior.email) === address);
-    // REMOVED AND FILED AGAIN is not somebody new either. Without this,
-    // custody an org admin took away came back by removing the record and
-    // filing it again.
-    const again = Boolean(stored?.removed && stored.kind === 'person' && lower(stored.email) === address);
+    // REMOVED AND FILED AGAIN is not somebody new either, under this id or
+    // another. Without this, custody an org admin took away came back by
+    // removing the record and filing it again.
+    const again = kind === 'person' && !samePerson && !met ? await addressLeft(store, address) : false;
     const added = kind === 'person' && !samePerson && !met && !again && address !== email ? [email] : [];
     const personCustodians = kind === 'person' ? (samePerson ? prior?.custodians ?? [] : added) : [];
     /** @type {OrgNode} */
@@ -503,6 +538,9 @@ export async function runOrgOp(inside, ctx) {
     const fits = checkTree(live, next);
     if (!fits.ok) return refuse('bad_params', fits.text);
     await store.put(`${ORG_MEMBER_PREFIX}${id}`, next);
+    // A RECORD POINTED AT ANOTHER ADDRESS has left the one it had, as a
+    // removed one has (addressLeft).
+    if (prior?.kind === 'person' && lower(prior.email) !== address) await store.put(`${ORG_LEFT_PREFIX}${lower(prior.email)}`, { at });
     const after = new Map(tree).set(id, next);
     return {
       ok: true,

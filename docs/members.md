@@ -205,8 +205,11 @@ sign-ins, and who else holds custody of it depends on who was there first.
   - *Taking a record out and filing it again*, or filing one for somebody
     whose keys were all removed after a lost phone. The address was met, so
     it gives nothing. Nor does it give back custody an org admin took away
-    from somebody nobody had met yet: the removal remembers whose address
-    the record was.
+    from somebody nobody had met yet: the minter remembers every address a
+    record has left (`orgl:<address>`), by removal or by being pointed at
+    another address, and filing that address again adds nobody new, under
+    the same id or any other. It was remembered on the removed record
+    itself, and an id is the filer's to choose.
   - *Filing a record at an address somebody has not used yet.* When a
     GitHub account that already has a vault files its first key under that
     address, the vault had met them after all, and the custody is dropped at
