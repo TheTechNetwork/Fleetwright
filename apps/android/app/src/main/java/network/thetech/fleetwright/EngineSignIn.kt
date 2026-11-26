@@ -322,10 +322,14 @@ internal object EngineSigninWords {
      * the code and nothing else from the answer. The same table as iOS, held
      * equal by test/engines-in-apps.test.js, which also holds it to every
      * code the machine's own code refuses with.
+     *
+     * [provider] is whose page that engine's code is entered on, for the one
+     * refusal that is about a page that was not theirs.
      */
-    fun refusal(code: String, box: String, engine: String, member: String?): String {
+    fun refusal(code: String, box: String, engine: String, provider: String, member: String?): String {
         val whose = if (member == null) "your" else "${member}’s"
         val whom = member ?: "you"
+        val named = member ?: "your own member"
         return when (code) {
             "not_approved" -> "$box is not approved for $whose credentials, or has not heard yet that it is. If it was approved a moment ago, try again shortly. Otherwise approve it first."
             "approval_unknown" -> "$box has not heard from the vault which credentials it is approved for. It asks every ten minutes. Try again in a few minutes."
@@ -350,7 +354,13 @@ internal object EngineSigninWords {
             "no_code" -> "$engine gave no code on $box in time, and nothing is waiting. Start again."
             "busy" -> "$engine is being signed out on $box right now. Try again in a moment."
             "signout_failed" -> "$engine was not signed out on $box, and what $box knows of the sign-in is unchanged. Try again."
-            "state_unreadable" -> "$box cannot read its own record of sign-ins, so it cannot say where this one stands. Whoever runs $box looks at its state directory."
+            "state_unreadable" -> "$box cannot read its own record of sign-ins, so it cannot say where this one stands or begin another, until whoever runs $box looks at it."
+            "state_unwritable" -> "$box could not write its own record of sign-ins, so it began nothing. Whoever runs $box looks at its disk. Then start again."
+            "unreadable_code" -> "$box could not read the page and code $engine gave it, and nothing is waiting. That is a fault in fleetwright on $box: update it and start again, or paste a sign-in instead."
+            "wrong_page" -> "$engine on $box named a sign-in page that is not ${provider}’s own, so $box stopped it and gave nobody the code. Nothing is waiting. Whoever runs $box looks at it before anybody starts again."
+            "id_reused" -> "$box refused a repeated request. Try again."
+            "in_flight" -> "The same request is still on its way to $box. Wait for its answer."
+            "member_not_delegated" -> "$box takes this only under a delegation that names $named. Allow one under You, Delegations, with that member turned on."
             else -> if (printable(code)) "$box refused that ($code)." else "$box refused that."
         }
     }
@@ -628,7 +638,7 @@ internal object EngineSignin {
         val state = reply.state.orEmpty()
         if (!reply.ok) {
             val code = reply.code ?: return before.copy(says = EngineSigninWords.NOT_REACHED, bad = true)
-            val says = EngineSigninWords.refusal(code, host, engineName(engine), memberName)
+            val says = EngineSigninWords.refusal(code, host, engineName(engine), EngineSigninWords.provider(engine), memberName)
             if (poll) return before.copy(says = says, bad = true)
             val next = EngineSigninShown(signedIn = before.signedIn, says = says, bad = true)
             return if (state == "waiting") {

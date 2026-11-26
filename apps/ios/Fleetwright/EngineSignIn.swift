@@ -265,9 +265,13 @@ enum EngineSigninWords {
     /// and the code and nothing else from the answer. The same table as
     /// Android, held equal by test/engines-in-apps.test.js, which also holds
     /// it to every code the machine's own code refuses with.
-    static func refusal(_ code: String, box: String, engine: String, member: String?) -> String {
+    ///
+    /// `provider` is whose page that engine's code is entered on, for the
+    /// one refusal that is about a page that was not theirs.
+    static func refusal(_ code: String, box: String, engine: String, provider: String, member: String?) -> String {
         let whose = member.map { "\($0)’s" } ?? "your"
         let whom = member ?? "you"
+        let named = member ?? "your own member"
         switch code {
         case "not_approved": return "\(box) is not approved for \(whose) credentials, or has not heard yet that it is. If it was approved a moment ago, try again shortly. Otherwise approve it first."
         case "approval_unknown": return "\(box) has not heard from the vault which credentials it is approved for. It asks every ten minutes. Try again in a few minutes."
@@ -292,7 +296,13 @@ enum EngineSigninWords {
         case "no_code": return "\(engine) gave no code on \(box) in time, and nothing is waiting. Start again."
         case "busy": return "\(engine) is being signed out on \(box) right now. Try again in a moment."
         case "signout_failed": return "\(engine) was not signed out on \(box), and what \(box) knows of the sign-in is unchanged. Try again."
-        case "state_unreadable": return "\(box) cannot read its own record of sign-ins, so it cannot say where this one stands. Whoever runs \(box) looks at its state directory."
+        case "state_unreadable": return "\(box) cannot read its own record of sign-ins, so it cannot say where this one stands or begin another, until whoever runs \(box) looks at it."
+        case "state_unwritable": return "\(box) could not write its own record of sign-ins, so it began nothing. Whoever runs \(box) looks at its disk. Then start again."
+        case "unreadable_code": return "\(box) could not read the page and code \(engine) gave it, and nothing is waiting. That is a fault in fleetwright on \(box): update it and start again, or paste a sign-in instead."
+        case "wrong_page": return "\(engine) on \(box) named a sign-in page that is not \(provider)’s own, so \(box) stopped it and gave nobody the code. Nothing is waiting. Whoever runs \(box) looks at it before anybody starts again."
+        case "id_reused": return "\(box) refused a repeated request. Try again."
+        case "in_flight": return "The same request is still on its way to \(box). Wait for its answer."
+        case "member_not_delegated": return "\(box) takes this only under a delegation that names \(named). Allow one under You, Delegations, with that member turned on."
         default: return printable(code) ? "\(box) refused that (\(code))." : "\(box) refused that."
         }
     }
@@ -543,7 +553,8 @@ enum EngineSignin {
                 kept.bad = true
                 return kept
             }
-            let says = EngineSigninWords.refusal(code, box: host, engine: engineName(engine), member: memberName)
+            let says = EngineSigninWords.refusal(code, box: host, engine: engineName(engine), provider: EngineSigninWords.provider(engine),
+                                                  member: memberName)
             if poll {
                 var kept = before
                 kept.says = says

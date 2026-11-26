@@ -644,7 +644,11 @@ test('nothing the fleet wrote is drawn in the sign-in block: a refusal is the ph
   assert.ok(refusedWith.size >= 8, 'the machine’s refusals were not found');
   for (const code of refusedWith) assert.ok(ios.includes(code), `a machine refuses a sign-in with ${code}, and the phones have no sentence for it`);
   // The ones the fleet and the machine's own check add on the way.
-  for (const code of ['not_approved', 'approval_unknown', 'custody_unknown', 'not_custodian', 'not_signed_in', 'no_member', 'member_unchecked', 'signature_required', 'host_outdated', 'no_engine', 'host_unavailable', 'host_timeout', 'answer_unsigned', 'bad_params', 'hub_outdated', 'hub_unreachable', 'hub_timeout']) {
+  for (const code of ['not_approved', 'approval_unknown', 'custody_unknown', 'not_custodian', 'not_signed_in', 'no_member', 'member_unchecked', 'signature_required', 'host_outdated', 'no_engine', 'host_unavailable', 'host_timeout', 'answer_unsigned', 'bad_params', 'hub_outdated', 'hub_unreachable', 'hub_timeout',
+    // Settled after the table was first written, by the machine's and the
+    // fleet's own lanes. Named here so the table is held to them before the
+    // machine's code on this branch has them, and after.
+    'unreadable_code', 'wrong_page', 'state_unwritable', 'state_unreadable', 'id_reused', 'in_flight', 'member_not_delegated']) {
     assert.ok(ios.includes(code), `the phones have no sentence for ${code}`);
   }
 });
