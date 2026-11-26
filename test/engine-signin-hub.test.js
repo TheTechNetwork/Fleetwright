@@ -435,7 +435,11 @@ test('the sidecar asks its hub on a route of its own, says so when the hub is ol
   // An older hub has no such route.
   const old = await startStubHub({ host: 'ops-box', without: ['/api/engine-signin'] });
   t.after(() => old.close());
-  assert.deepEqual(await new HubClient({ baseUrl: old.baseUrl, token: null }).engineSignin({ ...DEBBIE, engine: 'codex', action: 'start' }), { ok: false, error: { code: 'hub_outdated' }, text: 'fleetwright here is older than signing an engine in; update it' });
+  // Said by the machine's name, with what to do there: "fleetwright here" reads, on a phone, as the phone.
+  assert.deepEqual(await new HubClient({ baseUrl: old.baseUrl, token: null }).engineSignin({ ...DEBBIE, engine: 'codex', action: 'start' }), {
+    ok: false, error: { code: 'hub_outdated' },
+    text: 'ops-box is running a fleetwright from before engines were signed in on a machine. Update fleetwright on ops-box and restart it, then ask again.',
+  });
   // And none for who is still a member: it keeps everything, and says it is not done.
   assert.deepEqual(await new HubClient({ baseUrl: old.baseUrl, token: null }).engineMembers(['debbie']), { ok: false, gone: [], text: 'fleetwright here is older than forgetting a removed member’s engine sign-ins; update it' });
 
@@ -455,8 +459,24 @@ test('the sidecar asks its hub on a route of its own, says so when the hub is ol
     hub: new HubClient({ baseUrl: hub.baseUrl, token: null }), hostId: 'ops-box', watch: false, healthIntervalMs: 0, renewIntervalMs: 0, logger: quiet,
     transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { sent.push(f); return true; } }),
   });
+  // NOT TO A COORDINATOR THAT HAS NOT SHOWN IT KNOWS THE LIST. One from before
+  // protocol 22 passes every health key it does not know to every member, so
+  // a box that updated first told the whole fleet who was signed in where.
+  // Absent, which every reader takes as cannot tell.
+  assert.equal('engineSignins' in (await sidecar.health()), false, 'the list went to a coordinator that has said nothing of what it speaks');
+  await sidecar.handle({ v: 21, kind: 'vault-changed' });
+  assert.equal('engineSignins' in (await sidecar.health()), false, 'the list went to a coordinator that speaks 21');
+  await sidecar.handle({ v: 22, kind: 'vault-changed' });
   // THE FRAME: who is signed in now, by id, engine and since when. An attempt that expired leaves the sign-in before it.
   assert.deepEqual((await sidecar.health()).engineSignins, [{ member: 'debbie', engine: 'codex', since: at }, { member: 'ada', engine: 'opencode', since: at - 1000 }]);
+  // An intent is spoken in the older of the two parties' versions, so one in 21 does not say the coordinator is behind, and one in 22 says it is not.
+  await sidecar.handle({ v: 21, kind: 'intent', id: 'health-0001-older', verb: 'health', params: {}, issuedAt: Date.now() });
+  assert.equal('engineSignins' in (await sidecar.health()), true, 'an intent in an older version took the list back');
+  // A coordinator rolled back under a box that stays up is heard, by the next frame it stamps.
+  await sidecar.handle({ v: 21, kind: 'vault-changed' });
+  assert.equal('engineSignins' in (await sidecar.health()), false);
+  await sidecar.handle({ v: 22, kind: 'intent', id: 'health-0002-newer', verb: 'health', params: {}, issuedAt: Date.now() });
+  assert.equal('engineSignins' in (await sidecar.health()), true);
 
   // THE EVENT, on a change and never on the first look.
   const watcher = new SessionWatcher({ hub: new HubClient({ baseUrl: hub.baseUrl, token: null }), emit: (/** @type {any} */ e) => sidecar.emitEvent(e), logger: quiet });

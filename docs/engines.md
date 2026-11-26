@@ -427,7 +427,8 @@ with, by the same function, over
 
 ```
 signingInput('engine-signin-answer',
-  { v: 1, id, host, member, engine, url, code, at, signedIn })
+  { v: 1, id, host, member, engine, url, code, at, signedIn,
+    state, detail, expiresAt })
 ```
 
 where `id` is the id of the request being answered, which the phone chose
@@ -440,6 +441,31 @@ and left out of a clear one. Binding the id is what makes an older
 genuine answer useless for a newer request, and a `status` asked under a
 new id is signed over that id.
 
+The last three are in a sealed answer and left out of a clear one, as
+`signedIn` is: `state` is where the sign-in stands (the table under
+`status`, below); `detail` is the engine's own sentence for an attempt
+that failed, one line of at most 200 printable ASCII characters, and
+`null` otherwise; `expiresAt` is when the code runs out, epoch
+milliseconds as a whole number, there while a code is out and left out
+otherwise. **They were beside the seal and not inside it**, and a phone
+wrote the sentence a person reads from them, so a coordinator could hand
+back a genuine sealed answer beside `state: "failed"` and a `detail` of
+its own that named a code. A second outside review did. What a sheet
+says of a sign-in is now the box's signed word or the phone's own
+sentence, and nothing the coordinator wrote.
+
+That needed no new protocol version and no change to how a phone checks.
+Both phones rebuild the signed bytes from **everything they open** but
+`hostKey` and `signature`, putting their own request's `id`, `member` and
+`engine` in place (`EngineSignIn.swift` and `EngineSignIn.kt`,
+`verified`), so an answer with three more keys verifies on a phone built
+before them, which reads what it knew and ignores the rest. The values
+are a string, a string or `null`, and a whole number: what both phones'
+encoders write exactly as `JSON.stringify` does. The vectors in
+`test/fixtures/parity/engine-signin-answer.json` are made with
+`signinAnswerInput` and `seal`, the functions the box signs and seals
+with, and the older ones still hold as they are.
+
 *Sealed.* A request that carries `reply` is answered with `sealed`: the
 signed fields, the box's public key (`hostKey`) and the `signature`,
 encrypted to `reply` as a vault's answer is (`seal`, under
@@ -448,11 +474,16 @@ says nothing of the page, the code or the account**: no `url`, no `code`,
 `signedIn` cut down to `{ since }`, and a `text` that spells none of
 them. The coordinator carries the state and the times, which it is told
 anyway when an attempt ends, the engine's own sentence for an attempt
-that failed (`detail`), and ciphertext. Every answer to a request
-with `reply` that says where a sign-in stands is sealed, whatever the
+that failed (`detail`), and ciphertext. Those clear copies are for a
+caller that has no key to seal to; a phone reads `state`, `detail` and
+`expiresAt` from inside the seal, where they are signed. Every answer
+to a request with `reply` that is not a refusal is sealed, whatever the
 state, so the account a sign-in ended on is the box's signed word and not
 the coordinator's: a person who sees *Signed in as* an account that is
-not theirs is seeing what the machine said.
+not theirs is seeing what the machine said. A refusal is never sealed or
+signed, the ones that carry a `state` among them (`device_code_off`,
+`signin_failed`, `no_code`, `answer_unsigned`), and carries no page, code
+or account.
 
 ```json
 { "ok": true, "state": "waiting", "member": "debbie", "engine": "codex",
@@ -468,6 +499,18 @@ and inside `sealed`, once the phone has opened it:
 { "v": 1, "id": "…", "host": "9294…3866", "member": "debbie", "engine": "codex",
   "url": "https://auth.openai.com/codex/device", "code": "ABCD-EFGH",
   "at": 1764000001000, "signedIn": null,
+  "state": "waiting", "detail": null, "expiresAt": 1764000900000,
+  "hostKey": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
+  "signature": "…" }
+```
+
+and for an attempt that failed, with an earlier sign-in still in place:
+
+```json
+{ "v": 1, "id": "…", "host": "9294…3866", "member": "debbie", "engine": "codex",
+  "at": 1764000951200,
+  "signedIn": { "since": 1764000000000, "who": { "email": "old@example.com", "plan": "plus" } },
+  "state": "failed", "detail": "device auth failed with status 403 Forbidden",
   "hostKey": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
   "signature": "…" }
 ```
@@ -489,8 +532,9 @@ order:
    seal a payload of its own to `reply`, which is a public key, and it
    cannot make this hash one of the member's approved machines.
 4. Checks `signature` under `hostKey` over the payload above, rebuilt
-   with its own request's `id`, `member` and `engine` and the opened
-   `url`, `code`, `at` and `signedIn`.
+   with its own request's `id`, `member` and `engine` and everything
+   else it opened: `url`, `code`, `at`, `signedIn`, `state`, `detail`
+   and `expiresAt`.
 5. Only then shows `url` and `code`, or who is signed in, from the opened
    payload and from nowhere else.
 
@@ -509,13 +553,19 @@ The page and the code are not secrets, and they are for whoever asked and
 nobody else: they are in the answer to `start` and to `status`, and in no
 file, no log line, no event, no health frame and no push. They are held in
 memory in one place for as long as they are of use, the hub's attempt.
-**The sidecar's cache of replies does not keep them.** It remembers every
-mutating request by its id for ten minutes, to answer a retry with what
-the first attempt was told. For an answer that carried a code, or was
-sealed, it remembers only that the id was answered, and a retry of that
-id is answered afresh with where the sign-in stands now, signed over the
-same id and sealed to the retry's own `reply`: the attempt in flight
-while one is, and never a second attempt.
+**The sidecar's cache of replies keeps nothing of a sign-in's answer.** It
+remembers every mutating request by its id for ten minutes, to answer a
+retry with what the first attempt was told. For `enginesignin` it
+remembers only that the id was answered, whatever the answer was, and a
+retry of that id is answered afresh with where the sign-in stands now for
+the member and engine the retry names, signed over the same id and sealed
+to the retry's own `reply`: the attempt in flight while one is, and never
+a second attempt. It used to keep every answer that carried no code,
+whole, under the id alone, the account a sign-in is on among it, and a
+request for another member under the same id was handed the first
+member's. An id is one request's: another kind of request under a
+sign-in's id, or a sign-in under another request's, is refused
+(`id_reused`) and told to use an id of its own.
 The container then waits, for as long as the code lasts, for the engine to
 say how it ended. **One attempt a member and engine at a time**: a second `start`
 while one waits answers with the one in flight (`already: true`) and
@@ -641,7 +691,8 @@ its audit ring, and keeps nothing of a sign-in but what machines report.
 the member's vault (`not_approved`, on `start`), or the vault has not told
 it yet whose it is approved for (`approval_unknown`, on `start`); it could
 not sign or seal its answer (`answer_unsigned`, with the code and the
-account withheld), or was given a `reply` nothing can be sealed to
+account withheld; a phone is told its screen asks again by itself, an
+agent to ask again), or was given a `reply` nothing can be sealed to
 (`bad_params`, before anything is started); it does not run the
 engine (`no_engine`, for every action); its session image is not fetched
 yet (`no_image`); Podman is missing (`no_podman`) or the member's way out
@@ -656,7 +707,10 @@ out, each with when to ask again) or the engine would not sign out
 cannot read its own record (`state_unreadable`, which is cannot tell and
 is never answered as nobody signed in) or cannot write to it
 (`state_unwritable`, with nothing begun); its hub is older than its
-sidecar (`hub_outdated`).
+sidecar (`hub_outdated`, which names the machine and says to update
+fleetwright there and restart it). On a `start`, a machine that could not
+take the vault's last answer for the vault's own says why and what ends it
+(`approval_unknown`; [vault.md](./vault.md), "On the box").
 
 ## What a machine reports
 
@@ -683,6 +737,19 @@ its own record. A sign-in pasted into the vault is not in it either,
 because no machine was told it works (C-5). A person removed from the
 fleet is no longer in it, on any of the fleet's machines that forgot them
 ("What it does not stop" says what stays for a member).
+
+**A machine sends the list only to a coordinator that has shown it speaks
+22.** The filter above is the coordinator's, and one from before it
+passes every health key it does not know to every member. Machines update
+ahead of the coordinator in half a deploy, so a machine on 22 behind a
+coordinator on 21 told the whole fleet who was signed in where. The
+coordinator stamps its own version on every frame it writes that is not
+an intent (a config frame, the answer to a key-list or vault request,
+`vault-changed`), and a machine with a key asks for its key list seconds
+after it starts. Until one has said 22 the health frame has no list,
+which an older coordinator and every screen read as cannot tell. The
+latest such frame is believed, so a coordinator rolled back under a
+machine that stays up is heard too.
 
 ### Turning them on, on a box
 

@@ -575,6 +575,13 @@ agent-fleet/v1/delegation
   member, and a grant that carries the verb covers it for the members it
   names and no others ([engines.md](./engines.md), "Signing in on the
   machine").
+  And it is whose sessions it may act on: a delegated verb that names a
+  session (`resume`, `stop`, `answer`, `peek`, `logs`, `forget`, `restore`,
+  `purge` and the five workspace verbs) is covered, at a session the box's
+  own session manager records as a member's, only when the list has that
+  member. An enforcing box checks that itself and refuses
+  `member_not_delegated` ([members.md](./members.md), "A delegation covers a
+  member only by naming it").
   The key is signed only when the grant carries it: with none it is left out
   of the JSON altogether, so a delegation made before the field existed is
   the same bytes it always was and still verifies. With some it is the array
