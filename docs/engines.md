@@ -318,8 +318,26 @@ used to be "a refresh token is in the file" and neither engine agrees with
 that. With none, it asks for the member's pasted item as it always
 did, and writes it into the home, so there is one place an engine reads.
 A key for an engine on a metered API ([api-engines.md](./api-engines.md))
-is asked for every time, as before, and is added to OpenCode's file beside
-a Copilot sign-in without replacing it.
+is asked for every time, as before, and is never written into the engine
+home: it is handed to OpenCode in that one process's environment
+(`OPENCODE_AUTH_CONTENT`, which OpenCode reads in place of its file, and
+the provider's own variable where its documentation names one). It was
+filed in OpenCode's `auth.json` in the home, a volume that outlives the
+session, where a key that had since been turned off stayed with nothing to
+remove it. A session that finds one there from before takes it out.
+
+**A sign-in in the home that has ended does not shadow a pasted one.** When
+an engine started on the home's sign-in says the sign-in is over (a
+TurnEnded that would be `auth`), the runner asks the box for the member's
+pasted item, once a session. If the box holds another sign-in than the one
+that just failed (for Codex a file renewed later, by `last_refresh`; for
+OpenCode another token), it is put in the home, the engine is started
+again on it and the same prompt is sent again, and the one ending reported
+is that turn's. A turn that ended for want of a sign-in did none of what
+was asked, so nothing is done twice. The same item again, or none, ends
+`auth` as before. Before this the home was looked in first and the box was
+never asked while anything was there, so a member whose sign-in on a
+machine had ended could not be put right by pasting a new one.
 
 ### A pasted sign-in, the fallback
 
@@ -375,7 +393,12 @@ and hands a renewed one back the same way when it sees one, and once more
 as the session is stopped, so the box's copy keeps up for as long as that
 session runs. The box keeps the copy that was renewed later, by the file's
 own `last_refresh`, and refuses an older one. A later session finds the
-home signed in, asks for nothing and hands nothing back.
+home signed in and asks for nothing. It hands a renewal back all the same,
+because the runner marks a pasted file in the home as the box's copy
+(`auth.json.pasted` beside it): it was the first session alone that handed
+one back, and a renewal made in any later session left the box holding a
+sign-in that had been used up. A sign-in made on the machine has no mark
+and is handed to nobody.
 
 **Signing out does not forget a pasted item.** `signout` removes what the
 home holds. A pasted item the vault still keeps for

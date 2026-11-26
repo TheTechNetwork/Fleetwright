@@ -14,12 +14,12 @@ import { PassThrough } from 'node:stream';
 import { EventEmitter } from 'node:events';
 import { createInterface } from 'node:readline';
 import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, readdirSync, writeFileSync, statSync, existsSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import { codexSignIn } from './helpers/engine-files.js';
-import { Peer, codexAdapter, acpAdapter, run, parseArgs, stage, ended, providerOf, acpModel, reasonFromCodexError, codexResetsAt, ERROR_LINE_MAX, OPENCODE_ASKS } from '../sandbox/engine.mjs';
+import { Peer, codexAdapter, acpAdapter, run, parseArgs, stage, ended, another, PASTED, providerOf, acpModel, reasonFromCodexError, codexResetsAt, ERROR_LINE_MAX, OPENCODE_ASKS } from '../sandbox/engine.mjs';
 
 /** Wait until `said()` is true, or say what never happened. */
 async function until(/** @type {() => boolean} */ said, /** @type {string} */ what, ms = 3000) {
@@ -816,7 +816,7 @@ test('with no sign-in in the engine home the pasted item is asked for and writte
   assert.equal(asked(), 1, 'the second session asked for nothing');
 });
 
-test('in an engine home OpenCode’s file gains an entry and loses none: a key beside a Copilot sign-in, and a pasted token beside a key', (t) => {
+test('in an engine home a pasted Copilot token is added to OpenCode’s file beside what is there, and a key is not written there at all', (t) => {
   const home = mkdtempSync(path.join(os.tmpdir(), 'engine-stage-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const engineHome = path.join(home, 'engine-home');
@@ -824,13 +824,131 @@ test('in an engine home OpenCode’s file gains an entry and loses none: a key b
   const signedIn = { type: 'oauth', refresh: 'gho_made_on_the_machine', access: 'gho_made_on_the_machine', expires: 0 };
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify({ 'github-copilot': signedIn }));
-  assert.equal(stage('opencode', 'sk-or-key', home, { opencode: 'openrouter', env: 'OPENROUTER_API_KEY' }, engineHome).ok, true);
-  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { 'github-copilot': signedIn, openrouter: { type: 'api', key: 'sk-or-key' } });
-  // The other way round: a key was there, and the member's pasted Copilot token is the fallback.
-  writeFileSync(file, JSON.stringify({ openrouter: { type: 'api', key: 'sk-or-key' } }));
+  // The key is OpenCode's for this one process: in the variable it reads in place of its file, and the one its documentation names.
+  assert.deepEqual(stage('opencode', ' sk-or-key\n', home, { opencode: 'openrouter', env: 'OPENROUTER_API_KEY' }, engineHome), {
+    ok: true, file: null, env: { OPENCODE_AUTH_CONTENT: '{"openrouter":{"type":"api","key":"sk-or-key"}}', OPENROUTER_API_KEY: 'sk-or-key' },
+  });
+  assert.deepEqual(stage('opencode', 'vck-key', home, { opencode: 'vercel', env: null }, engineHome), { ok: true, file: null, env: { OPENCODE_AUTH_CONTENT: '{"vercel":{"type":"api","key":"vck-key"}}' } });
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { 'github-copilot': signedIn }, 'the home’s file is as it was');
+  // A pasted Copilot token is the fallback, and is added to whatever the file holds.
+  writeFileSync(file, JSON.stringify({ gitlab: { type: 'api', key: 'glpat-somebody-put-here' } }));
   assert.equal(stage('opencode', 'gho_pasted', home, null, engineHome).ok, true);
-  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { openrouter: { type: 'api', key: 'sk-or-key' }, 'github-copilot': { type: 'oauth', refresh: 'gho_pasted', access: '', expires: 0 } });
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { gitlab: { type: 'api', key: 'glpat-somebody-put-here' }, 'github-copilot': { type: 'oauth', refresh: 'gho_pasted', access: '', expires: 0 } });
   assert.equal(existsSync(path.join(home, '.local')), false);
+});
+
+test('a metered key reaches OpenCode for the session and is gone with it: nothing of it is in the member’s engine home, and one an earlier session left is taken out', async (t) => {
+  const KEY = 'sk-or-v1-0123456789abcdef0123456789abcdef';
+  const { socket, home, posts } = await sessionSocket(t, (kind) => (kind === 'apikey:openrouter' ? { ok: true, kind, value: KEY } : { ok: false }));
+  const engineHome = path.join(home, 'engine-home');
+  const file = path.join(engineHome, 'opencode', 'auth.json');
+  // As a session before this left the home: a Copilot sign-in, and the key it was handed.
+  const copilot = { type: 'oauth', refresh: 'gho_made_on_the_machine', access: 'gho_made_on_the_machine', expires: 0 };
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ 'github-copilot': copilot, openrouter: { type: 'api', key: 'sk-or-v1-left-by-an-earlier-session' } }));
+  const agent = acpServer({ session: { configOptions: modelOption('openrouter/some-model') } });
+  /** @type {any} */
+  let startedWith = null;
+  await run({ engine: 'opencode', model: 'openrouter/some-model', mode: 'dangerous', prompt: 'Go.' }, {
+    socket, home, cwd: '/work', env: { FLEETWRIGHT_ENGINE_HOME: engineHome }, out: () => {}, err: () => {}, stdin: typed(),
+    spawnEngine: (/** @type {string} */ _cmd, /** @type {string[]} */ _args, /** @type {any} */ opts) => {
+      startedWith = opts.env;
+      return agent.child;
+    },
+  });
+  assert.equal(posts.filter((p) => p.body.event === 'TurnEnded').at(-1)?.body.turn.reason, 'done');
+  // OpenCode had the key, in its own process's environment.
+  assert.deepEqual([JSON.parse(startedWith.OPENCODE_AUTH_CONTENT), startedWith.OPENROUTER_API_KEY], [{ openrouter: { type: 'api', key: KEY } }, KEY]);
+  // And the volume that outlives the session holds no key, this one or the older one. The sign-in beside it is untouched.
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { 'github-copilot': copilot });
+  const left = (/** @type {string} */ dir) => readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => readFileSync(path.join(e.parentPath, e.name), 'utf8')).join('\n');
+  assert.ok(!left(engineHome).includes('sk-or-v1-'), 'a key is in the engine home');
+});
+
+// ── A pasted sign-in, and a home whose sign-in has ended ─────────────────────
+
+/** Codex's app server in a session, started on whatever home the runner names: a turn works only while that home's file holds `good`. */
+function codexOnHome(/** @type {string} */ good, /** @type {(file: string) => void} */ duringTurn = () => {}) {
+  /** @type {string[]} */
+  const turns = [];
+  return {
+    turns,
+    spawn: (/** @type {string} */ _cmd, /** @type {string[]} */ _args, /** @type {any} */ opts) => {
+      const file = path.join(String(opts.env.CODEX_HOME), 'auth.json');
+      return codexServer({
+        turn: (send) => {
+          const works = readFileSync(file, 'utf8').includes(good);
+          turns.push(works ? 'worked' : 'refused');
+          if (works) duringTurn(file);
+          // As the real one says of a sign-in that is over: by name, and in one of its five sentences.
+          completed(send, works ? { status: 'completed', error: null } : { status: 'failed', error: { message: COULD_NOT_RENEW[2], codexErrorInfo: 'unauthorized' } });
+        },
+      }).child;
+    },
+  };
+}
+
+test('a sign-in in the home that has ended does not shadow the member’s pasted one: the box is asked once, a later one is put in its place, and the prompt runs', async (t) => {
+  const dead = codexSignIn({ refresh: 'rt-DEAD-0123456789abcdef', lastRefresh: '2026-11-01T10:00:00Z' });
+  const fresh = codexSignIn({ refresh: 'rt-FRESH-0123456789abcdef', lastRefresh: '2026-11-26T09:00:00Z' });
+  const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: fresh }));
+  const engineHome = path.join(home, 'engine-home');
+  const file = path.join(engineHome, 'codex', 'auth.json');
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, dead);
+  const asked = () => posts.filter((p) => p.path === '/internal/engine-credential' && p.body.value === undefined).length;
+  const server = codexOnHome('rt-FRESH');
+  await run({ engine: 'codex', model: 'gpt-5.1-codex', mode: 'safe', prompt: 'Go.' }, { socket, home, cwd: '/work', env: { FLEETWRIGHT_ENGINE_HOME: engineHome }, out: () => {}, stdin: typed(), spawnEngine: server.spawn });
+  // One ending is reported, and it is the turn that ran.
+  assert.deepEqual(posts.filter((p) => p.body.event === 'TurnEnded').map((p) => p.body.turn.reason), ['done']);
+  assert.deepEqual(server.turns, ['refused', 'worked']);
+  assert.equal(asked(), 1);
+  assert.equal(readFileSync(file, 'utf8'), fresh);
+  assert.ok(existsSync(path.join(engineHome, 'codex', PASTED)), 'what is in the home now is the box’s copy, and is marked as that');
+});
+
+test('when the box holds no other sign-in than the one that ended, the session ends auth as before, having asked once', async (t) => {
+  const dead = codexSignIn({ refresh: 'rt-DEAD-0123456789abcdef', lastRefresh: '2026-11-01T10:00:00Z' });
+  // The same file the home holds, an older one, and none: none of them is another sign-in to try.
+  for (const pasted of [dead, codexSignIn({ refresh: 'rt-OLDER-0123456789abcdef', lastRefresh: '2026-10-01T10:00:00Z' }), null]) {
+    const { socket, home, posts } = await sessionSocket(t, (kind) => (pasted ? { ok: true, kind, value: pasted } : { ok: false, error: 'not_held' }));
+    const engineHome = path.join(home, 'engine-home');
+    const file = path.join(engineHome, 'codex', 'auth.json');
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, dead);
+    const server = codexOnHome('rt-FRESH');
+    await run({ engine: 'codex', model: 'gpt-5.1-codex', mode: 'safe', prompt: 'first' }, { socket, home, cwd: '/work', env: { FLEETWRIGHT_ENGINE_HOME: engineHome }, out: () => {}, stdin: typed(['second']), spawnEngine: server.spawn });
+    const turns = posts.filter((p) => p.body.event === 'TurnEnded').map((p) => p.body.turn);
+    assert.deepEqual(turns.map((turn) => turn.reason), ['auth', 'auth']);
+    assert.match(turns[0].detail, /Sign in on a machine\.$/);
+    assert.equal(posts.filter((p) => p.path === '/internal/engine-credential').length, 1, 'asked once a session, not once a turn');
+    assert.equal(readFileSync(file, 'utf8'), dead);
+  }
+  // What "another" is: for Codex a file renewed later by its own date, for OpenCode another token.
+  const at = (/** @type {string} */ when) => codexSignIn({ lastRefresh: when });
+  assert.equal(another('codex', at('2026-11-26T09:00:00Z'), at('2026-11-01T10:00:00Z')), true);
+  assert.equal(another('codex', at('2026-11-01T10:00:00Z'), at('2026-11-01T10:00:00Z')), false);
+  assert.equal(another('codex', 'not a file', at('2026-11-01T10:00:00Z')), false);
+  assert.equal(another('opencode', 'gho_new', '{"github-copilot":{"type":"oauth","refresh":"gho_old","access":"","expires":0}}'), true);
+  assert.equal(another('opencode', 'gho_old\n', '{"github-copilot":{"type":"oauth","refresh":"gho_old","access":"","expires":0}}'), false);
+});
+
+test('a pasted sign-in is handed back by every session that renews it, not only the one that was handed it', async (t) => {
+  const pasted = codexSignIn({ refresh: 'rt-pasted-0123456789abcdef', lastRefresh: '2026-11-25T10:00:00Z' });
+  const renewed = codexSignIn({ refresh: 'rt-renewed-0123456789abcdef', lastRefresh: '2026-11-26T10:00:00Z' });
+  const { socket, home, posts } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: pasted }));
+  const engineHome = path.join(home, 'engine-home');
+  const handedBack = () => posts.filter((p) => p.path === '/internal/engine-credential' && typeof p.body.value === 'string').map((p) => p.body.value);
+  const session = (/** @type {(file: string) => void} */ duringTurn = () => {}) => run({ engine: 'codex', model: 'gpt-5.1-codex', mode: 'safe', prompt: 'Go.' }, {
+    socket, home, cwd: '/work', env: { FLEETWRIGHT_ENGINE_HOME: engineHome }, out: () => {}, stdin: typed(), spawnEngine: codexOnHome('rt-', duringTurn).spawn,
+  });
+  // The first session is handed the box's copy and puts it in the home.
+  await session();
+  assert.deepEqual(handedBack(), []);
+  // A later one finds it there, asks for nothing, and Codex renews it in that session.
+  await session((file) => writeFileSync(file, renewed));
+  assert.equal(posts.filter((p) => p.path === '/internal/engine-credential' && p.body.value === undefined).length, 1);
+  assert.deepEqual(handedBack(), [renewed], 'the box’s copy is now a sign-in that has been used up');
 });
 
 // ── What an engine sends is bounded ─────────────────────────────────────────

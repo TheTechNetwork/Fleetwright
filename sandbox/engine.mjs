@@ -757,6 +757,58 @@ export function signedInAt(engine, engineHome) {
 }
 
 /**
+ * The mark beside a Codex sign-in in an engine home that says it is the
+ * box's copy of a pasted one, put there by `stage`. A sign-in made on the
+ * machine has none: signing in and signing out there take it away.
+ */
+export const PASTED = 'auth.json.pasted';
+
+/**
+ * Whether the member's pasted item is another sign-in than the one a home
+ * holds: for Codex a file renewed later, by its own `last_refresh`, which is
+ * how the box itself tells two copies apart; for OpenCode another token.
+ *
+ * @param {string} engine @param {string} pasted  the item, as the box hands it over
+ * @param {string} held  the home's file
+ */
+export function another(engine, pasted, held) {
+  try {
+    if (engine === 'codex') {
+      const at = (/** @type {string} */ text) => Date.parse(String(JSON.parse(text)?.last_refresh ?? ''));
+      const [theirs, ours] = [at(pasted), at(held)];
+      return Number.isFinite(theirs) && (!Number.isFinite(ours) || theirs > ours);
+    }
+    const token = pasted.trim();
+    return token !== '' && token !== JSON.parse(held)?.['github-copilot']?.refresh;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Take out of an engine home the keys earlier sessions filed in OpenCode's
+ * file there, before a key was kept out of it (`stage`). Only an entry that
+ * is a key, for a provider this runner bills to: a sign-in, and anything a
+ * person put there, stays.
+ *
+ * @param {string} engineHome
+ */
+export function dropKeys(engineHome) {
+  const at = homePaths('opencode', engineHome);
+  if (!at) return;
+  let held;
+  try {
+    held = JSON.parse(readFileSync(at.file, 'utf8'));
+  } catch {
+    return;
+  }
+  if (!held || typeof held !== 'object' || Array.isArray(held)) return;
+  const billed = Object.values(API_PROVIDERS).map((p) => p.opencode);
+  const kept = Object.entries(held).filter(([name, entry]) => !(billed.includes(name) && entry?.type === 'api'));
+  if (kept.length !== Object.keys(held).length) writeWhole(at.file, `${JSON.stringify(Object.fromEntries(kept))}\n`);
+}
+
+/**
  * Put the engine's credential where the engine reads it, from the member's
  * vault item as the socket handed it over. Returns what to watch for
  * changes: Codex renews its own tokens into the file, and the renewed file
@@ -764,9 +816,21 @@ export function signedInAt(engine, engineHome) {
  *
  * INTO THE ENGINE HOME, when the box mounted one, so there is one place an
  * engine reads its sign-in from, and the member's next session here finds
- * it. OpenCode's file there may already hold another provider's entry (a
- * key beside a Copilot sign-in, or the other way round), so an entry is
- * added to what is there and never written over it.
+ * it. OpenCode's file there may already hold another provider's entry, so
+ * an entry is added to what is there and never written over it. A pasted
+ * Codex file is marked as the box's copy (`PASTED`), which is how a later
+ * session knows to hand a renewal of it back.
+ *
+ * A KEY IS NEVER WRITTEN INTO THE ENGINE HOME. It was, filed in OpenCode's
+ * `auth.json` there, and the home is a volume that outlives the session and
+ * every later session of the member reads: a metered key, asked for each
+ * time because it can be turned off, stayed on the machine with nothing
+ * that removed it. With a home, the key reaches OpenCode in its process's
+ * own environment and nowhere else: `OPENCODE_AUTH_CONTENT`, which
+ * OpenCode 1.19.6 reads in place of the file (auth/index.ts, `all`; seen to
+ * connect both providers with nothing on disk), and the variable its
+ * documentation names for the provider, where it names one. With no home
+ * the file is in the session's own container and goes with it, as before.
  *
  * @param {string} engine @param {string} value @param {string} home
  * @param {{ opencode: string, env: string|null }|null} [provider]  the API provider the model bills to, when it bills to one
@@ -781,9 +845,14 @@ export function stage(engine, value, home, provider = null, engineHome = null) {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       const file = path.join(dir, 'auth.json');
       writeFileSync(file, value, { mode: 0o600 });
+      if (at) writeFileSync(path.join(dir, PASTED), '', { mode: 0o600 });
       return { ok: true, file };
     }
     if (engine === 'opencode') {
+      if (provider && at) {
+        const key = value.trim();
+        return { ok: true, file: null, env: { OPENCODE_AUTH_CONTENT: JSON.stringify({ [provider.opencode]: { type: 'api', key } }), ...(provider.env ? { [provider.env]: key } : {}) } };
+      }
       // Where OpenCode keeps its providers' sign-ins, in the shape it writes
       // one for GitHub Copilot. If a later OpenCode reads another shape, the
       // model check before a turn is what catches it: an agent that cannot
@@ -798,8 +867,9 @@ export function stage(engine, value, home, provider = null, engineHome = null) {
           if (held && typeof held === 'object' && !Array.isArray(held)) there = held;
         } catch { /* none yet, or not a file of entries */ }
       }
-      // AN API KEY, filed under OpenCode's own name for the provider, in the
-      // shape it keeps a key in. And, where OpenCode's documentation names a
+      // AN API KEY, with no engine home: filed under OpenCode's own name for
+      // the provider, in the shape it keeps a key in, in this container's
+      // own data directory. And, where OpenCode's documentation names a
       // variable for it, in that variable for the engine's process alone:
       // a newer OpenCode reads this file once, into a store of its own, and
       // not again where that store already has an entry for the provider.
@@ -936,10 +1006,15 @@ export async function run(args, io = {}) {
   const engineHome = typeof env.FLEETWRIGHT_ENGINE_HOME === 'string' && env.FLEETWRIGHT_ENGINE_HOME ? env.FLEETWRIGHT_ENGINE_HOME : null;
   const homeEnv = engineHome ? homePaths(args.engine, engineHome)?.env ?? {} : {};
   const open = async () => {
-    // A SIGN-IN MADE ON THIS MACHINE IS USED FIRST, AND NOTHING IS ASKED FOR.
-    // The engine renews it where it is, so there is nothing to stage and
-    // nothing to hand back. A key is not a sign-in and is asked for every
-    // time, as it was.
+    // A key an earlier session left in the home's file goes before anything reads it.
+    if (engineHome && args.engine === 'opencode') {
+      try {
+        dropKeys(engineHome);
+      } catch { /* a file that cannot be rewritten is as it was */ }
+    }
+    // A SIGN-IN IN THE HOME IS USED FIRST, AND NOTHING IS ASKED FOR. The
+    // engine renews it where it is, so there is nothing to stage. A key is
+    // not a sign-in and is asked for every time, as it was.
     const here = engineHome && !provider ? signedInAt(args.engine, engineHome) : null;
     /** @type {{ ok: true, file: string|null, env?: Record<string, string> } | { ok: false, text: string }} */
     let staged;
@@ -983,11 +1058,41 @@ export async function run(args, io = {}) {
     const failed = await adapter.open();
     if (failed) {
       child.kill?.();
-      return { failed: spawnError ? ended(args.engine, 'error', { detail: spawnError }) : failed };
+      return { failed: spawnError ? ended(args.engine, 'error', { detail: spawnError }) : failed, fromHome: Boolean(here) };
     }
-    // `handBack` is whether a renewed file goes back to the box: only for the
-    // session that was handed the box's copy.
-    return { adapter, child, peer, file: staged.file, was, handBack: !here };
+    // `handBack` is whether a renewed file goes back to the box: whenever
+    // the file is the box's copy of a pasted sign-in. That is the session
+    // that was handed it, and EVERY LATER SESSION THAT FINDS IT IN THE HOME,
+    // by the mark `stage` left beside it. It was the first session alone, so
+    // a renewal made in any later one never reached the box, whose copy was
+    // then a sign-in that had been used up.
+    const pasted = here ? args.engine === 'codex' && existsSync(path.join(path.dirname(here.file), PASTED)) : true;
+    return { adapter, child, peer, file: staged.file, was, handBack: pasted, fromHome: Boolean(here) };
+  };
+
+  /**
+   * A sign-in read from the home has ended: the member's pasted item, when
+   * the box holds another, put in its place. Once a session.
+   *
+   * A SIGN-IN IN THE HOME USED TO SHADOW THE VAULT FOR EVER. The home was
+   * looked in first and the box asked for nothing while anything was there,
+   * dead or not. So a member whose sign-in on a machine had ended could not
+   * be put right by pasting a new one: every session read the dead file,
+   * ended `auth`, and never asked. Now an ending that says the sign-in is
+   * over asks the box, one time, and what comes back is used only when it
+   * is another sign-in than the one that just failed (`another`). The same
+   * file again, or none, ends `auth` as before.
+   */
+  let vaultAsked = false;
+  const fromVault = async () => {
+    if (vaultAsked || !engineHome || provider) return false;
+    vaultAsked = true;
+    const got = await post(socket, '/internal/engine-credential', { kind: item });
+    if (!got?.ok || typeof got.value !== 'string' || !got.value) return false;
+    const here = signedInAt(args.engine, engineHome);
+    if (here && !another(args.engine, got.value, here.text)) return false;
+    withhold(got.value);
+    return stage(args.engine, got.value, home, null, engineHome).ok;
   };
 
   /**
@@ -1074,8 +1179,12 @@ export async function run(args, io = {}) {
     if (prompt.trim()) {
       await post(socket, '/internal/session-event', { event: 'UserPromptSubmit' });
       if (!live) {
-        const opened = await Promise.race([open(), stopped]);
+        let opened = await Promise.race([open(), stopped]);
         if (opened === 'stopped') return leave();
+        if (opened.failed?.reason === 'auth' && opened.fromHome && await fromVault()) {
+          opened = await Promise.race([open(), stopped]);
+          if (opened === 'stopped') return leave();
+        }
         if (opened.failed) {
           note(`${args.engine} did not start a turn: ${opened.failed.reason}${opened.failed.detail ? ` (${opened.failed.detail})` : ''}.`);
           await report(opened.failed);
@@ -1085,15 +1194,34 @@ export async function run(args, io = {}) {
         }
       }
       if (live) {
-        const turn = await Promise.race([live.adapter.turn(prompt), stopped]);
+        let turn = await Promise.race([live.adapter.turn(prompt), stopped]);
         if (turn === 'stopped') return leave();
         await keep(live);
+        if (turn.reason === 'auth' && live.fromHome && await fromVault()) {
+          // THE SAME PROMPT AGAIN, on the sign-in just put in the home. A
+          // turn that ended because the engine was not signed in did none of
+          // what was asked, so nothing is done twice. One ending is reported:
+          // the second.
+          unwatch(live);
+          live.child.kill?.();
+          live = null;
+          const opened = await Promise.race([open(), stopped]);
+          if (opened === 'stopped') return leave();
+          if (opened.failed) turn = opened.failed;
+          else {
+            live = opened;
+            watch(live);
+            turn = await Promise.race([live.adapter.turn(prompt), stopped]);
+            if (turn === 'stopped') return leave();
+            await keep(live);
+          }
+        }
         if (turn.reason !== 'done') note(`${args.engine}’s turn ended: ${turn.reason}${turn.detail ? ` (${turn.detail})` : ''}.`);
         await report(turn);
         // A pipe that closed is an engine that is gone, and one whose
         // conversation was ended here (a message too long to read) is of no
         // more use: the next line typed starts it again.
-        if ((live.child.exitCode !== null && live.child.exitCode !== undefined) || live.peer.closed) {
+        if (live && ((live.child.exitCode !== null && live.child.exitCode !== undefined) || live.peer.closed)) {
           unwatch(live);
           live.child.kill?.();
           live = null;
@@ -1379,6 +1507,7 @@ export async function signin(args, io = {}) {
       // this runner's to remove, once Codex has said it is signed out.
       await peer.request('account/logout', undefined, startMs);
       rmSync(at.file, { force: true });
+      rmSync(path.join(at.dir, PASTED), { force: true });
       return existsSync(at.file) ? failed('its sign-in could not be removed from this machine') : done('signed_out');
     }
     // HOW IT ENDED arrives as a notice, and can arrive before the answer that
@@ -1456,6 +1585,8 @@ export async function signin(args, io = {}) {
     if (!made) return failed('it said it was signed in and kept no sign-in this runner can read');
     withhold(made.text);
     writeWhole(at.file, made.text);
+    // Made on this machine: no copy of the box's, so nothing to hand back.
+    rmSync(path.join(at.dir, PASTED), { force: true });
     return done('signed_in', { who: account ? { email: line(account.email, 120), plan: line(account.planType, 40) } : null });
   }
 
