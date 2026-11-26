@@ -267,25 +267,44 @@ test('Codex: a sign-in it wrote and then called failed is not kept, is signed ou
   const p = printed();
   const done = signin({ engine: 'codex' }, { env: { FLEETWRIGHT_ENGINE_HOME: engineHome(t) }, out: p.out, spawnEngine: server.spawn });
   await until(() => p.lines().length === 1, 'the page and the code');
-  server.approve({ then: 'selected workspace missing from routing discovery' });
+  // With what it had just written taken out of them: the tokens of this run's own home are this run's to keep quiet.
+  server.approve({ then: `no workspace for ${TOKEN} in routing discovery` });
   await done;
-  assert.equal(p.lines()[1].detail, 'OpenAI approved the code, but Codex did not finish (selected workspace missing from routing discovery), so no sign-in was kept. Sign in again');
+  assert.equal(p.lines()[1].detail, 'OpenAI approved the code, but Codex did not finish (no workspace for [withheld] in routing discovery), so no sign-in was kept. Sign in again');
 });
 
-test('Codex: a sign-in that fails says so in Codex’s own sentence, with anything from a sign-in already there taken out', async (t) => {
-  const home = engineHome(t);
-  // Signed in before, as another account: the file a new attempt would replace.
-  mkdirSync(path.join(home, 'codex'), { recursive: true });
-  writeFileSync(path.join(home, 'codex', 'auth.json'), codexSignIn({ refresh: TOKEN }));
+test('Codex: a sign-in that fails says so in Codex’s own sentence, and nothing in the member’s sign-in file takes a piece out of what the runner says', async (t) => {
+  // WHAT A SESSION OF THE MEMBER CAN WRITE: the home's sign-in file, with any
+  // string in it. Every string there was withheld and then cut out of the
+  // runner's finished line, so a piece of that line, left there as one more
+  // value, made the line unreadable to the box (which then asked the home,
+  // and believed the file); and a word of a sentence blanked the sentence.
+  const left = { ...JSON.parse(codexSignIn({ refresh: 'rt-the-one-before-0123456789' })), note: 'done","state":"cancelled', more: 'exchange-failed-for-0123' };
+  const withIt = () => {
+    const home = engineHome(t);
+    mkdirSync(path.join(home, 'codex'), { recursive: true });
+    writeFileSync(path.join(home, 'codex', 'auth.json'), JSON.stringify(left));
+    return home;
+  };
+  // A CANCEL IS SAID AS A CANCEL, in a line that reads.
+  const signals = new EventEmitter();
+  const cancelled = printed();
+  const stopping = signin({ engine: 'codex' }, { env: { FLEETWRIGHT_ENGINE_HOME: withIt() }, out: cancelled.out, spawnEngine: codexLogin().spawn, signals });
+  await until(() => cancelled.lines().length === 1, 'the page and the code');
+  signals.emit('SIGTERM');
+  assert.equal(await stopping, 0);
+  assert.deepEqual(cancelled.lines()[1], { engine: 'codex', signin: 'done', state: 'cancelled' });
+  // AND CODEX'S OWN SENTENCE IS SAID WHOLE.
+  const home = withIt();
   const server = codexLogin();
   const p = printed();
   const done = signin({ engine: 'codex' }, { env: { FLEETWRIGHT_ENGINE_HOME: home }, out: p.out, spawnEngine: server.spawn });
   await until(() => p.lines().length === 1, 'the page and the code');
-  server.fail(`device code exchange failed: token ${TOKEN} is not for this workspace`);
+  server.fail('device code exchange-failed-for-0123: not for this workspace');
   assert.equal(await done, 0);
-  assert.deepEqual(p.lines()[1], { engine: 'codex', signin: 'done', state: 'failed', detail: 'device code exchange failed: token [withheld] is not for this workspace' });
+  assert.deepEqual(p.lines()[1], { engine: 'codex', signin: 'done', state: 'failed', detail: 'device code exchange-failed-for-0123: not for this workspace' });
   // The sign-in that was there is still there: a failed attempt replaces nothing.
-  assert.ok(signedInAt('codex', home));
+  assert.deepEqual(JSON.parse(readFileSync(path.join(home, 'codex', 'auth.json'), 'utf8')), left);
 });
 
 test('Codex: a home that already holds a sign-in still gets its page: the issuer Codex keeps beside its tokens is no secret', async (t) => {
@@ -298,10 +317,9 @@ test('Codex: a home that already holds a sign-in still gets its page: the issuer
   const done = signin({ engine: 'codex' }, { env: { FLEETWRIGHT_ENGINE_HOME: home }, out: p.out, spawnEngine: server.spawn });
   await until(() => p.lines().length === 1, 'the page and the code');
   assert.deepEqual([p.lines()[0].url, p.lines()[0].code], ['https://auth.openai.com/codex/device', 'ABCD-EFGH']);
-  // And what is a secret in that file is still kept quiet.
-  server.fail(`the token ${TOKEN} from https://auth.openai.com was refused`);
+  server.fail('the code was refused at https://auth.openai.com');
   await done;
-  assert.equal(p.lines()[1].detail, 'the token [withheld] from https://auth.openai.com was refused');
+  assert.equal(p.lines()[1].detail, 'the code was refused at https://auth.openai.com');
 });
 
 test('Codex: the 15 minutes running out is expired, whether Codex says it first or this runner’s own clock does', async (t) => {

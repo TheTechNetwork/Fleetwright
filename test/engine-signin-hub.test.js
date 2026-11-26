@@ -180,16 +180,16 @@ test('an attempt nobody approves expires on this box’s own clock, one the engi
   assert.deepEqual(b.signins.report().map((r) => [r.state, r.since]), [['expired', first.since]], 'still reported as signed in, since the first time');
   await until(() => !b.running('fw-signin-codex-debbie'), 'the expired attempt’s container ended');
 
-  // THE ENGINE REFUSES IT, quoting a token from the sign-in that is there.
+  // THE ENGINE REFUSES IT, with a sign-in there that a new one would have replaced.
   const b2 = box(t);
   mkdirSync(b2.volume('fw-engine-debbie', 'codex'), { recursive: true });
   writeFileSync(b2.volume('fw-engine-debbie', 'codex', 'auth.json'), codexSignIn({ refresh: TOKEN }));
   await b2.ask('start');
-  b2.provider('refused', `device code exchange failed: token ${TOKEN} is not for this workspace`);
+  b2.provider('refused', 'device code exchange failed: this account is not for this workspace');
   await until(async () => (await b2.ask('status')).state === 'failed', 'the refusal');
   const failed = await b2.ask('status');
-  assert.equal(failed.detail, 'device code exchange failed: token [withheld] is not for this workspace');
-  assert.equal(failed.text, 'Codex was not signed in for debbie on ops-box: device code exchange failed: token [withheld] is not for this workspace.');
+  assert.equal(failed.detail, 'device code exchange failed: this account is not for this workspace');
+  assert.equal(failed.text, 'Codex was not signed in for debbie on ops-box: device code exchange failed: this account is not for this workspace.');
   for (const [where, text] of [['an answer', JSON.stringify([...b.answers, ...b2.answers])], ['a state file', b.kept() + b2.kept()], ['a log line', said()]]) {
     assert.ok(!text.includes('LEAKCANARY'), `a token is in ${where}`);
   }

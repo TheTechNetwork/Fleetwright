@@ -1441,11 +1441,13 @@ export async function run(args, io = {}) {
 // its page from a constant in its source. Whatever else an engine names,
 // for whatever reason, is refused here before a box can pass it on.
 //
-// NO TOKEN, EVER. A sign-in file is read to copy it and to withhold what is
-// in it from the second line. What the engine prints on its error output is
-// not passed on at all here, as it is in a session: before a sign-in exists
-// there is nothing of it to take out, and afterwards nothing is said but
-// the second line.
+// NO TOKEN, EVER. The sign-in the engine wrote in the run's own home is read
+// to copy it, and to keep what is in it out of the free text of the second
+// line (`say`, in `signin`). The file in the member's home is not read for
+// that, and decides nothing of what is said: a session writes it. What the
+// engine prints on its error output is not passed on at all here, as it is
+// in a session: before a sign-in exists there is nothing of it to take out,
+// and afterwards nothing is said but the second line.
 
 /** How long a device code lasts, in minutes. Codex's own bound (codex-rs/login/src/device_code_auth.rs); GitHub's codes last the same. */
 export const SIGNIN_MINUTES = 15;
@@ -1560,13 +1562,38 @@ export async function signin(args, io = {}) {
   const at = engineHome && spec ? homePaths(engine, engineHome) : null;
   /** The home the engine is started on, once it is made: this run's own, and gone when the run is. @type {{ root: string, home: string, work: string, dir: string, file: string, env: Record<string, string> }|null} */
   let own = null;
-  /** Everything said passes here, with whatever either home holds taken out first. */
-  const say = (/** @type {Record<string, unknown>} */ what) => {
-    for (const file of [at?.file, own?.file]) {
-      const held = file ? textOf(file) : null;
-      if (held !== null) withhold(held);
-    }
-    write(`${hide(JSON.stringify({ engine, ...what }))}\n`);
+  /**
+   * The second line: how it ended. THE LINE ITSELF IS NOT PASSED THROUGH
+   * `hide`, and nothing the member's home holds is withheld here at all.
+   *
+   * It was both. Every string in the home's sign-in file was withheld and
+   * then cut out of the finished line, and that file is one the member's
+   * sessions write. A session that left `done","state":"cancelled` in it as
+   * one more string had this runner cut that out of its own line, which no
+   * longer read as JSON: the box took the ending as not said, asked the
+   * home, found the session's file and recorded a sign-in for a code nobody
+   * had approved. Whoever can write a string into the withheld set could
+   * take any piece out of the line that carries the answer.
+   *
+   * So the line is built here from this file's own words (`signin`, `state`,
+   * `why`), and the only free text in it, `detail` and who is signed in, is
+   * made quiet before it goes in (`quiet`, `line`), as a value that
+   * JSON.stringify then quotes. What is taken out of a value can spoil that
+   * value and nothing else.
+   */
+  const say = (/** @type {Record<string, unknown>} */ what) => void write(`${JSON.stringify({ engine, ...what })}\n`);
+  /**
+   * One line of free text for the box, with this run's own secrets taken
+   * out: what the engine wrote into the home this run made for it, and the
+   * password this run made (withheld where each is made). NOT what the
+   * member's home holds: a sign-in never reads that file to the engine, so
+   * there is nothing of it for an engine to repeat. A sign out does hand
+   * Codex a copy, and withholds that copy where it is handed over.
+   */
+  const quiet = (/** @type {unknown} */ text, max = 200) => {
+    const mine = own ? textOf(own.file) : null;
+    if (mine !== null) withhold(mine);
+    return line(text, max);
   };
   /**
    * The first line: the page and the code. NOT THROUGH `hide`. The page is
@@ -1579,7 +1606,7 @@ export async function signin(args, io = {}) {
     say({ signin: 'done', state, ...extra });
     return 0;
   };
-  const failed = (/** @type {unknown} */ detail, /** @type {Record<string, unknown>} */ extra = {}) => done('failed', { detail: line(detail) ?? 'the engine gave no reason', ...extra });
+  const failed = (/** @type {unknown} */ detail, /** @type {Record<string, unknown>} */ extra = {}) => done('failed', { detail: quiet(detail) ?? 'the engine gave no reason', ...extra });
   if (!spec) return failed(`${line(engine, 40) ?? 'that'} is not an engine this runner signs in`);
   if (!at) return failed('this container was given no engine home to keep a sign-in in');
   try {
@@ -1665,7 +1692,13 @@ export async function signin(args, io = {}) {
       // done with and then removes the file, so it is given the file before
       // it starts, and nothing else of the home: not the settings beside it.
       const held = textOf(at.file);
-      if (held !== null) writeFileSync(mine.file, held, { mode: 0o600 });
+      if (held !== null) {
+        writeFileSync(mine.file, held, { mode: 0o600 });
+        // Handed to the engine, so kept out of whatever it then says. This
+        // is a file the member's sessions write, and the worst a string
+        // planted in it can do now is blank a piece of a `detail` (`say`).
+        withhold(held);
+      }
     }
     start(mine, ['app-server'], {});
     const peer = new Peer(child, { version: null });
