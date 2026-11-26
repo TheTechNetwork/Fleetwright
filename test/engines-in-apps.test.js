@@ -653,8 +653,10 @@ test('a code is drawn only beside the page that engine’s code is entered on, t
   // THE CHECKS SAY THE MACHINE SIGNED THE ANSWER, not that the page is the
   // provider's. So after them the page is held to the one each engine uses.
   for (const [engine, page] of [['codex', 'https://auth.openai.com/codex/device'], ['opencode', 'https://github.com/login/device']]) {
-    has(IOS, new RegExp(`case "${engine}": return "${lit(page)}"`), `iOS does not hold ${engine}’s code to its own page`);
-    has(ANDROID, new RegExp(`"${engine}" -> "${lit(page)}"`), `Android does not hold ${engine}’s code to its own page`);
+    // The exact text, not a pattern: a page's address is not something to
+    // match loosely, here least of all.
+    assert.ok(IOS.includes(`case "${engine}": return "${page}"`), `iOS does not hold ${engine}’s code to its own page`);
+    assert.ok(ANDROID.includes(`"${engine}" -> "${page}"`), `Android does not hold ${engine}’s code to its own page`);
   }
 });
 
