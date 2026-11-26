@@ -15,8 +15,11 @@ on:
   push:
     branches: [main]
     paths: ['sandbox/**', '!sandbox/machine/**', '.github/workflows/sandbox.yml']
+  # AND THE ONE SCRIPT OF OURS THE SMOKE RUNS IN THE IMAGE, on a pull request
+  # only: a change to what is asked of the engine must be seen to pass, and
+  # is no reason to publish an image nothing in which changed.
   pull_request:
-    paths: ['sandbox/**', '!sandbox/machine/**', '.github/workflows/sandbox.yml']
+    paths: ['sandbox/**', '!sandbox/machine/**', 'scripts/opencode-safe-check.mjs', '.github/workflows/sandbox.yml']
   workflow_dispatch:
 
 concurrency:
@@ -352,6 +355,34 @@ jobs:
             printf '%s\n' "$out" | grep -qx 'refused-outside-it' || { echo "under --userns=$userns the sandbox let the command write outside its workspace"; exit 1; }
           done
           echo "--- Codex ran a command in its own sandbox, in both namespaces ---"
+
+      # A SESSION THAT ASKS FIRST, ASKED OF THE REAL OPENCODE. In such a
+      # session the runner writes OpenCode's machine settings and starts it
+      # reading no project's (sandbox/engine.mjs, askFirst). The first was
+      # all there was, was said to be the one place a workspace cannot
+      # answer back from, and was tested against a stand-in that had been
+      # told so. Asked itself, OpenCode resolved `bash` and `edit` to allow
+      # for three kinds of file a workspace can hold. `--version` could not
+      # have said that, and neither could any test of ours.
+      #
+      # So the engine in this image is asked what its `build` agent resolves,
+      # with the settings and the variable taken from the runner in the same
+      # image, in a workspace holding each of those files, and the step fails
+      # unless every answer is ask (scripts/opencode-safe-check.mjs, which
+      # says what it does not show). With no network: nothing is signed in
+      # and no provider is asked anything.
+      #
+      # THE SCRIPT WAS RUN BEFORE CI against OpenCode 1.19.6 with no network,
+      # where it passes on this runner and fails on the one before it. Not in
+      # a container: the mount and the image around it run first here.
+      - name: A session that asks first is not un-asked by its workspace, asked of the real OpenCode
+        timeout-minutes: 10
+        run: |
+          set -eu
+          image=localhost/fleetwright-session:engines-smoke
+          timeout 420 podman run --rm --network none \
+            -v "$PWD/scripts/opencode-safe-check.mjs:/opencode-safe-check.mjs:ro" \
+            --entrypoint node "$image" /opencode-safe-check.mjs
 
       # THE BUG THIS WHOLE JOB EXISTS FOR, and the shim is what makes it
       # testable without a credential. `gh` on PATH is /usr/local/bin/gh, the

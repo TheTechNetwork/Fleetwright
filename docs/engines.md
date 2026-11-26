@@ -192,17 +192,35 @@ Claude Code's are.
 
 **OpenCode is told to ask.** Its permissions default to allow, so left alone
 it never asks and there is nothing for the runner to decline. In a `safe`
-session the runner writes OpenCode's machine settings
-(`/etc/opencode/opencode.json`, inside the container) before it starts the
-engine: every permission asks, except reading a file and the two searches.
-OpenCode's machine settings override a project's, so an `opencode.json` in
-the workspace cannot turn the asking off. A `safe` session on OpenCode
-therefore looks and answers, and each edit and each command is asked about,
-declined, and said in the pane. If the settings cannot be written the engine
-is not started. This is OpenCode's documented configuration
-([config](https://opencode.ai/docs/config/),
-[permissions](https://opencode.ai/docs/permissions/)), tested against a
-stand-in that reads the file. It has not been run against a real OpenCode.
+session the runner does two things before it starts the engine. It writes
+OpenCode's machine settings (`/etc/opencode/opencode.json`, inside the
+container): every permission asks, except reading a file and the two
+searches. And it starts OpenCode told to read no project's settings
+(`OPENCODE_DISABLE_PROJECT_CONFIG=1`, for the engine's process alone).
+
+**The machine's settings alone did not hold**, and this section said they
+did. OpenCode reads them last and merges them, and a rule a project gives
+its own agent comes after the machine's. A workspace holding an
+`opencode.json` with `agent.build.permission`, an agent file under
+`.opencode/agent/`, or a `permission` that names a tool after `*`, each
+resolved `bash` and `edit` to allow under the machine's file: seen with the
+real OpenCode 1.19.6, asked what its `build` agent resolves. A repository
+that uses OpenCode commits those files, and an earlier engine in the same
+session can write one. With the variable, all three resolve to ask. The
+price is that a `safe` session on OpenCode reads nothing of the workspace
+as settings: not its agents, its commands or its MCP servers either. A
+`dangerous` session reads them as OpenCode always did.
+
+A `safe` session on OpenCode therefore looks and answers, and each edit and
+each command is asked about, declined, and said in the pane. If the
+settings cannot be written the engine is not started. The tests run
+against a stand-in that was told what OpenCode does. The real one is asked
+in CI, in the image a box pulls, with no network: the settings and the
+variable as the runner sets them, each of those three files in the
+workspace, and the job fails unless `bash` and `edit` both resolve to ask
+(`scripts/opencode-safe-check.mjs`, `sandbox.yml`). What that shows is what
+OpenCode resolves. A turn in which it asks and is declined has not been run
+against a real OpenCode: that needs a provider.
 Codex is told on `thread/start`, as it always was.
 
 **Not restarted for being still.** The watcher stops and resumes a Claude

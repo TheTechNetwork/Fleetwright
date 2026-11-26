@@ -542,7 +542,8 @@ test('an OpenCode model on an API provider asks the socket for that provider’s
   });
   assert.equal(code, 0);
   assert.deepEqual(spawned[0].argv, ['opencode', 'acp']);
-  assert.deepEqual(spawned[0].env, { PATH: '/usr/bin', OPENROUTER_API_KEY: 'sk-or-v1-0123456789abcdef' }, 'the member’s key, whatever the session’s environment held');
+  // And, in a session that asks first, OpenCode's switch for reading no project's settings.
+  assert.deepEqual(spawned[0].env, { PATH: '/usr/bin', OPENROUTER_API_KEY: 'sk-or-v1-0123456789abcdef', OPENCODE_DISABLE_PROJECT_CONFIG: '1' }, 'the member’s key, whatever the session’s environment held');
   // It asked for the key and for nothing else, and never handed one back.
   assert.deepEqual(posts.filter((p) => p.path === '/internal/engine-credential').map((p) => [p.body.kind, typeof p.body.value]), [['apikey:openrouter', 'undefined']]);
   assert.deepEqual(posts.at(-1).body.turn, { engine: 'opencode', reason: 'done', detail: null, model, usage: null, resetsAt: null });
@@ -622,8 +623,20 @@ test('with no key on the machine for its member, no engine is started and the tu
  * What OpenCode does with a tool, from its machine's settings, by the rules
  * its permissions page gives: the tool's own rule, else `*`, else allow,
  * which is its default for nearly everything.
+ *
+ * AND FROM A WORKSPACE'S OWN SETTINGS, WHICH WIN, as the real one was seen to
+ * resolve them (OpenCode 1.19.6, `opencode debug agent build`): a project's
+ * rule for its `build` agent is added after the machine's and the last rule
+ * that matches decides. Unless OpenCode was started told to read no
+ * project's settings (`OPENCODE_DISABLE_PROJECT_CONFIG`), which is its own
+ * switch. CI asks the real engine the same question in the built image
+ * (scripts/opencode-safe-check.mjs); this is that answer, standing in.
+ *
+ * @param {string} systemDir @param {string} tool
+ * @param {{ project?: Record<string, string>|null, env?: Record<string, string|undefined> }} [also]  what the workspace's own opencode.json allows its agent, and what the engine was started with
  */
-function openCodeWould(/** @type {string} */ systemDir, /** @type {string} */ tool) {
+function openCodeWould(systemDir, tool, { project = null, env = {} } = {}) {
+  if (project?.[tool] && env.OPENCODE_DISABLE_PROJECT_CONFIG !== '1') return project[tool];
   /** @type {any} */
   let permission = {};
   try {
@@ -635,7 +648,7 @@ function openCodeWould(/** @type {string} */ systemDir, /** @type {string} */ to
 }
 
 /** OpenCode's ACP agent on a turn that reads a file, edits one and runs a command, asking where its settings say to. */
-function openCodeActing(/** @type {string} */ systemDir) {
+function openCodeActing(/** @type {string} */ systemDir, /** @type {{ project?: Record<string, string>|null, env?: Record<string, string|undefined> }} */ also = {}) {
   /** @type {string[]} */
   const did = [];
   /** @type {Map<number, string>} */
@@ -651,7 +664,7 @@ function openCodeActing(/** @type {string} */ systemDir) {
     else if (m.method === 'session/prompt') {
       turn = m.id;
       for (const [i, tool] of ['read', 'edit', 'bash'].entries()) {
-        const would = openCodeWould(systemDir, tool);
+        const would = openCodeWould(systemDir, tool, also);
         if (would === 'allow') did.push(tool);
         else if (would === 'ask') {
           asking.set(900 + i, tool);
@@ -693,6 +706,31 @@ test('a session that asks first has OpenCode told to ask, so the runner’s no i
   const free = path.join(home, 'etc-none');
   assert.deepEqual((await going('dangerous', free)).did, ['read', 'edit', 'bash']);
   assert.equal(existsSync(path.join(free, 'opencode.json')), false);
+});
+
+test('a workspace’s own OpenCode settings cannot turn the asking off: a session that asks first starts OpenCode reading no project’s', async (t) => {
+  const { socket, home, systemDir } = await sessionSocket(t, (kind) => ({ ok: true, kind, value: 'gho_0123456789abcdef' }));
+  // WHAT A REPOSITORY THAT USES OPENCODE COMMITS, or an earlier engine in the
+  // session wrote: its agent may edit and run without asking. The machine's
+  // settings say ask, and OpenCode puts a project's rule for its agent after
+  // them, so the session edited and ran with nobody asked.
+  const project = { edit: 'allow', bash: 'allow' };
+  const going = async (/** @type {string} */ mode, /** @type {string} */ dir) => {
+    /** What the engine was started with, which is where OpenCode reads its switches. @type {Record<string, string|undefined>} */
+    const env = {};
+    const { server, did } = openCodeActing(dir, { project, env });
+    await run({ engine: 'opencode', model: ASKED, mode, prompt: 'Fix the redirect.' }, {
+      socket, home, systemDir: dir, cwd: '/work', env: { PATH: '/usr/bin' }, out: () => {}, stdin: typed(),
+      spawnEngine: (/** @type {string} */ _command, /** @type {string[]} */ _args, /** @type {any} */ opts) => { Object.assign(env, opts.env); return server.child; },
+    });
+    return { did, env };
+  };
+  const safe = await going('safe', systemDir);
+  assert.deepEqual(safe.did, ['read'], 'the workspace’s settings were not read, so the edit and the command were asked about and declined');
+  assert.equal(safe.env.OPENCODE_DISABLE_PROJECT_CONFIG, '1');
+  // A session that does not ask first reads the project's settings as OpenCode always did.
+  const free = await going('dangerous', path.join(home, 'etc-none'));
+  assert.deepEqual([free.did, free.env.OPENCODE_DISABLE_PROJECT_CONFIG], [['read', 'edit', 'bash'], undefined]);
 });
 
 test('a session that asks first does not start an OpenCode it could not tell to ask', async (t) => {

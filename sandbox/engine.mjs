@@ -889,11 +889,19 @@ export function stage(engine, value, home, provider = null, engineHome = null) {
 }
 
 /**
- * Where OpenCode reads a machine's own settings, which override a person's
- * and a project's (https://opencode.ai/docs/config/, "Locations": "The
- * system config overrides all of them").
+ * Where OpenCode reads a machine's own settings, which it reads last
+ * (https://opencode.ai/docs/config/, "Locations"). Last is not final: see
+ * `askFirst`.
  */
 export const OPENCODE_SYSTEM_DIR = '/etc/opencode';
+
+/**
+ * What OpenCode is started with in a session that asks first, beside the
+ * settings below: its own switch for reading no project's settings
+ * (packages/opencode/src/config/config.ts, `OPENCODE_DISABLE_PROJECT_CONFIG`,
+ * at v1.19.6). For the engine's process alone, as every variable here is.
+ */
+export const OPENCODE_SAFE_ENV = Object.freeze({ OPENCODE_DISABLE_PROJECT_CONFIG: '1' });
 
 /**
  * The settings that make OpenCode ask before it acts
@@ -917,10 +925,29 @@ export const OPENCODE_ASKS = Object.freeze({
  * OPENCODE DOES NOT ASK UNLESS IT IS TOLD TO: its permissions default to
  * allow. The runner declines what an engine asks to do in a `safe` session,
  * and OpenCode never asked, so a `safe` session on OpenCode edited files and
- * ran commands with nobody declining anything. So it is told, in the one
- * place a workspace cannot answer back from: a project's own
- * `opencode.json` overrides a person's settings and not the machine's, and
- * the workspace is the session's to write.
+ * ran commands with nobody declining anything. So it is told, in its
+ * machine's settings.
+ *
+ * AND IT IS STARTED READING NO PROJECT'S SETTINGS, because the machine's
+ * settings alone did not hold. This said they were "the one place a
+ * workspace cannot answer back from". They are read last and merged, and
+ * that is not the same thing. A workspace's `opencode.json` that gives its
+ * `build` agent a rule of its own (`agent.build.permission`), an agent file
+ * under `.opencode/agent/`, or a `permission` that names a tool after `*`,
+ * each ended as allow: OpenCode puts an agent's rules after the machine's,
+ * keeps a key where the project first wrote it, and lets the last rule
+ * that matches decide. Seen with the real OpenCode 1.19.6, asked what its
+ * `build` agent resolves. A repository that uses OpenCode commits exactly
+ * these files, and the workspace is the session's to write, an earlier
+ * engine's included. So nothing in the workspace is read as settings in a
+ * session that asks first: not its permissions, and not its agents,
+ * commands or servers either, which is the price. A session that does not
+ * ask first reads them as OpenCode always did.
+ *
+ * CI asks the real engine, in the image, with these settings and that
+ * variable and each of those files in the workspace
+ * (scripts/opencode-safe-check.mjs). No test here can: the stand-in knows
+ * only what it was told OpenCode does.
  *
  * NOT WRITTEN IS NOT STARTED. A `safe` session whose engine could not be
  * told to ask is one that would not ask.
@@ -928,14 +955,14 @@ export const OPENCODE_ASKS = Object.freeze({
  * Codex needs nothing here: it is told on `thread/start`.
  *
  * @param {string} engine @param {string} mode @param {string} dir  where the engine reads its machine's settings
- * @returns {{ ok: true } | { ok: false, text: string }}
+ * @returns {{ ok: true, env?: Record<string, string> } | { ok: false, text: string }}  `env` is what the engine's own process is started with besides
  */
 export function askFirst(engine, mode, dir) {
   if (engine !== 'opencode' || mode === 'dangerous') return { ok: true };
   try {
     mkdirSync(dir, { recursive: true, mode: 0o755 });
     writeFileSync(path.join(dir, 'opencode.json'), `${JSON.stringify(OPENCODE_ASKS, null, 2)}\n`, { mode: 0o644 });
-    return { ok: true };
+    return { ok: true, env: { ...OPENCODE_SAFE_ENV } };
   } catch (e) {
     return { ok: false, text: `could not tell OpenCode to ask before it acts, so it was not started: ${e?.message ?? e}` };
   }
@@ -1042,8 +1069,10 @@ export async function run(args, io = {}) {
     const command = env[spec.bin] ? [env[spec.bin]] : [spec.command[0]];
     let child;
     try {
-      // The key's variable, when there is one, for the engine's process and nothing else of this session's.
-      child = (io.spawnEngine ?? spawn)(command[0], spec.command.slice(1), { cwd, env: staged.env || engineHome ? { ...env, ...homeEnv, ...(staged.env ?? {}) } : env, stdio: ['pipe', 'pipe', 'pipe'] });
+      // The key's variable, when there is one, and what a session that asks
+      // first starts OpenCode with: for the engine's process and nothing else
+      // of this session's.
+      child = (io.spawnEngine ?? spawn)(command[0], spec.command.slice(1), { cwd, env: staged.env || asks.env || engineHome ? { ...env, ...homeEnv, ...(staged.env ?? {}), ...(asks.env ?? {}) } : env, stdio: ['pipe', 'pipe', 'pipe'] });
       relayErrors(child.stderr, io.err ?? ((s) => process.stderr.write(s)));
     } catch (e) {
       return { failed: ended(args.engine, 'error', { detail: `could not start ${command[0]}: ${e?.message ?? e}` }) };
