@@ -195,7 +195,7 @@ RUN if [ "$WITH_CHROMIUM" = "1" ]; then \
 # for itself, and the OpenCode that the step 1 probe ran.
 #
 # renovate: datasource=npm depName=@openai/codex
-ARG CODEX_VERSION=0.171.0
+ARG CODEX_VERSION=0.172.0
 # renovate: datasource=npm depName=opencode-ai
 ARG OPENCODE_VERSION=1.19.6
 ARG WITH_ENGINES=0
