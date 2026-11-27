@@ -71,6 +71,7 @@ export const RESULT_FOOTER =
  * @property {number} at
  * @property {number} [readyAt]  when its session last came back to its prompt with no result written
  * @property {{ engine: string, reason: string, resetsAt?: number }} [stopped]  why, when its engine said (docs/engines.md)
+ * @property {number} [unheardSince]  on a lock with no session: when the wait for its box's answer ran out with the box not heard from since the start (holdLock)
  */
 /**
  * @typedef {object} TaskResult
@@ -254,8 +255,11 @@ export function lockWords(/** @type {Task} */ task) {
   const lock = task.lock;
   if (!lock) return '';
   const since = new Date(lock.at).toISOString().replace('T', ' ').slice(0, 16);
-  return lock.session
-    ? `${lock.session} on ${lock.hostId} has been working on it since ${since} UTC, started by ${lock.by}`
+  if (lock.session) return `${lock.session} on ${lock.hostId} has been working on it since ${since} UTC, started by ${lock.by}`;
+  // NOT "NOT YET", once the wait for an answer is over and the box is away
+  // (holdLock): nothing is on its way, and what is true is that nobody knows.
+  return lock.unheardSince
+    ? `${lock.by} started a session on it at ${since} UTC, and ${lock.hostId} did not answer and has not been heard from since, so whether a session is working on it there is not known`
     : `${lock.by} started a session on it at ${since} UTC, and ${lock.hostId} has not answered yet`;
 }
 
@@ -263,6 +267,23 @@ export function lockWords(/** @type {Task} */ task) {
  * A change to what a task says or whose it is. Reassigning is a handoff, and
  * is refused while a session holds the lock: the work in flight comes back,
  * or is released, first.
+ *
+ * SO IS A CHANGE TO ITS WORDS, the title and the brief. A start carries the
+ * task's own words and no others (the coordinator compares them), and that
+ * held for the moment of the start only: a task whose brief said one thing
+ * was started, rewritten while its session worked, and came back with a
+ * result under words the session was never told, with nothing in its
+ * history to say they had changed. While a lock is held, and until what
+ * came back is accepted or reopened, the words are the ones the session was
+ * told. At any other time a change to them is a line in `handoffs`
+ * (`words`, with which of them changed), as a change of the kind of work
+ * is.
+ *
+ * AND SO IS THE REPOSITORY, which is in the first line of what a session is
+ * told ("Task t12. Branch … in acme/docs.") and in what its result says of
+ * itself. It was left free: a task started in acme/docs was moved to
+ * acme/production-infra while its session worked, with no line anywhere,
+ * and the result read "in acme/production-infra, as the session was told".
  *
  * @param {Task} task
  * @param {{ title?: string, brief?: string, workType?: string, repo?: string, assignee?: string|null, routing?: 'off'|'manual'|'auto'|null }} fields  already through checkTask
@@ -274,8 +295,21 @@ export function changeTask(task, fields, { by, at, note = '' }) {
     return refuse('task_closed', `${task.id} is ${task.state}. Reopen it to change it.`);
   }
   const next = { ...task, updatedAt: at };
+  // Only a value that differs: a screen sends the whole form back, and one
+  // that changed the repository must not be told it rewrote the brief.
+  const reworded = [
+    ...(fields.title !== undefined && fields.title !== task.title ? ['title'] : []),
+    ...(fields.brief !== undefined && fields.brief !== task.brief ? ['brief'] : []),
+    ...(fields.repo !== undefined && (fields.repo || '') !== (task.repo ?? '') ? ['repository'] : []),
+  ];
+  /** "title", "title and brief", "title, brief and repository". */
+  const which = reworded.length > 2 ? `${reworded.slice(0, -1).join(', ')} and ${reworded.at(-1)}` : reworded.join(' and ');
+  if (reworded.length && task.lock) {
+    return refuse('task_locked', `${task.id}’s ${which} cannot change while it is being worked on, because ${reworded.length === 1 ? 'it is' : 'they are'} what its session was told: ${lockWords(task)}. ${task.state === 'returned' ? 'Accept what came back, or reopen it, and change it then.' : 'Release it, or wait for it to come back.'}`);
+  }
   if (fields.title !== undefined) next.title = fields.title;
   if (fields.brief !== undefined) next.brief = fields.brief;
+  if (reworded.length) next.handoffs = handed(next, { at, by, kind: 'words', note: which });
   if (fields.workType !== undefined && (fields.workType || '') !== (task.workType ?? '')) {
     if (fields.workType) next.workType = fields.workType;
     else delete next.workType;
@@ -351,6 +385,11 @@ export function lockTask(task, { member, branch, hostId, by, at }) {
   if (!task.assignee) return refuse('task_unassigned', `${task.id} is assigned to nobody. Assign it to a member first.`);
   if (task.assignee !== member) return refuse('task_not_theirs', `${task.id} is assigned to ${task.assignee}, and this would start it as ${member || 'nobody'}. A task is started as its assignee.`);
   if (branch !== task.branch) return refuse('task_branch', `${task.id} is worked on the branch ${task.branch}, and this names ${branch || 'none'}.`);
+  if (task.lock?.unheardSince && !task.lock.session) {
+    // Not "already being worked on", which nobody knows, and with the way
+    // out: the lock waits on a box that may be gone for good.
+    return refuse('task_locked', `${task.id} is held for a start that was not answered: ${lockWords(task)}. It is kept until ${task.lock.hostId} reports, which settles it either way. Release it to start it again now. Releasing does not stop a session, if one did start there.`);
+  }
   if (task.lock) return refuse('task_locked', `${task.id} is already being worked on: ${lockWords(task)}.`);
   if (task.state !== 'open') {
     return refuse('task_not_open', task.state === 'returned'
@@ -383,6 +422,33 @@ export function expireLock(task, { at }) {
 }
 
 /**
+ * A start's lock is past the time it is held for, and ITS BOX CANNOT BE
+ * ASKED: it is not connected, or has sent no list of its sessions since the
+ * start. That is cannot-tell, and the lock is kept, as a session's lock is
+ * when its box is away (org-tasks.js, sweep).
+ *
+ * It used to run out here like any other. The connection that lost a
+ * start's answer is often still down ten minutes on, so the task was
+ * offered again while the session the start had made was working, a second
+ * session was started on the same branch on another box, and the first
+ * one's result was dropped when its box came back, because the lock was
+ * the second's by then. A person who knows the box is gone releases the
+ * task by hand, which both phones offer wherever there is a lock.
+ *
+ * What is written is when this was first found, so the task's own sentence
+ * (`lockWords`) stops saying "has not answered yet" about an answer nobody
+ * is waiting for.
+ *
+ * @param {Task} task
+ * @param {{ at: number }} when
+ * @returns {Task}
+ */
+export function holdLock(task, { at }) {
+  if (!task.lock || task.lock.session || task.lock.unheardSince) return task;
+  return { ...task, lock: { ...task.lock, unheardSince: at }, updatedAt: at };
+}
+
+/**
  * The box answered a start: the lock is this session's and the task is being
  * worked on. Also how a session the coordinator did not hear start (a reply
  * that timed out) is taken up when its box next speaks of it.
@@ -392,7 +458,8 @@ export function expireLock(task, { at }) {
  * @returns {Task}
  */
 export function confirmLock(task, { session, hostId, member, by, at }) {
-  const lock = task.lock ?? { session: null, hostId, member: member ?? task.assignee ?? '', by: by ?? '', at };
+  // Heard from now, so the note that it had not been goes (holdLock).
+  const { unheardSince: _heard, ...lock } = task.lock ?? { session: null, hostId, member: member ?? task.assignee ?? '', by: by ?? '', at };
   const { sent: _spent, ...rest } = task;
   return {
     ...rest,

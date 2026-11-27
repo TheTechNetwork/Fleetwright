@@ -197,7 +197,13 @@ function describeTask(t, full = false) {
         ? `Held by ${t.lock.session} on ${t.lock.hostId} since ${taskTime(t.lock.at)}, started by ${t.lock.by}.` +
           (t.lock.connected === false ? ` ${t.lock.hostId} is not connected, so the fleet cannot tell whether it is still working.` : '') +
           (t.lock.readyAt ? ` It came back to its prompt at ${taskTime(t.lock.readyAt)} and wrote no ${RESULT_FILE}.` : '')
-        : `A session was asked for on ${t.lock.hostId} at ${taskTime(t.lock.at)} by ${t.lock.by}, and the box has not answered yet.`,
+        // NOT "NOT YET" once the wait is over and the box is away
+        // (protocol/tasks.js, holdLock): the fleet keeps the lock because
+        // it cannot tell, and an agent told "not yet" waits for nothing.
+        : t.lock.unheardSince
+          ? `A session was asked for on ${t.lock.hostId} at ${taskTime(t.lock.at)} by ${t.lock.by}. The box did not answer and has not been heard from since, so the fleet cannot tell whether a session is working on it there. ` +
+            `The task is held until ${t.lock.hostId} reports. If that box is gone, fleet_task with action release frees the task; it does not stop a session.`
+          : `A session was asked for on ${t.lock.hostId} at ${taskTime(t.lock.at)} by ${t.lock.by}, and the box has not answered yet.`,
     );
   }
   if (t.parent) lines.push(`Delegated from ${t.parent}.`);
@@ -542,11 +548,28 @@ function askingFrom(session) {
   return typeof q === 'string' ? oneLine(q, 300) : '';
 }
 
-/** What every answer that carries an engine sign-in's code says after it (callTool). */
-const SIGNIN_CODE_UNVERIFIED =
-  'UNVERIFIED. This server cannot check that the page and code above came from the machine and not from the fleet’s coordinator, which carries them. ' +
-  'A phone checks the machine’s signature against the machines approved for the member’s credentials before it shows a code. ' +
-  'Tell the person the code is unverified, or have them sign in from the Fleetwright app, on the member’s Credentials.';
+/**
+ * What every answer to an engine sign-in that is not a refusal says after it
+ * (callTool).
+ *
+ * ALL OF IT, AND EVERY TIME. This was said only after an answer that had a
+ * `code` field, and only of the page and the code. The coordinator it warns
+ * about writes the answer, so it decided whether the warning was shown: a
+ * second outside review sent a code in the sentence and no field, and the
+ * agent read it with no warning at all. And the account a sign-in is on is
+ * as unchecked here as the code, and was never said to be.
+ *
+ * AND THAT THE CODE CAN BE READ, not only replaced: asked with no key to
+ * seal to, the answer is in the clear, so whatever carries it can enter the
+ * code first under an account of its own. Then the sign-in is real and on
+ * the wrong account, and the answer that says whose is the same party's.
+ */
+const SIGNIN_UNVERIFIED =
+  'UNVERIFIED, ALL OF IT. This server cannot check anything above: not the page or the code, not where the sign-in stands, and not which account it says is signed in. ' +
+  'It reaches this server through the fleet’s coordinator, in the clear. A coordinator that is not honest can read a code and enter it first under an account of its own, ' +
+  'or put a page, a code or an account of its own in its place. ' +
+  'A phone has the machine seal its answer and checks the machine’s signature against the machines approved for the member’s credentials before it shows any of it. ' +
+  'Tell the person this is unverified, or have them sign in from the Fleetwright app, on the member’s Credentials.';
 
 export class McpServer {
   /** @param {Options} opts */
@@ -1025,6 +1048,19 @@ export class McpServer {
       // does not exist are different situations, and an agent told only "no"
       // will try again differently rather than stop.
       const withheld = DEFAULT_DENY.includes(verbOfTool(name));
+      // NOT "THE WHOLE CHANGE" FOR SIGNING AN ENGINE IN. Allowing the tool
+      // here is half of it: a machine takes the verb from this server only
+      // under a delegation that carries it and names the member, and the
+      // delegation a phone makes for an MCP client carries neither a
+      // withheld verb nor this one (docs/mcp.md). Told it was the whole
+      // change, whoever allowed it met a refusal on every call. So this
+      // says where it is done instead.
+      const lift = verbOfTool(name) === 'enginesignin'
+        ? `Whoever runs this server can offer it with FLEETWRIGHT_MCP_ALLOW=${verbOfTool(name)} in its environment, and that is half of it: ` +
+          'a machine takes it only under a delegation that carries this verb and names the member, and the delegation a phone makes for an MCP client does not carry it. ' +
+          'Until one does, sign the engine in from the Fleetwright app, on the member’s Credentials, with Sign in on a machine.'
+        : `Whoever runs this server can allow it with FLEETWRIGHT_MCP_ALLOW=${verbOfTool(name)} ` +
+          'in its environment. If that is you, that is the whole change.';
       return this.#text(
         withheld
           ? `${name} is not exposed by this server. It restarts machines, permanently destroys work, or moves ` +
@@ -1035,8 +1071,7 @@ export class McpServer {
               // lift existed or what it was called. A refusal that hides its
               // own remedy from the one person who can apply it is worse than
               // a flat no.
-              `Whoever runs this server can allow it with FLEETWRIGHT_MCP_ALLOW=${verbOfTool(name)} ` +
-              'in its environment. If that is you, that is the whole change.'
+              lift
           : `No such tool: ${name}. Available: ${this.tools.map((t) => t.name).join(', ')}.`,
         true,
       );
@@ -1059,7 +1094,12 @@ export class McpServer {
     // (#member). A caller that still sends it is told where a budget is
     // set, which "takes no parameter" would not tell them.
     if (tool.name === 'fleet_member' && 'budgetUsdMonth' in params) return this.#text(BUDGET_NOT_HERE, true);
-    const unknown = Object.keys(params).filter((k) => !(k in declared));
+    // AND A `tag` ON A TOOL THAT TAKES NONE. `host` and `tag` are placement
+    // and were lifted out above, so a tag sent to a tool whose verb is never
+    // placed by one (fleet_engine_signin) went on beside the intent and was
+    // read by nothing. It is a parameter the tool does not take, and is said
+    // to be one.
+    const unknown = [...Object.keys(params), ...(tag !== undefined && !('tag' in declared) ? ['tag'] : [])].filter((k) => !(k in declared));
     if (unknown.length) {
       const near = (/** @type {string} */ bad) => {
         // Name the likely intent rather than only the mistake. `session` and
@@ -1177,7 +1217,11 @@ export class McpServer {
       // A TOOL ERROR, NOT A PROTOCOL ERROR. The call was well-formed. isError
       // lets the agent see it and carry on rather than the client treating the
       // session as broken.
-      return this.#text(describeFailure(e), true);
+      //
+      // An engine sign-in's failure quotes what arrived where it would not
+      // parse, and what arrived is the coordinator's to write, so it is said
+      // to be unverified as an answer is (below).
+      return this.#text(tool.verb === 'enginesignin' ? `${describeFailure(e)}\n\n${SIGNIN_UNVERIFIED}` : describeFailure(e), true);
     }
 
     // Remembered only on success, and forgotten when stopped — so the set is
@@ -1267,15 +1311,23 @@ export class McpServer {
       reply = { ...reply, text: `${reply?.text ?? ''}\n\n${describeVmImages(await vmImages)}` };
     }
 
-    // A SIGN-IN CODE THIS SERVER CANNOT CHECK, SAID AS THAT. The machine
-    // signs the page and the code, and a phone holds that signature to the
-    // machines approved for the member's vault before it shows either
+    // AN ENGINE SIGN-IN'S ANSWER THIS SERVER CANNOT CHECK, SAID AS THAT. The
+    // machine signs the page and the code, and a phone holds that signature
+    // to the machines approved for the member's vault before it shows either
     // (docs/engines.md, "The machine signs what it answers"). The list
     // of those machines reaches a phone sealed by the minter; this server
-    // has none, so the signature proves nothing to it, and a code that reads
-    // as checked here would be a claim with no answer behind it.
-    if (tool.verb === 'enginesignin' && reply?.ok !== false && typeof reply?.code === 'string') {
-      reply = { ...reply, text: `${reply?.text ?? ''}\n\n${SIGNIN_CODE_UNVERIFIED}` };
+    // has none, so the signature proves nothing to it, and an answer that
+    // reads as checked here would be a claim with no answer behind it.
+    //
+    // ON EVERY ANSWER THE FLEET GAVE, A REFUSAL INCLUDED, whatever fields it
+    // has (SIGNIN_UNVERIFIED): which fields an answer has, and whether it
+    // says `ok`, is decided by the party the warning is about. It was left
+    // off a refusal, as one that "hands nothing on", and a third review
+    // sent the page and the code in a refusal's sentence: the agent read
+    // "enter WXYZ-1234" with no warning under it. What this server refuses
+    // by itself, before anything is asked of the fleet, carries none.
+    if (tool.verb === 'enginesignin') {
+      reply = { ...(reply && typeof reply === 'object' ? reply : {}), text: `${reply?.text ?? JSON.stringify(reply, null, 1)}\n\n${SIGNIN_UNVERIFIED}` };
     }
 
     const failed = reply?.ok === false;

@@ -79,6 +79,7 @@ export const monthOf = (/** @type {number} */ t) => new Date(t).toISOString().sl
  * @property {Record<string, number>} seen   the last figure seen for each session, by key, newest last
  * @property {{ warn?: boolean, over?: boolean }} told  which of the month's two notices went out
  * @property {boolean} [gone]                its member was removed this month; the row is kept so the month's spend is not reset by removing and adding back (org-budgets.js, forget)
+ * @property {number} [budget]               on a row whose member is gone: the monthly budget it had when it was removed, which a member made under the id again takes back (org-budgets.js, back)
  * @typedef {{ kind: 'over-budget'|'dangerous'|'risky-work'|'paid-api', text: string }} Reason
  * @typedef {object} Approval
  * @property {string} id
@@ -149,7 +150,9 @@ function inMonth(/** @type {Spend} */ row, /** @type {number} */ now) {
   const month = monthOf(now);
   if (row.month === month) return row;
   const unanswered = (row.unanswered ?? []).filter((u) => now - u.at < UNANSWERED_KEPT_MS);
-  return { month, usd: 0, unknown: [], ...(unanswered.length ? { unanswered } : {}), seen: row.seen, told: {} };
+  // A removed member's budget is kept across the turn, with what says the row is nobody's now.
+  const left = row.gone && typeof row.budget === 'number' ? { gone: true, budget: row.budget } : {};
+  return { month, usd: 0, unknown: [], ...(unanswered.length ? { unanswered } : {}), ...left, seen: row.seen, told: {} };
 }
 
 /** `seen` with this session's figure newest, and no more than the row keeps. */
@@ -377,11 +380,25 @@ function note(/** @type {unknown} */ v) {
  * record's to hold. Their digest is enough to tell the same start from
  * another, and nobody can find other words that give the same one.
  *
- * @param {{ task?: unknown, profile?: unknown }} start
+ * AND THE TWO THINGS A START CARRIES THAT DECIDE WHAT ITS WORDS CAN DO.
+ * A profile is a name, and what it says is a file on the machine the start
+ * goes to: approved as "the profile tidy-readme", the same approval started
+ * that name on the asker's own machine, where the file said whatever they
+ * had written. So a profile is approved on one machine (`host`). And a
+ * named secret is what the session may fetch while it follows those words,
+ * so it is part of what was approved, on any start. A start with neither is
+ * the digest it always was, and an approval given before this still covers
+ * it.
+ *
+ * @param {{ task?: unknown, profile?: unknown, secret?: unknown, host?: unknown }} start
+ *   `host` is the machine the person named, read only beside a profile
  * @returns {Promise<string>} SHA-256, hex
  */
-export async function startDigest({ task, profile }) {
-  const said = JSON.stringify([typeof task === 'string' ? task : '', typeof profile === 'string' ? profile : '']);
+export async function startDigest({ task, profile, secret, host }) {
+  const words = [typeof task === 'string' ? task : '', typeof profile === 'string' ? profile : ''];
+  const fetches = typeof secret === 'string' ? secret : '';
+  const on = words[1] && typeof host === 'string' ? host : '';
+  const said = JSON.stringify(fetches || on ? [...words, fetches, on] : words);
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(said)));
   return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -390,13 +407,17 @@ export async function startDigest({ task, profile }) {
  * The same, as a sentence for the person asked to approve: the start of the
  * words on one line. They approve a start, and a start is what it says.
  *
- * @param {{ task?: unknown, profile?: unknown }} start
+ * @param {{ task?: unknown, profile?: unknown, secret?: unknown, host?: unknown }} start
  */
-export function toldWords({ task, profile }) {
+export function toldWords({ task, profile, secret, host }) {
   const words = typeof task === 'string' ? oneLine(task, MAX_TOLD_SHOWN + 1) : '';
-  if (words) return `The session is told: “${words.length > MAX_TOLD_SHOWN ? `${words.slice(0, MAX_TOLD_SHOWN - 1)}…` : words}”`;
-  if (typeof profile === 'string' && profile) return `The session is given the profile ${oneLine(profile, 40)}, as its machine holds it.`;
-  return 'The session is told nothing, and starts idle.';
+  // The secret by name, which is all anybody here knows of it.
+  const fetches = typeof secret === 'string' && secret ? ` It may fetch the secret ${oneLine(secret, 64)}.` : '';
+  if (words) return `The session is told: “${words.length > MAX_TOLD_SHOWN ? `${words.slice(0, MAX_TOLD_SHOWN - 1)}…` : words}”${fetches}`;
+  if (typeof profile === 'string' && profile) {
+    return `The session is given the profile ${oneLine(profile, 40)}, as ${typeof host === 'string' && host ? oneLine(host, 64) : 'its machine'} holds it.${fetches}`;
+  }
+  return `The session is told nothing, and starts idle.${fetches}`;
 }
 
 /**
@@ -501,7 +522,7 @@ export function readApproval(row) {
     task: typeof row.task === 'string' && TASK_ID_RE.test(row.task) ? row.task : null,
     reasons,
     ...(typeof row.digest === 'string' && /^[0-9a-f]{64}$/.test(row.digest) ? { digest: row.digest } : {}),
-    ...(typeof row.told === 'string' && row.told ? { told: oneLine(row.told, MAX_TOLD_SHOWN + 60) } : {}),
+    ...(typeof row.told === 'string' && row.told ? { told: oneLine(row.told, MAX_TOLD_SHOWN + 200) } : {}),
     askedBy: String(row.askedBy ?? '').slice(0, 200),
     askedAt: Number(row.askedAt) || 0,
     state: row.state,
@@ -534,5 +555,6 @@ export function readSpend(row) {
     .filter((/** @type {any} */ u) => u && typeof u.host === 'string' && u.host.length <= 200 && Number(u.at) > 0)
     .map((/** @type {any} */ u) => ({ host: u.host, at: Number(u.at) }))
     .slice(-MAX_SESSIONS_SEEN);
-  return { month: row.month, usd, unknown, ...(capped.length ? { capped } : {}), ...(unanswered.length ? { unanswered } : {}), ...(row.gone === true ? { gone: true } : {}), seen, told: { ...(row.told?.warn === true ? { warn: true } : {}), ...(row.told?.over === true ? { over: true } : {}) } };
+  const budget = row.gone === true && typeof row.budget === 'number' && Number.isFinite(row.budget) && row.budget >= 0 ? { budget: row.budget } : {};
+  return { month: row.month, usd, unknown, ...(capped.length ? { capped } : {}), ...(unanswered.length ? { unanswered } : {}), ...(row.gone === true ? { gone: true } : {}), ...budget, seen, told: { ...(row.told?.warn === true ? { warn: true } : {}), ...(row.told?.over === true ? { over: true } : {}) } };
 }

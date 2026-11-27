@@ -43,7 +43,7 @@ import { OrgTasks } from './org-tasks.js';
 import { OrgRouting } from './org-routing.js';
 import { OrgBudgets } from './org-budgets.js';
 import { OrgCustody } from './org-custody.js';
-import { approvalNeeded, approvalWords, spendWords, overBudget, uncounted, dollars, withoutFigures, refusedWithoutFigures, startDigest, toldWords, withTold } from '../protocol/budgets.js';
+import { approvalNeeded, approvalWords, spendWords, overBudget, uncounted, dollars, withoutFigures, refusedWithoutFigures, startDigest, toldWords, withTold, UNANSWERED_SKEW_MS } from '../protocol/budgets.js';
 import { manages } from '../protocol/members.js';
 import { modeFor, decide as decideRoute, candidatesFor, routeWords, routeQuestion, readRouteAnswer, MAX_MODEL_CHOICES } from '../protocol/routing.js';
 import { GATE_PATTERNS } from '../../core/mask-pane.js';
@@ -157,6 +157,14 @@ const TASK_PROTOCOL = 20;
  * v21). An older one runs Claude Code and nothing else.
  */
 const ENGINES_PROTOCOL = 21;
+/**
+ * The protocol a box must speak to read a delegation that names members
+ * (`members` on a grant, protocol/intent-signature.js). The field is in the
+ * bytes a phone signs, so a box from before it finds such a grant badly
+ * signed, whatever the grant is carried for. It came in with 22 and was not
+ * written down as a wire change then (intents.js says so now).
+ */
+const DELEGATION_MEMBERS_PROTOCOL = 22;
 /**
  * The protocol a box must speak to sign an engine in on itself
  * (`enginesignin`, intents.js, v22), to report who is signed in there and to
@@ -4068,15 +4076,40 @@ export class CoordinatorCore {
     // person signed earlier to let the fleet send exactly this kind of thing in
     // their name (delegations.js). The box checks it; carrying one that does not
     // cover the intent would only be refused there.
+    const enforcing = host?.health?.signatures?.enforcing;
     if (!intent.sig && needsSignature(intent.verb)) {
-      const covering = this.delegations.cover(intent, String(host?.hostId ?? ''));
+      const hostId = String(host?.hostId ?? '');
+      // ONE THIS BOX CAN READ (delegations.js, `cover`): a grant that names
+      // members is badly signed to a box from before the field.
+      const speaks = Number(host?.health?.protocol);
+      const readsMembers = Number.isInteger(speaks) && speaks >= DELEGATION_MEMBERS_PROTOCOL;
+      // AND, AT A SESSION THAT RUNS AS A MEMBER, ONE THAT NAMES IT WHEN THERE
+      // IS ONE. Which member a session is here is its box's word, and all it
+      // chooses is which of the person's own grants goes with the request.
+      const about = intent.verb !== 'start' && typeof intent.params?.name === 'string'
+        ? this.registry.findSessions(intent.params.name).find((c) => c.host?.hostId === hostId)
+        : null;
+      const asMember = typeof (/** @type {any} */ (about)?.member) === 'string' ? /** @type {any} */ (about).member : null;
+      const covering = this.delegations.cover(intent, hostId, { readsMembers, asMember });
       if (covering) intent = { ...intent, delegation: covering };
+      else if (!readsMembers && this.delegations.cover(intent, hostId)) {
+        // THE ONLY GRANT THAT COVERS THIS IS ONE THE BOX CANNOT READ. Said
+        // here, as a machine to update, where the box would refuse it: one
+        // that takes only signed requests, and any box for a start as a
+        // member, which is taken signed or delegated whatever the box's mode
+        // (docs/members.md). Sent, the box answered that the request "was
+        // changed after it was signed", or that nothing covered it, to a
+        // person who had just allowed exactly this on their phone. A box
+        // that takes unsigned work is sent the rest without a grant, as it
+        // takes it.
+        const asks = enforcing === true || enforcing === 'signers' || (intent.verb === 'start' && intent.params?.member !== undefined);
+        if (asks) return Promise.resolve(grantUnreadable(hostId, speaks, intent));
+      }
     }
     // `signers` (the box enforces for people it has seen a key for) is the
     // box's own to apply, from a list this side does not keep; what this side
     // can refuse first is a request with nobody named, which such a box always
     // refuses because it would run it as itself.
-    const enforcing = host?.health?.signatures?.enforcing;
     const bare = !intent.sig && !intent.delegation && needsSignature(intent.verb);
     if ((enforcing === true || (enforcing === 'signers' && !actorEmail(intent.actor))) && bare) {
       return Promise.resolve(signatureRequired(String(host.hostId), Boolean(signed), intent, spec.fromApp === true));
@@ -4087,8 +4120,11 @@ export class CoordinatorCore {
     // send one id to every host, and the last set() won while the first
     // waiter starved to timeout. The fan-out now mints per-host ids, and this
     // makes the invariant structural instead of a habit.
+    // `notSent`, here and where the socket refuses the write below: nothing
+    // left this coordinator, so whoever asked is not told the box may have
+    // acted (dispatch). A wait that runs out carries no such mark.
     if (this.pending.has(intent.id)) {
-      return Promise.reject(new Error(`an intent with id ${intent.id} is already in flight`));
+      return Promise.reject(Object.assign(new Error(`an intent with id ${intent.id} is already in flight`), { notSent: true }));
     }
     const answer = new Promise((resolve, reject) => {
       const timer = this.setTimer(() => {
@@ -4103,7 +4139,7 @@ export class CoordinatorCore {
       } catch (e) {
         this.clearTimer(timer);
         this.pending.delete(intent.id);
-        reject(e);
+        reject(Object.assign(e instanceof Error ? e : new Error(String(e)), { notSent: true }));
       }
     });
     // AND WHEN THE BOX REFUSES IT FOR WANT OF ONE, what would have carried it.
@@ -4378,7 +4414,7 @@ export class CoordinatorCore {
       // manages that member (docs/budgets.md). Asked here, before a machine is
       // chosen, so the answer is about the member and not about a box.
       if (params.member !== undefined) {
-        const gate = await this.#gateStart(spec.requester, params);
+        const gate = await this.#gateStart(spec.requester, params, typeof spec.preferHost === 'string' ? spec.preferHost : '');
         if (!gate.ok) return gate;
         if (gate.approval) spec = { ...spec, approvalId: gate.approval };
       }
@@ -4399,6 +4435,25 @@ export class CoordinatorCore {
       const as = this.#mayActAs(spec.requester, shaped.params.member, 'signin');
       if (!as.ok) return as;
       spec = { ...spec, memberSays: as.member.name };
+      // THE SAME ID AGAIN WHILE THE FIRST IS STILL AT THE MACHINE. A start
+      // waits up to 45 seconds for the engine's code, which is longer than a
+      // caller's patience, and its retry was answered `host_timeout`, "an
+      // intent with id … is already in flight": a timeout that was none, in
+      // words about an intent. The docs promised a retry is answered with
+      // where the sign-in stands, which is true only once the first has been
+      // answered (the box's own cache, sidecar.js). So this says what is
+      // happening and what to do. Not only "wait for that answer", which
+      // is all it said: whoever retries has usually given the first request
+      // up and has no answer to wait for, so it also says to ask again
+      // shortly, and what that will be answered with.
+      const waiting = typeof spec.id === 'string' ? this.pending.get(spec.id) : undefined;
+      if (waiting) {
+        return {
+          ok: false,
+          error: { code: 'in_flight' },
+          text: `${waiting.hostId} is still answering the request sent under this id, so nothing new was sent. If that request is still open, its answer is the one to wait for. If it was given up on, ask again in a few seconds: once ${waiting.hostId} has answered, the same id is answered with where the sign-in stands. Asking again does not start a second sign-in.`,
+        };
+      }
     }
     if (spec.verb === 'provision' && (shaped.params.platform === 'vm' || shaped.params.platform === 'lab')) return this.#provisionVm(spec, shaped.params);
     if (spec.verb === 'vmctl') return this.#vmctl(spec, shaped.params);
@@ -4737,6 +4792,17 @@ export class CoordinatorCore {
     const onTask = spec.verb === 'start' && typeof spec.params?.taskId === 'string' ? String(spec.params.taskId) : '';
     const lockedOn = String(placement.host?.hostId || '');
     if (onTask) {
+      // THE TASK AS IT IS NOW, asked again in the same breath as the lock.
+      // The first asking (#startOn, above) is before a machine is chosen,
+      // and choosing one can wait: for an approval's digest, and in the
+      // seconds after a deploy for a box's first report. No lock is held in
+      // that wait, so the task could be rewritten in it and was: a session
+      // told "Tidy the docs" was locked onto a record that read "Reset the
+      // production database", with a `words` line in its history dated
+      // before its own start. Nothing between here and the lock waits, so
+      // what this compares is what the lock is taken on.
+      const still = this.#startOn(spec.requester, spec.params ?? {});
+      if (!still.ok) return still;
       const locked = this.tasks.lock(this.#who(spec.requester), onTask, { member: String(spec.params?.member ?? ''), branch: String(spec.params?.taskBranch ?? ''), hostId: lockedOn });
       if (!locked.ok) return locked;
       this.onStateChanged?.();
@@ -4754,8 +4820,18 @@ export class CoordinatorCore {
 
     const sentAt = this.now();
     try {
+      // A send that throws before it returns (an intent that cannot be built
+      // for this box) sent nothing either, and is marked as the two inside
+      // `send` are.
+      /** @type {Promise<any>} */
+      let sending;
+      try {
+        sending = this.send(placement.host, spec);
+      } catch (e) {
+        throw Object.assign(e instanceof Error ? e : new Error(String(e)), { notSent: true });
+      }
       const answer = explainUnsupportedVersion(
-        explainUnknownVerb(await this.send(placement.host, spec), placement.host),
+        explainUnknownVerb(await sending, placement.host),
         placement.host,
       );
       if (onTask) {
@@ -4827,8 +4903,9 @@ export class CoordinatorCore {
       const said = enginesNote && answer?.ok !== false ? { ...answer, text: `${answer?.text ? `${answer.text}\n` : ''}${enginesNote}` } : answer;
       return withArchiveNote(said, spec, placement.host);
     } catch (e) {
-      // NOT GIVEN BACK: a box that did not answer may have started the
-      // session all the same, and an approval is for one start.
+      // NOT GIVEN BACK, where the start may have left: a box that did not
+      // answer may have started the session all the same, and an approval
+      // is for one start.
       //
       // AND FOR THE SAME REASON ITS SPEND IS NOT KNOWN (docs/budgets.md). A
       // start as a member that got no answer was never counted: the session
@@ -4836,8 +4913,31 @@ export class CoordinatorCore {
       // $0.00 because nothing here had heard it start. It is kept as a start
       // whose spend is unknown, which the member's row says, until that box
       // speaks of the session and it is counted from nothing.
-      if (spec.verb === 'start' && typeof spec.params?.member === 'string' && lockedOn && this.org.get(spec.params.member)) {
+      //
+      // NOT WHEN NOTHING WAS SENT (`notSent`, from `send`). A send that
+      // failed before anything left, a socket closing as it was written to
+      // or an id already in flight, started nothing, and was kept all the
+      // same: the member's month read "at least", and "one start got no
+      // answer from its machine", until the month turned, about a start
+      // this coordinator knew it never sent. Anything else is taken as a
+      // box that may have acted, which is the side to be wrong on.
+      const notSent = /** @type {any} */ (e)?.notSent === true;
+      if (!notSent && spec.verb === 'start' && typeof spec.params?.member === 'string' && lockedOn && this.org.get(spec.params.member)) {
         this.budgets.unanswered(spec.params.member, lockedOn, sentAt);
+        this.onStateChanged?.();
+      }
+      // AND WHAT THIS START TOOK FOR ITSELF GOES BACK, when nothing was
+      // sent: the task's lock and the approval. Only the spend was spared,
+      // so a start onto a socket that had just closed left its task saying
+      // "deb132 has not answered yet" for the wait and five minutes more,
+      // about a box that was never asked, and its approval used, so the
+      // person who pressed Start again was sent to ask for another. Both
+      // were taken by this start a few lines up, so nobody else's is undone
+      // here: `unlock` leaves a lock that has a session, and `giveBack` an
+      // approval that is not `used`.
+      if (notSent && (onTask || spec.approvalId)) {
+        if (onTask) this.tasks.unlock(onTask, lockedOn);
+        if (spec.approvalId) this.budgets.giveBack(spec.approvalId);
         this.onStateChanged?.();
       }
       return { ok: false, error: { code: 'host_timeout' }, text: /** @type {Error} */ (e).message };
@@ -5942,13 +6042,46 @@ export class CoordinatorCore {
   setMember(requester, id, input) {
     const saved = this.org.set(requester, id, input);
     if (!saved.ok) return saved;
-    // Added back under an id removed this month, it has spent what that id
-    // had: removing a member is not how its month starts again (budgets.forget).
-    if (saved.created) this.budgets.back(saved.member.id);
+    // `budgetUsdMonth: null` names a budget, the one that is none: the
+    // record has the same shape with the key left out, so it is read here.
+    const named = Boolean(input) && typeof input === 'object' && Object.hasOwn(/** @type {object} */ (input), 'budgetUsdMonth');
+    const made = this.#madeAgain(requester, saved, named);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
-    this.record({ event: 'member.saved', actor: by, text: `${by} ${saved.created ? 'added' : 'changed'} the member ${saved.member.id} (${oneLine(saved.member.role, 60)})` });
-    return saved;
+    this.record({ event: 'member.saved', actor: by, text: `${by} ${made.created ? 'added' : 'changed'} the member ${made.member.id} (${oneLine(made.member.role, 60)})` });
+    return made;
+  }
+
+  /**
+   * A member just made, under an id one was removed from. It has spent what
+   * that id had this month: removing a member is not how its month starts
+   * again (budgets.forget). AND IT HAS THE BUDGET THAT ONE HAD, unless this
+   * request names one: removing a member is not how it stops having a
+   * budget either (docs/budgets.md, "An approval"). A request that names a
+   * budget is a person's, since the tools an agent holds send none, and it
+   * is taken as sent. One that names none gets the old one back, said in
+   * the answer, and a person who wants it gone takes it off the record
+   * afterwards.
+   *
+   * AN EXPLICIT `null` NAMES ONE: no budget, asked for in so many words
+   * (`named`). It was read as naming none, because the saved record looks
+   * the same either way, and the member was handed the old budget back by
+   * a request that had just said it should have none. The tools an agent
+   * holds cannot send the field at all (mcp/server.js), so this is still
+   * only a person's to say.
+   *
+   * @template {{ ok: true, created?: boolean, member: import('../protocol/members.js').Member, text: string }} S
+   * @param {{ email?: string|null, admin?: boolean }|null} requester @param {S} saved
+   * @param {boolean} [named]  whether the request had a `budgetUsdMonth` at all, `null` included
+   * @returns {S}
+   */
+  #madeAgain(requester, saved, named = false) {
+    if (!saved.created) return saved;
+    const kept = this.budgets.back(saved.member.id);
+    if (typeof kept !== 'number' || named || typeof saved.member.budgetUsdMonth === 'number') return saved;
+    const again = this.org.set(requester, saved.member.id, { ...saved.member, budgetUsdMonth: kept });
+    if (!again.ok) return saved;
+    return { ...saved, member: again.member, text: `${saved.text} ${saved.member.name} was removed with a budget of ${dollars(kept)} a month, and has it again: a budget is changed by a person, in the app.` };
   }
 
   /**
@@ -5961,7 +6094,8 @@ export class CoordinatorCore {
     // Its open approvals go with it: a member made later under the same id
     // is not the one somebody approved a start as. What it spent this month
     // stays under its id until the month turns.
-    this.budgets.forget(gone.member.id);
+    // And its budget is kept with them, for a member made under the id again.
+    this.budgets.forget(gone.member.id, gone.member.budgetUsdMonth);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
     this.record({ event: 'member.removed', actor: by, text: `${by} removed the member ${gone.member.id}` });
@@ -5980,11 +6114,11 @@ export class CoordinatorCore {
   importMember(requester, text) {
     const read = this.org.importFile(requester, text);
     if (!read.ok) return read;
-    if (read.created) this.budgets.back(read.member.id);
+    const made = this.#madeAgain(requester, read);
     this.onStateChanged?.();
     const by = String(requester?.email || 'an admin').toLowerCase();
-    this.record({ event: 'member.saved', actor: by, text: `${by} ${read.created ? 'added' : 'changed'} the member ${read.member.id} from a file` });
-    return read;
+    this.record({ event: 'member.saved', actor: by, text: `${by} ${made.created ? 'added' : 'changed'} the member ${made.member.id} from a file` });
+    return made;
   }
 
   // ── Tasks (docs/tasks.md) ─────────────────────────────────────────────────
@@ -6152,11 +6286,17 @@ export class CoordinatorCore {
    * task whose brief has been rewritten since, lets nothing through, and the
    * refusal says that is why.
    *
+   * AND, FOR A PROFILE, FOR THE MACHINE THAT HOLDS IT, with the named secret
+   * the session may fetch on any start (startDigest). A start that names a
+   * profile and needs approval names its machine too, or it is not asked
+   * about: there is no saying what "the profile deploy" is without one.
+   *
    * @param {{ email?: string|null, admin?: boolean }|null|undefined} requester
    * @param {Record<string, any>} params  the start's, with `member` set
+   * @param {string} [host]  the machine the person named, or none
    * @returns {Promise<{ ok: true, approval?: string } | { ok: false, error: { code: string }, text: string, approval?: any }>}
    */
-  async #gateStart(requester, params) {
+  async #gateStart(requester, params, host = '') {
     const member = this.org.get(String(params.member));
     if (!member) return { ok: true };
     const task = typeof params.taskId === 'string' ? this.tasks.get(params.taskId) : null;
@@ -6180,8 +6320,16 @@ export class CoordinatorCore {
     if (!need.reasons.length) return { ok: true };
     const said = sees ? need.reasons : withoutFigures(need.reasons, name);
     const by = String(requester?.email || '').toLowerCase() || 'an admin';
-    const digest = await startDigest(params);
-    const told = toldWords(params);
+    if (typeof params.profile === 'string' && params.profile && !host) {
+      return {
+        ok: false,
+        error: { code: 'ambiguous_host' },
+        text: `${said.map((r) => r.text).join(' ')} That needs approval, and an approval for a profile is for the machine that holds it, because the profile is that machine’s own file. Name the machine and start it again; nothing was sent.`,
+      };
+    }
+    const start = { task: params.task, profile: params.profile, secret: params.secret, host };
+    const digest = await startDigest(start);
+    const told = toldWords(start);
     const about = { member: member.id, task: task?.id ?? null, kinds: need.reasons.map((r) => r.kind), by, digest };
     // GIVEN ALREADY: the start goes on, and takes the approval when it is
     // about to be sent and not before (dispatch).
@@ -6190,6 +6338,18 @@ export class CoordinatorCore {
     // GIVEN, FOR SOMETHING ELSE: said, so the person holding it is not left
     // to wonder why an approved start is asked about again.
     const other = this.budgets.givenForOtherWords(about);
+    // What else may differ, said only where this start or that approval has
+    // it: the digest says that two starts differ and not in what.
+    const fetches = Boolean(start.secret) || /It may fetch the secret /.test(other?.told ?? '');
+    const elseways = [start.profile ? 'machine' : '', fetches ? 'secret' : ''].filter(Boolean).join(' or ');
+    // AND THE THIRD WAY TWO DIGESTS DIFFER, which neither of those says:
+    // the approval is from before the machine and the secret were part of
+    // one. Given for this very start, it stopped matching when this
+    // coordinator was updated, and its holder was told the start "says
+    // something else, or names another machine", which it did not. The
+    // digest cannot tell the three apart, so the sentence names all three;
+    // what to do is the same for each, and is the sentence after it.
+    const elsewaysSaid = elseways && other ? `, or names another ${elseways}, or ${other.id} is from before this fleet’s coordinator was updated, when an approval did not name its ${elseways}` : '';
     const { approval, fresh } = this.budgets.ask({ member: member.id, task: task?.id ?? null, reasons: need.reasons, digest, told, by });
     const own = !requester || Boolean(requester.admin) || this.org.mayManage(requester, member.id);
     const managers = this.#managersOf(member.id);
@@ -6211,7 +6371,7 @@ export class CoordinatorCore {
     return {
       ok: false,
       error: { code: 'needs_approval' },
-      text: `${said.map((r) => r.text).join(' ')}${other ? ` ${other.id} was approved for what the session was to be told then${task ? `, and ${task.id} has been changed since` : ', and this start says something else'}: it does not cover this.` : ''} ${own ? `That needs approval, which you may give yourself: ${approval.id}.` : `${who} must approve it first: ${approval.id}.`} Start it again once it is approved; nothing was sent.`,
+      text: `${said.map((r) => r.text).join(' ')}${other ? ` ${other.id} was approved for what the session was to be told then${task ? `, and ${task.id} has been changed since` : ', and this start says something else'}${elsewaysSaid}: it does not cover this.` : ''} ${own ? `That needs approval, which you may give yourself: ${approval.id}.` : `${who} must approve it first: ${approval.id}.`} Start it again once it is approved; nothing was sent.`,
       approval: { ...this.#approvalShown(approval, said), mayAnswer: own },
     };
   }
@@ -6786,29 +6946,88 @@ export class CoordinatorCore {
 
   /**
    * End the locks no box stands behind any more: a session its box no longer
-   * lists, and a start whose box never answered.
+   * lists, and a start whose box never answered and, asked since, lists no
+   * session for it. A box that cannot be asked ends nothing.
    */
   #sweepTasks() {
     const now = this.now();
     let changed = false;
-    for (const task of this.tasks.all()) {
-      const lock = task.lock;
-      if (lock && !lock.session && now - lock.at > this.intentTimeoutMs + TASK_START_GRACE_MS) {
-        this.tasks.expire(task.id, lock.hostId);
-        changed = true;
-      }
-    }
-    const released = this.tasks.sweep((hostId) => {
+    /** A box's own list of sessions and when it sent it, or null. @param {string} hostId */
+    const listed = (hostId) => {
       const host = this.registry.get(hostId);
       // Only a connected box's own list, as of its last frame. A box that is
       // away, or too busy to list its sessions, is cannot-tell.
       if (!host?.connected || !Array.isArray(host.health?.sessions)) return null;
       return { names: new Set(host.health.sessions.map((/** @type {any} */ s) => String(s?.name ?? ''))), at: Number(host.healthAt) || 0 };
-    }, TASK_LIST_GRACE_MS);
+    };
+    for (const task of this.tasks.all()) {
+      const lock = task.lock;
+      if (lock && !lock.session && now - lock.at > this.intentTimeoutMs + TASK_START_GRACE_MS) {
+        // ITS BOX LISTS A SESSION ON IT: the start happened, and the lock is
+        // that session's. The lock used to be dropped here whatever the box
+        // had been saying, so a task whose start was never answered was
+        // offered again ten minutes on while its box listed the session
+        // working on it in every report; a second session was started on
+        // the same branch, and when the first came back its result was
+        // dropped because the lock was the second's by then. The list is
+        // the one a lock is ended by below, believed for the same reason.
+        const held = this.#sessionOn(task.id, lock);
+        if (held) {
+          this.tasks.confirm(task.id, { session: held, hostId: lock.hostId });
+          changed = true;
+          continue;
+        }
+        // IT LISTS NONE, IN A LIST MADE SINCE THE START: the start is taken
+        // not to have happened. AWAY, OR NOT LISTING, IS CANNOT TELL, and
+        // was taken for "no session" too: `#sessionOn` answers null for a
+        // box that is not connected, and the lock ran out on that null. The
+        // connection that lost a start's answer is often the one still
+        // down ten minutes on, so the task was offered again with its
+        // session running, a second was started on another box, and the
+        // first one's result was dropped when its box came back. The lock
+        // is kept, saying since when, until the box is heard from or a
+        // person releases it (docs/tasks.md, "The lock follows the box's
+        // word"). The same grace as below: a list from the first moments
+        // after the start may be the one from before it.
+        const seen = listed(lock.hostId);
+        if (seen && seen.at >= lock.at + TASK_LIST_GRACE_MS) {
+          this.tasks.expire(task.id, lock.hostId);
+          changed = true;
+        } else if (this.tasks.hold(task.id, lock.hostId)) {
+          changed = true;
+        }
+      }
+    }
+    const released = this.tasks.sweep(listed, TASK_LIST_GRACE_MS);
     for (const task of released) {
       this.record({ event: 'task.released', actor: task.createdBy, text: `${task.id} “${oneLine(task.title, 80)}” is open again: its box no longer lists the session that held it` });
     }
     if (changed || released.length) this.onStateChanged?.();
+  }
+
+  /**
+   * The session a box lists for a task whose start it never answered, by
+   * name, or null when it lists none or cannot be asked.
+   *
+   * ONLY ONE THIS START COULD HAVE MADE: running, on this task, as the
+   * lock's member when the box says as whom, and begun no earlier than the
+   * start was sent, by the box's own clock with the leeway two clocks need.
+   * A session from an earlier go at the same task is still in the list,
+   * stopped, with the task's id on it, and the lock is not that one's. A
+   * session with no start time says nothing either way, which is cannot
+   * tell and so not a session.
+   *
+   * @param {string} taskId @param {{ hostId: string, member: string, at: number }} lock
+   * @returns {string|null}
+   */
+  #sessionOn(taskId, lock) {
+    const host = this.registry.get(lock.hostId);
+    if (!host?.connected || !Array.isArray(host.health?.sessions) || !(Number(host.healthAt) >= lock.at)) return null;
+    const found = host.health.sessions.find((/** @type {any} */ s) =>
+      s && s.taskId === taskId && s.status === 'running' && typeof s.name === 'string' && s.name
+      && (s.member === undefined || s.member === lock.member)
+      && typeof s.startedAt === 'number' && s.startedAt >= lock.at - UNANSWERED_SKEW_MS);
+    return found ? String(found.name) : null;
   }
 
   /**
@@ -6887,12 +7106,24 @@ export class CoordinatorCore {
     // What is being asked for, as each sentence below needs it.
     const may = signin ? `sign an engine in for ${member.name}` : `start a session as ${member.name}`;
     if (!this.memberCustody && !requester?.admin) {
+      // WHEN IT WILL BE KNOWN, said only as far as this coordinator knows.
+      // The list is read off the vault's answer to a machine, so it comes
+      // when a machine that can ask is connected: one enrolled with a key,
+      // which is what the vault takes a request from. "Try again in a few
+      // minutes" was said to every fleet with a vault, and on one where no
+      // such machine was connected it was true of no number of minutes.
+      const asking = this.registry.reachable().filter((h) => {
+        const enrolled = this.hostIds?.get(h.hostId);
+        return Boolean(enrolled?.publicJwk) && !enrolled?.revokedAt;
+      }).map((h) => h.hostId);
       return {
         ok: false,
         error: { code: 'custody_unknown' },
-        text: this.minter?.vault
-          ? `The fleet has not heard yet who may ${may}, so it cannot tell whether you may. The vault says when a machine asks it, and a connected machine asks every ten minutes: try again in a few minutes. Nothing was sent.`
-          : `This fleet has no vault to say who may ${may}, so it cannot tell whether you may, and no machine would ${signin ? 'do' : 'run'} it. Nothing was sent.`,
+        text: !this.minter?.vault
+          ? `This fleet has no vault to say who may ${may}, so it cannot tell whether you may, and no machine would ${signin ? 'do' : 'run'} it. Nothing was sent.`
+          : asking.length
+            ? `The fleet has not heard yet who may ${may}, so it cannot tell whether you may. The vault says when a machine asks it, and ${asking.length === 1 ? `${asking[0]} is connected and asks` : `${asking.length} connected machines ask`} every ten minutes: try again in a few minutes. If this is still the answer after that, ${asking.length === 1 ? 'that machine is' : 'those machines are'} not asking, and ${asking.length === 1 ? 'its log says' : 'their logs say'} why. Nothing was sent.`
+            : `The fleet has not heard yet who may ${may}, so it cannot tell whether you may. The vault says when a machine asks it, and no machine that can ask is connected now. It will be known a few minutes after one connects. Nothing was sent.`,
       };
     }
     const listed = this.memberCustody?.get(member.id);
@@ -7305,7 +7536,7 @@ export class CoordinatorCore {
     }
     // SIGNING AN ENGINE IN, which an older box would answer `unknown_verb`
     // to: true, and said here as which machine and what to do about it. All
-    // three of its parameters are newer than such a box, so nothing of it
+    // four of its parameters are newer than such a box, so nothing of it
     // could be built for one either (intents.js, buildIntent).
     if (spec.verb === 'enginesignin') {
       const speaks = Number(host?.health?.protocol);
@@ -11127,6 +11358,26 @@ export function deviceText(r) {
   return r.error?.code === 'not_yours'
     ? 'That device is somebody else\u2019s. Removing other people\u2019s devices needs an admin credential on this fleet.'
     : 'That device was not registered.';
+}
+
+/**
+ * What a request is answered with when the one grant that covers it names
+ * members and its box is from before grants could (CoordinatorCore#send).
+ * The way on is the box's, not the person's: what they allowed is right.
+ *
+ * @param {string} hostId @param {number} speaks  NaN from a box that has not said
+ * @param {{ actor?: string, verb?: string }} intent
+ */
+function grantUnreadable(hostId, speaks, intent) {
+  return {
+    ok: false,
+    error: { code: 'host_outdated' },
+    text:
+      `${hostId} is too old to read what ${intent?.actor || 'you'} allowed for this ${intent?.verb ?? 'request'}: it speaks protocol ` +
+      `${Number.isInteger(speaks) ? speaks : 'an older version'}, and a delegation that names members needs ${DELEGATION_MEMBERS_PROTOCOL}. ` +
+      `It would answer that the delegation is badly signed, which it is not. Update ${hostId}, from its page in the app or with fleetwright-sidecar update on it, ` +
+      `or use a machine that is up to date. Nothing was sent.`,
+  };
 }
 
 /**

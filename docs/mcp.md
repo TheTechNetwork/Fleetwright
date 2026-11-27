@@ -149,8 +149,18 @@ labels                            where everybody else's work lands
 (`FLEETWRIGHT_MCP_ALLOW=enginesignin`): the one tool whose name is not its
 verb's, because one word of twelve letters is not what an agent looks for.
 It hands back the provider's page and a code for the person to enter, and
-no token ([engines.md](./engines.md), "Signing in on the machine"). Allowing
-it here is half of it. This server acts on a delegation, and a box takes
+no token ([engines.md](./engines.md), "Signing in on the machine"). It
+takes a `host`, the machine to sign in on, and no `tag`: a sign-in is kept
+on the machine it is made on, so the machine is named. **Nothing it
+answers is verified here**, and it says so after every answer that is not
+a refusal, whatever fields the answer has: the page, the code, where the
+sign-in stands and the account it is on all reach this server through the
+coordinator in the clear, which can read the code and enter it first under
+an account of its own. The warning used to follow only an answer that had
+a `code` field, which the coordinator writes. Allowing
+it here is half of it, and the refusal for the withheld tool says that
+too, where every other withheld tool is told that allowing it is the
+whole change. This server acts on a delegation, and a box takes
 the verb only under one that carries `enginesignin` and names the member.
 The delegation the phones make for an MCP client is the verbs this server
 offers by default, so it does not carry a withheld one: until it does, a box
@@ -166,7 +176,14 @@ the machine made from one the coordinator put in its place. A phone also
 has the machine seal the answer to a key of its own (`reply`), which the
 tool does not offer, so what comes back here crossed the coordinator in
 the clear. The tool's description says the code is unverified, and so
-does every answer that carries one, in the words the agent reads.
+does every answer the fleet gives it, in the words the agent reads: a
+sign-in under way, one that is done, and a refusal. Which of those an
+answer is, and which fields it has, is written by the party the warning is
+about, so the warning does not depend on either. It was once shown only
+beside a `code` field, then only on an answer that was not a refusal, and
+each time the page and the code were sent the other way with nothing under
+them. Only what this server refuses by itself, before it asks the fleet
+(a tool that is withheld, a parameter it does not take), carries none.
 
 **`sandbox` is offered and `labels` is not,** which looks inconsistent from the
 outside and is the same rule applied twice. The variant decides what the next

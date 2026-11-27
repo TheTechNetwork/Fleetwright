@@ -81,7 +81,9 @@ that start's: counted from nothing, like any session the fleet started, and
 no longer unknown. One session a start. Like every unknown it blocks
 nothing, in `ask` and in `refuse`: what stops the next start is the figure
 once the box reports it. A start nobody ever answers stays unknown for the
-month.
+month. A start the coordinator could not send at all, because the machine's
+connection closed as it was written to, is not one of these: nothing left,
+so nothing ran, and the row says nothing of it.
 
 One row a member (`spend:<id>`): the month, the total, the last figure
 seen for at most 60 of its sessions, and the starts nobody answered. One row a member for who may start as
@@ -147,14 +149,30 @@ approval is given, the same start is sent again and goes through.
 - **An approval is for one start.** It covers the member, the task if there
   was one, and the reasons it names, for the person who asked, once, within
   an hour of being given. A start that has since gained a reason (the member
-  went over budget while a risky-work approval waited) needs a new one.
+  went over budget while a risky-work approval waited) needs a new one. A
+  start its machine refused, and one the coordinator could not send at all
+  (the machine's connection closed as it was written to), started nothing,
+  and the approval is good again within its hour. One that was sent and
+  never answered keeps it: the machine may have started the session.
 - **And for what its session is to be told.** The coordinator keeps a
   SHA-256 digest of the words the start carried when the approval was asked
   for (or of the profile it named), and the approval covers only a start
   with the same digest. A task whose title or brief was rewritten since, or
   other words on a start with no task, is another start: it is refused, in
   words that say the approval was for something else, and asks for a new
-  one. The words themselves are not kept. Whoever is asked reads the start
+  one. **A profile is approved on one machine.** A profile is a name, and
+  what it says is a file on the machine the start goes to, so the machine is
+  in the digest and in the sentence (*as ops-box holds it*); a start that
+  names a profile and needs approval names its machine, or is refused
+  (`ambiguous_host`) saying so. An approval for the name alone started that
+  name on the asker's own machine, where the file was theirs to write. **A
+  named secret is part of it too**, on any start: it is what the session may
+  fetch while it follows those words, and the sentence names it. **An
+  approval from before the machine and the secret were part of one no
+  longer covers a start that names either**, though it was given for that
+  very start: the refusal says so beside the other two ways the two can
+  differ (other words; another machine or secret), because the digest cannot
+  tell which it is, and asks for a new one. The words themselves are not kept. Whoever is asked reads the start
   of them, after the last reason, in the list, on their phone and in the
   push. The digest is the coordinator's own check and is sent to nobody.
 - **A second ask for the same thing is the same approval**, so trying again
@@ -168,6 +186,16 @@ approval is given, the same start is sent again and goes through.
   the same month, it has spent what it had: removing a member is not how its
   month starts again. A member made later that month under the same id
   starts with that figure too, which is the price of the first.
+- **Its budget stays under its id too, until somebody is made under it.**
+  A member removed and made again has the budget it had, unless the request
+  that makes it names another, which only a person's does. The spend was
+  kept and the budget was not: a member past a budget that refuses was
+  removed and made again with none, by the one tool an agent holds for a
+  member's record, and nothing is past no budget. The answer says the
+  budget came back. A person who wants it gone takes it off the record
+  afterwards, in the app, or makes the member with `budgetUsdMonth: null`:
+  an explicit null names a budget, the one that is none, and is taken as
+  sent. It used to be read as naming none and handed the old one back.
 - **The figure is for whoever may see it.** What a member has spent is read
   by an admin, its managers and the person it is. Somebody else whose start
   is refused is told that the member is past its budget and who can approve,
@@ -225,7 +253,17 @@ says which, and it is what a screen draws.
 - **A box says what its sessions cost.** A box a member enrolled could
   under-report. It can do that only for sessions on itself. A box could
   over-report too, for a session somebody the minter lists started on it,
-  at most $100 a report.
+  at most $100 a report. That bounds a report and nothing longer: a box
+  reports every half minute, and a figure that falls is counted again from
+  nothing, so a box that means to can still take a member past any budget,
+  $100 at a time.
+- **`risky-work` is a label, and whoever makes a task puts it on.** The
+  fleet asks about a start on a task that carries a kind of work it names.
+  Taking the label off such a task needs the standing that could approve
+  it. Leaving it off needs nothing: the same words on a task made without
+  it, or on a start with no task, are not asked about. It is a way for a
+  team to mark its own risky work, not a way to stop somebody who may start
+  as the member from doing that work unasked.
 - **An approval is as strong as the credential that gives it.** The
   coordinator checks who is answering, not what they are holding. A program
   with a manager's credential that calls the route directly has approved.

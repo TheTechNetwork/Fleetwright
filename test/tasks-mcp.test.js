@@ -143,6 +143,16 @@ test('a delegation that produces no result says what is left behind, as an error
   assert.equal(isError(f), true);
   assert.equal(text(f), 'deb132 did not answer in time\n\nt1 was made, and whether a session started on it is not known: no answer came back in time, and one may have started all the same. fleet_tasks with `id: "t1"` shows whether a session holds it. If none does in a few minutes, start it with fleet_start and `taskId`, or cancel it with fleet_task.');
   assert.deepEqual([f.core.tasks.get('t1')?.state, f.core.tasks.get('t1')?.lock?.hostId], ['open', 'deb132'], 'and the task is kept, with the lock its start took');
+  await f.server.handleLine(rpc(3, 'fleet_tasks', { id: 't1' }));
+  assert.match(text(f), /\nA session was asked for on deb132 at .* UTC by eli@example\.com, and the box has not answered yet\.\n/);
+  // AND ONCE THE WAIT IS OVER WITH THE BOX AWAY, the fleet keeps the lock
+  // because it cannot tell (tasks-coordinator.test.js), and "not yet" would
+  // have an agent wait for an answer nobody expects: it is told what is not
+  // known, and the one thing that frees the task.
+  f.core.registry.disconnect('deb132', 'socket closed');
+  assert.equal(f.core.tasks.hold('t1', 'deb132'), true);
+  await f.server.handleLine(rpc(4, 'fleet_tasks', { id: 't1' }));
+  assert.match(text(f), /\nA session was asked for on deb132 at .* UTC by eli@example\.com\. The box did not answer and has not been heard from since, so the fleet cannot tell whether a session is working on it there\. The task is held until deb132 reports\. If that box is gone, fleet_task with action release frees the task; it does not stop a session\.\n/);
 
   // THE SESSION STOPS AND WROTE NOTHING: no result is made up from it.
   f = fleet({ onSleep: (self) => self.says({ event: 'session.ready', name: 'cc-1', tasked: true, taskId: 't1' }) });

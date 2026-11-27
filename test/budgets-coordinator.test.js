@@ -146,6 +146,41 @@ test('a start as a member that its box never answers is spend the fleet cannot t
   g.answers((spec) => ({ ok: true, text: 'Started.', sessions: [{ name: 'cc-2', status: 'running', member: spec.params.member }] }));
   assert.equal((await g.start(dana, 'debbie')).ok, true);
   assert.equal(g.spendOf('debbie').unknownSessions, 1);
+
+  // A START THAT NEVER LEFT is not one nobody answered. The box's connection
+  // closes as the start is written to it: nothing was sent, so nothing ran,
+  // and the member's month says nothing of it. It was kept as unknown like
+  // the rest, and the row read "at least" until the month turned.
+  const h = fleet();
+  await h.reports();
+  delete (/** @type {any} */ (h.core)).send; // the coordinator's own send, onto a socket that refuses the write
+  /** @type {any} */ (h.core.registry.get('deb132')).send = () => { throw new Error('the socket is closed'); };
+  const unsent = await h.start(dana, 'debbie');
+  assert.equal(unsent.ok, false);
+  assert.equal(unsent.text, 'the socket is closed');
+  assert.deepEqual([h.spendOf('debbie').unknownSessions, h.spendOf('debbie').words], [0, '$0.00 of $50.00 this month, at API prices as each session counted it.']);
+
+  // AND IT HOLDS NOTHING. Only the spend was spared: the task stayed locked
+  // "deb132 has not answered yet" for the wait and five minutes more, about
+  // a box that was never asked, and the approval the start went ahead on
+  // stayed used, so the same start a moment later was sent to ask again.
+  const k = fleet();
+  k.set({ workTypes: ['deploy'] });
+  await k.reports();
+  const task = /** @type {any} */ (k.core.createTask(dana, { title: 'Ship it', brief: 'Deploy the API.', assignee: 'debbie', workType: 'deploy' }));
+  assert.equal((await k.start(sam, 'debbie', task.start)).approval.id, 'a1');
+  assert.equal(/** @type {any} */ (await k.core.answerApproval(dana, 'a1', 'approve')).ok, true);
+  const state = () => [/** @type {any} */ (k.core.tasks.get('t1')).lock, /** @type {any} */ (k.core.approvalsFor(admin)).approvals.find((/** @type {any} */ a) => a.id === 'a1').state];
+  const kept = k.core.send;
+  delete (/** @type {any} */ (k.core)).send;
+  /** @type {any} */ (k.core.registry.get('deb132')).send = () => { throw new Error('the socket is closed'); };
+  assert.equal((await k.start(sam, 'debbie', task.start)).error.code, 'host_timeout');
+  assert.deepEqual(state(), [null, 'approved']);
+  assert.notEqual(/** @type {any} */ (k.core.taskFor(sam, 't1')).start, null, 'the task is still offered to start');
+  // The same start with the socket open goes through, on the same approval.
+  k.core.send = kept;
+  assert.equal((await k.start(sam, 'debbie', task.start)).ok, true);
+  assert.deepEqual([state()[0].session, state()[1]], ['cc-1', 'used']);
 });
 
 test('with enforcing off, a member past its budget starts as before and nobody is asked', async () => {
@@ -300,7 +335,37 @@ test('an approval is for what the session was to be told: a rewritten brief, or 
   const other = await g.start(sam, 'debbie', { mode: 'dangerous', task: 'rm -rf the release bucket.' });
   assert.deepEqual([other.error.code, other.approval.id], ['needs_approval', 'a2']);
   assert.match(other.text, /a1 was approved for what the session was to be told then, and this start says something else: it does not cover this\./);
+  // AND THE SECRET IT MAY FETCH while it follows them: the same words with a
+  // secret named are another start, and whoever is asked reads which.
+  const fetching = await g.start(sam, 'debbie', { mode: 'dangerous', task: 'Tidy the README.', secret: 'PROD_DEPLOY_KEY' });
+  assert.deepEqual([fetching.error.code, fetching.approval.id], ['needs_approval', 'a3']);
+  assert.match(fetching.approval.reasons[0].text, /The session is told: “Tidy the README\.” It may fetch the secret PROD_DEPLOY_KEY\.$/);
+  // The sentence is true of all three ways the two can differ, the third
+  // being an approval given for this very start before the secret was part
+  // of one: that one's holder was told it "names another secret".
+  assert.match(fetching.text, /a1 was approved for what the session was to be told then, and this start says something else, or names another secret, or a1 is from before this fleet’s coordinator was updated, when an approval did not name its secret: it does not cover this\. dana@example\.com or eli@example\.com, or a fleet admin, must approve it first: a3\. Start it again once it is approved; nothing was sent\.$/);
   assert.equal((await g.start(sam, 'debbie', { mode: 'dangerous', task: 'Tidy the README.' })).ok, true);
+
+  // A PROFILE IS A NAME, and what it says is a file on the machine the start
+  // goes to. Approved by name alone, it started that name on the asker's own
+  // machine, where the file was theirs to write. So it is approved on one
+  // machine, and a start that names none is told to name it.
+  const h = fleet();
+  h.set({ dangerous: true });
+  h.core.registry.connect('sams-laptop', () => {});
+  await h.reports();
+  h.core.registry.recordHealth('sams-laptop', /** @type {any} */ (h.core.registry.get('deb132')).health);
+  const profile = (/** @type {string|undefined} */ preferHost) => /** @type {Promise<any>} */ (h.core.dispatch({ verb: 'start', params: { member: 'debbie', mode: 'dangerous', profile: 'tidy-readme' }, actor: sam.email, requester: sam, ...(preferHost ? { preferHost } : {}) }));
+  const unplaced = await profile(undefined);
+  assert.equal(unplaced.error.code, 'ambiguous_host');
+  assert.equal(unplaced.text, 'This session would not ask before it runs commands, on Debbie’s sign-ins. That needs approval, and an approval for a profile is for the machine that holds it, because the profile is that machine’s own file. Name the machine and start it again; nothing was sent.');
+  const asked = await profile('deb132');
+  assert.equal(asked.approval.reasons[0].text, 'This session would not ask before it runs commands, on Debbie’s sign-ins. The session is given the profile tidy-readme, as deb132 holds it.');
+  assert.equal(/** @type {any} */ (await h.core.answerApproval(dana, asked.approval.id, 'approve')).ok, true);
+  const elsewhere = await profile('sams-laptop');
+  assert.deepEqual([elsewhere.error.code, elsewhere.approval.id === asked.approval.id], ['needs_approval', false], 'an approval for the profile on one machine started it on another');
+  assert.equal(h.sent.length, 0);
+  assert.equal((await profile('deb132')).ok, true);
 });
 
 test('the kind of work on a task the fleet asks about is changed only by somebody who could approve it, and the change is written down', async () => {
@@ -493,13 +558,51 @@ test('a resumed session counts from the first figure heard, and removing a membe
   assert.equal(f.core.setMember(dana, 'debbie', record).ok, true);
   assert.deepEqual([f.spendOf('debbie').usd, f.spendOf('debbie').over], [51, true]);
   assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
-  // Until the month turns: then a removed member's row is nobody's, and goes when the rows are next read.
+  // AND ITS BUDGET, which the same two steps took away. Made again with no
+  // budget named, as the tool an agent holds for a member's record makes
+  // one, she had none, and nothing is past no budget: the start went through.
   assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  const { budgetUsdMonth: _was, ...bare } = record;
+  const again = /** @type {any} */ (f.core.setMember(dana, 'debbie', bare));
+  assert.equal(again.ok, true, again.text);
+  assert.match(again.text, /Debbie was removed with a budget of \$50\.00 a month, and has it again: a budget is changed by a person, in the app\.$/);
+  assert.deepEqual([again.member.budgetUsdMonth, f.core.org.get('debbie').budgetUsdMonth, f.spendOf('debbie').over], [50, 50, true]);
+  assert.equal((await f.start(dana, 'debbie')).error.code, 'over_budget');
+  // NAMED AS NONE, she has none: an explicit null is a person saying so,
+  // and it was read as a request that named no budget and handed the old
+  // one back.
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  const none = /** @type {any} */ (f.core.setMember(dana, 'debbie', { ...bare, budgetUsdMonth: null }));
+  assert.equal(none.ok, true, none.text);
+  assert.doesNotMatch(none.text, /has it again/);
+  assert.deepEqual([f.core.org.get('debbie').budgetUsdMonth ?? null, f.spendOf('debbie').over], [null, false]);
+  assert.equal(/** @type {any} */ (f.core.setMember(dana, 'debbie', record)).ok, true);
+  // From a file too, which is the other way that tool makes one.
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  const file = /** @type {any} */ (f.core.importMember(dana, '---\nid: debbie\nname: Debbie\nkind: agent\nrole: software engineer\nreportsTo: dana\n---\n'));
+  assert.equal(file.ok, true, file.text);
+  assert.equal(f.core.org.get('debbie').budgetUsdMonth, 50);
+  // A request that names a budget is a person's, and is taken as sent. And a
+  // person who wants none takes it off the record that is there.
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  assert.equal(/** @type {any} */ (f.core.setMember(dana, 'debbie', { ...bare, budgetUsdMonth: 80 })).member.budgetUsdMonth, 80);
+  assert.equal(/** @type {any} */ (f.core.setMember(dana, 'debbie', bare)).member.budgetUsdMonth ?? null, null);
+  assert.equal(/** @type {any} */ (f.core.setMember(dana, 'debbie', { ...bare, budgetUsdMonth: 80 })).ok, true);
+
+  // Until the month turns: then what a removed member spent is nobody's.
+  // Its budget is kept, because the gate it stands for does not turn with
+  // the month. A removed member that had none leaves nothing, as before.
+  f.core.budgets.started('loose', 'deb132\ncc-loose');
+  assert.equal(f.core.removeMember(dana, 'debbie').ok, true);
+  assert.equal(f.core.removeMember(admin, 'loose').ok, true);
   const kept = f.core.budgets.serialise();
   f.tick(8 * 86_400_000);
   const next = new CoordinatorCore({ now: () => Date.UTC(2026, 11, 2) });
   next.budgets.restore(kept);
-  assert.deepEqual([next.budgets.spend.has('debbie'), next.budgets.takeChanges().del], [false, ['spend:debbie']]);
+  assert.deepEqual([next.budgets.spend.has('loose'), next.budgets.takeChanges().del], [false, ['spend:loose']]);
+  assert.equal(next.budgets.spendOf('debbie'), null, 'last month’s spend is not this month’s');
+  assert.equal(next.budgets.back('debbie'), 80);
+  assert.equal(next.budgets.spend.has('debbie'), false, 'the row held only the budget, and it has been handed back');
 });
 
 test('who sees whose spend: an admin everybody, a manager their team, a person their own member', async () => {

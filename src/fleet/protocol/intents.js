@@ -527,6 +527,15 @@ export const PVESETUP_STEPS = Object.freeze([
 // engine there (`engineSignins`), and a box says when an attempt ends
 // (`engine.signin`); the coordinator reads both only from a box that
 // speaks 22.
+//
+// AND WITH 22, A DELEGATION MAY NAME MEMBERS (`members` on a grant,
+// intent-signature.js). It came in the same change and was not written down
+// here, though it is a wire change like any other: the list is in the bytes
+// a phone signs, so a box from before it rebuilds them without the list and
+// finds the grant badly signed, for every verb. The coordinator carries a
+// grant that names members only to a box that speaks 22, and where such a
+// grant is the only one that covers a request an older box would want signed
+// it refuses, by name, as a machine to update (core.js, `send`).
 /** @type {number} */
 export const PROTOCOL_VERSION = 22;
 

@@ -98,7 +98,9 @@ Host → coordinator:
 { "v": 3, "kind": "reply", "id": "01J8ZK3QH4", "ok": true, "text": "…", "sessions": [] }
 ```
 
-`replayed: true` marks a reply served from the idempotency cache. A refused
+`replayed: true` marks a reply served from the idempotency cache, or, for
+`enginesignin`, one asked afresh because nothing of a sign-in's answer is
+kept there ("Idempotency", below). A refused
 intent also carries `error: {code}` — one of `bad_envelope`, `unsupported_version`,
 `unknown_verb`, `bad_params`, `stale`, `internal`. A reply is always sent: a
 coordinator that gets no answer cannot tell a refused intent from a dead host,
@@ -235,26 +237,46 @@ checks, no code of its own.** A box takes the verb only with a custodian's
 signature over it, or a delegation that names the member, so the
 coordinator cannot start a sign-in or sign a member out by itself; the
 sign-in the engine makes never leaves the box, and no answer carries a
-token. A `start` is taken only by a box approved for that member's vault.
+token. A `start` is taken only by a box approved for that member's vault,
+which the box hears from the vault in an answer the minter signs
+([vault.md](./vault.md), "On the box"), so it is not the coordinator's to
+say.
 What the coordinator carries back, for a phone, is ciphertext: the phone
 sends `reply`, a key it made for the one request, inside what it signs,
-and the box seals to it the page, the code and who is signed in, with the
-box's own key and its signature over
+and the box seals to it the page, the code, who is signed in and where the
+sign-in stands, with the box's own key and its signature over
 `signingInput('engine-signin-answer', { v: 1, id, host, member, engine,
-url, code, at, signedIn })`, `id` being the request's own id and `host`
-the hash the vault names that box's grant by. The phone opens it,
-compares that hash with the grants in the member's vault `list` answer,
-which the minter sealed to it, checks the signature, and only then shows
-anything. So the coordinator does not read the code and cannot enter it
-first; a payload it seals itself to `reply`, which is a public key, is
-signed by no approved machine; an older genuine answer is over another
-id; and the account a sign-in ended on is the box's signed word.
+url, code, at, signedIn, state, detail, expiresAt })`, `id` being the
+request's own id and `host` the hash the vault names that box's grant by.
+The phone opens it, compares that hash with the grants in the member's
+vault `list` answer, which the minter sealed to it, checks the signature
+over everything it opened, and only then shows anything, and in that
+sheet it shows nothing that came from outside the seal. So the
+coordinator does not read the code and cannot enter it first; a payload it
+seals itself to `reply`, which is a public key, is signed by no approved
+machine; an older genuine answer is over another id; the account a sign-in
+ended on is the box's signed word; and so is the sentence that says how an
+attempt ended.
+
+**Both halves of that bold sentence were false as first merged**, and a
+second outside review showed each against the code. *No code of its own:*
+`state` and the engine's `detail` were beside the seal and unsigned, and
+both phones drew a refusal's `text` and a failure's `detail` as they
+arrived, so a coordinator put a sentence naming its own code in the sheet,
+beside a page button that had passed every check. They are now inside the
+seal, signed, and a phone writes a refusal in its own words. *Only by a
+box approved:* the vault's answer to a box was sealed to a key the box
+sends in the clear and was signed by nobody, so the coordinator could
+write it, approval and items both. The minter now signs it and a box
+takes nothing from one that is not.
 
 **Still open**, and [engines.md](./engines.md) says so under "What it does
-not stop": a phone that skips the checks, and the MCP path, which sends no
-`reply`, is answered in the clear and is told the code is unverified. The
-page half of "The exclusion that got answered" below is otherwise closed
-for this verb.
+not stop": a phone that skips the checks; a phone or a box from before
+those two fixes; and the MCP path, which sends no `reply`, is answered in
+the clear, and is told after every answer that none of it is verified and
+that the coordinator can read the code and enter it first. The page half
+of "The exclusion that got answered" below is otherwise closed for this
+verb.
 
 It is one verb with an `action`, which "The workspace" below argues
 against for `files`. The argument there is that a scheduler and an MCP

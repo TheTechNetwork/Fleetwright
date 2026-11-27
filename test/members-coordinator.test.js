@@ -10,6 +10,7 @@ import { MAX_MEMBERS, MAX_INSTRUCTIONS, checkMember } from '../src/fleet/protoco
 import { PROTOCOL_VERSION, checkParams } from '../src/fleet/protocol/intents.js';
 import { intentSigningInput } from '../src/fleet/protocol/intent-signature.js';
 import { CUSTODY_PREFIX } from '../src/fleet/coordinator/org-custody.js';
+import { generateKeyPair } from '../src/fleet/crypto.js';
 import { Fleet } from '../worker/src/fleet-do.js';
 
 const admin = { email: 'eli@example.com', admin: true };
@@ -325,9 +326,14 @@ test('the coordinator refuses first, on the minter’s last list, and passes on 
   assert.equal((await go(dana, 'debbie')).error?.code, 'custody_unknown', 'her manager too: the tree is not the list');
   assert.deepEqual(sent, []);
   assert.equal((await go(admin, 'debbie')).ok, true);
-  // With a vault, the list is on its way: a machine asks every ten minutes.
+  // WITH A VAULT, the list comes when a machine asks for it, and a machine
+  // asks only if it was enrolled with a key. "Try again in a few minutes"
+  // was said whatever was connected, and on a fleet where no machine could
+  // ask it was true of no number of minutes.
   core.minter = /** @type {any} */ ({ vault: async () => ({ ok: false }) });
-  assert.equal((await go(sam, 'debbie')).text, 'The fleet has not heard yet who may start a session as Debbie, so it cannot tell whether you may. The vault says when a machine asks it, and a connected machine asks every ten minutes: try again in a few minutes. Nothing was sent.');
+  assert.equal((await go(sam, 'debbie')).text, 'The fleet has not heard yet who may start a session as Debbie, so it cannot tell whether you may. The vault says when a machine asks it, and no machine that can ask is connected now. It will be known a few minutes after one connects. Nothing was sent.');
+  await core.hostIds.enrol({ hostId: 'box-19', publicJwk: (await generateKeyPair()).publicJwk, enrolledBy: admin.email });
+  assert.equal((await go(sam, 'debbie')).text, 'The fleet has not heard yet who may start a session as Debbie, so it cannot tell whether you may. The vault says when a machine asks it, and box-19 is connected and asks every ten minutes: try again in a few minutes. If this is still the answer after that, that machine is not asking, and its log says why. Nothing was sent.');
 
   // The list arrives on a box's key answer, relayed and read on the way.
   core.memberCustody = new Map([['debbie', [dana.email]], ['dana', [dana.email]]]);

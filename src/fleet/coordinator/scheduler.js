@@ -508,12 +508,15 @@ export function place(registry, intent, { maxPinAgeMs = 120_000, preferHost = ''
     if (preferHost) {
       const chosen = durable.find((h) => h.hostId === preferHost);
       if (chosen) return { kind: 'host', host: chosen };
+      // WITH WHERE IT CAN BE DONE. This said whose machine it was and stopped,
+      // which names the problem and not the way on; every other refusal here
+      // lists the machines that would take it.
       if (permanent.some((h) => h.hostId === preferHost)) {
         return {
           kind: 'refused',
           code: 'host_unavailable',
           why: 'enrolled_by_other',
-          reason: `${preferHost} acts for the person who enrolled it, and keeps nobody else\u2019s sign-ins.`,
+          reason: `${preferHost} acts for the person who enrolled it, and keeps nobody else\u2019s sign-ins. Sign in on a machine that acts for you: ${durable.map((h) => h.hostId).join(', ')}.`,
         };
       }
       if (registry.reachable().some((h) => h.hostId === preferHost)) {

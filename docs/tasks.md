@@ -33,11 +33,11 @@ Nothing here runs unless somebody makes a task.
 | `state` | `open`, `working`, `returned`, `done` or `cancelled` | |
 | `branch` | `task/<id>-<the title as a slug>` | set when the task is made, never changed |
 | `parent` | the task this one was delegated from | optional |
-| `lock` | the session working on it: `{ session, hostId, member, by, at }`, with `readyAt` once that session is back at its prompt with no result, and, as a screen is sent it, `connected`: whether its machine is connected now | one, or none |
+| `lock` | the session working on it: `{ session, hostId, member, by, at }`, with `readyAt` once that session is back at its prompt with no result, `unheardSince` on a start nobody answered once the wait for it is over and its machine has not been heard from, and, as a screen is sent it, `connected`: whether its machine is connected now | one, or none |
 | `result` | what came back: `{ outcome, summary, session, hostId, member, at, truncated }` | the summary is at most 4000 bytes |
 | `routing` | this task's own routing mode, `auto`, `manual` or `off` ([routing.md](./routing.md)) | optional; absent follows the fleet's |
 | `route` | the last routing decision about it: how, who, among whom, and why | set by the coordinator |
-| `handoffs` | every change of hands, oldest first, and every change of the kind of work (`work-type`, where `from` and `to` are kinds of work) | the last 50 |
+| `handoffs` | every change of hands, oldest first, every change of the kind of work (`work-type`, where `from` and `to` are kinds of work), and every change of the title, brief or repository (`words`, where `note` says which) | the last 50 |
 | `createdBy`, `createdAt`, `updatedAt` | who made it, and when | set by the coordinator |
 
 **No credential is ever in a task.** A brief and a result are words a person
@@ -67,6 +67,16 @@ and `test/tasks.test.js` measures that they do.
   standing over the member, because an assignment is the step before a start.
 - **Changes, reassigns, releases, accepts, reopens or cancels it**: the same
   people who see it.
+- **Its title, brief and repository do not change while it is being worked
+  on** (`task_locked`), from the start until what came back is accepted or
+  reopened: they are what its session was told. A start carries the task's
+  own words, and that was true at the start only. A brief was started,
+  rewritten while its session worked, and the result came back under words
+  the session had never seen, with nothing in the history to say so. The
+  repository was left out of this at first, and a task started in one
+  repository was moved to another under its session: the result then said
+  "in" the second, "as the session was told". At any other time a change to
+  any of them is a line in `handoffs` (`words`, with which of them changed).
 - **Changes its kind of work, where the fleet asks about that kind**
   ([budgets.md](./budgets.md), `risky-work`): somebody who manages its
   assignee, or a fleet admin, which is who could approve a start on it. With
@@ -85,10 +95,38 @@ work in flight is released or comes back first.
 lock before it sends the start to a box, so of two people who press Start at
 once the second is refused, in words that name the session, the box and since
 when. The lock is confirmed with the session's name when the box answers, and
-dropped if the box refuses. A box that does not answer in time leaves it held
+dropped if the box refuses, or if the start could not be sent to it at all
+(its connection closed as the start was written), so the task is not held
+for a box that was never asked. A box that does not answer in time leaves it held
 for five minutes past the time its answer was waited for: its session is
-taken up the moment the box speaks of it, and otherwise the start is taken
-not to have happened and the task can be started again.
+taken up the moment the box speaks of it. When the hold runs out the
+coordinator looks at that box's own list of sessions, the one in every report
+it sends. A session running there on this task, begun since the start was
+sent, is the start's, and the lock becomes that session's. Only when the box
+lists none, in a list made since the start, is the start taken not to have
+happened, and the task can be started again. The list used not to be looked
+at: a task was offered again while its box listed the session working on it,
+a second session was started on the same branch, and the first one's result
+was dropped when it came back.
+
+**A box that is away when the hold runs out is cannot-tell, and the lock is
+kept.** Not connected, or connected and sending no list of its sessions, it
+has said nothing either way about the start it was sent. That was read as
+*lists none*: the connection that lost a start's answer is often the one
+still down ten minutes later, so the task was offered again with its session
+running, a second was started on another box, and the first one's result was
+dropped when its box came back. The lock now stays, with `unheardSince` on
+it, until that box reports (a session on the task takes the lock; a list
+without one ends it) or a person releases it. While it is kept the task is
+not offered to start, and a start on it is refused `task_locked` in words
+that say what is not known and that Release frees it: *t12 is held for a
+start that was not answered: … deb132 did not answer and has not been heard
+from since, so whether a session is working on it there is not known. It is
+kept until deb132 reports, which settles it either way. Release it to start
+it again now. Releasing does not stop a session, if one did start there.*
+A box that never comes back holds its task until somebody releases it.
+Release was already there for this, on both phones wherever a task has a
+lock, so nothing new had to be offered.
 
 **Only the box a start was sent to is heard about a task.** After that hold
 the coordinator still keeps which box the unanswered start went to, for a
@@ -142,6 +180,14 @@ compares them with the task's title and brief as they are now, and a start
 that carries anything else is refused before a machine is chosen. A task
 changed after somebody opened it is refused the same way, and the refusal
 says where the words as they are now can be read.
+
+**And compares them again where the lock is taken.** Choosing a machine can
+wait: for an approval, and in the seconds after a coordinator deploy for a
+box's first report. Nothing holds the task in that wait, so it could be
+rewritten in it, and a start that had passed the first comparison went on to
+lock a record that no longer said what its session was told. Every one of
+those refusals is made a second time in the same step as the lock, and a
+start that no longer matches is refused `task_words` with nothing sent.
 
 **The box composes the first message** (`composeTaskMessage`,
 `src/fleet/protocol/tasks.js`):

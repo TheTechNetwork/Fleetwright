@@ -390,7 +390,10 @@ box a custodian approved to hold the member's credentials: the box whose
 key is a grant in that member's vault ([vault.md](./vault.md)). For a
 person signing in their own engines it is their own vault. The box knows
 whose vaults it is approved for from what the vault last answered it with,
-which names each of them. A box the answer did not name the member to
+which names each of them, and which the minter signs: a box takes nothing
+from an answer whose signature does not hold, so this is the vault's word
+and not the coordinator's, which carries the answer and could once write
+it ([vault.md](./vault.md), "On the box"). A box the answer did not name the member to
 refuses (`not_approved`) and says to approve the machine from the member's
 Credentials first, then sign in. A box the vault has not answered yet
 cannot tell, and says that instead (`approval_unknown`); it is never said
@@ -594,9 +597,14 @@ reported its engines and does not run this one (`no_engine`). The machine
 is named and never chosen: with several permanent machines and none named
 the refusal lists the ones that run the engine (`ambiguous_host`), and a
 temporary machine or a box somebody else enrolled is refused
-(`host_unavailable`), because a sign-in is kept where it is made. The
-coordinator passes the machine's answer through, leaves `status` out of
-its audit ring, and keeps nothing of a sign-in but what machines report.
+(`host_unavailable`), because a sign-in is kept where it is made; both say
+which machines would take it. The same id sent again while the machine is
+still answering the first is refused (`in_flight`) with what to do: wait
+for the first answer where that request is still open, or ask again in a
+few seconds where it was given up on. A start can take 45 seconds to get
+its code, and a second copy of it is not a second sign-in. The coordinator passes the machine's answer through, leaves
+`status` out of its audit ring, and keeps nothing of a sign-in but what
+machines report.
 
 **Refused by the machine**, each with a sentence: it is not approved for
 the member's vault (`not_approved`, on `start`), or the vault has not told
@@ -720,8 +728,8 @@ the engines this machine does not run.
   under a grant that carries `enginesignin` and names the member. Its
   caller cannot check the machine's signature, having no vault answer to
   check it against, and sends no `reply`, so its answers are in the clear:
-  the tool's description and every answer that carries a code say the
-  code is unverified.
+  the tool's description and every answer the fleet gives it, a refusal
+  included, say that none of it is verified.
 - **Both phones**: Engines on a member's edit page, to add, remove, reorder
   and name a model; under a member's Credentials, for Codex and for
   Copilot, *Sign in on a machine* where a connected machine runs the
@@ -737,20 +745,29 @@ the engines this machine does not run.
 - **A code is only as checked as whoever shows it.** For a phone that
   sends `reply` and makes the checks, the coordinator cannot read the
   code, cannot put one of its own in its place, and cannot say who a
-  sign-in ended on: the machine seals all three to the phone and signs
-  them with the key a custodian approved for the member's vault ("The
-  machine signs what it answers"). Two things are still open, and only
-  these. **A phone that skips the checks** shows whatever arrived: one
+  sign-in ended on or how an attempt ended: the machine seals all of it
+  to the phone and signs it with the key a custodian approved for the
+  member's vault ("The machine signs what it answers"), and the phone
+  draws nothing in the sheet from outside the seal. This list said "two
+  things are still open, and only these", and a second outside review
+  found two more, both since closed: the sentence beside the seal was the
+  coordinator's to write and the phones drew it, and the vault's answer
+  that tells a machine it is approved was the coordinator's to write too.
+  What is open now:
+  **A phone that skips the checks** shows whatever arrived: one
   that sends no `reply` is answered in the clear, and one that opens
   `sealed` without holding the key to the member's approved machines, or
   without checking the signature, has only shown that somebody knew its
   public key. The checks are each app's to make, and the wire cannot make
-  them for it. **The MCP path** has none of it: its caller holds no vault
-  answer to compare a machine's key with and no key to seal to, so its
-  answers are clear, the coordinator reads the code as it carries it and
-  could change it or enter it first under an account of its own, and the
-  tool says, in its description and after every code, that the code is
-  unverified.
+  them for it. **A phone or a machine from before those two fixes** does
+  what it did: such a phone draws a refusal's sentence as it came, and
+  such a machine takes any vault answer that opens. **The MCP path** has
+  none of it: its caller holds no vault answer to compare a machine's key
+  with and no key to seal to, so its answers are clear, the coordinator
+  reads the code as it carries it and could change it or enter it first
+  under an account of its own, or say a sign-in is on an account it is
+  not on, and the tool says so in its description and after every answer
+  that is not a refusal, whatever the answer holds.
 - **OpenCode names no account**, so for a Copilot sign-in there is no
   *Signed in as* for a person to find wrong, sealed or not.
 - **A machine cannot tell a grant for some of a vault from one for all of
