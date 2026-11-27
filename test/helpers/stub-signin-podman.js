@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 
+import { allGone, coverageAside, gatherCoverage } from './child-coverage.js';
 import { codexSignIn, copilotEntry } from './engine-files.js';
 
 const RUNNER = fileURLToPath(new URL('../../sandbox/engine.mjs', import.meta.url));
@@ -171,6 +172,11 @@ echo $$ > "$D/ctr-$name.pid"
 mkdir -p "$D/tmp/$name"
 export TMPDIR="$D/tmp/$name"
 export FLEETWRIGHT_ENGINE_HOME="$D/volumes/$vol" FLEETWRIGHT_CODEX_BIN="$D/codex" FLEETWRIGHT_OPENCODE_BIN="$D/opencode" STANDIN_DIR="$D"
+# REMOVED WHILE IT IS LEAVING, the runner is killed part way through writing
+# what it ran, and a run for coverage fails on the half file
+# (test/helpers/child-coverage.js). It writes aside, and the test hands on
+# what is whole.
+${coverageAside('"$D/v8"')}
 case "$1" in
   fleetwright-engine) shift; exec ${q(node)} ${q(RUNNER)} "$@" ;;
 esac
@@ -178,18 +184,24 @@ exit 127
 `);
   chmodSync(podmanBin, 0o755);
   const calls = () => (existsSync(path.join(dir, 'podman.log')) ? readFileSync(path.join(dir, 'podman.log'), 'utf8').split('\n').filter(Boolean) : []);
-  t.after(() => {
+  t.after(async () => {
     // Whatever a test left running under a container's name.
+    /** @type {number[]} */
+    const killed = [];
     for (const line of calls()) {
       const name = /--name (\S+)/.exec(line)?.[1];
       const pidFile = name ? path.join(dir, `ctr-${name}.pid`) : null;
       if (pidFile && existsSync(pidFile)) {
+        const pid = Number(readFileSync(pidFile, 'utf8'));
         try {
-          process.kill(-Number(readFileSync(pidFile, 'utf8')), 'SIGKILL');
+          process.kill(-pid, 'SIGKILL');
+          killed.push(pid);
         } catch { /* gone already */ }
       }
     }
-    rmSync(dir, { recursive: true, force: true });
+    await allGone(killed, 2000);
+    gatherCoverage(path.join(dir, 'v8'));
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   return {
     dir,

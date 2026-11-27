@@ -29,6 +29,7 @@ import { answerEngineCredential } from '../src/core/engine-box.js';
 import { applyVault } from '../src/core/vault-store.js';
 import { dispatch } from '../src/adapters/commands.js';
 import { killSession } from '../src/core/tmux.js';
+import { allGone, coverageAside, gatherCoverage } from './helpers/child-coverage.js';
 
 const tmux = spawnSync('tmux', ['-V']).status === 0;
 const RUNNER = fileURLToPath(new URL('../sandbox/engine.mjs', import.meta.url));
@@ -115,6 +116,13 @@ while [ $# -gt 0 ]; do
   shift
 done
 export AGENT_SESSION_HOOK_SOCKET="$own/hub.sock" HOME="$D/home" FLEETWRIGHT_OPENCODE_BIN="$D/opencode" FLEETWRIGHT_OPENCODE_SYSTEM_DIR="$D/etc-opencode"
+# Its pane is killed under it when the test is done, and the runner, told
+# to stop, tidies up and writes what it ran on its way out: after the test
+# has gone, as likely as not, and into the directory the test runner is by
+# then reading (test/helpers/child-coverage.js). It writes aside, and says
+# which process it is so that the test can wait for it to be gone.
+${coverageAside('"$D/v8"')}
+echo $$ >> "$D/ran.pids"
 case "$1" in
   fleetwright-engine) shift; exec ${q(node)} ${q(RUNNER)} "$@" ;;
   claude) exec ${q(node)} "$D/claude.mjs" ;;
@@ -145,7 +153,10 @@ exit 127
   t.after(async () => {
     killSession(name);
     await hooks.close(name);
-    rmSync(dir, { recursive: true, force: true });
+    const ran = existsSync(path.join(dir, 'ran.pids')) ? readFileSync(path.join(dir, 'ran.pids'), 'utf8').split('\n').filter(Boolean).map(Number) : [];
+    await allGone(ran);
+    gatherCoverage(path.join(dir, 'v8'));
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   const notes = () => readdirSync(dir).filter((f) => f.startsWith('HANDOFF-')).sort().map((f) => readFileSync(path.join(dir, f), 'utf8'));
   return { dir, cfg, registry, sm, name, RC_TIMEOUT, notes };
