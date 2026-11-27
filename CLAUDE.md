@@ -99,3 +99,8 @@ ready, never a reason to merge the others as if it were.
   reason: guidance for a focused security question, and a six-phase audit
   with independent verification when one is asked for by name. Its
   validators run with `node` alone.
+- [`.claude/skills/full-audit/SKILL.md`](.claude/skills/full-audit/SKILL.md) —
+  ours, written from the reviews this repository has already had: a full
+  code and design audit in stages, one sub-agent to a lane
+  (`LANES.md`), every finding checked before it is passed on, and a second
+  review of the fixes. It never merges, deploys or spends.
