@@ -62,6 +62,17 @@ enum IntentSigning {
         switch value {
         case let s as String:
             return quote(s)
+        // A TRUE OR A FALSE READ OUT OF JSON IS A NUMBER TO FOUNDATION, and
+        // was written here as 1 or 0, because the test for a whole number
+        // came first and such a value passes it. JavaScript writes the
+        // word. Nothing this phone signs carries one yet, and what it
+        // checks (a machine's answer about an engine's sign-in) is read
+        // out of JSON: the day a machine put a yes or no in that, every
+        // iPhone would have said the answer could not be checked, and no
+        // Android phone would. So what Foundation holds as a boolean is
+        // told apart first, by its own type.
+        case let n as NSNumber where CFGetTypeID(n as CFTypeRef) == CFBooleanGetTypeID():
+            return n.boolValue ? "true" : "false"
         case let i as Int:
             return String(i)
         case let b as Bool:

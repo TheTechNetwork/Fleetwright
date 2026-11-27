@@ -15,6 +15,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -186,9 +187,21 @@ internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListe
 
     // A MEMBER'S MACHINE, OPENED TO APPROVE IT: the same approval a machine's
     // own page shows, with the key this phone worked out to compare.
+    //
+    // CLOSING IT ASKS THE VAULT AGAIN. The sheet is drawn over this page,
+    // which never leaves the screen, so nothing else would. The page said
+    // "Approve it below, then sign in", and after exactly that it went on
+    // saying the machine was not approved, with no Sign in on a machine and
+    // the machine missing from Machines, until it was closed and opened.
     val opened = approving
     if (member != null && opened != null) {
-        FullScreen(title = opened.hostId, onDismiss = { approving = null }) {
+        FullScreen(
+            title = opened.hostId,
+            onDismiss = {
+                approving = null
+                scope.launch { reload() }
+            },
+        ) {
             VaultApproval(settings, opened, member)
         }
     }
@@ -251,28 +264,36 @@ internal fun YourVault(settings: Settings, member: Fleet.Member? = null, onListe
                 }
             }
             engineItemsOffered(whoseEngines, kept.items.map { it.name }).forEach { name ->
-                // SIGNED IN ON A MACHINE, for the two an engine signs in
-                // itself, and only for a member there is an id to ask as.
-                val engine = EngineSignin.engineOfItem(name)
-                if (engine != null && signsInAs != null) {
-                    EngineMachineSignIn(
-                        settings = settings,
-                        engine = engine,
-                        member = signsInAs,
-                        memberName = member?.name,
-                        hosts = machines,
-                        keys = boxes,
-                        grants = kept.grants,
-                        pasted = kept.items.any { it.name == name },
+                // EACH ITEM'S ROWS ARE ITS OWN, BY NAME. Without a key, what
+                // a row remembers belongs to its place in this loop, and the
+                // list grows from the front when a person's own engines
+                // arrive after what is kept: the block headed Codex then
+                // held what OpenCode's had been told, and the paste field
+                // under it what had been pasted for Copilot.
+                key(name) {
+                    // SIGNED IN ON A MACHINE, for the two an engine signs in
+                    // itself, and only for a member there is an id to ask as.
+                    val engine = EngineSignin.engineOfItem(name)
+                    if (engine != null && signsInAs != null) {
+                        EngineMachineSignIn(
+                            settings = settings,
+                            engine = engine,
+                            member = signsInAs,
+                            memberName = member?.name,
+                            hosts = machines,
+                            keys = boxes,
+                            grants = kept.grants,
+                            pasted = kept.items.any { it.name == name },
+                        )
+                    }
+                    EngineSignInRow(
+                        name = name,
+                        item = kept.items.firstOrNull { it.name == name },
+                        busy = busy,
+                        keep = { pasted -> keepEngine(name, pasted) },
+                        forget = { forgetting = name },
                     )
                 }
-                EngineSignInRow(
-                    name = name,
-                    item = kept.items.firstOrNull { it.name == name },
-                    busy = busy,
-                    keep = { pasted -> keepEngine(name, pasted) },
-                    forget = { forgetting = name },
-                )
             }
         }
 

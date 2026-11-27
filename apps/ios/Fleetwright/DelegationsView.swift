@@ -62,7 +62,7 @@ struct DelegationsView: View {
 
             Section {
                 ForEach(startable) { member in
-                    Toggle("Start sessions as \(member.name)", isOn: Binding(
+                    Toggle("Start and steer sessions as \(member.name)", isOn: Binding(
                         get: { chosen.contains(member.id) },
                         set: { on in
                             if on { chosen.insert(member.id) } else { chosen.remove(member.id) }
@@ -140,7 +140,7 @@ struct DelegationsView: View {
         let ids = d.members ?? []
         if ids.isEmpty { return "" }
         let said = ids.map { id in names.first { $0.id == id }?.name ?? id }
-        return " · starts sessions as \(said.joined(separator: ", "))"
+        return " · starts and steers sessions as \(said.joined(separator: ", "))"
     }
 
     @MainActor
@@ -186,10 +186,17 @@ struct DelegationsView: View {
     }
 }
 
-/// What turning on a member under An MCP client does, in one sentence. The
-/// same sentence as Android.
-let mcpMembersSentence = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member."
+/// What turning on a member under An MCP client does. A machine that takes
+/// only signed requests asks for a grant that names the member not only to
+/// start a session as it but to act on one that runs as it, and answers
+/// `member_not_delegated` without. The switch said "Start sessions as", so
+/// somebody who wanted their client to answer a member's prompt had no way
+/// to know this was the switch. The same words as Android.
+let mcpMembersSentence = "The MCP client may start a session as a member turned on here, on that member's sign-ins, and steer one that runs as that member: write a file into it, answer its prompt, resume it, read it or stop it. It does neither as any other member."
 
-/// What to do when a machine refuses a start as a member under such a grant.
+/// What an older machine does with a grant that names members, and what to
+/// do first. It rebuilds the signed bytes without the field, so the whole
+/// grant fails its check there: every stop and read the client sends that
+/// machine, where this used to say only a start as a member was refused.
 /// The same sentence as Android.
-let mcpMembersOlderMachine = "If a machine refuses a start as a member, update that machine: an older one does not take a grant that names members."
+let mcpMembersOlderMachine = "A machine from before members could be named refuses everything sent under a grant that names one, not only a start as a member. Update that machine before turning a member on."

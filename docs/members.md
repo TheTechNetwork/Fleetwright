@@ -460,8 +460,23 @@ The dialog says the cost first, by what the member is: the vault forgets
 what an agent kept and the machines approved for it, and a person's vault
 stays theirs. A minter that refuses stops the removal, and its sentence is
 shown. The one refusal the phone goes on after is `no_member`, a member the
-minter never held. If the coordinator then refuses, the member stays, the
-page says custody is not filed, and *File it* puts its place back. A phone
+minter never held.
+
+**The phone refuses first what the coordinator would refuse.** The two keep
+separate trees and each checks its own, and the minter's half is not given
+back: an agent's vault is emptied when the minter is told the agent is gone.
+So before the minter is told, the phone looks at the coordinator's list,
+which the page already holds, and where something reports to the member it
+says the coordinator's own sentence (*Jason reports to Debbie. Move them
+first.*) and sends nothing. The list can go stale and the coordinator can be
+out of reach, so the coordinator may still refuse after the minter agreed.
+The member then stays, and the line under the button says both halves: *The
+vault has already forgotten what it kept for Debbie and the machines
+approved for it, and the fleet still lists Debbie.* (for a person, that the
+vault took them out of its organization and what they keep is untouched),
+that *File it* under Custody puts the member back in the vault, and the
+coordinator's sentence after *Your fleet said:*. Filing puts the place back
+and nothing an agent's vault kept. A phone
 with no GitHub sign-in cannot ask the minter: on a fleet that has one it
 removes nothing and says to sign in under Runners, and on a fleet with no
 minter the coordinator is asked alone.

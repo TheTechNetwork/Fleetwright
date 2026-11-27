@@ -1194,9 +1194,18 @@ class Fleet(
          * ([EngineSignin.verified]). Null on every other reply.
          */
         val state: String? = null,
-        /** The engine's own sentence for a sign-in that failed. Null otherwise. */
+        /**
+         * The engine's own sentence for a sign-in that failed, as it arrives
+         * beside the seal. NOT DRAWN: a fleet that lies can write a code of
+         * its own here, so the sign-in block reads the reason from inside the
+         * checked answer or says none ([EngineSignin.shown]). Null otherwise.
+         */
         val detail: String? = null,
-        /** How many minutes a code that is out still lasts. Null otherwise. */
+        /**
+         * How many minutes a code that is out still lasts, as it arrives
+         * beside the seal. Not drawn, for the same reason: the minutes are
+         * worked out from the checked answer. Null otherwise.
+         */
         val expiresInMinutes: Int? = null,
     ) {
         /**

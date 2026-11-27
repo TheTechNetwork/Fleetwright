@@ -61,21 +61,25 @@ test('both phones offer the members an MCP client may start as, none chosen unti
   const ios = iosSources();
   const android = androidSources();
   for (const words of [
-    'Start sessions as ',
-    "The MCP client may start a session as a member turned on here, on that member's sign-ins, and as no other member.",
-    // A box from before the field refuses such a grant as badly signed, so
-    // the switches say what to do about that refusal.
-    'If a machine refuses a start as a member, update that machine: an older one does not take a grant that names members.',
-    ' · starts sessions as ',
+    // Starting and steering: a box that takes only signed requests asks for
+    // the member's name in the grant to act on a session that runs as it,
+    // not only to start one, and the switch says both.
+    'Start and steer sessions as ',
+    "The MCP client may start a session as a member turned on here, on that member's sign-ins, and steer one that runs as that member: write a file into it, answer its prompt, resume it, read it or stop it. It does neither as any other member.",
+    // A box from before the field refuses such a grant as badly signed, all
+    // of it and not only a start as a member, so the switches say that and
+    // what to do first.
+    'A machine from before members could be named refuses everything sent under a grant that names one, not only a start as a member. Update that machine before turning a member on.',
+    ' · starts and steers sessions as ',
   ]) {
     assert.ok(ios.includes(words), `iOS does not say "${words}"`);
     assert.ok(android.includes(words), `Android does not say "${words}"`);
   }
   // Each switch reads one set, and that set starts empty.
-  const iosSet = /Toggle\("Start sessions as \\\(\w+\.name\)", isOn: Binding\(\s*get: \{ (\w+)\.contains\(/.exec(ios)?.[1];
+  const iosSet = /Toggle\("Start and steer sessions as \\\(\w+\.name\)", isOn: Binding\(\s*get: \{ (\w+)\.contains\(/.exec(ios)?.[1];
   assert.ok(iosSet, 'iOS has no switch for a member an MCP client may start as');
   assert.match(ios, new RegExp(`@State private var ${iosSet}: Set<String> = \\[\\]`), 'iOS starts with a member already chosen');
-  const androidSet = /Text\("Start sessions as \$\{\w+\.name\}"[\s\S]{0,200}?Switch\(\s*checked = \w+\.id in (\w+),/.exec(android)?.[1];
+  const androidSet = /Text\("Start and steer sessions as \$\{\w+\.name\}"[\s\S]{0,200}?Switch\(\s*checked = \w+\.id in (\w+),/.exec(android)?.[1];
   assert.ok(androidSet, 'Android has no switch for a member an MCP client may start as');
   assert.match(android, new RegExp(`var ${androidSet} by remember \\{ mutableStateOf\\(setOf<String>\\(\\)\\) \\}`), 'Android starts with a member already chosen');
   // And what is turned on is what the grant is asked to name.

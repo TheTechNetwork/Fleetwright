@@ -16,7 +16,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { verify, fromB64Url } from '../src/fleet/crypto.js';
+import { verify, fromB64Url, signingInput } from '../src/fleet/crypto.js';
 import { keyId, signinAnswerInput } from '../src/fleet/protocol/intent-signature.js';
 import { boxKeyHash } from '../src/fleet/minter/vault.js';
 import { open, importDepositKey, newSealKey, ENGINE_SIGNIN_AAD } from '../src/fleet/seal.js';
@@ -92,4 +92,49 @@ test('the sealed vector opens with the key a phone kept, to what a box signed: t
   // And a sealed answer's bytes are not a clear one's: left out, who is signed in is not "nobody".
   const { signedIn: _who, ...clear } = signed;
   assert.equal(await verify(hostKey, signature, signinAnswerInput(clear)), false);
+});
+
+test('each further sealed answer opens with its own key, to bytes a box builds and a signature that holds over them', async () => {
+  // SEVEN MORE, under `more`, made by test/helpers/make-engine-signin-vectors.mjs
+  // (which says how) and carried by both phones' tests. Three are the shape a
+  // box sends on main: their bytes are `signinAnswerInput`'s, the function a
+  // box signs with. Four are the next shape, with `state`, `detail` and
+  // `expiresAt` inside what is signed: their bytes are every opened field
+  // but the key and the signature, in the same canonical form, which is what
+  // a phone checks whatever the fields are.
+  const names = VECTOR.more.map((/** @type {any} */ m) => m.name);
+  assert.deepEqual(names, ['opencode-signed-in', 'none', 'next-waiting', 'next-failed', 'foreign-page', 'next-signed-in', 'next-failed-quoted']);
+  for (const m of VECTOR.more) {
+    const mine = await importDepositKey(JSON.stringify({ kty: 'EC', crv: 'P-256', d: m.recipient.d, x: m.recipient.x, y: m.recipient.y }));
+    assert.equal(mine.publicKey, m.recipient.publicKey, m.name);
+    const opened = await open({ privateKey: mine.privateKey, publicKey: mine.publicKey, aad: ENGINE_SIGNIN_AAD, sealed: m.sealed });
+    assert.deepEqual(opened, m.opened, m.name);
+    const { hostKey, signature, v, ...signed } = opened;
+    assert.equal(v, 1);
+    assert.deepEqual([await keyId(hostKey), signed.host], [m.host, m.host], m.name);
+    assert.equal(signingInput('engine-signin-answer', { v: 1, ...signed }), m.signingInput, m.name);
+    if (m.shape === 'main') assert.equal(signinAnswerInput(signed), m.signingInput, `${m.name}: not the bytes a box on main signs`);
+    else assert.deepEqual(['state', 'detail'].map((k) => k in signed), [true, true], `${m.name}: the next shape signs how it stands and why`);
+    assert.equal(await verify(hostKey, signature, m.signingInput), true, m.name);
+    // With who is signed in changed, or the code, it does not hold.
+    assert.equal(await verify(hostKey, signature, signingInput('engine-signin-answer', { v: 1, ...signed, signedIn: { since: 1, who: null } })), false, m.name);
+  }
+  // What each is there to show a phone.
+  const by = Object.fromEntries(VECTOR.more.map((/** @type {any} */ m) => [m.name, m.opened]));
+  assert.deepEqual(by['opencode-signed-in'].signedIn.who, null);
+  assert.equal(by.none.signedIn, null);
+  assert.equal(by['next-waiting'].expiresAt - by['next-waiting'].at, 15 * 60_000);
+  assert.deepEqual([by['next-failed'].state, typeof by['next-failed'].detail, 'code' in by['next-failed']], ['failed', 'string', false]);
+  assert.notEqual(by['foreign-page'].url, 'https://auth.openai.com/codex/device');
+  // The answer a box sends most: Codex signed in, naming its account, with
+  // `who` written inside `signedIn` inside what is signed, keys in order.
+  assert.deepEqual([by['next-signed-in'].state, by['next-signed-in'].signedIn.who], ['signed_in', { email: 'debbie@example.com', plan: 'plus' }]);
+  const signedIn = VECTOR.more.find((/** @type {any} */ m) => m.name === 'next-signed-in').signingInput;
+  assert.ok(signedIn.includes(`"signedIn":{"since":${by['next-signed-in'].signedIn.since},"who":{"email":"debbie@example.com","plan":"plus"}},"state":"signed_in"`), signedIn);
+  // A reason with a quote, a backslash and a slash: the first two are
+  // signed with a backslash before them and the slash as itself, which is
+  // the one spelling a phone has to write to check it.
+  const quoted = VECTOR.more.find((/** @type {any} */ m) => m.name === 'next-failed-quoted');
+  for (const mark of ['"', '\\', '/']) assert.ok(quoted.opened.detail.includes(mark), `the reason has no ${mark}`);
+  assert.ok(quoted.signingInput.includes(String.raw`"detail":"the provider said \"no\" for C:\\Users\\debbie at /codex/device"`), quoted.signingInput);
 });

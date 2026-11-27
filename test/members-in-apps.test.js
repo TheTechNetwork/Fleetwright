@@ -14,6 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { iosSources } from './helpers/ios-sources.js';
 import { androidSources } from './helpers/android-sources.js';
+import { OrgMembers } from '../src/fleet/coordinator/org-members.js';
 
 const IOS = iosSources();
 const ANDROID = androidSources();
@@ -210,6 +211,71 @@ test('Remove asks first, says what it costs by kind, and tells the vault before 
     assert.doesNotMatch(between, /\n\s*(?:\w+ )*(?:func|fun) \w/, `${name} tells the vault and the fleet in different functions`);
     assert.ok(between.includes('"no_member"'), `${name} does not go on when the vault never held the member`);
   }
+});
+
+test('a removal the fleet’s own list shows it would refuse is refused on the phone before the vault is told, in the fleet’s sentence', () => {
+  // THE VAULT'S HALF IS NOT GIVEN BACK. It empties an agent's vault when it
+  // is told the agent is gone, and it checks its own tree, not the fleet's.
+  // So an agent with a report the vault had not heard of was emptied, and
+  // then kept by the fleet with "Jason reports to Debbie. Move them first."
+  // The phone holds the fleet's list, and says that sentence itself first.
+  //
+  // THE SENTENCE IS THE FLEET'S, made here by the fleet's own code and held
+  // against what each phone would say for the same members.
+  const admin = { email: 'eli@example.com', admin: true };
+  const fleetSays = (/** @type {string[]} */ reports) => {
+    const org = new OrgMembers();
+    assert.equal(org.set(admin, 'debbie', { name: 'Debbie', kind: 'agent', role: 'dev' }).ok, true);
+    for (const name of reports) assert.equal(org.set(admin, name.toLowerCase(), { name, kind: 'agent', role: 'dev', reportsTo: 'debbie' }).ok, true);
+    const said = org.remove(admin, 'debbie');
+    assert.equal(said.error?.code, 'has_reports');
+    return said.text;
+  };
+  /** A phone's two sentences with its moving parts filled in. @param {string} one @param {string} many */
+  const phoneSays = (one, many) => (/** @type {string[]} */ reports) =>
+    (reports.length === 1 ? one : many).replace('{names}', reports.join(', ')).replace('{member}', 'Debbie');
+  const ios = /\? "\\\(names\) ([^"]+?) \\\(member\.name\)([^"]+)"\s*: "\\\(names\) ([^"]+?) \\\(member\.name\)([^"]+)"/.exec(IOS);
+  const android = /"\$names ([^"]+?) \$\{member\.name\}([^"]+)"\s*else "\$names ([^"]+?) \$\{member\.name\}([^"]+)"/.exec(ANDROID);
+  assert.ok(ios, 'iOS has no sentence for a member something reports to');
+  assert.ok(android, 'Android has no sentence for a member something reports to');
+  for (const [name, m] of /** @type {const} */ ([['iOS', ios], ['Android', android]])) {
+    const says = phoneSays(`{names} ${m[1]} {member}${m[2]}`, `{names} ${m[3]} {member}${m[4]}`);
+    for (const reports of [['Jason'], ['Jason', 'Kim']]) {
+      assert.equal(says(reports), fleetSays(reports), `${name} refuses a removal in other words than the fleet would`);
+    }
+  }
+  // BEFORE THE VAULT, in the one function that removes: the list is asked,
+  // and what it says ends the removal there.
+  for (const [name, src, stops] of /** @type {const} */ ([
+    ['iOS', IOS, /if let (\w+) = \w+\(\w+, roster: roster\) \{\s*removeResult = \1\s*return\s*\}/],
+    ['Android', ANDROID, /\w+\(member, roster\)\?\.let \{\s*removeResult = it\s*return\s*\}/],
+  ])) {
+    const asked = src.search(stops);
+    const vault = src.search(/fileOrgMember\([^)]*remove(?:: | = )true\)/);
+    assert.ok(asked > 0, `${name} tells the vault a member is gone without asking the fleet’s list first`);
+    assert.ok(asked < vault, `${name} asks the fleet’s list after the vault was told`);
+    assert.doesNotMatch(src.slice(asked, vault), /\n\s*(?:\w+ )*(?:func|fun) \w/, `${name} asks the fleet’s list in another function than the one that removes`);
+  }
+});
+
+test('when the fleet keeps a member the vault already took out, the line says both halves, the same on both phones', () => {
+  // THE FLEET'S SENTENCE ALONE READ AS "NOTHING WAS REMOVED". After the
+  // vault said yes, an agent's vault is already empty, so that is said
+  // first, then how the member is put back, then the fleet's words as the
+  // fleet's.
+  for (const words of [
+    'The vault has already forgotten what it kept for ',
+    ' and the machines approved for it, and the fleet still lists ',
+    'The vault has already taken ',
+    ' out of its organization, and the fleet still lists them. What they keep is untouched.',
+    ' File it, under Custody, puts the member back in the vault. Your fleet said: ',
+  ]) {
+    assert.ok(IOS.includes(words), `iOS lost: ${words}`);
+    assert.ok(ANDROID.includes(words), `Android lost: ${words}`);
+  }
+  // Said only once the vault was told, with the fleet's answer inside it.
+  assert.match(IOS, /if toldVault \{\s*removeResult = \w+\(shown\.name, kind: shown\.kind, fleetSaid: removeResult\)/);
+  assert.match(ANDROID, /if \(toldVault\) \{\s*removeResult = \w+\(member\.name, member\.kind, removeResult\)/);
 });
 
 test('File it is drawn only for somebody the vault would take it from, and anybody else reads who files it (C-2)', () => {

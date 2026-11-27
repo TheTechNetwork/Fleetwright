@@ -498,7 +498,15 @@ internal fun EngineSignInRow(
                 if (pasted.isEmpty() || revealed) {
                     OutlinedTextField(
                         value = pasted,
-                        onValueChange = { pasted = it },
+                        // TYPING IS NOT PASTING. The field hid itself at
+                        // the first character, so somebody typing lost the
+                        // field under their thumb and read "1 characters".
+                        // What arrives one character at a time into an
+                        // empty field is shown; a paste is hidden.
+                        onValueChange = { typed ->
+                            if (pasted.isEmpty() && typed.length == 1) revealed = true
+                            pasted = typed
+                        },
                         label = { Text("auth.json") },
                         minLines = 3,
                         maxLines = 8,
@@ -614,7 +622,7 @@ const val COPILOT_TOKEN_LINE = "It is the refresh value under github-copilot in 
  * What stands in the field's place while a pasted auth.json is hidden. The
  * same sentence as iOS.
  */
-fun pastedHiddenLine(count: Int): String = "Pasted and hidden: $count characters."
+fun pastedHiddenLine(count: Int): String = if (count == 1) "Pasted and hidden: 1 character." else "Pasted and hidden: $count characters."
 
 /**
  * A member's engines, on its form: an ordered list to add to, remove from
