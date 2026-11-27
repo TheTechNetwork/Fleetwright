@@ -47,7 +47,7 @@ packages:
   SwiftNIOSSH:
     url: https://github.com/apple/swift-nio-ssh
     # renovate: datasource=github-tags depName=apple/swift-nio-ssh
-    exactVersion: 0.15.1
+    exactVersion: 0.15.2
   SwiftNIO:
     url: https://github.com/apple/swift-nio
     # renovate: datasource=github-tags depName=apple/swift-nio
