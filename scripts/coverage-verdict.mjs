@@ -113,3 +113,96 @@ export function skippedCount(stdout) {
   const m = /^\u2139 skipped (\d+)$/m.exec(stdout || '');
   return m ? Number(m[1]) : 0;
 }
+
+/**
+ * What to say of a suite run that did not pass.
+ *
+ * THE FAILING TESTS, WHEN THERE ARE ANY TO NAME. And when there are none,
+ * WHATEVER ENDED THE RUN, because a run can fail without a failing test: the
+ * runner is killed (out of memory is a SIGKILL, and leaves no last word), its
+ * output passes the buffer it is read into, or it dies after the last test
+ * with something on stderr. Each of those used to print an empty line here,
+ * and verify.sh then printed `tests ... FAILED` over nothing. Three people
+ * met that in one night with several suites running on one box, reran, saw
+ * green, and never learned which it had been. A failure with no name gets
+ * reread as noise, which is the thing a gate must not teach.
+ *
+ * @param {{ status: number|null, signal?: string|null, error?: { code?: string, message?: string }|null, stdout?: string, stderr?: string }} run
+ *   what `spawnSync` returned for the suite
+ * @returns {string[]}  lines to print, never empty
+ */
+export function whatFailed(run) {
+  const named = (run.stdout || '').split('\n').filter((l) => /^(not ok|\u2716)/.test(l)).slice(0, 10);
+  // A RUN THAT WAS ENDED AFTER A TEST HAD FAILED says both. The names alone
+  // read as the whole list, and it is the list up to where the run stopped.
+  if (named.length) {
+    if (run.signal) named.push(`and the test runner was then ended by ${run.signal}, so tests after these did not run.`);
+    else if (run.error) named.push(`and the run was then stopped (${run.error.code || run.error.message || 'no reason given'}), so tests after these did not run.`);
+    return named;
+  }
+  const said = [];
+  if (run.error) {
+    said.push(run.error.code === 'ENOBUFS'
+      ? 'the suite printed more than this script reads, so it was stopped before its end. Something is printing far more than it used to.'
+      : `the suite could not be run to its end: ${run.error.code || run.error.message || 'no reason given'}.`);
+  }
+  if (run.signal) {
+    said.push(`the test runner was ended by ${run.signal}, and named no failing test.${run.signal === 'SIGKILL' ? ' That is what running out of memory looks like: is another suite running on this machine?' : ''}`);
+  }
+  if (!said.length) said.push(`the test runner exited ${run.status === null ? 'with no status' : run.status} and named no failing test.`);
+  // WHAT THE RUNNER WARNED OF, which is the whole story when every test
+  // passed: node prints a failure to build the coverage report as a warning
+  // among its closing lines and exits 1 for it. Caught once, after three
+  // people had rerun past it: one process's coverage file was cut short
+  // ("Unterminated string in JSON at position 524288"), so there was no
+  // report, so the run "failed" with 4327 passing and 0 failing.
+  const warned = (run.stdout || '').split('\n').filter((l) => /^(\u2139|#) Warning: /.test(l)).map((l) => l.slice(0, 600));
+  if (warned.length) said.push('every test may have passed; the runner warned:', ...warned.slice(0, 5));
+  const stderr = (run.stderr || '').trim();
+  if (stderr) said.push('what it wrote last:', stderr.slice(-2000));
+  else {
+    const last = (run.stdout || '').trim().split('\n').slice(-8);
+    if (last.join('').trim()) said.push('the last lines of its output:', ...last);
+  }
+  return said;
+}
+
+/**
+ * The coverage file a run could not read, if it said so, and null otherwise.
+ *
+ * @param {string} stdout  the suite's output
+ * @returns {string|null}
+ */
+export function unreadCoverageFile(stdout) {
+  const m = /failed to parse coverage file (\S+\.json)/.exec(stdout || '');
+  return m ? m[1] : null;
+}
+
+/**
+ * Which process a cut-short coverage file was, as far as the file says: the
+ * first few of this repository's own files it had loaded, in the order V8
+ * listed them. The file cannot be parsed, which is the fault being reported,
+ * so the names are picked out of its text.
+ *
+ * A PROCESS IS NAMED BY WHAT IT RAN. The file's own name holds only a process
+ * id, long gone by the time anybody reads the message. Its first scripts are
+ * the program's entry and what that imported first, which is enough to say
+ * "the hub a test started" or "the stand-in Podman", and so which tests to
+ * look at for a process still writing as the run ended.
+ *
+ * @param {string} text  what could be read of the file
+ * @param {number} [most]
+ * @returns {string[]}  paths, shortened to what follows the repository's root where they are in it
+ */
+export function scriptsIn(text, most = 6) {
+  /** @type {string[]} */
+  const out = [];
+  for (const m of String(text || '').matchAll(/"url":"file:\/\/([^"]+)"/g)) {
+    const file = m[1];
+    if (file.includes('/node_modules/')) continue;
+    const short = file.replace(/^.*\/(src|test|bin|scripts|sandbox|worker|install|tools)\//, '$1/');
+    if (!out.includes(short)) out.push(short);
+    if (out.length >= most) break;
+  }
+  return out;
+}
