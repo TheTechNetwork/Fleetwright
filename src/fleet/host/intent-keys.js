@@ -142,11 +142,14 @@ export async function keyListFrom({ payload, signature, pinned, host, now }) {
 export class IntentKeys {
   /**
    * @param {{ origin: string, dir: string|null, hostKey: { publicJwk: { x: string, y: string }, sign: (message: string) => Promise<string> },
-   *   ask: (request: any, signature: string) => Promise<any>, fetchImpl?: typeof fetch, now?: () => number, log?: { info: (s: string) => void, warn: (s: string) => void } }} opts
-   *   `ask` sends the box's request to the coordinator and resolves with what came back
+   *   ask: (request: any, signature: string) => Promise<any>, onList?: (() => void)|null, fetchImpl?: typeof fetch, now?: () => number, log?: { info: (s: string) => void, warn: (s: string) => void } }} opts
+   *   `ask` sends the box's request to the coordinator and resolves with what came back;
+   *   `onList` is called each time a list is taken
    */
-  constructor({ origin, dir, hostKey, ask, fetchImpl = (...a) => fetch(...a), now = () => Date.now(), log = { info() {}, warn() {} } }) {
+  constructor({ origin, dir, hostKey, ask, onList = null, fetchImpl = (...a) => fetch(...a), now = () => Date.now(), log = { info() {}, warn() {} } }) {
     this.origin = new URL(origin).origin;
+    /** Told each time a list is taken, after it is in place: whoever holds this may act on who it names now (sidecar.js, #tellHubWhoIsListed). @type {(() => void)|null} */
+    this.onList = onList;
     this.file = dir ? path.join(dir, MINTER_KEY_FILE) : null;
     this.signersFile = dir ? path.join(dir, SIGNERS_FILE) : null;
     this.hostKey = hostKey;
@@ -158,6 +161,8 @@ export class IntentKeys {
     this.pinned = null;
     /** @type {string|null} a sentence saying what is wrong, for health */
     this.problem = null;
+    /** Whether the last look for the minter's key reached the fleet's address and was given something that is not the minter's answer (#pin). */
+    this.unrouted = false;
     /** @type {Map<string, Array<{ kid: string, key: any, label: string }>>|null} */
     this.directory = null;
     /** Who may start as each member, from the same list (keyListFrom). @type {Map<string, { kind: 'person'|'agent', email: string|null, may: string[] }>|null} */
@@ -226,11 +231,28 @@ export class IntentKeys {
     }
     /** @type {any} */
     let answer = null;
+    // REACHED, AND NOT THE MINTER'S ANSWER: a status that is not a success,
+    // or a body that is not JSON. That is not a box that cannot reach its
+    // fleet, and saying so sent somebody to look at a network that was
+    // fine. It is a fleet whose deploy gave the minter no route on the
+    // fleet's own hostname (a fork on workers.dev, a deploy token that
+    // cannot write routes), where the coordinator, or nothing, answers
+    // this path. A third review found a box on such a fleet refusing every
+    // vault answer for good with "look at whether this box can reach it".
+    let gave = '';
     try {
       const res = await this.fetchImpl(`${this.origin}${MINTER_KEY_PATH}`, { headers: { accept: 'application/json' } });
-      answer = res.ok ? await res.json() : null;
+      if (!res.ok) gave = `HTTP ${res.status}`;
+      else {
+        try {
+          answer = await res.json();
+        } catch {
+          gave = 'a page that is not the minter’s answer';
+        }
+      }
     } catch (e) {
       if (!this.pinned) {
+        this.unrouted = false;
         this.problem = `the minter’s address could not be reached for its signing key: ${/** @type {Error} */ (e).message}`;
         return null;
       }
@@ -238,9 +260,13 @@ export class IntentKeys {
     const served = p256(answer?.signing);
     if (!this.pinned) {
       if (!served) {
-        this.problem = 'the minter’s address gives no signing key yet, so this box has nothing to check signatures with';
+        this.unrouted = Boolean(gave);
+        this.problem = gave
+          ? `${this.origin}${MINTER_KEY_PATH} answers with ${gave}, which is a fleet whose minter has no route at the fleet’s own address, so this box has nothing to check signatures with`
+          : 'the minter’s address gives no signing key yet, so this box has nothing to check signatures with';
         return null;
       }
+      this.unrouted = false;
       this.pinned = served;
       if (this.file) {
         mkdirSync(path.dirname(this.file), { recursive: true });
@@ -251,6 +277,30 @@ export class IntentKeys {
     } else if (served && (served.x !== this.pinned.x || served.y !== this.pinned.y)) {
       this.problem = `the minter’s address now gives a different signing key from the one this box keeps; no key list is taken until somebody deletes ${this.file ?? MINTER_KEY_FILE} on this box to accept it`;
       return null;
+    }
+    return this.pinned;
+  }
+
+  /**
+   * The minter's signing key this box keeps, for the one other thing it
+   * signs for a box: its answer to a vault request (sidecar.js, #askVault;
+   * protocol/vault-answer.js). The same key the key list is checked with, so
+   * a box has one pin and not two.
+   *
+   * THE KEPT KEY, WITHOUT ASKING AGAIN, once there is one: the address is
+   * asked on every key list, which is where a changed key is noticed and
+   * said (#pin). Until one is kept it is fetched now, because a box's first
+   * vault answer can arrive before its first key list. Null when there is
+   * none to be had, and `problem` then says why. Never throws.
+   *
+   * @returns {Promise<{ kty: string, crv: string, x: string, y: string }|null>}
+   */
+  async minterKey() {
+    if (this.pinned) return this.pinned;
+    try {
+      await this.#pin();
+    } catch (e) {
+      this.problem = `the minter’s signing key could not be kept: ${/** @type {Error} */ (e).message}`;
     }
     return this.pinned;
   }
@@ -284,6 +334,11 @@ export class IntentKeys {
       this.revoked = list.revoked;
       this.#noteSigners(list.directory, list.cleared);
       this.problem = null;
+      // After the list is in place, and never for one that was not taken:
+      // every return above this one leaves the last list as it was.
+      try {
+        this.onList?.();
+      } catch { /* what a listener does with a list is not a reason to refuse the list */ }
       return true;
     } catch (e) {
       this.problem = `the key list could not be fetched: ${/** @type {Error} */ (e).message}`;

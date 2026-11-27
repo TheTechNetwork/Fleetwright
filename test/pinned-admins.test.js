@@ -23,6 +23,7 @@ import { promisify } from 'node:util';
 import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { HubClient } from '../src/fleet/host/hub-client.js';
 import { IntentKeys, KEY_LIST_MAX_AGE_MS } from '../src/fleet/host/intent-keys.js';
+import { generateKeyPair } from '../src/fleet/crypto.js';
 import { adminCommand, rootRefusal, seedPins } from '../src/fleet/host/pinned-admins.js';
 import { loadSidecarConfig, validateSidecarConfig } from '../src/fleet/host/config.js';
 import { PIN_SENTENCES, PROTOCOL_VERSION } from '../src/fleet/protocol/intents.js';
@@ -346,6 +347,43 @@ test('a key list too old to check with strands the box, and its health says so',
   assert.deepEqual((await sidecar.health()).admins, { pinned: [ADA] });
   now += 2 * KEY_LIST_MAX_AGE_MS + 1;
   assert.deepEqual((await sidecar.health()).admins, { pinned: [ADA], stranded: 'unchecked', left: PIN_SENTENCES.unchecked });
+});
+
+test('a fleet address that answers without the minter’s key is said to be that, and a key put there by hand is used', async (t) => {
+  // REACHED IS NOT GIVEN. On a fleet whose deploy gave the minter no route
+  // (a fork on workers.dev, a token that cannot write routes) the key path
+  // is a 404 or the coordinator's own page. That read as "could not be
+  // reached", with a JSON error for a reason, and the box's vault sentence
+  // told somebody to look at a network that was fine.
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-unrouted-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const keysFor = (/** @type {() => Promise<Response>} */ answer) => new IntentKeys({
+    origin: 'https://coord.example.workers.dev', dir, fetchImpl: /** @type {any} */ (answer),
+    hostKey: { publicJwk: { x: 'x', y: 'y' }, sign: async () => '' }, ask: async () => ({ ok: false }),
+  });
+  for (const [answer, gave] of /** @type {Array<[() => Promise<Response>, string]>} */ ([
+    [async () => new Response('Not found', { status: 404 }), 'HTTP 404'],
+    [async () => new Response('<!doctype html><title>Fleetwright</title>', { status: 200, headers: { 'content-type': 'text/html' } }), 'a page that is not the minter’s answer'],
+  ])) {
+    const keys = keysFor(answer);
+    assert.equal(await keys.minterKey(), null);
+    assert.equal(keys.unrouted, true);
+    assert.equal(keys.problem, `https://coord.example.workers.dev/.well-known/fleetwright-minter answers with ${gave}, which is a fleet whose minter has no route at the fleet’s own address, so this box has nothing to check signatures with`);
+  }
+  // Not reached at all is the other thing, and still says so.
+  const offline = keysFor(async () => { throw new Error('getaddrinfo ENOTFOUND coord.example.workers.dev'); });
+  assert.equal(await offline.minterKey(), null);
+  assert.equal(offline.unrouted, false);
+  assert.match(String(offline.problem), /^the minter’s address could not be reached for its signing key: getaddrinfo ENOTFOUND/);
+
+  // GIVEN BY HAND (docs/vault.md, "A fleet whose minter has no route"): the
+  // public half in the box's own directory is the pin, with the address
+  // still answering 404.
+  const minters = await generateKeyPair();
+  const { kty, crv, x, y } = minters.publicJwk;
+  writeFileSync(path.join(dir, 'minter-signing.json'), `${JSON.stringify({ kty, crv, x, y })}\n`);
+  const given = keysFor(async () => new Response('Not found', { status: 404 }));
+  assert.deepEqual(await given.minterKey(), { kty: 'EC', crv: 'P-256', x, y });
 });
 
 test('with no list to check with, a box whose every admin left says it checks nobody, and says so when it refuses', async (t) => {

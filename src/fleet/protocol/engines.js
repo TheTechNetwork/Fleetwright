@@ -257,8 +257,12 @@ export const HANDS_ON = Object.freeze(['limit', 'auth', 'model']);
  * (the runner's copy says whose).
  */
 export const LIMIT_WORDS = /rate.?limit|usage.?limit|quota|too many requests|\b429\b|credit balance|limit (?:reached|exceeded)|out of (?:credits|usage)|insufficient (?:credits?|funds|balance)|more credits|payment.?required|\b402\b|exceeded your [a-z ]{0,40}allowance/i;
-/** Words that mean the sign-in is missing or ended. Mirrored the same way. */
-export const AUTH_WORDS = /not (?:logged|signed) in|unauthori[sz]ed|authentication|\b401\b|invalid (?:api key|token|credentials)|(?:token|credentials|session) (?:has |have )?expired|log ?in required|please (?:log|sign) in/i;
+/**
+ * Words that mean the sign-in is missing or ended. Mirrored the same way.
+ * The last two are Codex's own for a sign-in it could not renew (the
+ * runner's copy quotes where from).
+ */
+export const AUTH_WORDS = /not (?:logged|signed) in|unauthori[sz]ed|authentication|\b401\b|invalid (?:api key|token|credentials)|(?:token|credentials|session) (?:has |have )?expired|log ?in required|please (?:log|sign) in|access token could not be refreshed|log out and sign in again|user not found|bad credentials|no (?:cookie )?auth credentials/i;
 
 /**
  * Claude Code's own names for why a turn failed, as reasons: the `error`

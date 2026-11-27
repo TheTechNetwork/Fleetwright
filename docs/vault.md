@@ -396,13 +396,70 @@ it with `$(cat …)` and never carries it. Written whole on every answer, so a
 person who removed the box, or emptied their vault, is gone from it on the
 next pass.
 
+**A box takes only the vault's own answer.** The answer is sealed to a key
+the box sent in the clear, so being able to open it says nothing about who
+wrote it. The minter signs what it seals ("Who may ask", above), and the
+sidecar checks that signature before it opens the answer
+(`Sidecar#askVault`), with the minter's signing key it pins from the
+fleet's own address for the key list: over its own key's id, its own
+request's `at` and `reply`, and the digest of the sealed part it was
+handed. An answer that does not pass sets no approval, hands fleetwright
+nothing and clears nothing. Before this the box filed whatever opened: a
+coordinator's own answer made a box believe an approval nobody gave, and
+put a member's sign-in of the coordinator's choosing where that member's
+sessions read it. Each way of not passing is said in the box's log, as a
+warning, with what ends it:
+
+- **not signed at all**, which is a minter older than the box, or one
+  whose signing key does not load: whoever runs the fleet deploys the
+  minting Worker again;
+- **no key to check with**, when the box has never been given the
+  minter's key at the fleet's own address. The sentence says which of two
+  it is: the address could not be reached, which is the box's network, or
+  it was reached and answered with something that is not the minter's
+  (a 404, a page), which is a fleet whose minter has no route there
+  (below);
+- **signed by another key**, so it was changed on the way or the minter
+  has a new signing key: delete `minter-signing.json` on the box to accept
+  a new key, and otherwise something between the box and the vault is
+  answering in its place.
+
+A machine refusing an engine sign-in because it has not heard whose
+credentials it may hold (`approval_unknown`) gives the same reason
+([engines.md](./engines.md)).
+
+**A fleet whose minter has no route.** The deploy routes one path on the
+fleet's own hostname to the minting Worker, and that is the only place a
+box learns the key it checks the vault's answers with. A fleet without a
+custom domain (a fork on workers.dev) gets no route, and so does one whose
+deploy token cannot edit Workers Routes; the deploy warns and carries on.
+On such a fleet a box that checks the vault's signature takes nothing from
+the vault, where a box from before the check took whatever opened. That is
+the check working: with no route, the path is answered by the coordinator
+or by nobody, and a key learned there would be the coordinator's to
+choose. Two ways out, and waiting is not one:
+
+- give the minter its route: a custom domain for the fleet, and a deploy
+  token that may edit Workers Routes on its zone ([ci.md](./ci.md)). Every
+  box pins the key at its next ask;
+- or give each box the key by hand: put the **public half** of the
+  minter's signing key (the JWK with `d` taken out: `kty`, `crv`, `x`,
+  `y`) in `minter-signing.json` in the box's state directory, beside its
+  own key. A box reads that file before it asks the address, and keeps
+  using it while the address gives nothing. This needs the signing key in
+  your hands, which is the one you put in Secrets Store ("Kept a second
+  time, outside the minter", below); a minter that made its own key and
+  has no route has no way to tell anybody what it is.
+
 **What makes a box forget, and what does not.** Two things clear what a box
-holds: an answer the vault sealed that names nobody for it, and the
-coordinator saying the request is not signed by the key this box enrolled
-with (`not_this_box`). Every other refusal is cannot tell, and the box keeps
-what it holds until it runs out and asks again at its usual time: no answer,
-an answer that does not open, a fleet that says it has no vault just now,
-and `bad_signature`. That last one used to forget. A vault from before a box
+holds: an answer the vault sealed **and signed** that names nobody for it,
+and the coordinator saying the request is not signed by the key this box
+enrolled with (`not_this_box`). That second one is still the coordinator's
+word, and it can only take away. Every other refusal is cannot tell, and
+the box keeps what it holds until it runs out and asks again at its usual
+time: no answer, an answer that is not the vault's (above), an answer that
+does not open, a fleet that says it has no vault just now, and
+`bad_signature`. That last one used to forget. A vault from before a box
 said what it takes (`accepts`) checks the signature without that list, so it
 answers a box that signs one with `bad_signature` every time, and a box
 upgraded before its vault dropped every credential it held and got none

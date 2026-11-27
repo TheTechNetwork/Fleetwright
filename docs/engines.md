@@ -19,28 +19,65 @@ step 7. **A machine runs only the engines it reports**, and none reports
 and names them (`FLEETWRIGHT_ENGINES`), so a fleet that changes nothing runs
 exactly as it did.
 
-**What has and has not been run.** The two adapters are tested against
-stand-in servers that speak each engine's published protocol, and the Codex
-adapter's opening was checked against the real `codex app-server`, signed
-out. No turn has been sent to a real Codex or OpenCode. The move from one
-engine to the next is run in a test through the real launch, a real tmux pane
-and the real runner, with a script standing in for podman and for each
-engine (`test/engines-launch.test.js`). It has not been run on a box, in a
-container, with a real engine. The image with the engines in it is built and
-run in CI (`.github/workflows/sandbox.yml`), which this change added and
-which has not run yet: nothing here could build a container.
+**What has and has not been run.** Four different things, and which one a
+claim on this page rests on matters.
 
-**Signing in on the machine has not been run against anything real.** The
-runner's sign-in mode is tested against stand-ins that answer as each
-engine's source reads at the version the image pins (`codex app-server`
-0.171.0, `account/login/start` with `chatgptDeviceCode`; `opencode serve`
-1.19.6, `/provider/github-copilot/oauth/authorize` and `/callback`), and the
-box's side of it with a script standing in for Podman. No device code has
-been asked of OpenAI or GitHub, no real Codex or OpenCode has been started
-for it, no account has been signed in, and no container has been run: that
-the volume mounts as described under rootless Podman, that the pinned
-engines answer as their sources read, and that a code can be approved for a
-real account are each still to be seen on a box.
+*Against stand-ins, in every test run.* The two adapters, the runner's
+sign-in mode and the box's side of it are tested against stand-ins that
+speak each engine's protocol (`test/engines-run.test.js`,
+`test/engine-signin-run.test.js`, and a script standing in for Podman in
+`test/engine-signin-hub.test.js`). The move from one engine to the next
+runs through the real launch, a real tmux pane and the real runner
+(`test/engines-launch.test.js`). The stand-ins now answer, and write the
+files, that the real engines were seen to (`test/helpers/engine-files.js`).
+Before that they wrote files neither engine writes, and nothing in a test
+ever waited five seconds, which is how a sign-in that could not complete
+passed every one of them.
+
+*The real engines with no network, by hand and now in CI.* Codex 0.171.0
+and OpenCode 1.19.6, as the image installs them, were run with no network
+at all and made-up values: each handshake the runner performs before a
+prompt (`initialize`, `account/read`, `thread/start` for Codex;
+`initialize`, `session/new`, `session/set_config_option` for
+`opencode acp`), `--signin` and `--signout` for both, what each says of a
+sign-in file of every shape the tests now plant, a key handed over in the
+environment alone, and which hosts each asks a proxy for. No prompt was
+sent. `.github/workflows/sandbox.yml` now runs the four sign-in and
+sign-out commands in the built image under rootless Podman with
+`--network none`, and Codex's own sandbox on one command with no model
+involved.
+
+*The real engines against a stand-in for the provider on loopback, by
+hand.* Still with no network: Codex pointed at a made-up issuer and backend
+through its own overrides, and OpenCode reaching a made-up GitHub through a
+loopback proxy. That is how a whole sign-in was seen: a code, an approval,
+a refusal, a cancel, the file each engine writes, Codex's workspace check
+failing after the file is written, its sentences for a sign-in it cannot
+renew, a sign out telling the issuer, a second sign-in over a first, and
+OpenCode loading a plugin from a home a session had written. What OpenAI
+and GitHub really answer is not known from this; what each engine does
+with an answer is.
+
+*Not run at all.* No device code has been asked of OpenAI or GitHub and no
+account has been signed in. No turn has been sent to a real Codex or
+OpenCode, so none of this has been seen: an approval answered, OpenCode
+asking before it acts, a limit, a renewal in the middle of a session, the
+move to the next engine. Nor has a box done any of it under rootless
+Podman: the volume, the signals a cancel sends, a container removed, the
+container that asks a home whether it holds a sign-in
+(`--signedin`, which reads the file and has only been run in the tests,
+against files of the shapes the engines were seen to write), an attempt's
+word reaching its container through `-e` and no other container.
+
+Two checks before a turn are weaker than this page used to say, and both
+want a real account to settle. Codex's `thread/start` was seen to answer
+with whatever model name it was given, a made-up one included, so "on the
+model that was asked for" proves nothing for Codex with no network; whether
+it refuses a wrong name when it can fetch its list is not known, and a
+wrong model is found by the turn. And OpenCode's `session/new` succeeds
+with a Copilot token that works nowhere, because it falls back to the
+model list it shipped with: an ended Copilot sign-in is found by the first
+prompt, not before it.
 
 ## The engines
 
@@ -95,12 +132,22 @@ TurnEnded { engine, reason, detail, model, usage, resetsAt }
 |---|---|---|---|---|
 | `done` | the turn ended | the `Stop` hook | `turn/completed`, status `completed` | `stopReason: end_turn` |
 | `limit` | the account's limit, or its money | `StopFailure` with `rate_limit` or `billing_error` | `usageLimitExceeded`, or a failed turn while a rate-limit window stands at 100% | an error naming a rate limit, a quota, or credits that ran out |
-| `auth` | not signed in, or the sign-in ended | `StopFailure` with `authentication_failed`, `oauth_org_not_allowed`, `account_on_hold` or `cloud_credential_error` | `account/read` with no account, or `unauthorized` | error `-32000`, Authentication required |
+| `auth` | not signed in, or the sign-in ended | `StopFailure` with `authentication_failed`, `oauth_org_not_allowed`, `account_on_hold` or `cloud_credential_error` | `account/read` with no account, or `unauthorized` | error `-32000`, Authentication required, or an error whose words say the provider does not know the key or the token |
 | `model` | not the model that was asked for | `StopFailure` with `model_not_found` | `thread/start` answers another model, `model/rerouted`, `modelNotFound` | the session reports another model, or none, or the agent says it has no such model |
 | `refused` | the provider declined the work | | a policy error | `stopReason: refusal` |
 | `cut` | the turn ran out of room | `StopFailure` with `max_output_tokens` | `contextWindowExceeded` | `max_tokens`, `max_turn_requests`, a context that overflowed |
 | `cancelled` | somebody stopped it | | status `interrupted` | `stopReason: cancelled` |
 | `error` | anything else, with the engine's first line as `detail` | `StopFailure` otherwise | status `failed` otherwise | any other error |
+
+**A key or a token the provider no longer knows is the sign-in.** OpenCode
+passes on its provider's sentence for a failed prompt and nothing else, so a
+401 arrives as words. OpenRouter's for a key that was deleted or disabled
+("User not found.", "Invalid API key"), its two for a request with no key,
+and GitHub's for a token it no longer knows ("Bad credentials"), which is
+what a Copilot sign-in is, are each read as `auth`, and the member's next
+engine takes over. Codex's own sentence for a sign-in it could not renew is
+said before where to sign in again, in whole sentences: what does not fit
+in a turn's detail is left off a sentence at a time, never inside a word.
 
 **Running out of money is a limit.** A metered key does not usually stop at a
 rate limit, it stops when its credits are gone: OpenRouter answers 402, "Your
@@ -156,17 +203,35 @@ Claude Code's are.
 
 **OpenCode is told to ask.** Its permissions default to allow, so left alone
 it never asks and there is nothing for the runner to decline. In a `safe`
-session the runner writes OpenCode's machine settings
-(`/etc/opencode/opencode.json`, inside the container) before it starts the
-engine: every permission asks, except reading a file and the two searches.
-OpenCode's machine settings override a project's, so an `opencode.json` in
-the workspace cannot turn the asking off. A `safe` session on OpenCode
-therefore looks and answers, and each edit and each command is asked about,
-declined, and said in the pane. If the settings cannot be written the engine
-is not started. This is OpenCode's documented configuration
-([config](https://opencode.ai/docs/config/),
-[permissions](https://opencode.ai/docs/permissions/)), tested against a
-stand-in that reads the file. It has not been run against a real OpenCode.
+session the runner does two things before it starts the engine. It writes
+OpenCode's machine settings (`/etc/opencode/opencode.json`, inside the
+container): every permission asks, except reading a file and the two
+searches. And it starts OpenCode told to read no project's settings
+(`OPENCODE_DISABLE_PROJECT_CONFIG=1`, for the engine's process alone).
+
+**The machine's settings alone did not hold**, and this section said they
+did. OpenCode reads them last and merges them, and a rule a project gives
+its own agent comes after the machine's. A workspace holding an
+`opencode.json` with `agent.build.permission`, an agent file under
+`.opencode/agent/`, or a `permission` that names a tool after `*`, each
+resolved `bash` and `edit` to allow under the machine's file: seen with the
+real OpenCode 1.19.6, asked what its `build` agent resolves. A repository
+that uses OpenCode commits those files, and an earlier engine in the same
+session can write one. With the variable, all three resolve to ask. The
+price is that a `safe` session on OpenCode reads nothing of the workspace
+as settings: not its agents, its commands or its MCP servers either. A
+`dangerous` session reads them as OpenCode always did.
+
+A `safe` session on OpenCode therefore looks and answers, and each edit and
+each command is asked about, declined, and said in the pane. If the
+settings cannot be written the engine is not started. The tests run
+against a stand-in that was told what OpenCode does. The real one is asked
+in CI, in the image a box pulls, with no network: the settings and the
+variable as the runner sets them, each of those three files in the
+workspace, and the job fails unless `bash` and `edit` both resolve to ask
+(`scripts/opencode-safe-check.mjs`, `sandbox.yml`). What that shows is what
+OpenCode resolves. A turn in which it asks and is declined has not been run
+against a real OpenCode: that needs a provider.
 Codex is told on `thread/start`, as it always was.
 
 **Not restarted for being still.** The watcher stops and resumes a Claude
@@ -180,19 +245,57 @@ and each token inside a Codex sign-in file, as handed over and as Codex
 renews it. A line of an engine's error output is passed on up to 64 KiB and
 the rest of that line is dropped. A message from an engine longer than 8 MiB
 ends the conversation with it, says so as the turn's error, and the next
-line typed starts the engine again.
+line typed starts the engine again. Of a sign-in file it withholds every string
+but two kinds that are nobody's secret: a date, and a bare origin. The file
+Codex writes names who issued its tokens (`https://auth.openai.com`) beside
+them, and with that withheld the page for a second sign-in was printed as
+`[withheld]/codex/device`, which no box would pass on.
+
+**A sign-in's two lines are the runner's own, and the member's home has no
+say in them.** The file in an engine home is one that member's sessions
+write. It used to be withheld from a sign-in's lines like any other, each
+string cut out of the finished line, and a session that left a piece of
+that line in its own file as one more string (`done","state":"cancelled`)
+had the runner cut it out of its own answer, which the box could then not
+read. So the line that says how a sign-in ended is built from the runner's
+own words, and only the free text in it (`detail`, and who is signed in) has
+anything taken out, before it goes in as a value. What is taken out there is
+what the run itself made: the file the engine wrote in the run's own home,
+the password for OpenCode's server, and for a Codex sign out the copy it
+hands Codex. Nothing a session can write decides what a sign-in says.
+
+**In pieces as much as whole.** An agent's words reach the pane a few
+characters at a time. A value was looked for inside each piece, so one that
+arrived in five pieces was written in five pieces. The runner now holds back
+the end of what it is writing for as long as it could be the beginning of a
+value, and nothing else, so words still appear as they arrive. A value that
+breaks off after twelve characters or more is written as `[withheld]` as far
+as it got. What this does not stop is an agent that says a value some other
+way, spelled out or encoded: only the value itself is known to the runner.
 
 ## Before a turn
 
 The runner sends no prompt until two things are true, and says which was not.
 
-**Signed in.** Codex is asked `account/read`, which answers at once; a
-`codex exec` with no sign-in retries for 45 seconds before it says so. An ACP
-agent is asked for a session, and an Authentication required error is the
-answer. Neither is a turn, and neither spends anything. An engine that is
-not signed in, or whose sign-in has ended, is a TurnEnded with reason `auth`
-as before, and the pane and the turn's detail now say where it is signed in
-again: the member's Credentials, *Sign in on a machine*, on this machine.
+**Signed in.** Codex is asked `account/read`, which answers at once with
+no sign-in; a `codex exec` with no sign-in retries for 45 seconds before it
+says so. An ACP agent is asked for a session, and an Authentication required
+error is the answer. Neither is a turn, and neither spends anything. An
+engine that is not signed in, or whose sign-in has ended, is a TurnEnded
+with reason `auth` as before, and the pane and the turn's detail now say
+where it is signed in again: the member's Credentials, *Sign in on a
+machine*, on this machine.
+
+With a ChatGPT sign-in, `account/read` is not answered at once: Codex first
+asks `chatgpt.com` which workspace the account is in, and renews the sign-in
+if it is told to. A sign-in it could not renew comes back in one of five
+sentences, all beginning "Your access token could not be refreshed", and
+each is the sign-in ending (`auth`): three of them ("already used",
+"revoked", and the one with no reason) used to read as an `error`, which
+handed nothing on and left the box saying the engine was signed in. When
+`chatgpt.com` cannot be reached at all Codex says "workspace routing
+discovery failed"; that is an `error`, not an ended sign-in, and the detail
+says that this machine must be able to reach `chatgpt.com`.
 
 **On the model that was asked for.** OpenCode, given a model it cannot reach,
 uses another one and says nothing. So a turn runs only when the engine
@@ -286,6 +389,21 @@ OpenCode with `XDG_DATA_HOME` as the home itself, so its files are
 `opencode/` beside that. Both are set for the engine's own process and
 nothing else in the session.
 
+**It holds more than a sign-in**, because each engine treats it as its
+home. Seen with the real engines: Codex keeps five SQLite databases there
+(its logs and state among them), its bundled skills, an installation id,
+and a file for every thread a session starts
+(`codex/sessions/<year>/<month>/<day>/rollout-….jsonl`); OpenCode keeps
+`opencode/opencode.db`, where its sessions and messages are, `log/` and
+`repos/`. So what a member's sessions said on a machine stays in that
+member's volume there after each session's container is gone. A sign-in
+or sign out leaves none of this behind: it runs on a directory of its own
+(below). OpenCode also writes outside the home, where the runner points
+nothing: settings under `~/.config/opencode`, locks under
+`~/.local/state/opencode`, a cache under `~/.cache/opencode`, and
+`/tmp/opencode`, all inside the session's container. Codex writes nowhere
+but its home.
+
 **Engines renew their own sign-ins there**, as they do on a person's
 computer. A member's sessions on one machine share the one home, so nothing
 is handed back to the box and no copy goes stale. A sign-in belongs to the
@@ -294,11 +412,34 @@ each.
 
 **A session uses what is signed in on its machine first.** Before a turn
 the runner looks in the engine home. With a sign-in there it asks the box
-for nothing. With none, it asks for the member's pasted item as it always
+for nothing. A sign-in is what the engine itself would start on: for Codex
+its three tokens, the first of them shaped as a signed token is, or an API
+key; for OpenCode a whole `github-copilot` entry with a token in it. Each
+was held against the real engine with a made-up file, because the rule
+used to be "a refresh token is in the file" and neither engine agrees with
+that. With none, it asks for the member's pasted item as it always
 did, and writes it into the home, so there is one place an engine reads.
 A key for an engine on a metered API ([api-engines.md](./api-engines.md))
-is asked for every time, as before, and is added to OpenCode's file beside
-a Copilot sign-in without replacing it.
+is asked for every time, as before, and is never written into the engine
+home: it is handed to OpenCode in that one process's environment
+(`OPENCODE_AUTH_CONTENT`, which OpenCode reads in place of its file, and
+the provider's own variable where its documentation names one). It was
+filed in OpenCode's `auth.json` in the home, a volume that outlives the
+session, where a key that had since been turned off stayed with nothing to
+remove it. A session that finds one there from before takes it out.
+
+**A sign-in in the home that has ended does not shadow a pasted one.** When
+an engine started on the home's sign-in says the sign-in is over (a
+TurnEnded that would be `auth`), the runner asks the box for the member's
+pasted item, once a session. If the box holds another sign-in than the one
+that just failed (for Codex a file renewed later, by `last_refresh`; for
+OpenCode another token), it is put in the home, the engine is started
+again on it and the same prompt is sent again, and the one ending reported
+is that turn's. A turn that ended for want of a sign-in did none of what
+was asked, so nothing is done twice. The same item again, or none, ends
+`auth` as before. Before this the home was looked in first and the box was
+never asked while anything was there, so a member whose sign-in on a
+machine had ended could not be put right by pasting a new one.
 
 ### A pasted sign-in, the fallback
 
@@ -354,10 +495,15 @@ and hands a renewed one back the same way when it sees one, and once more
 as the session is stopped, so the box's copy keeps up for as long as that
 session runs. The box keeps the copy that was renewed later, by the file's
 own `last_refresh`, and refuses an older one. A later session finds the
-home signed in, asks for nothing and hands nothing back.
+home signed in and asks for nothing. It hands a renewal back all the same,
+because the runner marks a pasted file in the home as the box's copy
+(`auth.json.pasted` beside it): it was the first session alone that handed
+one back, and a renewal made in any later session left the box holding a
+sign-in that had been used up. A sign-in made on the machine has no mark
+and is handed to nobody.
 
-**Signing out does not forget a pasted item.** `signout` has the engine
-remove what it holds in the home. A pasted item the vault still keeps for
+**Signing out does not forget a pasted item.** `signout` removes what the
+home holds. A pasted item the vault still keeps for
 the member is handed to its next session as above, so a member that is to
 stop running on an account has the item forgotten in its Credentials too.
 
@@ -430,7 +576,8 @@ with, by the same function, over
 
 ```
 signingInput('engine-signin-answer',
-  { v: 1, id, host, member, engine, url, code, at, signedIn })
+  { v: 1, id, host, member, engine, url, code, at, signedIn,
+    state, detail, expiresAt })
 ```
 
 where `id` is the id of the request being answered, which the phone chose
@@ -443,6 +590,31 @@ and left out of a clear one. Binding the id is what makes an older
 genuine answer useless for a newer request, and a `status` asked under a
 new id is signed over that id.
 
+The last three are in a sealed answer and left out of a clear one, as
+`signedIn` is: `state` is where the sign-in stands (the table under
+`status`, below); `detail` is the engine's own sentence for an attempt
+that failed, one line of at most 200 printable ASCII characters, and
+`null` otherwise; `expiresAt` is when the code runs out, epoch
+milliseconds as a whole number, there while a code is out and left out
+otherwise. **They were beside the seal and not inside it**, and a phone
+wrote the sentence a person reads from them, so a coordinator could hand
+back a genuine sealed answer beside `state: "failed"` and a `detail` of
+its own that named a code. A second outside review did. What a sheet
+says of a sign-in is now the box's signed word or the phone's own
+sentence, and nothing the coordinator wrote.
+
+That needed no new protocol version and no change to how a phone checks.
+Both phones rebuild the signed bytes from **everything they open** but
+`hostKey` and `signature`, putting their own request's `id`, `member` and
+`engine` in place (`EngineSignIn.swift` and `EngineSignIn.kt`,
+`verified`), so an answer with three more keys verifies on a phone built
+before them, which reads what it knew and ignores the rest. The values
+are a string, a string or `null`, and a whole number: what both phones'
+encoders write exactly as `JSON.stringify` does. The vectors in
+`test/fixtures/parity/engine-signin-answer.json` are made with
+`signinAnswerInput` and `seal`, the functions the box signs and seals
+with, and the older ones still hold as they are.
+
 *Sealed.* A request that carries `reply` is answered with `sealed`: the
 signed fields, the box's public key (`hostKey`) and the `signature`,
 encrypted to `reply` as a vault's answer is (`seal`, under
@@ -451,11 +623,16 @@ says nothing of the page, the code or the account**: no `url`, no `code`,
 `signedIn` cut down to `{ since }`, and a `text` that spells none of
 them. The coordinator carries the state and the times, which it is told
 anyway when an attempt ends, the engine's own sentence for an attempt
-that failed (`detail`), and ciphertext. Every answer to a request
-with `reply` that says where a sign-in stands is sealed, whatever the
+that failed (`detail`), and ciphertext. Those clear copies are for a
+caller that has no key to seal to; a phone reads `state`, `detail` and
+`expiresAt` from inside the seal, where they are signed. Every answer
+to a request with `reply` that is not a refusal is sealed, whatever the
 state, so the account a sign-in ended on is the box's signed word and not
 the coordinator's: a person who sees *Signed in as* an account that is
-not theirs is seeing what the machine said.
+not theirs is seeing what the machine said. A refusal is never sealed or
+signed, the ones that carry a `state` among them (`device_code_off`,
+`signin_failed`, `no_code`, `answer_unsigned`), and carries no page, code
+or account.
 
 ```json
 { "ok": true, "state": "waiting", "member": "debbie", "engine": "codex",
@@ -471,6 +648,18 @@ and inside `sealed`, once the phone has opened it:
 { "v": 1, "id": "…", "host": "9294…3866", "member": "debbie", "engine": "codex",
   "url": "https://auth.openai.com/codex/device", "code": "ABCD-EFGH",
   "at": 1764000001000, "signedIn": null,
+  "state": "waiting", "detail": null, "expiresAt": 1764000900000,
+  "hostKey": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
+  "signature": "…" }
+```
+
+and for an attempt that failed, with an earlier sign-in still in place:
+
+```json
+{ "v": 1, "id": "…", "host": "9294…3866", "member": "debbie", "engine": "codex",
+  "at": 1764000951200,
+  "signedIn": { "since": 1764000000000, "who": { "email": "old@example.com", "plan": "plus" } },
+  "state": "failed", "detail": "device auth failed with status 403 Forbidden",
   "hostKey": { "kty": "EC", "crv": "P-256", "x": "…", "y": "…" },
   "signature": "…" }
 ```
@@ -492,8 +681,9 @@ order:
    seal a payload of its own to `reply`, which is a public key, and it
    cannot make this hash one of the member's approved machines.
 4. Checks `signature` under `hostKey` over the payload above, rebuilt
-   with its own request's `id`, `member` and `engine` and the opened
-   `url`, `code`, `at` and `signedIn`.
+   with its own request's `id`, `member` and `engine` and everything
+   else it opened: `url`, `code`, `at`, `signedIn`, `state`, `detail`
+   and `expiresAt`.
 5. Only then shows `url` and `code`, or who is signed in, from the opened
    payload and from nowhere else.
 
@@ -512,13 +702,19 @@ The page and the code are not secrets, and they are for whoever asked and
 nobody else: they are in the answer to `start` and to `status`, and in no
 file, no log line, no event, no health frame and no push. They are held in
 memory in one place for as long as they are of use, the hub's attempt.
-**The sidecar's cache of replies does not keep them.** It remembers every
-mutating request by its id for ten minutes, to answer a retry with what
-the first attempt was told. For an answer that carried a code, or was
-sealed, it remembers only that the id was answered, and a retry of that
-id is answered afresh with where the sign-in stands now, signed over the
-same id and sealed to the retry's own `reply`: the attempt in flight
-while one is, and never a second attempt.
+**The sidecar's cache of replies keeps nothing of a sign-in's answer.** It
+remembers every mutating request by its id for ten minutes, to answer a
+retry with what the first attempt was told. For `enginesignin` it
+remembers only that the id was answered, whatever the answer was, and a
+retry of that id is answered afresh with where the sign-in stands now for
+the member and engine the retry names, signed over the same id and sealed
+to the retry's own `reply`: the attempt in flight while one is, and never
+a second attempt. It used to keep every answer that carried no code,
+whole, under the id alone, the account a sign-in is on among it, and a
+request for another member under the same id was handed the first
+member's. An id is one request's: another kind of request under a
+sign-in's id, or a sign-in under another request's, is refused
+(`id_reused`) and told to use an id of its own.
 The container then waits, for as long as the code lasts, for the engine to
 say how it ended. **One attempt a member and engine at a time**: a second `start`
 while one waits answers with the one in flight (`already: true`) and
@@ -533,11 +729,19 @@ refused, with the engine's sentence when it gave one.
 | `waiting` | a code is out, with `url`, `code`, `expiresAt` and `expiresInMinutes` |
 | `signed_in` | the engine said the sign-in succeeded, at `at` |
 | `expired` | the 15 minutes passed with nobody approving it |
-| `failed` | the engine refused or failed; `detail` is its own sentence |
+| `failed` | the engine refused or failed, and `detail` is its own sentence; or this machine ended the attempt itself, and `detail` says why |
 | `cancelled` | somebody cancelled it |
-| `lost` | the hub restarted while a code was out, so that attempt is gone and its container was removed. Never reported as waiting |
+| `lost` | the hub restarted while a code was out, the container was removed, and the home, asked, holds no sign-in the attempt made. Never reported as waiting |
 | `signed_out` | the engine was asked to sign out here, and did |
 | `ended` | a session of this member found the sign-in no longer works |
+
+`waiting` is by the clock on the wall. The attempt is ended by a timer, and
+a timer does not count time the machine was not running: a box suspended
+with a code out woke still saying "about 1 more minute" for a code its
+provider had ended an hour before. So every time it is asked, the machine
+looks at the clock, and a code past `expiresAt` and the half minute the
+runner is given to say so itself is ended as `expired` there and then, and
+the home asked what became of it (below).
 
 Beside `state`, every answer carries `signedIn`: `{ since, who }` when this
 machine holds a sign-in it was told of, else `null`. They are two facts. A
@@ -549,14 +753,81 @@ In a sealed answer `who` is inside `sealed`, signed with the rest, and the
 clear `signedIn` says only `since`. No token is in any answer.
 
 **`cancel`** stops the container. **`signout`** cancels an attempt that is
-waiting, then has the engine sign out in a container of the same kind
-(`--signout`): Codex is asked `account/logout`, and OpenCode's server is
-asked to remove its `github-copilot` entry (`DELETE /auth/github-copilot`).
+waiting, then signs the engine out in a container of the same kind
+(`--signout`). Codex is asked `account/logout` on a copy of its sign-in,
+which tells OpenAI the tokens are done with, and the runner then removes
+the file from the home. For OpenCode the runner takes the `github-copilot`
+entry out of the home's file itself and starts nothing: OpenCode's own sign
+out is exactly that, and tells GitHub nothing.
 
 **What the box keeps** is in memory for an attempt that is waiting, and in
 `engine-signins.json` in its state directory for the rest: for each member
 and engine, how the last attempt ended, when, who is signed in and since
-when, and who asked. No token, no code and no page.
+when, who asked, a mark while an attempt is out with that attempt's own
+word (below), and the name of the engine home it is in. No token, no code
+and no page.
+
+**An ending the machine did not hear is asked about before it is said.**
+The runner's second line is the only word for how an attempt ended. Every
+other ending is the machine deciding: its hub restarted under a code, the
+container stopped or was removed after a code was out, its own clock ended
+the code. The person may have approved the code first, and the sign-in may
+be in the home. A hub that restarted used to say the attempt was gone and
+report nobody signed in, with the member's sessions running on the sign-in
+and no screen offering to sign it out. So the machine asks. It removes the
+attempt's container, then runs a short one from the session image with the
+home mounted and no network (`fleetwright-engine --signedin <engine>`),
+which starts no engine: it reads the file as the runner does before every
+turn, and says whether a sign-in the engine would start on is there,
+whether that is the box's copy of a pasted one, when the file was last
+written, and the attempt's word it found beside it.
+
+**A sign-in is an attempt's by that attempt's word, and by nothing else.**
+The home is one the member's sessions write, so a file in it proves
+nothing by being there or by when it was written. The machine makes up a
+word for each attempt (sixteen random bytes), keeps it in its record, and
+gives it to that attempt's container and to nothing else
+(`FLEETWRIGHT_SIGNIN_ATTEMPT`). The runner leaves it beside the sign-in, in
+a file of its own (`auth.json.attempt`), only once the engine has said the
+code was approved, and `--signedin` repeats what it finds there. What the
+machine then records:
+
+- a sign-in made there with this attempt's word beside it: `signed_in`,
+  `since` when it was written, and `who` is `null`, because no engine was
+  asked and the account the record held is not known to be this one's;
+- a sign-in with another word beside it, or none: the attempt changed
+  nothing. The ending stands (`lost`, `expired`, `failed`, `cancelled`) and
+  the record of who is signed in is left exactly as it was, somebody with
+  their account still said, or nobody;
+- none, or only a pasted copy: the ending stands and nobody is signed in
+  on the machine, whatever the record said.
+
+It was "written since the attempt began", and that said three things that
+were not so: a file a session left there was recorded as a code approved
+that nobody had approved; an older sign-in a session renewed while a code
+was out was recorded as the new code approved, with whose it was dropped;
+and a sign-in a session had found ended, whose file was still in the home,
+was reported again as "one this machine had not been told of".
+
+A `status`, a `cancel` and a `start` wait for that answer. **When the
+machine cannot ask** (no Podman, no image, a container that would not run,
+an entry from before the home's name was kept), **or the runner could not
+read the home** (`signedIn: null`: what should be the file is there and
+would not read, or does not read as a whole file, which is not the same as
+no file), it refuses with `cannot_tell`, gives no `state` for a screen to
+put its own words to, and looks again each time it is asked. Before any
+code was out there was nothing to approve, and nothing is asked.
+
+**A record that cannot be read, or does not read as one, is cannot tell.**
+The machine then reports no list at all (never an empty one, which would
+be it saying nobody is signed in), refuses every action with
+`state_unreadable`, and does not write over the file: its operator moves
+it aside. **A record that cannot be written** ends a start before anything
+is run (`state_unwritable`). What happens to an attempt that was already
+out is kept in memory, answered from there, and written the next time the
+machine is asked anything, so a full disk leaves nothing waiting and
+nothing wedged. A cancel, a sign out and the hub's own stop wait a bounded
+time for a container to end, and no longer.
 
 **When an attempt ends** the machine says so to the coordinator
 (`engine.signin`, with the member's id, the engine, the state and the
@@ -576,17 +847,83 @@ image pins:
   A workspace or account with device code switched off answers the start
   with "device code login is not enabled", which is refused as
   `device_code_off` in Codex's words.
+  When OpenAI approves and Codex then cannot finish, it has already
+  written its sign-in: it asks `chatgpt.com` which workspace the account
+  is in only afterwards, and calls the sign-in failed when that question
+  fails ("workspace routing discovery failed"). That sign-in is not kept.
+  Codex is asked to sign it out, and the detail says in the runner's words
+  that OpenAI approved the code, that Codex could not reach `chatgpt.com`,
+  and to let this machine reach it and sign in again.
 - **OpenCode** (`opencode serve` on loopback inside the container, behind a
   password made for that one run; `opencode acp` has no sign-in and its
   command-line login needs a terminal):
   `POST /provider/github-copilot/oauth/authorize` answers the page and
   "Enter code: XXXX-XXXX"; `POST …/oauth/callback` is held open while
-  OpenCode asks GitHub, and answers `true` or
+  OpenCode asks GitHub, on a connection of its own (a kept one is cut
+  after four idle seconds, which ended every sign-in before the code
+  could be typed), and answers `true` or
   `ProviderAuthOauthCallbackFailed`. That failure does not say why, so it
-  is reported as `failed` in those words, and only the runner's own 15
-  minutes are reported as `expired`. This is OpenCode's own login in its
-  own binary. Fleetwright does not speak GitHub's device flow itself and
-  uses no other app's client id.
+  is reported as `failed`, "GitHub declined the code or it ran out, and
+  OpenCode does not say which". A code that ran out is `expired` all the
+  same: the runner's own 15 minutes start before OpenCode asks GitHub for
+  the code, so they end first, and a failure that OpenCode passes on in
+  the code's last ten seconds (one of its polls of GitHub) is read as the
+  code running out. When OpenCode cannot reach GitHub
+  at all it answers the request for a code with `UnknownError` and no
+  reason; the detail then says that this machine must be able to reach
+  `github.com`. This is OpenCode's own login in its own binary. Fleetwright
+  does not speak GitHub's device flow itself and uses no other app's client
+  id.
+
+**Neither engine is started on the member's engine home.** A member's
+sessions write that home, and both engines read more from their home than a
+sign-in. OpenCode reads `auth.json` for entries that name a server to fetch
+settings from, and loads the plugins those settings list; a plugin answers
+the request for a code. The real OpenCode 1.19.6 was seen to do this from a
+file and a plugin a session could have left, and to answer with a page and
+a code of the plugin's choosing, which a box would have shown a custodian
+as its own. Codex reads `config.toml`, which names where a new sign-in's
+token is first sent and what else to start. So the engine is started on an
+empty directory of that run's own, with everything it reads pointed into
+it (`CODEX_HOME`, the four XDG directories, `HOME`, and where it starts),
+and the runner copies the one thing it made into the home: Codex's
+`auth.json`, or OpenCode's `github-copilot` entry beside whatever the
+home's file already holds. The directory is removed when the run ends.
+
+**The page is the engine's own, or no code is shown. It is checked twice.**
+Each engine builds its page from a constant in its source:
+
+| engine | the page | where it is from |
+|---|---|---|
+| `codex` | `https://auth.openai.com/codex/device` | what Codex builds from its own issuer (`login/src/server.rs` `DEFAULT_ISSUER`, `login/src/device_code_auth.rs`, at `rust-v0.171.0`) |
+| `opencode` | `https://github.com/login/device` | GitHub's own `verification_uri` for a device code asked of github.com, which OpenCode passes on as given |
+
+Exactly these, and nothing that only looks like them. The runner prints
+only that page and refuses any other an engine names, whatever made it
+name one: the attempt ends as `failed`, in those words. The box then holds
+what the container printed to the same two pages, kept in its own file
+(`SIGNIN_PAGES` in `src/core/engine-signin.js`; a test holds the two lists
+to each other), before it answers with any of it. What a container prints
+is not the machine's word until the machine has held it to something it
+knows, and the box's check does not rest on the runner in the image being
+the one this release shipped. An attempt whose first line names any other
+page is ended at once, its code is in no answer, no status and no file,
+and the start is refused (`wrong_page`) with what its operator looks at.
+The page it named is not repeated. An engine that moves its page is
+refused until both lists say the new one. A GitHub Enterprise deployment
+has another page and is not signed in this way.
+
+A first line that does not read as a page and a code at all is refused at
+once too (`unreadable_code`), in words that say which half the box could
+not read and that the fault is fleetwright's on that machine, not the
+provider's. It used to be skipped without a word, and the start then said
+45 seconds later that the engine gave no code.
+
+**A failure's `detail` is a clause.** Both places it is shown put the
+engine's name in front ("OpenCode did not sign in: " on a phone, and "… was
+not signed in for debbie on ops-box: " from the machine, which adds the
+full stop), so the runner's own sentences have no subject and no full
+stop. An engine's own words are passed on as they are.
 
 **Refused before anything is sent**, by the coordinator, where it can
 tell: no member named at all (`bad_params`, in words that say whose to
@@ -610,18 +947,28 @@ machines report.
 the member's vault (`not_approved`, on `start`), or the vault has not told
 it yet whose it is approved for (`approval_unknown`, on `start`); it could
 not sign or seal its answer (`answer_unsigned`, with the code and the
-account withheld), or was given a `reply` nothing can be sealed to
+account withheld; a phone is told its screen asks again by itself, an
+agent to ask again), or was given a `reply` nothing can be sealed to
 (`bad_params`, before anything is started); it does not run the
 engine (`no_engine`, for every action); its session image is not fetched
 yet (`no_image`); Podman is missing (`no_podman`) or the member's way out
 behind an egress list could not be made (`no_egress`); the engine gave no
 code within 45 seconds (`no_code`) or the container ended before one
-(`signin_failed`); device code is off for the account (`device_code_off`);
-a sign out is under way (`busy`) or the engine would not sign out
+(`signin_failed`); what the container gave as the page and the code did
+not read as them (`unreadable_code`), or the page was not the provider's
+own (`wrong_page`); device code is off for the account (`device_code_off`);
+a sign out is under way (`busy`, said to a start and to a second sign
+out, each with when to ask again) or the engine would not sign out
 (`signout_failed`, which changes nothing the machine reports); the machine
 cannot read its own record (`state_unreadable`, which is cannot tell and
-is never answered as nobody signed in); its hub is older than its sidecar
-(`hub_outdated`).
+is never answered as nobody signed in) or cannot write to it
+(`state_unwritable`, with nothing begun); it did not hear how the last
+attempt ended and could not ask the home (`cannot_tell`, which carries no
+state and is asked again by asking again); its hub is older than its
+sidecar (`hub_outdated`, which names the machine and says to update
+fleetwright there and restart it). On a `start`, a machine that could not
+take the vault's last answer for the vault's own says why and what ends it
+(`approval_unknown`; [vault.md](./vault.md), "On the box").
 
 ## What a machine reports
 
@@ -643,8 +990,24 @@ shows each entry only to somebody who may act for that member, and only
 from a machine that acts for them. It is what lets a screen say *Signed in
 on ops-box* and offer the sign-in only on a machine whose `engines` names
 the engine (C-2). **Absent is cannot tell**, never signed out: a machine
-older than protocol 22 sends no list. A sign-in pasted into the vault is
-not in it either, because no machine was told it works (C-5).
+older than protocol 22 sends no list, and so does one that cannot read
+its own record. A sign-in pasted into the vault is not in it either,
+because no machine was told it works (C-5). A person removed from the
+fleet is no longer in it, on any of the fleet's machines that forgot them
+("What it does not stop" says what stays for a member).
+
+**A machine sends the list only to a coordinator that has shown it speaks
+22.** The filter above is the coordinator's, and one from before it
+passes every health key it does not know to every member. Machines update
+ahead of the coordinator in half a deploy, so a machine on 22 behind a
+coordinator on 21 told the whole fleet who was signed in where. The
+coordinator stamps its own version on every frame it writes that is not
+an intent (a config frame, the answer to a key-list or vault request,
+`vault-changed`), and a machine with a key asks for its key list seconds
+after it starts. Until one has said 22 the health frame has no list,
+which an older coordinator and every screen read as cannot tell. The
+latest such frame is believed, so a coordinator rolled back under a
+machine that stays up is heard too.
 
 ### Turning them on, on a box
 
@@ -686,22 +1049,35 @@ as below.
 [security.md](./security.md)) no engine but Claude Code reaches its provider
 until the provider's hosts are added to `FLEETWRIGHT_SANDBOX_EGRESS_ALLOW`:
 
-| engine | hosts |
+| engine, and what it is doing | hosts to add |
 |---|---|
-| `codex`, on a ChatGPT sign-in | `chatgpt.com`, `auth.openai.com` |
-| `opencode`, on Copilot | `api.githubcopilot.com` (`api.github.com` is already allowed), `models.dev` |
-| `opencode`, on OpenRouter | `openrouter.ai`, `models.dev` |
-| `opencode`, on Vercel AI Gateway | `ai-gateway.vercel.sh`, `models.dev` |
-| signing `codex` in on the machine | `auth.openai.com` |
-| signing `opencode` in to Copilot on the machine | `github.com` |
+| signing `codex` in on the machine | `auth.openai.com` for the code and the tokens, **and `chatgpt.com`**: Codex asks it about the account's workspace before it calls the sign-in done, and without it the sign-in is reported failed and not kept |
+| `codex`, a session on a ChatGPT sign-in | `chatgpt.com` (asked before every turn, and for the turn), `auth.openai.com` (to renew) |
+| signing `opencode` in to Copilot on the machine | none: `github.com` is already allowed |
+| `opencode`, a session on Copilot | `api.githubcopilot.com` |
+| `opencode`, on OpenRouter | `openrouter.ai` |
+| `opencode`, on Vercel AI Gateway | `ai-gateway.vercel.sh` |
+
+Optional, and each engine carries on without them:
+
+| engine | host | for |
+|---|---|---|
+| `codex`, at every start | `github.com`, `api.github.com` (both already allowed) | its list of plugins (`git ls-remote https://github.com/openai/plugins.git`) |
+| `opencode`, at every start | `models.opencode.ai` | a newer list of models than the one it shipped with. This was written here as `models.dev`, which 1.19.6 does not ask for |
+| `opencode`, at every start | `registry.npmjs.org` (already allowed) | what its plugins depend on |
 
 The container a sign-in runs in joins the member's own network behind the
-list, as that member's sessions do, so the two sign-in rows are needed
-before a code can be asked for at all.
+list, as that member's sessions do, so the sign-in rows are needed before a
+code can be asked for at all.
 
-These are read from each engine's documentation and source and have not been
-measured on a box behind a list. An engine that cannot reach its provider
-ends its turn as `error`, with the engine's own words, and hands nothing on.
+The rows for signing in and for the start of a session are measured: the
+real engines were given a proxy that refuses everything, set as a box sets
+its own, and these are the hosts they asked it for. Both engines go through
+the proxy. The hosts a turn itself reaches were not measured, because no
+turn was sent, and the two metered providers' rows are from OpenCode's
+documentation. An engine that cannot reach its provider ends its turn as
+`error` and hands nothing on; for Codex's `chatgpt.com` the detail names
+the host.
 
 ## Starting
 
@@ -788,11 +1164,30 @@ the engines this machine does not run.
   the original on their own computer, and the first of the two to renew ends
   the other. Signing in on the machine does not have this: the sign-in is
   made there and exists nowhere else.
+- **A member's sessions can write that member's engine home, and the
+  attempt's word is in it.** A session can read it, copy it and remove it,
+  like any file there. Removing it, or the sign-in, makes a machine that
+  did not hear an ending record that the attempt signed nobody in, and
+  somebody starts again. After a code was approved a session can put
+  another file where the sign-in was and leave the word: the machine then
+  says the attempt signed in, which it did, says nothing of who, and
+  whether what is there works is the engine's to say before a turn. What
+  a session cannot do is know an attempt's word before the runner writes
+  it, so it cannot make a code nobody approved look approved. A session
+  image from before the word, and a mark an earlier release left in the
+  record, never match: an approval the machine did not hear is then
+  recorded as `lost`, once, and signing in again mends it.
 - **A machine says what it was told, not what is true now.** `engineSignins`
   and `status` report a sign-in from the moment the engine said it
-  succeeded until somebody signs it out or a session of that member finds
-  it ended. A sign-in revoked at the provider and not yet used by a session
-  is still reported as signed in.
+  succeeded, or the home was found to hold the one an attempt made after an
+  ending the machine did not hear, until somebody signs it out or a session
+  of that member finds it ended. A sign-in revoked at the provider and not yet used by a
+  session is still reported as signed in: asking the home says a sign-in
+  is there, never that it still works, which only the engine can say and
+  only before a turn. And `engineSignins` has no way to say cannot tell
+  about one member: while an ending is unheard and unasked, the list
+  carries that entry as it was recorded, and `status` is where the
+  machine says it cannot tell.
 - **Two processes can spend one Codex refresh token.** Codex serializes its
   writes to a shared `CODEX_HOME` with lock files, and two sessions of one
   member renewing in the same moment can still both present the old token.
@@ -807,12 +1202,47 @@ the engines this machine does not run.
   the session had on its screen. It is quoted in a fence the text cannot
   close, so it stays a quotation, and it is still the session's own words in
   a file the next engine is told to read.
-- **A removed member's engine home stays on the box.** Removing an agent
-  empties its vault ([members.md](./members.md)); nothing removes
-  `fw-engine-<id>` from each machine it was signed in on. It is mounted
-  only into a session started as that member, which a removed member has
-  none of, and a new member filed under the same id on that machine would
-  find it. An operator removes it with `podman volume rm`.
+- **A person removed from the fleet loses their engine sign-ins on each
+  machine that forgets them**, with everything else it kept in their name
+  (`src/core/forget-person.js`): an attempt of theirs that is waiting is stopped, their entries are
+  dropped, and their engine home (`fw-engine-person.<tag>`) is removed with
+  the sign-ins in it. A volume Podman will not remove, or a record that
+  cannot be changed, makes the machine's answer a no, and the coordinator
+  asks it again. One thing stays: an entry written by the one release
+  before the volume's name was kept beside it names nobody's address, so
+  it is still reported until a session finds the sign-in gone. The volume
+  is removed all the same.
+- **A removed agent member loses its engine sign-in on a machine when that
+  machine next takes the vault's list**, which it does every ten minutes
+  and whenever a signature names a key it has not seen. Nothing is sent to
+  a machine when a member is removed, and nothing needs to be: the sidecar
+  already holds the minter's signed list of who is a member and checks
+  every member start against it, so it is not the coordinator's word. Each
+  time it takes a list that is not the one it last told, it tells its hub
+  the ids (`POST /api/engine-members`; `keepMembers` in
+  `src/core/engine-signin.js`). For an id the hub holds something under and
+  the list no longer names, it stops any attempt, drops every entry so the
+  member is no longer reported, and removes `fw-engine-<id>`, including a
+  home a pasted sign-in was staged into that it recorded nothing of. Gone
+  can be told from not listed yet: nothing is signed in, and no home is
+  made, for a member the list did not name at the time. So a member filed
+  later under the same id starts with nothing of the first one's.
+  What stays, and for how long:
+  - Until that next list, up to ten minutes, the home and its entry are as
+    they were. A removed member has no session to mount it into.
+  - A machine that holds no list it may still use (none yet, one past its
+    age, a minter from before members) tells its hub nothing, and
+    everything stays until it holds one.
+  - A machine that is off, or whose hub is older than this, keeps the home
+    until it is back and updated. An operator removes it sooner with
+    `podman volume rm fw-engine-<id>`.
+  - One list without the id is enough: there is no second look, because
+    waiting for one is the time in which an id filed again would find the
+    last member's sign-in. A wrong list costs signing in again.
+  - A person's home is never removed this way. It is named by their
+    address and is theirs while they are in the fleet, whatever member
+    records name them; only their entries under a record that is gone are
+    dropped.
 - **A session on OpenCode or Codex that sits still is not restarted**, and
   nothing says it is stuck. An engine waiting out a provider's rate limit
   looks the same from the pane.
@@ -826,8 +1256,9 @@ the engines this machine does not run.
   the session that finds it ended is what marks it, and the machine's
   `engine.signin` reaches the custodians' phones.
 - **Limit detection for an ACP agent reads the error's words**, because the
-  protocol has no field for it. A limit worded in a way nobody has seen is an
-  `error`, and hands nothing on. Claude Code names the error in its
+  protocol has no field for it, and so does a key or a token its provider
+  refuses. One worded in a way nobody has seen is an `error`, and hands
+  nothing on. Claude Code names the error in its
   `StopFailure` hook (`rate_limit`, `billing_error` and the rest) and is read
   by that name; its words are read only where a version sends no name.
 
@@ -843,7 +1274,11 @@ note, and three engines in turn), `test/engines-run.test.js` (each adapter and t
 stand-in server speaking the published protocol: sign-in, the model check,
 a turn, a limit, a refusal, a permission request, the sign-in staged and
 handed back when it changes and as the session stops, OpenCode told to ask,
-the tokens in a sign-in withheld, a line and a message bounded),
+the tokens in a sign-in withheld and the issuer beside them not, a line
+and a message bounded, Codex's five sentences for a sign-in it could not
+renew, a key kept out of the engine home, a home's ended sign-in giving way
+to a pasted one, and a pasted one handed back by every session that renews
+it),
 `test/engines-hub.test.js` (TurnEnded and the sign-in on a
 session's socket, the launch command, what the watcher says as a session
 moves), `test/engines-coordinator.test.js` (the list a start carries, the
@@ -853,10 +1288,24 @@ that takes them), and `test/engines-in-apps.test.js`. Signing in on the
 machine: `test/engine-signin-run.test.js` (the runner's sign-in mode
 against stand-ins for `codex app-server` and `opencode serve`: a code, a
 sign-in, a failure in the engine's words, the 15 minutes, device code not
-enabled, a cancel, a sign out, the home used before the vault, and no token
-in anything printed), `test/engine-signin-hub.test.js` (the box, through a
+enabled, a cancel, a sign out, no token in anything printed; an approval
+that comes after a kept connection would have been cut; the engine started
+on a home of the run's own and only its sign-in copied out; a page that is
+not the engine's own refused; a sign-in Codex wrote and then called failed
+not kept; a home that already holds a real sign-in still given its page;
+a string a session left in the home's file taking nothing out of what the
+runner says; an attempt's word left beside the sign-in it made and by no
+other; a home that would not read said as cannot tell; and what counts as a
+sign-in, row by row as the real engines answered. Every test there has a
+bound of its own and ends the sign-ins it began, so a fix taken out fails
+a test by name in seconds, where the file used to sit until it was
+killed), `test/engine-signin-hub.test.js` (the box, through a
 stand-in Podman and the real runner: the volume and its name, one attempt
-at a time, what is kept and what a restart loses, who may and who may not,
+at a time, what is kept, a restart or a dead container asking the home
+what became of a code and saying cannot tell until it could, a file in the
+home that the attempt did not make never recorded as its sign-in, a code
+past its life by the clock not said to be waiting, who may and
+who may not,
 a delegation that does not name the member, and no token in any answer,
 file, event or log line), `test/engine-signin-answer.test.js` (the vectors
 both phones check an answer against: a signed one with every field of it

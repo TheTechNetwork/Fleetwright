@@ -16,6 +16,25 @@ reaches TestFlight, Play and the GitHub release.
 Not in a release yet. This section moves under the next version's heading
 when that version is cut.
 
+- **Signing OpenCode in on a machine now completes.** It gave up four
+  seconds after showing the code, every time. Machines running Codex or
+  OpenCode need the new session image.
+- **Signing Codex in a second time works.** A machine that already held a
+  Codex sign-in printed a broken page address, so the code never reached
+  the phone.
+- **A machine behind an egress allowlist needs `chatgpt.com` to sign Codex
+  in**, as well as `auth.openai.com`. Without it the sign-in now says so
+  and keeps nothing. Before, it said "failed" and kept a sign-in the app
+  did not show. The hosts each engine needs are measured in
+  `docs/engines.md`.
+- **A Codex sign-in that has ended sends you to sign in again**, and the
+  member's next engine takes over. Two of the ways it ends read as a plain
+  error and did neither.
+- **A member's pasted sign-in is used when the one on the machine has
+  ended.** Until now a dead sign-in on the machine was tried for ever.
+- **A metered API key is no longer left on the machine after a session.**
+  A session that finds one from before removes it.
+
 - **The fleet has an organization.** Under You, Organization lists the
   fleet's members as a tree: people and AI agents, each with a role and who
   they report to. An admin adds and edits members, and a team lead edits

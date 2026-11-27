@@ -28,8 +28,27 @@ name: Machine image
 # WHAT STARTS IT IS WHAT THE IMAGE IS BUILT FROM, which is the host itself
 # and not only this directory: `bin/`, `src/`, the two files beside them,
 # what npm installs for a checkout, and the packager that makes a release
-# of them. It watched `sandbox/machine/` and `machines.js` alone, so a
-# change to the host that broke the host in a machine never ran it.
+# of them, with the one file of its own the packager reads
+# (`tools/rollout.mjs`). It watched `sandbox/machine/` and `machines.js`
+# alone, so a change to the host that broke the host in a machine never
+# ran it.
+#
+# A SESSION IS STARTED IN THE MACHINE, IN BOTH LEGS. The release leg was
+# added for a hook path that was wrong in a release, and then built the
+# image and started no session, so it never looked at that path. The smoke
+# now starts one, with a plain program where Claude Code would be (no
+# engine, nothing signed in) that runs the SessionStart hook the session's
+# settings name, and asks the hub inside whether it heard.
+#
+# THE THREE LIMITS ARE APPLIED WHERE THE RUNNER WILL GRANT THEM, AND A RUN
+# WITHOUT THEM SAYS SO. Both legs ran `--no-limits`, always, so that Podman
+# honours `--memory`, `--cpus` and `--pids-limit`, and that the hub inside
+# counts its sessions against the first, had never met a real Podman. A
+# step below asks for the runner's user to hold its own cgroup controllers,
+# and the smoke asks Podman before it leans on them. Where Podman still
+# refuses, the smoke runs without limits as before, and puts a warning on
+# the run and a heading in the job's summary: a run that proved nothing
+# about limits must not read like one that did.
 on:
   push:
     branches: [main]
@@ -41,6 +60,7 @@ on:
       - 'package-lock.json'
       - 'openapi.json'
       - 'tools/build-host-package.mjs'
+      - 'tools/rollout.mjs'
       - 'scripts/machine-smoke.mjs'
       - '.github/workflows/machine-image.yml'
   pull_request:
@@ -52,6 +72,7 @@ on:
       - 'package-lock.json'
       - 'openapi.json'
       - 'tools/build-host-package.mjs'
+      - 'tools/rollout.mjs'
       - 'scripts/machine-smoke.mjs'
       - '.github/workflows/machine-image.yml'
   workflow_dispatch:
@@ -101,6 +122,33 @@ jobs:
           mkdir "$RUNNER_TEMP/release"
           tar -xzf "$RELEASE_OUT_DIR"/fleetwright-host-*.tar.gz -C "$RUNNER_TEMP/release" --strip-components=1
           ls "$RUNNER_TEMP/release" "$RUNNER_TEMP/release/lib"
+      # A LIMIT NEEDS THE USER'S OWN CGROUP CONTROLLERS, which a login session
+      # is handed and a job's shell is not: with none, Podman refuses a
+      # container that asks for `--memory`. So the runner's user is given a
+      # manager of its own that outlives a login (linger), told to hand it
+      # memory, processors and processes, and the steps after this are told
+      # where that manager's bus is, which is how rootless Podman asks it for
+      # a cgroup. NOTHING HERE MAY FAIL THE JOB: whether it worked is for the
+      # smoke to find out from Podman itself, and to say.
+      #
+      # NOT RUN ANYWHERE BEFORE CI: no machine this was written on has
+      # systemd's user manager or Podman.
+      - name: The runner's user is handed its own cgroup controllers, where the runner will
+        run: |
+          set -u
+          uid="$(id -u)"
+          sudo mkdir -p /etc/systemd/system/user@.service.d || true
+          printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/fleetwright-machine-smoke.conf >/dev/null || true
+          sudo systemctl daemon-reload || true
+          sudo loginctl enable-linger "$(id -un)" || true
+          for _ in $(seq 20); do [ -S "/run/user/$uid/bus" ] && break; sleep 0.5; done
+          if [ -S "/run/user/$uid/bus" ]; then
+            echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+            echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+            echo "what the user's own manager holds: $(cat "/sys/fs/cgroup/user.slice/user-$uid.slice/user@$uid.service/cgroup.controllers" 2>/dev/null || echo 'could not be read')"
+          else
+            echo "::warning title=Machine image::No manager of its own came up for $(id -un), so Podman is asked for a machine's limits without one and may refuse. The smoke says which."
+          fi
       # ROOTLESS PODMAN, which is what a box runs these under. The runner
       # image carries it; this says which, and installs it where one does not.
       - name: Podman
@@ -108,17 +156,25 @@ jobs:
           set -eu
           command -v podman >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y podman; }
           podman --version
-      # WITHOUT THE THREE LIMITS a box gives a machine. A limit needs the
-      # runner's user to have been delegated its cgroup controllers, which a
-      # login session gets and a job's shell does not, so Podman would refuse
-      # the start here for a reason no box has. That the flags are passed is
-      # test/machines.test.js; that Podman honours them is not checked
-      # anywhere, and is Podman's. Nor, for the same reason, is the hub
-      # inside seen to count its sessions against a limit
-      # (src/core/cgroup-memory.js): there is none here to count against.
-      - name: Build it from the checkout, start one, end it
+      # WITH THE THREE LIMITS a box gives a machine, where Podman will set
+      # them for this user (`--limits-if-granted`): the smoke then reads each
+      # back out of the machine's own cgroup and asks the hub inside how many
+      # sessions it would take, which is the first time either has met a real
+      # Podman. Where Podman will not, the smoke runs without them and says so
+      # on the run and in the job's summary; that the flags are passed is
+      # still test/machines.test.js.
+      #
+      # 4 GB AND NOT A BOX'S 8, so that what is being proved cannot be read
+      # off the runner by accident: the runner has several times that free,
+      # and a hub that counted against the box would take a dozen sessions
+      # where its machine has room for three.
+      - name: Build it from the checkout, start one and a session in it, end it
         if: matrix.from == 'checkout'
-        run: node scripts/machine-smoke.mjs --no-limits
-      - name: Build it from the release, start one, end it
+        env:
+          FLEETWRIGHT_SANDBOX_MEMORY: 4g
+        run: node scripts/machine-smoke.mjs --limits-if-granted
+      - name: Build it from the release, start one and a session in it, end it
         if: matrix.from == 'release'
-        run: node scripts/machine-smoke.mjs --no-limits --release "$RUNNER_TEMP/release"
+        env:
+          FLEETWRIGHT_SANDBOX_MEMORY: 4g
+        run: node scripts/machine-smoke.mjs --limits-if-granted --release "$RUNNER_TEMP/release"

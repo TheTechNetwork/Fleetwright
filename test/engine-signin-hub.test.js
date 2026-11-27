@@ -10,15 +10,17 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
 import path from 'node:path';
 
-import { EngineSignins, containerFor } from '../src/core/engine-signin.js';
-import { engineHomeVolume, engineHomeArgs, ENGINE_HOME } from '../src/core/engine-home.js';
+import { EngineSignins, SIGNIN_PAGES, containerFor } from '../src/core/engine-signin.js';
+import { engineHomeVolume, engineHomeArgs, memberOfEngineHome, ENGINE_HOME } from '../src/core/engine-home.js';
+import { forgetPerson } from '../src/core/forget-person.js';
 import { buildCommand } from '../src/core/claude.js';
 import { ownerTag } from '../src/core/accounts.js';
 import { Registry } from '../src/core/registry.js';
@@ -30,6 +32,8 @@ import { Sidecar } from '../src/fleet/host/sidecar.js';
 import { SessionWatcher } from '../src/fleet/host/watcher.js';
 import { setLogStream } from '../src/log.js';
 import { signinBox, TOKEN } from './helpers/stub-signin-podman.js';
+import { SIGNIN_PAGES as RUNNER_PAGES } from '../sandbox/engine.mjs';
+import { codexSignIn } from './helpers/engine-files.js';
 import { startStubHub } from './helpers/stub-hub.js';
 
 /** Wait until `said()` is true, or say what never happened. */
@@ -74,7 +78,8 @@ test('a start runs the runner with the member’s engine home and nothing of a s
   const [first, second] = await Promise.all([b.ask('start'), b.ask('start')]);
   // One container, whichever of the two arrived first.
   assert.equal(b.runs().length, 1);
-  assert.equal(b.runs()[0], `run --rm --name fw-signin-codex-debbie -v fw-engine-debbie:${ENGINE_HOME} -e FLEETWRIGHT_ENGINE_HOME=${ENGINE_HOME} img fleetwright-engine --signin codex`);
+  // With the home, and a word of this attempt's own that no other container is given.
+  assert.match(b.runs()[0], new RegExp(`^run --rm --name fw-signin-codex-debbie -v fw-engine-debbie:${ENGINE_HOME} -e FLEETWRIGHT_ENGINE_HOME=${ENGINE_HOME} -e FLEETWRIGHT_SIGNIN_ATTEMPT=[0-9a-f]{32} img fleetwright-engine --signin codex$`));
   const waiting = first.already ? second : first;
   assert.deepEqual(
     { ...waiting, text: '', startedAt: 0, expiresAt: 0 },
@@ -90,8 +95,9 @@ test('a start runs the runner with the member’s engine home and nothing of a s
   assert.deepEqual([(await b.ask('status')).state, (await b.ask('status')).code], ['waiting', 'ABCD-EFGH']);
   assert.equal(b.runs().length, 1);
 
-  // WHILE IT WAITS, what is on disk is a mark that an attempt is out, and no page or code.
-  assert.deepEqual(JSON.parse(b.kept()).signins['debbie/codex'], { member: 'debbie', engine: 'codex', signedIn: null, last: null, attempt: { startedAt: waiting.startedAt, by: 'eli@example.com' } });
+  // WHILE IT WAITS, what is on disk is a mark that an attempt is out, with the word its container was given, and no page or code.
+  const word = /FLEETWRIGHT_SIGNIN_ATTEMPT=(\S+)/.exec(b.runs()[0])?.[1];
+  assert.deepEqual(JSON.parse(b.kept()).signins['debbie/codex'], { member: 'debbie', engine: 'codex', volume: 'fw-engine-debbie', signedIn: null, last: null, attempt: { startedAt: waiting.startedAt, by: 'eli@example.com', word } });
   // And the box reports nobody signed in.
   assert.deepEqual(b.signins.report(), [{ member: 'debbie', engine: 'codex', state: null, at: null, since: null }]);
 
@@ -118,6 +124,10 @@ test('a start runs the runner with the member’s engine home and nothing of a s
     assert.ok(!text.includes(waiting.code) && !text.includes(new URL(waiting.url).host), `the code or its page is in ${where}`);
   }
   assert.match(said(), /engines: codex sign-in for debbie, asked by eli@example\.com: signed_in/);
+  // THE ATTEMPT'S WORD is the record's and its container's: in no answer, no log line and nothing reported.
+  for (const [where, text] of [['an answer', JSON.stringify(b.answers)], ['a log line', said()], ['what the box reports', JSON.stringify(b.signins.report())]]) {
+    assert.ok(!text.includes(String(word)), `the attempt’s word is in ${where}`);
+  }
 });
 
 test('a person’s engine home is named by a hash of their address, an agent’s by its id, and neither can be the other’s', (t) => {
@@ -176,16 +186,16 @@ test('an attempt nobody approves expires on this box’s own clock, one the engi
   assert.deepEqual(b.signins.report().map((r) => [r.state, r.since]), [['expired', first.since]], 'still reported as signed in, since the first time');
   await until(() => !b.running('fw-signin-codex-debbie'), 'the expired attempt’s container ended');
 
-  // THE ENGINE REFUSES IT, quoting a token from the sign-in that is there.
+  // THE ENGINE REFUSES IT, with a sign-in there that a new one would have replaced.
   const b2 = box(t);
   mkdirSync(b2.volume('fw-engine-debbie', 'codex'), { recursive: true });
-  writeFileSync(b2.volume('fw-engine-debbie', 'codex', 'auth.json'), JSON.stringify({ tokens: { refresh_token: TOKEN } }));
+  writeFileSync(b2.volume('fw-engine-debbie', 'codex', 'auth.json'), codexSignIn({ refresh: TOKEN }));
   await b2.ask('start');
-  b2.provider('refused', `device code exchange failed: token ${TOKEN} is not for this workspace`);
+  b2.provider('refused', 'device code exchange failed: this account is not for this workspace');
   await until(async () => (await b2.ask('status')).state === 'failed', 'the refusal');
   const failed = await b2.ask('status');
-  assert.equal(failed.detail, 'device code exchange failed: token [withheld] is not for this workspace');
-  assert.equal(failed.text, 'Codex was not signed in for debbie on ops-box: device code exchange failed: token [withheld] is not for this workspace.');
+  assert.equal(failed.detail, 'device code exchange failed: this account is not for this workspace');
+  assert.equal(failed.text, 'Codex was not signed in for debbie on ops-box: device code exchange failed: this account is not for this workspace.');
   for (const [where, text] of [['an answer', JSON.stringify([...b.answers, ...b2.answers])], ['a state file', b.kept() + b2.kept()], ['a log line', said()]]) {
     assert.ok(!text.includes('LEAKCANARY'), `a token is in ${where}`);
   }
@@ -196,7 +206,7 @@ test('an account with device code turned off is refused as that at the start, in
   b.set('codex-off');
   const r = await b.ask('start');
   assert.deepEqual([r.ok, r.error?.code, r.state], [false, 'device_code_off', 'failed']);
-  assert.equal(r.text, 'Codex says device code sign-in is not turned on for this account or its workspace, in its words: device code login is not enabled for this Codex server. Use the browser login or verify the server URL.. Turn it on there, or paste a sign-in instead.');
+  assert.equal(r.text, 'Codex says device code sign-in is not turned on for this account or its workspace, in its words: device code login is not enabled for this Codex server. Use the browser login or verify the server URL. Turn it on there, or paste a sign-in instead.');
   assert.equal(r.url, undefined);
   assert.deepEqual([(await b.ask('status')).state, b.signins.attempts.size], ['failed', 0]);
 });
@@ -258,33 +268,73 @@ async function hubThatDies(/** @type {{ cfg: any }} */ b) {
   return answered;
 }
 
-test('a hub that restarts under a waiting attempt says it is lost, never that it is waiting, and ends its container', async (t) => {
+test('a hub that restarts under a waiting attempt asks the home what became of it: lost when nobody had approved the code, signed in when somebody had, and never waiting', async (t) => {
+  const said = logged(t);
   const b = box(t);
   assert.equal((await hubThatDies(b)).state, 'waiting');
   assert.equal(b.running('fw-signin-codex-debbie'), true, 'the container outlives the hub that started it');
-  // The hub that comes up in its place: asked, it says what it knows.
+  // The hub that comes up in its place: asked, it ends the container nobody
+  // is listening to, looks in the home, and says what it found.
   const after = await b.ask('status');
-  assert.deepEqual([after.state, after.url, after.code], ['lost', undefined, undefined]);
+  assert.deepEqual([after.state, after.url, after.code, after.signedIn], ['lost', undefined, undefined, null]);
   assert.equal(after.text, 'ops-box restarted while a Codex sign-in for debbie was waiting, so that attempt is gone. Start again for a new code.');
-  await until(() => !b.running('fw-signin-codex-debbie'), 'the container nobody is listening to, ended');
+  assert.equal(b.running('fw-signin-codex-debbie'), false, 'the container was still running when the home was asked about');
+  // ASKED WITH NO ENGINE AND NO NETWORK, in a container of its own name.
+  assert.equal(b.runs().at(-1), `run --rm --name fw-signin-codex-debbie-asked -v fw-engine-debbie:${ENGINE_HOME} -e FLEETWRIGHT_ENGINE_HOME=${ENGINE_HOME} --network=none img fleetwright-engine --signedin codex`);
+  assert.deepEqual(b.codexSaw().filter((m) => m !== 'initialize' && m !== 'initialized' && m !== 'account/login/start'), [], 'the engine was started to answer');
   // What nobody could see does not go on to sign in.
   b.provider('approved');
   await new Promise((r) => setTimeout(r, 150));
   assert.equal(existsSync(b.volume('fw-engine-debbie', 'codex', 'auth.json')), false);
   assert.deepEqual(b.signins.report().map((r) => [r.state, r.since]), [['lost', null]]);
 
-  // FOUND AS THE HUB COMES UP, before anybody asks.
+  // THE OTHER ORDER: THE CODE WAS APPROVED WHILE THE HUB WAS DOWN. The
+  // container outlived it and the engine signed the member in. The hub that
+  // came back said the attempt was gone and reported nobody, with the
+  // member's sessions running on the sign-in and nothing offering to sign it out.
+  const o = box(t);
+  assert.equal((await hubThatDies(o)).state, 'waiting');
+  o.provider('approved');
+  await until(() => existsSync(o.volume('fw-engine-debbie', 'codex', 'auth.json')), 'the code approved with no hub listening');
+  const back = await o.ask('status');
+  assert.deepEqual([back.ok, back.state, back.url, back.code], [true, 'signed_in', undefined, undefined]);
+  // Since when the engine wrote it. Who is not known: no engine was asked, and the box does not read the file.
+  assert.deepEqual([back.signedIn.who, back.signedIn.since > 0, back.signedIn.since <= Date.now()], [null, true, true]);
+  assert.match(back.text, /^Codex is signed in for debbie on ops-box, since \d{4}-\d\d-\d\d \d\d:\d\d UTC\.$/);
+  assert.deepEqual(o.signins.report().map((r) => [r.state, r.since]), [['signed_in', back.signedIn.since]]);
+  assert.match(said(), /engines: codex sign-in for debbie: lost, and the code had been approved: signed in/);
+  // It can be signed out, which is what no screen offered while the box said nobody was signed in.
+  assert.equal((await o.ask('signout')).state, 'signed_out');
+
+  // AND WHEN IT CANNOT ASK, IT CANNOT TELL. Never lost, never not signed in: a refusal that says so, and it looks again when asked again.
+  const c = box(t);
+  await hubThatDies(c);
+  c.provider('approved');
+  await until(() => existsSync(c.volume('fw-engine-debbie', 'codex', 'auth.json')), 'approved here too');
+  c.set('no-image');
+  for (const action of ['status', 'cancel']) {
+    const blind = await c.ask(action);
+    assert.deepEqual([blind.ok, blind.error?.code, blind.state, blind.signedIn], [false, 'cannot_tell', undefined, undefined], action);
+    assert.equal(blind.text, 'ops-box did not hear how the last Codex sign-in for debbie ended (it restarted while the code was out), and has not been able to ask whether the code was approved first. So it cannot tell whether Codex is signed in for debbie there. Ask again in a moment, and it looks again.');
+  }
+  c.set('no-image', false);
+  assert.equal((await c.ask('status')).state, 'signed_in');
+
+  // FOUND AS THE HUB COMES UP, before anybody asks, and written down once the home has answered.
   const b2 = box(t);
   await hubThatDies(b2);
   b2.signins.recover();
-  assert.deepEqual(b2.signins.report().map((r) => r.state), ['lost']);
-  await until(() => !b2.running('fw-signin-codex-debbie'), 'that container ended too');
+  assert.notEqual(b2.signins.report()[0].state, 'waiting');
+  await until(() => b2.signins.report()[0].state === 'lost', 'the attempt a restart left, written down as lost');
+  assert.equal(b2.running('fw-signin-codex-debbie'), false);
   // AND A HUB THAT STOPS IN GOOD ORDER ends what is waiting itself, as lost and not as cancelled: nobody cancelled it.
+  // The runner said so as it was stopped, so there is nothing to ask.
   const b3 = box(t);
   await b3.ask('start');
   await b3.signins.close();
   assert.equal((await b3.ask('status')).state, 'lost');
   assert.equal(b3.running('fw-signin-codex-debbie'), false);
+  assert.ok(!b3.runs().some((l) => l.includes('--signedin')), 'a home was asked about an ending the runner had said');
 });
 
 test('a sign out has the engine remove its sign-in and stops reporting it; one that fails changes nothing this box says', async (t) => {
@@ -300,7 +350,10 @@ test('a sign out has the engine remove its sign-in and stops reporting it; one t
   assert.match(failed.text, /^Codex was not signed out for debbie on ops-box: .*What ops-box knows of the sign-in is unchanged\.$/);
   assert.equal((await b.ask('status')).state, 'signed_in');
   b.set('fail-run', false);
-  const out = await b.ask('signout');
+  // ASKED TWICE AT ONCE, the second is told the first is at it, and what to do next.
+  const [out, busy] = await Promise.all([b.ask('signout'), b.ask('signout')]);
+  assert.deepEqual([busy.ok, busy.error?.code], [false, 'busy']);
+  assert.equal(busy.text, 'Codex is already being signed out for debbie on ops-box, so this asked for nothing more. Ask where it stands in a moment.');
   assert.deepEqual([out.ok, out.state, out.signedIn], [true, 'signed_out', null]);
   assert.equal(b.runs().at(-1), `run --rm --name fw-signin-codex-debbie -v fw-engine-debbie:${ENGINE_HOME} -e FLEETWRIGHT_ENGINE_HOME=${ENGINE_HOME} img fleetwright-engine --signout codex`);
   assert.equal(existsSync(b.volume('fw-engine-debbie', 'codex', 'auth.json')), false, 'Codex removed its own file');
@@ -386,9 +439,9 @@ test('a sign-in a session finds ended is no longer reported, and an engine on a 
 test('the hub itself answers on that route for whoever holds its token, tells a session’s ending to the same store, and says in its state who is signed in', async (t) => {
   const b = signinBox(t);
   const cfg = b.cfg({ bind: '127.0.0.1', port: 0, token: '', workdir: path.join(b.dir, 'work'), maxSessions: 5, loginEnabled: true, sandboxCredentialsFile: '', sandboxImagePinned: false, releaseChannel: '', rulesFile: path.join(b.dir, 'CLAUDE.md') });
-  const sessions = /** @type {any} */ ({ list: () => [], running: () => [], binned: () => [] });
+  const sessions = /** @type {any} */ ({ list: () => [], running: () => [], binned: () => [], forgetOwner: () => [] });
   const token = ensureApiToken(cfg);
-  const adapter = new HttpAdapter(cfg, { sessions, login: /** @type {any} */ ({ status: () => ({ loggedIn: true }), isPending: () => false, pending: null }), token });
+  const adapter = new HttpAdapter(cfg, { sessions, login: /** @type {any} */ ({ status: () => ({ loggedIn: true }), isPending: () => false, pending: null, forget: () => false }), token });
   await adapter.start();
   t.after(() => adapter.stop());
   const baseUrl = `http://127.0.0.1:${/** @type {any} */ (adapter.server).address().port}`;
@@ -409,13 +462,34 @@ test('the hub itself answers on that route for whoever holds its token, tells a 
   assert.ok(!JSON.stringify(state).includes('ABCD-EFGH') && !JSON.stringify(state).includes('LEAKCANARY'), 'the hub’s state carries the code or a token');
   // The store a session's ending is told to is this one.
   assert.equal(sessions.engineSignins, adapter.engineSignins);
+
+  // AND IT IS THE STORE A REMOVAL REACHES, on the two routes the sidecar has for one.
+  // A person removed from the fleet (forget-person.js):
+  const eli = { ...ELI, engine: 'codex', action: 'start' };
+  assert.equal((await hub.engineSignin(eli)).state, 'waiting');
+  const forgot = await hub.forgetPerson('eli@example.com');
+  assert.deepEqual([forgot.ok, forgot.forgot?.engines?.attempts], [true, 1]);
+  assert.equal(adapter.engineSignins.attempts.size, 0);
+  // A member the vault no longer lists (keepMembers), which only the hub's own token may say.
+  const anybodyAgain = await fetch(`${baseUrl}/api/engine-members`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ members: [] }) });
+  assert.equal(anybodyAgain.status, 401);
+  assert.deepEqual((await hub.state()).engineSignins.map((/** @type {any} */ e) => e.member), ['debbie']);
+  assert.deepEqual(await hub.engineMembers(['debbie']), { ok: true, gone: [], text: 'Every member this machine holds an engine sign-in for is still listed.' });
+  assert.deepEqual((await hub.engineMembers([])).gone, ['debbie']);
+  assert.deepEqual((await hub.state()).engineSignins, []);
 });
 
 test('the sidecar asks its hub on a route of its own, says so when the hub is older, reports only who is signed in, and says when an attempt ends', async (t) => {
   // An older hub has no such route.
-  const old = await startStubHub({ host: 'ops-box', without: ['/api/engine-signin'] });
+  const old = await startStubHub({ host: 'ops-box', without: ['/api/engine-signin', '/api/engine-members'] });
   t.after(() => old.close());
-  assert.deepEqual(await new HubClient({ baseUrl: old.baseUrl, token: null }).engineSignin({ ...DEBBIE, engine: 'codex', action: 'start' }), { ok: false, error: { code: 'hub_outdated' }, text: 'fleetwright here is older than signing an engine in; update it' });
+  // Said by the machine's name, with what to do there: "fleetwright here" reads, on a phone, as the phone.
+  assert.deepEqual(await new HubClient({ baseUrl: old.baseUrl, token: null }).engineSignin({ ...DEBBIE, engine: 'codex', action: 'start' }), {
+    ok: false, error: { code: 'hub_outdated' },
+    text: 'ops-box is running a fleetwright from before engines were signed in on a machine. Update fleetwright on ops-box and restart it, then ask again.',
+  });
+  // And none for who is still a member: it keeps everything, and says it is not done.
+  assert.deepEqual(await new HubClient({ baseUrl: old.baseUrl, token: null }).engineMembers(['debbie']), { ok: false, gone: [], text: 'fleetwright here is older than forgetting a removed member’s engine sign-ins; update it' });
 
   const at = Date.UTC(2026, 10, 25, 10);
   const hub = await startStubHub({ host: 'ops-box', facts: { engines: ['claude-code', 'codex'], engineSignins: [
@@ -433,8 +507,24 @@ test('the sidecar asks its hub on a route of its own, says so when the hub is ol
     hub: new HubClient({ baseUrl: hub.baseUrl, token: null }), hostId: 'ops-box', watch: false, healthIntervalMs: 0, renewIntervalMs: 0, logger: quiet,
     transport: /** @type {any} */ ({ origin: 'https://fleet.test', onMessage() {}, start: async () => true, stop: async () => {}, send: (/** @type {any} */ f) => { sent.push(f); return true; } }),
   });
+  // NOT TO A COORDINATOR THAT HAS NOT SHOWN IT KNOWS THE LIST. One from before
+  // protocol 22 passes every health key it does not know to every member, so
+  // a box that updated first told the whole fleet who was signed in where.
+  // Absent, which every reader takes as cannot tell.
+  assert.equal('engineSignins' in (await sidecar.health()), false, 'the list went to a coordinator that has said nothing of what it speaks');
+  await sidecar.handle({ v: 21, kind: 'vault-changed' });
+  assert.equal('engineSignins' in (await sidecar.health()), false, 'the list went to a coordinator that speaks 21');
+  await sidecar.handle({ v: 22, kind: 'vault-changed' });
   // THE FRAME: who is signed in now, by id, engine and since when. An attempt that expired leaves the sign-in before it.
   assert.deepEqual((await sidecar.health()).engineSignins, [{ member: 'debbie', engine: 'codex', since: at }, { member: 'ada', engine: 'opencode', since: at - 1000 }]);
+  // An intent is spoken in the older of the two parties' versions, so one in 21 does not say the coordinator is behind, and one in 22 says it is not.
+  await sidecar.handle({ v: 21, kind: 'intent', id: 'health-0001-older', verb: 'health', params: {}, issuedAt: Date.now() });
+  assert.equal('engineSignins' in (await sidecar.health()), true, 'an intent in an older version took the list back');
+  // A coordinator rolled back under a box that stays up is heard, by the next frame it stamps.
+  await sidecar.handle({ v: 21, kind: 'vault-changed' });
+  assert.equal('engineSignins' in (await sidecar.health()), false);
+  await sidecar.handle({ v: 22, kind: 'intent', id: 'health-0002-newer', verb: 'health', params: {}, issuedAt: Date.now() });
+  assert.equal('engineSignins' in (await sidecar.health()), true);
 
   // THE EVENT, on a change and never on the first look.
   const watcher = new SessionWatcher({ hub: new HubClient({ baseUrl: hub.baseUrl, token: null }), emit: (/** @type {any} */ e) => sidecar.emitEvent(e), logger: quiet });
@@ -450,6 +540,476 @@ test('the sidecar asks its hub on a route of its own, says so when the hub is ol
   assert.deepEqual(sent.filter((f) => f.kind === 'event').map(({ v: _v, ...f }) => f), [{ kind: 'event', hostId: 'ops-box', event: 'engine.signin', member: 'jason', engine: 'codex', state: 'signed_in', at: at + 5000 }]);
 });
 
-test('the name a sign-in’s container runs under is its engine and its member, which a member’s id cannot break out of', () => {
+test('the name a sign-in’s container runs under is its engine and its member, and an id that is not one never reaches Podman', async (t) => {
   assert.equal(containerFor('debbie', 'codex'), 'fw-signin-codex-debbie');
+  // What would break out of a name, or of the command it is in, is not a member's id, and is refused before anything is run or named.
+  const b = box(t);
+  for (const member of ['debbie --privileged', 'debbie;reboot', '../debbie', 'debbie/codex', '-v', 'debbie\n--rm', 'DEBBIE', 'person.0123456789abcdef', '']) {
+    for (const action of ['start', 'status', 'cancel', 'signout']) {
+      assert.equal((await b.ask(action, { member, account: 'debbie@members.invalid' })).error?.code, 'bad_params', `${JSON.stringify(member)} ${action}`);
+    }
+  }
+  assert.deepEqual(b.calls(), [], 'Podman was run for something that is not a member');
+  assert.equal(b.kept(), '', 'and something was written down for it');
+});
+
+// ── What the runner says is held to what this box knows ─────────────────────
+
+/**
+ * A Podman whose container prints the lines a test gives it and then waits
+ * to be stopped: what this box does with a first line, whatever printed it.
+ * The runner and the engines are not in it, on purpose. What they print is
+ * theirs (test/engine-signin-run.test.js); what the box does with a line it
+ * should not believe must not depend on their being unable to print one.
+ */
+function sayingBox(/** @type {import('node:test').TestContext} */ t, /** @type {Record<string, unknown>[]} */ lines, /** @type {any} */ opts = {}, /** @type {{ ends?: boolean, home?: Record<string, unknown>|null }} */ { ends = false, home = null } = {}) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'fw-signin-says-'));
+  const podmanBin = path.join(dir, 'podman');
+  writeFileSync(path.join(dir, 'lines'), lines.map((l) => `${JSON.stringify(l)}\n`).join(''));
+  // What the container that looks in the home says of it (`--signedin`), when it says anything.
+  if (home) writeFileSync(path.join(dir, 'home'), `${JSON.stringify(home)}\n`);
+  writeFileSync(podmanBin, `#!/bin/sh
+D='${dir}'
+printf '%s\\n' "$*" >> "$D/podman.log"
+case "$1" in
+  --version) echo 'podman version 5.0.0'; exit 0 ;;
+  rm) for last; do :; done; if [ -e "$D/ctr-$last.pid" ]; then kill -9 "-$(cat "$D/ctr-$last.pid")" 2>/dev/null; rm -f "$D/ctr-$last.pid"; fi; exit 0 ;;
+  run) ;;
+  *) exit 0 ;;
+esac
+name=''
+asked=''
+while [ $# -gt 0 ]; do case "$1" in --name) name="$2"; shift ;; --signedin) asked=1 ;; FLEETWRIGHT_SIGNIN_ATTEMPT=*) printf '%s' "\${1#*=}" > "$D/word" ;; esac; shift; done
+# The home answers with the word of the attempt that was last run where a test wrote @word@: what the runner would have left beside its sign-in.
+if [ -n "$asked" ]; then sed "s/@word@/$(cat "$D/word" 2>/dev/null)/" "$D/home" 2>/dev/null; exit 0; fi
+echo $$ > "$D/ctr-$name.pid"
+cat "$D/lines"
+${ends ? 'exit 0' : 'exec sleep 30'}
+`);
+  chmodSync(podmanBin, 0o755);
+  const pid = (/** @type {string} */ container) => (existsSync(path.join(dir, `ctr-${container}.pid`)) ? Number(readFileSync(path.join(dir, `ctr-${container}.pid`), 'utf8')) : 0);
+  const running = (/** @type {string} */ container) => {
+    try {
+      return pid(container) > 0 && (process.kill(pid(container), 0), true);
+    } catch {
+      return false;
+    }
+  };
+  const cfg = /** @type {any} */ ({ stateDir: path.join(dir, 'state'), hostname: 'ops-box', podmanBin, sandbox: true, sandboxHookSocket: true, sandboxImage: 'img', sandboxUserns: 'host', sandboxExtraArgs: [], engines: ['codex', 'opencode'] });
+  const signins = new EngineSignins(cfg, opts);
+  t.after(async () => {
+    await signins.close();
+    for (const engine of ['codex', 'opencode']) {
+      // Only one that is known: a group of 0 is this process's own.
+      const left = pid(`fw-signin-${engine}-debbie`);
+      try {
+        if (left > 0) process.kill(-left, 'SIGKILL');
+      } catch { /* gone already */ }
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const kept = () => (existsSync(signins.file) ? readFileSync(signins.file, 'utf8') : '');
+  const calls = () => (existsSync(path.join(dir, 'podman.log')) ? readFileSync(path.join(dir, 'podman.log'), 'utf8').split('\n').filter(Boolean) : []);
+  return { dir, cfg, signins, running, kept, calls, ask: (/** @type {string} */ action, /** @type {Record<string, unknown>} */ over = {}) => signins.ask({ ...DEBBIE, engine: 'codex', action, ...over }) };
+}
+
+test('a first line that does not read as a page and a code is refused at once, in words that say which half, and nothing is left waiting', async (t) => {
+  const said = logged(t);
+  // WHAT A RUNNER PRINTED on a machine whose engine home already held a Codex
+  // sign-in: it took the issuer in that file for a secret and cut it out of
+  // the page. The box skipped the line without a word and, 45 seconds later,
+  // said Codex gave no code.
+  for (const [line, half] of /** @type {const} */ ([
+    [{ signin: 'code', engine: 'codex', url: '[withheld]/codex/device', code: 'ABCD-EFGH', expiresInMinutes: 15 }, 'what it was given as the page does not begin https://'],
+    [{ signin: 'code', engine: 'codex', url: SIGNIN_PAGES.codex.page, code: 'ABCD EFGH; open evil', expiresInMinutes: 15 }, 'what it was given as the code is not letters, digits and hyphens'],
+    [{ signin: 'code', engine: 'codex', code: 'ABCD-EFGH' }, 'what it was given as the page does not begin https://'],
+  ])) {
+    const b = sayingBox(t, [line]);
+    const began = Date.now();
+    const r = await b.ask('start');
+    assert.ok(Date.now() - began < 10_000, 'it waited out its 45 seconds to say so');
+    assert.deepEqual([r.ok, r.error?.code, r.state, r.url, r.code], [false, 'unreadable_code', 'failed', undefined, undefined]);
+    assert.equal(r.text, `Codex was not signed in for debbie on ops-box: ops-box could not read the page and the code it gave (${half}). Nothing is waiting. That is a fault in fleetwright on ops-box and not at OpenAI: update fleetwright on ops-box and start again, or paste a sign-in instead.`);
+    assert.deepEqual([(await b.ask('status')).state, b.signins.attempts.size], ['failed', 0]);
+    await until(() => !b.running('fw-signin-codex-debbie'), 'the container ended');
+    // Neither half is repeated anywhere: what was given is not known to be anybody's page.
+    for (const [where, text] of [['the answer', JSON.stringify(r)], ['the state file', b.kept()], ['a log line', said()]]) {
+      assert.ok(!text.includes('ABCD') && !text.includes('codex/device'), `the page or the code it could not read is in ${where}`);
+    }
+  }
+});
+
+test('a page that is not the provider’s own ends the attempt, and its code is given to nobody: not in the answer, a status, the record or the log', async (t) => {
+  const said = logged(t);
+  assert.deepEqual(SIGNIN_PAGES, { codex: { page: 'https://auth.openai.com/codex/device', at: 'OpenAI' }, opencode: { page: 'https://github.com/login/device', at: 'GitHub' } });
+  // THE RUNNER HOLDS ITS ENGINE TO THE SAME TWO (sandbox/engine.mjs, which this box cannot import from and the image cannot import this from).
+  // One list moved without the other is every sign-in refused by whichever was left behind.
+  assert.deepEqual(Object.fromEntries(Object.entries(SIGNIN_PAGES).map(([engine, own]) => [engine, own.page])), { ...RUNNER_PAGES });
+  // The engine in a sign-in's container runs on a volume the member's
+  // sessions write. Whatever it names, only the one page is this box's word.
+  for (const [engine, url] of /** @type {const} */ ([
+    ['opencode', 'https://github.com.login-device.example/login/device'],
+    ['opencode', 'https://github.com/login/device?next=https://evil.example'],
+    ['opencode', 'https://github.com/login/device/'],
+    ['opencode', 'https://GITHUB.com/login/device'],
+    // Each engine's own page is not the other's.
+    ['opencode', SIGNIN_PAGES.codex.page],
+    ['codex', SIGNIN_PAGES.opencode.page],
+    ['codex', 'https://auth.openai.com.evil.example/codex/device'],
+    ['codex', 'https://auth.openai.com/codex/device#x'],
+  ])) {
+    const b = sayingBox(t, [{ signin: 'code', engine, url, code: 'EVIL-0000', expiresInMinutes: 15 }, { signin: 'done', engine, state: 'signed_in', who: { email: 'mallory@example.com', plan: 'plus' } }]);
+    const r = await b.ask('start', { engine });
+    const [says, at] = engine === 'codex' ? ['Codex', 'OpenAI'] : ['OpenCode', 'GitHub'];
+    assert.deepEqual([r.ok, r.error?.code, r.state, r.url, r.code, r.signedIn], [false, 'wrong_page', 'failed', undefined, undefined, undefined], url);
+    assert.equal(r.text, `${says} was not signed in for debbie on ops-box: its sign-in named a page that is not ${at}’s own, so ops-box stopped it and gave nobody the code. Nothing is waiting. Whoever runs ops-box looks at what its session image runs as ${says} and at what is in debbie’s engine home there (fw-engine-debbie), before anybody starts again.`);
+    await until(() => !b.running(`fw-signin-${engine}-debbie`), 'the container ended');
+    // STOPPED, so the sign-in it then claimed is nobody's: nothing is recorded as signed in.
+    const now = await b.ask('status', { engine });
+    assert.deepEqual([now.state, now.url, now.code, now.signedIn, b.signins.attempts.size], ['failed', undefined, undefined, null, 0]);
+    assert.deepEqual(b.signins.report().map((e) => [e.state, e.since]), [['failed', null]]);
+    for (const [where, text] of [['an answer', JSON.stringify([r, now])], ['the state file', b.kept()], ['a log line', said()]]) {
+      assert.ok(!text.includes('EVIL-0000') && !text.includes(new URL(url).host.toLowerCase()) && !text.includes('mallory'), `the page it named, its code or who it claimed is in ${where}`);
+    }
+  }
+  // AND THE PROVIDER'S OWN PAGE, from the same Podman, is answered: the check is the page and nothing about who printed it.
+  const ok = sayingBox(t, [{ signin: 'code', engine: 'opencode', url: SIGNIN_PAGES.opencode.page, code: 'WXYZ-1234', expiresInMinutes: 15 }]);
+  assert.deepEqual([(await ok.ask('start', { engine: 'opencode' })).state, (await ok.ask('status', { engine: 'opencode' })).code], ['waiting', 'WXYZ-1234']);
+});
+
+test('an ending the runner did not say, with a code out, is asked of the home before it is said: a container that died, a cancel that raced an approval, a pasted copy', async (t) => {
+  const code = { signin: 'code', engine: 'codex', url: SIGNIN_PAGES.codex.page, code: 'ABCD-EFGH', expiresInMinutes: 15 };
+  const later = () => Date.now() + 60_000;
+  const state = async (/** @type {ReturnType<typeof sayingBox>} */ b) => {
+    await until(async () => (await b.ask('status')).state !== 'waiting', 'the attempt over');
+    return b.ask('status');
+  };
+  // THE CONTAINER DIED AFTER THE CODE WAS OUT, having written the sign-in:
+  // the box said "was not signed in", of something it had not heard.
+  // Its word is beside it, which is how the box knows this attempt made it (`@word@`, sayingBox).
+  const died = sayingBox(t, [code], {}, { ends: true, home: { signin: 'is', engine: 'codex', signedIn: true, pasted: false, writtenAt: later(), attempt: '@word@' } });
+  await died.ask('start');
+  const signedIn = await state(died);
+  assert.deepEqual([signedIn.state, signedIn.signedIn.who, signedIn.signedIn.since > 0], ['signed_in', null, true]);
+  assert.match(signedIn.text, /^Codex is signed in for debbie on ops-box, since /);
+  // DIED, AND NOTHING IS IN THE HOME: now it is known, and said as it always was.
+  const empty = sayingBox(t, [code], {}, { ends: true, home: { signin: 'is', engine: 'codex', signedIn: false, pasted: false, writtenAt: null } });
+  await empty.ask('start');
+  const not = await state(empty);
+  assert.deepEqual([not.state, not.signedIn], ['failed', null]);
+  assert.equal(not.text, 'Codex was not signed in for debbie on ops-box: the sign-in container stopped before it said how the sign-in ended.');
+  // WHAT IS THERE IS NOT THIS ATTEMPT'S: the box's copy of a pasted one, a
+  // file from before, and A FILE WRITTEN SINCE THE ATTEMPT BEGAN WITH NO WORD
+  // OF ITS, OR ANOTHER ATTEMPT'S, BESIDE IT. The last two were taken for the
+  // code approved, on the time alone, and a member's sessions write this
+  // home. The attempt signed nobody in, and a file it did not make is not
+  // recorded as a sign-in either: this box says nobody is signed in whom it
+  // did not already say.
+  for (const home of [
+    { signedIn: true, pasted: true, writtenAt: later(), attempt: '@word@' },
+    { signedIn: true, pasted: false, writtenAt: 1_000 },
+    { signedIn: true, pasted: false, writtenAt: later() },
+    { signedIn: true, pasted: false, writtenAt: later(), attempt: null },
+    { signedIn: true, pasted: false, writtenAt: later(), attempt: '0123456789abcdef0123456789abcdef' },
+  ]) {
+    const b = sayingBox(t, [code], {}, { ends: true, home: { signin: 'is', engine: 'codex', ...home } });
+    await b.ask('start');
+    const s = await state(b);
+    assert.deepEqual([s.state, s.signedIn], ['failed', null], JSON.stringify(home));
+    assert.equal(b.signins.report()?.[0].since, null, JSON.stringify(home));
+  }
+  // THE HOME DOES NOT ANSWER: cannot tell, and not "was not signed in".
+  const mute = sayingBox(t, [code], {}, { ends: true });
+  await mute.ask('start');
+  await until(async () => (await mute.ask('status')).ok === false, 'the attempt over');
+  const blind = await mute.ask('status');
+  assert.deepEqual([blind.ok, blind.error?.code, blind.state], [false, 'cannot_tell', undefined]);
+  assert.equal(blind.text, 'ops-box did not hear how the last Codex sign-in for debbie ended (the container stopped without saying), and has not been able to ask whether the code was approved first. So it cannot tell whether Codex is signed in for debbie there. Ask again in a moment, and it looks again.');
+  assert.equal(mute.signins.report()?.[0].since, null);
+  // A CANCEL THAT RACED AN APPROVAL: stopped before the runner answered, with the sign-in written. The cancel's own answer says what is true.
+  const raced = sayingBox(t, [code], { stopMs: 300 }, { home: { signin: 'is', engine: 'codex', signedIn: true, pasted: false, writtenAt: later(), attempt: '@word@' } });
+  assert.equal((await raced.ask('start')).state, 'waiting');
+  const cancelled = await raced.ask('cancel');
+  assert.deepEqual([cancelled.state, cancelled.signedIn?.who], ['signed_in', null]);
+  // BEFORE ANY CODE there was nothing to approve, and nothing is asked.
+  const early = sayingBox(t, [], {}, { ends: true, home: { signin: 'is', engine: 'codex', signedIn: true, pasted: false, writtenAt: later() } });
+  assert.equal((await early.ask('start')).error?.code, 'signin_failed');
+  assert.ok(!early.calls().some((l) => l.includes('--signedin')), 'a home was asked about an attempt that never had a code');
+});
+
+// ── A file in the home that the attempt did not make ────────────────────────
+//
+// A member's sessions write the engine home. What a box finds there after an
+// ending it did not hear is the attempt's sign-in only by the attempt's own
+// word beside it (src/core/engine-signin.js, #ask), and each of these three
+// was once recorded as the code approved, or as somebody signed in.
+
+/** A box whose member was signed in on the machine once, as debbie@example.com, with nothing left running. */
+async function signedInOnce(/** @type {import('node:test').TestContext} */ t) {
+  const b = box(t);
+  await b.ask('start');
+  b.provider('approved');
+  await until(async () => (await b.ask('status')).state === 'signed_in', 'the first sign-in');
+  b.set('provider-approved', false);
+  await until(() => !b.running('fw-signin-codex-debbie'), 'the first container gone');
+  return b;
+}
+
+test('a sign-in a session found ended is not reported again after an ending this box did not hear', async (t) => {
+  // The box stops reporting it (`ended`); the file that no longer works
+  // stays in the home. After the next ending this box did not hear, with
+  // nobody having approved anything, it took that file for "a sign-in it had
+  // not been told of" and said the member was signed in.
+  const b = await signedInOnce(t);
+  assert.equal(b.signins.ended('debbie', 'codex'), true);
+  assert.deepEqual([(await b.ask('status')).state, (await b.ask('status')).signedIn], ['ended', null]);
+  assert.equal((await hubThatDies(b)).state, 'waiting');
+  const after = await b.ask('status');
+  assert.deepEqual([after.state, after.signedIn], ['lost', null]);
+  assert.deepEqual(b.signins.report().map((r) => [r.state, r.since]), [['lost', null]]);
+});
+
+test('a sign-in a session renewed while a code was out is not recorded as the code approved, and whose it is stays said', async (t) => {
+  // Codex rewrites its file when it renews, so the file is newer than the
+  // attempt and is not the attempt's. It was recorded as the new code
+  // approved, and the account the record held was dropped.
+  const r = await signedInOnce(t);
+  const first = (await r.ask('status')).signedIn;
+  assert.equal(first.who.email, 'debbie@example.com');
+  assert.equal((await hubThatDies(r)).state, 'waiting');
+  const file = r.volume('fw-engine-debbie', 'codex', 'auth.json');
+  await new Promise((done) => setTimeout(done, 30));
+  writeFileSync(file, readFileSync(file, 'utf8'));
+  const back = await r.ask('status');
+  assert.deepEqual([back.state, back.signedIn], ['lost', first]);
+  assert.match(back.text, /^ops-box restarted while a Codex sign-in for debbie was waiting, so that attempt is gone\. Start again for a new code\. Codex is still signed in as debbie@example\.com there, since /);
+});
+
+test('a file a session left in the home, with a piece of the runner’s own line in it, does not make this box record a sign-in nobody approved', async (t) => {
+  // Shaped as a sign-in (any account's), with one more string in it. The
+  // runner cut that string out of what it said, the box could not read the
+  // line, asked the home, found the session's file written since the
+  // attempt began, and recorded a sign-in for a code nobody had approved.
+  const p = box(t);
+  const theirs = p.volume('fw-engine-debbie', 'codex', 'auth.json');
+  const planted = JSON.stringify({ ...JSON.parse(codexSignIn({ refresh: 'rt-of-some-other-account-0123', access: 'at-of-some-other-account-0123' })), note: 'done","state":"cancelled' });
+  mkdirSync(path.dirname(theirs), { recursive: true });
+  writeFileSync(theirs, planted);
+  assert.equal((await p.ask('start')).state, 'waiting');
+  // The session goes on writing its home, as sessions do.
+  writeFileSync(theirs, planted);
+  const cancelled = await p.ask('cancel');
+  assert.deepEqual([cancelled.state, cancelled.signedIn], ['cancelled', null]);
+  assert.deepEqual(p.signins.report().map((row) => [row.state, row.since]), [['cancelled', null]]);
+});
+
+test('a code this box’s clock says is over is not said to be waiting, though no timer of its own has fired', async (t) => {
+  let skew = 0;
+  const b = box(t, {}, { now: () => Date.now() + skew });
+  const first = await b.ask('start');
+  assert.equal(first.state, 'waiting');
+  // SUSPENDED FOR AN HOUR WITH THE CODE OUT. The clock on the wall moved; a
+  // timer does not count time the machine was not running, so the one that
+  // ends the attempt is still fourteen minutes off. It answered "waiting,
+  // about 1 more minute", with the page and a code OpenAI had long ended.
+  skew = 3_600_000;
+  const later = await b.ask('status');
+  assert.deepEqual([later.ok, later.state, later.url, later.code, later.signedIn], [true, 'expired', undefined, undefined, null]);
+  assert.equal(later.text, 'The code ran out before anybody approved it, so Codex was not signed in for debbie on ops-box. Start again for a new code.');
+  // Ended by what ends one: the container is gone, and the home was asked before anything was said.
+  assert.ok(b.runs().some((l) => l.includes('--signedin')), 'the home was not asked what became of a code this box ended');
+  await until(() => !b.running('fw-signin-codex-debbie'), 'the container of a code that is over, ended');
+  // And a start is a new attempt with a life of its own, not the old one handed back as in flight.
+  const again = await b.ask('start');
+  assert.deepEqual([again.state, again.already, again.expiresAt > first.expiresAt + skew - 1000], ['waiting', undefined, true]);
+});
+
+// ── A record that cannot be written, or does not read ───────────────────────
+
+test('a record that cannot be written ends the attempt that needed it, in words, and nothing stays wedged once it can be written again', async (t) => {
+  const b = box(t, {}, { stopMs: 300 });
+  mkdirSync(b.cfg.stateDir, { recursive: true });
+  // The state directory is there and reads; the one file a write goes through cannot be made.
+  const blocked = `${b.signins.file}.${process.pid}`;
+  const block = (on = true) => (on ? mkdirSync(blocked) : rmSync(blocked, { recursive: true }));
+
+  // AT THE START: nothing is begun, and it is said. The write was not guarded,
+  // with the attempt already held: every later start and status threw.
+  block();
+  const refused = await b.ask('start');
+  assert.deepEqual([refused.ok, refused.error?.code, b.signins.attempts.size, b.runs().length], [false, 'state_unwritable', 0, 0]);
+  assert.equal(refused.text, 'ops-box could not write to its own record of engine sign-ins (EISDIR), so it began no Codex sign-in for debbie and nothing is waiting. Whoever runs ops-box looks at its state directory and the room on its disk. Then start again.');
+  assert.equal((await b.ask('status')).state, 'none');
+  block(false);
+  assert.equal((await b.ask('start')).state, 'waiting', 'the disk is fine again, and so is the box');
+
+  // AS AN ATTEMPT ENDS: a cancel is still answered, and with what happened.
+  // It used to wait for ever, as did a sign out and this hub's own stop.
+  block();
+  const cancelled = await Promise.race([b.ask('cancel'), new Promise((r) => setTimeout(() => r({ state: 'never answered' }), 8000))]);
+  assert.equal(cancelled.state, 'cancelled');
+  assert.equal(b.running('fw-signin-codex-debbie'), false);
+  assert.deepEqual([(await b.ask('status')).state, b.signins.attempts.size], ['cancelled', 0]);
+  assert.deepEqual(b.signins.report().map((e) => e.state), ['cancelled'], 'what could not be written is still what this box says');
+  assert.equal(JSON.parse(b.kept()).signins['debbie/codex'].last, null, 'and it is not on disk yet');
+  // Written down the next time anything is asked, once it can be. Never as lost: no restart lost it.
+  block(false);
+  assert.equal((await b.ask('status')).state, 'cancelled');
+  assert.deepEqual([JSON.parse(b.kept()).signins['debbie/codex'].last.state, JSON.parse(b.kept()).signins['debbie/codex'].attempt], ['cancelled', null]);
+
+  // AND THE HUB STOPS, with an attempt out and a record it cannot write.
+  assert.equal((await b.ask('start')).state, 'waiting');
+  block();
+  assert.equal(await Promise.race([b.signins.close().then(() => 'stopped'), new Promise((r) => setTimeout(() => r('never stopped'), 8000))]), 'stopped');
+  assert.equal(b.running('fw-signin-codex-debbie'), false);
+  block(false);
+  assert.equal((await b.ask('status')).state, 'lost');
+});
+
+test('a record that does not read as one is cannot tell, never nobody: not reported, said once, and not written over', async (t) => {
+  const said = logged(t);
+  const b = box(t);
+  mkdirSync(b.cfg.stateDir, { recursive: true });
+  // Cut short, as a disk that filled leaves a file somebody else wrote.
+  const cut = '{"v":1,"signins":{"debbie/codex":{"member":"debbie","engine":"codex","signedIn":{"since":1795000000000';
+  writeFileSync(b.signins.file, cut);
+  // An empty list is this box saying nobody is signed in here. It does not know that.
+  assert.deepEqual([b.signins.report(), b.signins.report(), b.signins.report()], [null, null, null]);
+  for (const action of ['status', 'start', 'cancel', 'signout']) {
+    const r = await b.ask(action);
+    assert.deepEqual([r.ok, r.error?.code], [false, 'state_unreadable'], action);
+    assert.equal(r.text, 'ops-box cannot read its own record of engine sign-ins, so it cannot say where this one stands or begin another. Whoever runs ops-box looks at engine-signins.json in its state directory: moved aside, the record starts again, and a sign-in made before is not known here until it is made again.');
+  }
+  assert.equal(b.signins.ended('debbie', 'codex'), false);
+  assert.equal((said().match(/does not read as this machine’s record of engine sign-ins/g) ?? []).length, 1, 'said on every read, and the state is read every few seconds');
+  assert.equal(b.kept(), cut, 'what it could not read was written over');
+  assert.deepEqual(b.runs(), []);
+  // Moved aside, as the sentence says, the record starts again.
+  rmSync(b.signins.file);
+  assert.deepEqual([b.signins.report(), (await b.ask('status')).state], [[], 'none']);
+});
+
+// ── Somebody who is gone ────────────────────────────────────────────────────
+
+/**
+ * The stand-in Podman, with the two things a removal asks of it: which
+ * volumes there are, and removing one. Everything else is the stand-in's own
+ * (test/helpers/stub-signin-podman.js), which keeps a volume as a directory.
+ */
+function withVolumes(/** @type {ReturnType<typeof signinBox>} */ b) {
+  const podmanBin = path.join(b.dir, 'podman-volumes');
+  writeFileSync(podmanBin, `#!/bin/sh
+D='${b.dir}'
+if [ "$1" = volume ]; then
+  printf '%s\\n' "$*" >> "$D/podman.log"
+  for last; do :; done
+  case "$2" in
+    ls) ls "$D/volumes" 2>/dev/null; exit 0 ;;
+    exists) [ -d "$D/volumes/$last" ]; exit $? ;;
+    rm) [ -e "$D/keep-volumes" ] && { echo 'Error: volume is being used' >&2; exit 2; }
+        [ -d "$D/volumes/$last" ] || { echo "Error: no such volume $last" >&2; exit 1; }
+        rm -rf "$D/volumes/$last"; exit 0 ;;
+  esac
+fi
+exec "$D/podman" "$@"
+`);
+  chmodSync(podmanBin, 0o755);
+  return podmanBin;
+}
+
+const ELI = { member: 'eli', account: 'eli@example.com', by: 'eli@example.com', box: 'ops-box' };
+
+test('a person removed from the fleet has their engine sign-ins here stopped, dropped and removed with their engine home, and nobody else’s', async (t) => {
+  const b = signinBox(t);
+  const cfg = b.cfg({ podmanBin: withVolumes(b) });
+  const signins = new EngineSignins(cfg);
+  t.after(() => signins.close());
+  const home = String(engineHomeVolume('eli@example.com'));
+  // Eli is signed in to Copilot, has a Codex sign-in waiting for its code, and Debbie is signed in beside them.
+  for (const who of [{ ...ELI, engine: 'opencode' }, { ...DEBBIE, engine: 'codex' }]) {
+    await signins.ask({ ...who, action: 'start' });
+    b.provider('approved');
+    await until(async () => (await signins.ask({ ...who, action: 'status' })).state === 'signed_in', `${who.member} signed in`);
+    b.set('provider-approved', false);
+    await until(() => !b.running(`fw-signin-${who.engine}-${who.member}`), 'that container gone');
+  }
+  assert.equal((await signins.ask({ ...ELI, engine: 'codex', action: 'start' })).state, 'waiting');
+  assert.ok(readFileSync(b.volume(home, 'opencode', 'auth.json'), 'utf8').includes(TOKEN));
+
+  const sessions = { forgetOwner: () => [] };
+  const forgot = await forgetPerson(cfg, sessions, 'Eli@Example.com', null, signins);
+  assert.equal(forgot.ok, true);
+  assert.deepEqual(forgot.forgot?.engines, { entries: 2, attempts: 1, removed: true });
+  assert.equal(forgot.text, 'Forgot eli@example.com, who was removed from the fleet: 0 sessions stopped and put in the bin, an engine sign-in in their name that was waiting for a code stopped, the engines signed in for them here signed out by removing their engine home.');
+  // The token is gone with the volume, the box reports only Debbie, and the attempt is not waiting.
+  assert.equal(existsSync(b.volume(home)), false, 'their engine home is still on the box');
+  assert.deepEqual(signins.report()?.map((e) => [e.member, e.engine, e.state]), [['debbie', 'codex', 'signed_in']]);
+  assert.deepEqual([b.running('fw-signin-codex-eli'), signins.attempts.size], [false, 0]);
+  assert.ok(readFileSync(b.volume('fw-engine-debbie', 'codex', 'auth.json'), 'utf8').includes(TOKEN), 'somebody else’s sign-in went with theirs');
+  // A CODE APPROVED AFTER THEY HAD GONE signs nobody in: it used to, and was reported.
+  b.provider('approved');
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(existsSync(b.volume(home)), false);
+  assert.deepEqual(signins.report()?.map((e) => e.member), ['debbie']);
+  // ASKED AGAIN, there is nothing of theirs and it says so with a yes.
+  const again = await forgetPerson(cfg, sessions, 'eli@example.com', null, signins);
+  assert.deepEqual([again.ok, again.forgot?.engines], [true, { entries: 0, attempts: 0, removed: false }]);
+
+  // A VOLUME PODMAN WILL NOT REMOVE is a sign-in of theirs still here: not a yes, so the coordinator asks again.
+  await signins.ask({ ...ELI, engine: 'opencode', action: 'start' });
+  await until(async () => (await signins.ask({ ...ELI, engine: 'opencode', action: 'status' })).state === 'signed_in', 'eli signed in again');
+  b.set('keep-volumes');
+  const stuck = await forgetPerson(cfg, sessions, 'eli@example.com', null, signins);
+  assert.equal(stuck.ok, false);
+  assert.match(stuck.text, /Their engine sign-ins on this box may still be here: the volume fw-engine-person\.[0-9a-f]{16} could not be removed \(Error: volume is being used\)\. Asked again, it is tried again\.$/);
+  b.set('keep-volumes', false);
+  assert.equal((await forgetPerson(cfg, sessions, 'eli@example.com', null, signins)).ok, true);
+  assert.equal(existsSync(b.volume(home)), false);
+  // An agent's account is nobody removed from the fleet, and is not forgotten this way.
+  assert.deepEqual(await signins.forget('debbie@members.invalid'), { ok: true, entries: 0, attempts: 0, removed: false });
+  assert.equal(existsSync(b.volume('fw-engine-debbie')), true);
+});
+
+test('a member the vault no longer lists is no longer reported, its attempt is stopped and its engine home removed; a list that says nothing removes nothing', async (t) => {
+  assert.deepEqual(['fw-engine-debbie', 'fw-engine-person', `fw-engine-person.${ownerTag('eli@example.com')}`, 'cache-0123456789abcdef', 'fw-engine-', 'fw-engine-Debbie'].map(memberOfEngineHome), ['debbie', 'person', null, null, null, null]);
+  const b = signinBox(t);
+  const cfg = b.cfg({ podmanBin: withVolumes(b) });
+  const signins = new EngineSignins(cfg);
+  t.after(() => signins.close());
+  const JASON = { ...DEBBIE, member: 'jason', account: 'jason@members.invalid' };
+  // Debbie and Eli (a person, under their own record) are signed in; Jason's code is out;
+  // Ada has a home a pasted sign-in was staged into, which this box recorded nothing of.
+  for (const who of [{ ...DEBBIE, engine: 'codex' }, { ...ELI, engine: 'codex' }]) {
+    await signins.ask({ ...who, action: 'start' });
+    b.provider('approved');
+    await until(async () => (await signins.ask({ ...who, action: 'status' })).state === 'signed_in', `${who.member} signed in`);
+    b.set('provider-approved', false);
+    await until(() => !b.running(`fw-signin-codex-${who.member}`), 'that container gone');
+  }
+  assert.equal((await signins.ask({ ...JASON, engine: 'codex', action: 'start' })).state, 'waiting');
+  mkdirSync(b.volume('fw-engine-ada', 'codex'), { recursive: true });
+  writeFileSync(b.volume('fw-engine-ada', 'codex', 'auth.json'), JSON.stringify({ tokens: { refresh_token: TOKEN } }));
+  const eliHome = String(engineHomeVolume('eli@example.com'));
+  const reported = () => signins.report()?.map((e) => e.member).sort();
+
+  // WHAT IS NOT A LIST removes nothing: a caller that could not check one has nothing to say.
+  for (const not of [null, undefined, 'debbie', [null], ['Debbie'], ['debbie', '../ada']]) {
+    assert.deepEqual([(await signins.keepMembers(not)).ok, reported()], [false, ['debbie', 'eli', 'jason']], JSON.stringify(not));
+  }
+  // EVERYBODY STILL LISTED: nothing goes.
+  const all = await signins.keepMembers(['ada', 'debbie', 'eli', 'jason', 'zed']);
+  assert.deepEqual([all.ok, all.gone, all.text], [true, [], 'Every member this machine holds an engine sign-in for is still listed.']);
+  assert.deepEqual([reported(), existsSync(b.volume('fw-engine-ada')), b.running('fw-signin-codex-jason')], [['debbie', 'eli', 'jason'], true, true]);
+
+  // DEBBIE STAYS. Jason, Ada and Eli's record have left the list.
+  const some = await signins.keepMembers(['debbie']);
+  assert.deepEqual([some.ok, some.gone], [true, ['ada', 'eli', 'jason']]);
+  assert.equal(some.text, 'Forgot the engine sign-ins of ada, eli, jason, no longer listed by the vault.');
+  assert.deepEqual(reported(), ['debbie']);
+  assert.deepEqual([b.running('fw-signin-codex-jason'), signins.attempts.size], [false, 0]);
+  assert.deepEqual(['fw-engine-debbie', 'fw-engine-jason', 'fw-engine-ada'].map((v) => existsSync(b.volume(v))), [true, false, false]);
+  // A PERSON'S HOME IS THEIRS while they are in the fleet, whatever became of a record of them.
+  assert.ok(readFileSync(b.volume(eliHome, 'codex', 'auth.json'), 'utf8').includes(TOKEN));
+  // A member filed again under an id that went starts with nothing of the last one's.
+  assert.deepEqual([(await signins.ask({ ...JASON, engine: 'codex', action: 'status' })).state, (await signins.ask({ ...JASON, engine: 'codex', action: 'status' })).signedIn], ['none', null]);
 });

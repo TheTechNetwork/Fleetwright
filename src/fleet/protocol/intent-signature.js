@@ -115,6 +115,17 @@ export function intentSigningInput(intent, host) {
 // sessions run on it, and its answer carries the code a person types, so a
 // grant that names no member carries it for nobody.
 //
+// AND THE MEMBERS WHOSE SESSIONS IT MAY ACT ON, by the same list. A session
+// started as a member runs on that member's sign-ins for as long as it runs,
+// and the rule above was asked of a start and of nothing after it: a grant
+// that named no member could not start a session as Debbie, and could write
+// files into one that was running, answer its prompts, resume it and read
+// it. So a verb that names a session (SESSION_VERBS) is covered, at a
+// session its box's own hub records as a member's, only by a grant that
+// names that member. Which sessions those are is the box's to know and
+// nobody's to tell it, so that half is checked there (host/sidecar.js) and
+// not in delegationGap, which a coordinator also asks.
+//
 // WHAT A COORDINATOR CAN STILL DO WITH ONE is exactly that, as many times as it
 // likes inside the window: it is a standing permission, not a single request,
 // and that is the whole reason a phone keeps them short and narrow. `id` is what
@@ -229,6 +240,18 @@ export function delegationSigningInput(grant) {
 
 /** The verbs that act as a member, which a grant covers only by naming that member. */
 const MEMBER_VERBS = Object.freeze(['start', 'enginesignin']);
+
+/**
+ * The verbs whose `name` is a session on the box they are sent to: what a
+ * delegation carries at a member's session only when it names the member
+ * (above). `status` names one too, and a box answers it to whoever asks
+ * (UNSIGNED_VERBS). `start` names a session that does not exist yet, and
+ * `vmctl` and `vmlogin` name a machine.
+ */
+export const SESSION_VERBS = Object.freeze([
+  'resume', 'stop', 'answer', 'peek', 'logs', 'forget', 'restore', 'purge',
+  'files', 'readfile', 'writefile', 'copyfile', 'deletefile',
+]);
 
 /**
  * Why a grant does not cover the member a start or an engine sign-in names,
@@ -392,10 +415,31 @@ export function actorEmail(actor) {
  *           answer that is sealed. LEFT OUT of a clear one, whose bytes are
  *           what they were before answers were sealed. signingInput drops
  *           what is undefined and keeps a null.
+ *   state, detail    where the sign-in stands, and for one that failed the
+ *           engine's own sentence (else null), in an answer that is sealed.
+ *   expiresAt        when the code runs out, epoch ms as a whole number, in a
+ *           sealed answer while a code is out.
+ *
+ * WHY THE LAST THREE ARE SIGNED. They were only beside the seal, in the
+ * clear, where the coordinator carries them, and a phone drew its sentence
+ * from them: a second outside review answered a genuine sealed `signed_in`
+ * with `state: "failed"` and a `detail` of its own that named a code. What
+ * a person reads in the sheet is now the box's signed word or the phone's
+ * own. The clear copies stay, for a caller that has no key to seal to.
+ *
+ * NO NEW VERSION, AND NONE NEEDED. A phone checks the signature over
+ * everything it opens but the key and the signature (EngineSignIn.swift,
+ * EngineSignIn.kt, `verified`), so a payload with three more keys verifies
+ * on a phone built before them, which then ignores them. LEFT OUT of a
+ * clear answer, as `signedIn` is, so its bytes are still what they were.
+ * And nothing here is a boolean or a fraction: the phones' encoders write
+ * whole numbers, strings and null as JSON.stringify does, and `detail` is
+ * held to printable ASCII by whoever signs (sidecar.js, #signAnswer).
  *
  * @param {{ id: string, host: string, member: string, engine: string, url?: string, code?: string, at: number,
- *   signedIn?: { since: number, who: { email: string|null, plan: string|null }|null }|null }} answer
+ *   signedIn?: { since: number, who: { email: string|null, plan: string|null }|null }|null,
+ *   state?: string, detail?: string|null, expiresAt?: number }} answer
  */
-export function signinAnswerInput({ id, host, member, engine, url, code, at, signedIn }) {
-  return signingInput('engine-signin-answer', { v: 1, id, host, member, engine, url, code, at, signedIn });
+export function signinAnswerInput({ id, host, member, engine, url, code, at, signedIn, state, detail, expiresAt }) {
+  return signingInput('engine-signin-answer', { v: 1, id, host, member, engine, url, code, at, signedIn, state, detail, expiresAt });
 }

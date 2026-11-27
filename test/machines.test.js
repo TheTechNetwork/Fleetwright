@@ -11,7 +11,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Machines, machineImage, machineNames, releaseTag, stageMachineContext, MACHINE_MAX_MINUTES } from '../src/core/machines.js';
@@ -77,9 +77,51 @@ test('a release that changed is another image, so a machine runs what its box ru
   writeFileSync(bundle, 'y\n');
   utimesSync(bundle, packed, packed);
   assert.deepEqual([statSync(bundle).size, statSync(bundle).mtimeMs], [was.size, was.mtimeMs]);
-  assert.notEqual(releaseTag(root), before.split(':')[1]);
+  const changed = releaseTag(root);
+  assert.notEqual(changed, before.split(':')[1]);
+  // A FILE THAT MAY NOW BE RUN, with the bytes it had. The image copies a
+  // release as it is, so one in which the sidecar could not be started and
+  // one in which it can are two hosts, and were one tag.
+  chmodSync(path.join(root, 'bin', 'fleetwright-sidecar'), 0o755);
+  const runnable = releaseTag(root);
+  assert.notEqual(runnable, changed);
+  // THE NODE THE HUB RUNS ON is what the build installs in the image. A box
+  // whose Node moved a major kept the image with the old one inside.
+  const versions = process.versions;
+  Object.defineProperty(process, 'versions', { value: { ...versions, node: `${Number(versions.node.split('.')[0]) + 2}.0.0` }, configurable: true });
+  t.after(() => Object.defineProperty(process, 'versions', { value: versions, configurable: true }));
+  assert.notEqual(releaseTag(root), runnable);
+  Object.defineProperty(process, 'versions', { value: versions, configurable: true });
+  assert.equal(releaseTag(root), runnable);
   // The operator's own image is used as named, whatever the release is.
   assert.equal(machineImage({ installDir: root, machineImage: 'registry.example/ours:1' }), 'registry.example/ours:1');
+});
+
+test('a checkout whose node_modules is a link has a tag, with or without npm’s list of what is in it', (t) => {
+  const podman = stubMachinePodman(t);
+  const root = podman.release('checkout');
+  // A SECOND WORKTREE OF A CHECKOUT shares the first one's dependencies
+  // through a link. This one has no `.package-lock.json` behind it (another
+  // installer's, or a directory somebody filled by hand). The tag read the
+  // link's target from an empty path and threw, and every look at the
+  // machines went with it.
+  const shared = path.join(podman.dir, 'shared-node-modules');
+  renameSync(path.join(root, 'node_modules'), shared);
+  symlinkSync(shared, path.join(root, 'node_modules'));
+  const bare = releaseTag(root);
+  assert.match(bare, /^[0-9a-f]{12}$/);
+  // WITH NPM'S LIST, that file stands for the directory: a dependency that
+  // moved is another image.
+  writeFileSync(path.join(shared, '.package-lock.json'), '{"packages":{"node_modules/jose":{"version":"6.0.0"}}}\n');
+  const listed = releaseTag(root);
+  assert.notEqual(listed, bare);
+  writeFileSync(path.join(shared, '.package-lock.json'), '{"packages":{"node_modules/jose":{"version":"6.0.1"}}}\n');
+  assert.notEqual(releaseTag(root), listed);
+  // And the image is still built from what the link points at.
+  const out = mkdtempSync(path.join(os.tmpdir(), 'fw-stage-'));
+  t.after(() => rmSync(out, { recursive: true, force: true }));
+  assert.equal(stageMachineContext({ installDir: root }, out).ok, true);
+  assert.equal(existsSync(path.join(out, 'release', 'node_modules', 'jose', 'index.js')), true);
 });
 
 test('making a machine puts its ticket in the machine’s own volume from standard input, and in no command line or environment', async (t) => {
@@ -271,6 +313,32 @@ test('more time given while another machine is being cleared away is kept, and t
   assert.deepEqual(after.ok && after.machines.map((m) => [m.name, m.until]), [[B, more.until]]);
 });
 
+test('a machine made and given more time while another is being cleared away keeps that time too', async (t) => {
+  const { podman, cfg, clock, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 5 });
+  // Eli's is over, and the minute's look is held in the middle of removing
+  // it. That look listed the containers before Sam's machine existed.
+  clock.now += 6 * 60_000;
+  podman.set({ holdRm: 'next' });
+  const look = machines.list();
+  for (let i = 0; i < 500 && podman.state().holdRm !== 'held'; i += 1) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(podman.state().holdRm, 'held', 'the look is removing Eli’s machine');
+  const B = 'vm-bbbbbbbbbbbb';
+  assert.equal((await machines.make({ owner: SAM, ticket: ticket('b'.repeat(12)), coordinator: FLEET, minutes: 10 })).ok, true);
+  const more = await machines.control({ owner: SAM, name: B, action: 'extend', minutes: 120 });
+  assert.equal(more.ok, true, more.text);
+  podman.set({ holdRm: '' });
+  await look;
+  // The look took a machine it had not listed for one that was gone, and
+  // wrote the file without it: Sam was told two hours and it went at the
+  // ten minutes its label said, with its disk.
+  assert.deepEqual(JSON.parse(readFileSync(path.join(cfg.stateDir, 'machines.json'), 'utf8')), { [B]: { until: more.until } });
+  clock.now += 11 * 60_000;
+  const after = await machines.list();
+  assert.deepEqual(after.ok && after.machines.map((m) => [m.name, m.until]), [[B, more.until]]);
+  assert.deepEqual(podman.state().volumes, [machineNames(B).volume]);
+});
+
 test('a box behind an egress allowlist neither builds the machine image nor offers it', async (t) => {
   // It refuses every machine (above), so an image there is a button for
   // something that does not exist: built, offered, and then refused.
@@ -356,6 +424,54 @@ test('a machine that stopped by itself is removed with how its log ended kept fo
   clock.now += 49 * 60_000;
   const gone = await machines.list();
   assert.deepEqual(gone.ok && gone.ended, []);
+});
+
+test('how a stopped machine’s log ended is read by the time on each line, as Podman prints a time', async (t) => {
+  const { podman, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 60 });
+  // FOUR LINES IN ONE SECOND, with the time as Podman prints it: the fraction
+  // with its trailing zeros dropped, and `Z` on a box whose clock is on UTC.
+  // The warning is the last thing the machine said before its entrypoint's
+  // own last line. Read as text, `.1234Z` sorts before `.12Z` and `.1Z`, so
+  // the line said to be how the log ended was the first one printed.
+  const s = podman.state();
+  s.containers[0].state = 'exited';
+  s.containers[0].log = [
+    { at: '2026-11-24T10:00:03.1Z', line: 'fleetwright-machine: joining https://fleet.example as its owner\'s temporary machine' },
+    { at: '2026-11-24T10:00:03.12Z', line: '2026-11-24T10:00:03.120Z INFO  http: listening' },
+    { at: '2026-11-24T10:00:03.1234Z', err: true, line: '2026-11-24T10:00:03.123Z WARN  sidecar: the fleet refused this machine, so this is over' },
+    { at: '2026-11-24T10:00:03.5Z', line: 'fleetwright-machine: the sidecar ended with status 1, so this machine is ending' },
+  ];
+  podman.set({ containers: s.containers });
+  const seen = await machines.list();
+  assert.equal(seen.ok && seen.ended[0]?.text, `This machine found ${VM} stopped just now and removed it with its disk. Its log ends: sidecar: the fleet refused this machine, so this is over`);
+});
+
+test('a secret too short to be known by its length is kept out of a stopped machine’s last words by where it stands', async (t) => {
+  const { podman, cfg, machines } = await box(t);
+  await machines.make({ owner: ELI, ticket: ticket(), coordinator: FLEET, minutes: 60 });
+  let journal = '';
+  setLogStream(/** @type {any} */ ({ write: (/** @type {string} */ l) => { journal += l; return true; } }));
+  t.after(() => setLogStream(null));
+  // Each is under the 32 characters that mark a value of no known shape.
+  const PASSWORD = 'hunter2-Sup3rSecret';
+  const KEY = 'sk-proj-AbCdEfGhIjKlMnOpQrStUv';
+  const ASSIGNED = 'Zx9-short';
+  const s = podman.state();
+  s.containers[0].state = 'exited';
+  s.containers[0].log = [
+    { at: '2026-11-24T10:00:01Z', line: `archive: fatal: bad key ${KEY} rejected` },
+    { at: '2026-11-24T10:00:02Z', line: `archive: tried with {"api_key": "${ASSIGNED}"} and TOKEN=${ASSIGNED}` },
+    { at: '2026-11-24T10:00:03Z', err: true, line: `sidecar: the token was refused at https://deploy:${PASSWORD}@git.example.com/fleet.git` },
+  ];
+  podman.set({ containers: s.containers });
+  const seen = await machines.list();
+  // WHAT A SENTENCE SAYS IS KEPT: "the token was refused" names no value.
+  assert.equal(seen.ok && seen.ended[0]?.text, `This machine found ${VM} stopped just now and removed it with its disk. Its log ends: sidecar: the token was refused at https://[removed]@git.example.com/fleet.git`);
+  assert.match(journal, /archive: fatal: bad key \[removed\] rejected/);
+  assert.match(journal, /tried with \{"api_key": "\[removed\]"\} and TOKEN=\[removed\]/);
+  const kept = readdirSync(cfg.stateDir, { recursive: true, withFileTypes: true }).filter((f) => f.isFile()).map((f) => readFileSync(path.join(f.parentPath, f.name), 'utf8')).join('\n');
+  for (const secret of [PASSWORD, KEY, ASSIGNED]) assert.equal(`${journal}${kept}${JSON.stringify(seen)}`.includes(secret), false, secret);
 });
 
 test('a stopped machine whose log cannot be read, or is empty, is said as that and not as a reason', async (t) => {

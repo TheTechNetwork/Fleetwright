@@ -140,5 +140,6 @@ test('a box told to forget somebody removed ends their sessions and every sign-i
   // Asked again, as a box that did not confirm would be: nothing more to do.
   const again = await new HubClient({ baseUrl: `http://127.0.0.1:${port}`, token: hubToken }).forgetPerson(NINA);
   assert.equal(again.ok, true);
-  assert.deepEqual(again.forgot, { sessions: 0, claude: false, providers: [], vault: false, login: false });
+  // Nothing of hers in an engine home either: this box runs none, and has no Podman to ask (test/engine-signin-hub.test.js has one that does).
+  assert.deepEqual(again.forgot, { sessions: 0, claude: false, providers: [], vault: false, login: false, engines: { entries: 0, attempts: 0, removed: false } });
 });

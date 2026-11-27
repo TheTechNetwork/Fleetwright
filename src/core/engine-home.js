@@ -6,11 +6,14 @@
 // (claude.js) and the sign-in (engine-signin.js) name the volume and must
 // name the same one.
 
-import { memberOfAccount } from '../fleet/protocol/members.js';
+import { MEMBER_ID_RE, memberOfAccount } from '../fleet/protocol/members.js';
 import { emailFromActor, normaliseEmail, ownerTag } from './accounts.js';
 
 /** Where the volume is mounted in a container. The runner is told by name, never by guessing. */
 export const ENGINE_HOME = '/engine-home';
+
+/** What every engine home's name begins with: an agent's id follows it, or `person.` and a person's tag. */
+const HOME_PREFIX = 'fw-engine-';
 
 /**
  * The volume holding one member's engine sign-ins on this box, or null for a
@@ -36,7 +39,25 @@ export function engineHomeVolume(owner) {
   const account = emailFromActor(owner) ?? normaliseEmail(String(owner ?? ''));
   if (!account) return null;
   const member = memberOfAccount(account);
-  return member ? `fw-engine-${member}` : `fw-engine-person.${ownerTag(account)}`;
+  return member ? `${HOME_PREFIX}${member}` : `${HOME_PREFIX}person.${ownerTag(account)}`;
+}
+
+/**
+ * The agent member a volume's name says it is the engine home of, or null:
+ * a person's home, or a volume that is not an engine home at all.
+ *
+ * The other way round from engineHomeVolume, for a box looking through its
+ * own volumes for the homes of members who are gone (engine-signin.js,
+ * keepMembers). A person's home never reads as an agent's: its name holds a
+ * full stop, and an id cannot.
+ *
+ * @param {unknown} volume  a Podman volume's name
+ * @returns {string|null}
+ */
+export function memberOfEngineHome(volume) {
+  const name = String(volume ?? '');
+  const id = name.startsWith(HOME_PREFIX) ? name.slice(HOME_PREFIX.length) : '';
+  return MEMBER_ID_RE.test(id) ? id : null;
 }
 
 /**

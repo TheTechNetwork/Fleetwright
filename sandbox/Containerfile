@@ -204,6 +204,19 @@ RUN if [ "$WITH_ENGINES" = "1" ]; then \
       && npm cache clean --force; \
     fi
 
+# BUBBLEWRAP, FOR CODEX. In a session that asks first Codex runs every
+# command inside it, and looks for it on PATH at every start. With none
+# there it falls back to a copy it carries and says so as an error, on its
+# error output, which a session passes on: "Codex could not find bubblewrap
+# on PATH" was the first line in every Codex pane. The distribution's own
+# is what Codex asks for, is not setuid, and adds nothing a session could
+# not already do. Whether it can make its namespaces inside the session's
+# container is asked in CI on the image this builds (sandbox.yml).
+RUN if [ "$WITH_ENGINES" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends bubblewrap \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # WHERE PLAYWRIGHT AND PUPPETEER LOOK. Both will otherwise download their own
 # copy on first use — inside a container that is discarded, so it downloads
 # again on the next session, which is the whole cost this variant exists to

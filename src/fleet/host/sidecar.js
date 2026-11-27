@@ -58,7 +58,8 @@ import { emailFromActor } from '../../core/accounts.js';
 import { LOG_SOURCES, unitInstalled, tidyPane } from '../../core/logs.js';
 import { verifyRunnerJob } from '../coordinator/oidc.js';
 import { newSealKey, bindingFor, claudeBindingFor, seal, open, canSealTo, VAULT_BOX_AAD, ENGINE_SIGNIN_AAD } from '../seal.js';
-import { signingInput, fingerprint } from '../crypto.js';
+import { signingInput, fingerprint, verify } from '../crypto.js';
+import { vaultBoxAnswerInput } from '../protocol/vault-answer.js';
 import { probe, XoSetups } from './xo-setup.js';
 import { RelayStreams } from './xo-relay.js';
 import { ConsoleTunnels } from './console-tunnel.js';
@@ -69,9 +70,9 @@ import { SandboxPools } from './sandbox-pools.js';
 import { OwnPools, OWN_PROVIDER } from './own-pools.js';
 import { Pools } from './pools.js';
 import { EdgeWatch } from './edge-watch.js';
-import { IntentKeys } from './intent-keys.js';
+import { IntentKeys, MINTER_KEY_FILE } from './intent-keys.js';
 import { decideBoxWide, decidePin, forgetPinned, isBoxWide, ownerOf, pinReport, readPins, updatePins } from './pinned-admins.js';
-import { actorEmail, needsSignature, keyId, signinAnswerInput } from '../protocol/intent-signature.js';
+import { actorEmail, needsSignature, keyId, signinAnswerInput, delegationShape, SESSION_VERBS } from '../protocol/intent-signature.js';
 import { accountOfMember, memberOfAccount, composeFirstMessage, MEMBER_ID_RE } from '../protocol/members.js';
 import { ENGINE_IDS, DEFAULT_ENGINE, SIGNIN_ENGINES } from '../protocol/engines.js';
 import { composeTaskMessage, TASK_BRANCH_RE } from '../protocol/tasks.js';
@@ -131,6 +132,9 @@ function reasonsAfter(list) {
 
 /** How many sign-ins one frame carries. A fleet has at most 200 members, and each has two such engines. */
 const SIGNINS_MAX = 400;
+
+/** The protocol a coordinator speaks once it shows each person only the sign-ins they may see (core.js, signinsSeenBy). */
+const ENGINE_SIGNINS_SINCE = 22;
 
 /**
  * Which members are signed in to which engine on this box, out of what its
@@ -205,7 +209,7 @@ export function factsFrom(state) {
 // mutating intent carries an idempotency key and its result is remembered.
 export const REPLAY_TTL_MS = 10 * 60_000;
 const REPLAY_MAX = 512;
-/** What is remembered of a reply that carried an engine sign-in's page and code: that its id was answered, and nothing of it (handle). */
+/** What is remembered of an engine sign-in's reply, whatever it said: that its id was answered, and nothing of it (handle). */
 const CODE_NOT_KEPT = Object.freeze({ codeNotKept: true });
 
 /**
@@ -581,8 +585,10 @@ export class Sidecar {
      * @type {IntentKeys|null}
      */
     this.intentKeys = vaultKey && transport?.origin
-      ? new IntentKeys({ origin: transport.origin, dir: xoStateDir, hostKey: vaultKey, ask: (request, signature) => this.#askKeys(request, signature), log: this.log })
+      ? new IntentKeys({ origin: transport.origin, dir: xoStateDir, hostKey: vaultKey, ask: (request, signature) => this.#askKeys(request, signature), onList: () => void this.#tellHubWhoIsListed(), log: this.log })
       : null;
+    /** The member ids the hub was last told the vault lists, and took (#tellHubWhoIsListed). Null until it has taken one. @type {string|null} */
+    this.listedToHub = null;
     /** @type {XoPools|Pools|null} */
     // ON A POOL'S OWN MACHINE, the Xen Orchestra it was made to hold
     // (xo-holder.js): its health says so, and the coordinator asks it first.
@@ -890,6 +896,41 @@ export class Sidecar {
   }
 
   /**
+   * The protocol the coordinator on this socket has shown it speaks, or null
+   * while it has shown none.
+   *
+   * WHAT IT IS FOR: a list this box volunteers that only a newer coordinator
+   * knows to filter. Which members are signed in to which engine here
+   * (`engineSignins`) is shown by a coordinator on 22 to who may act for
+   * each member, and a coordinator from before it passed every health key it
+   * did not know to every member. Boxes update ahead of the coordinator in
+   * half a deploy, so for that window a box on 22 told the whole fleet who
+   * was signed in where. The list now waits for a frame that says the
+   * coordinator has it (health).
+   *
+   * HOW IT IS HEARD. The coordinator stamps its own number on every frame
+   * it writes that is not an intent: a config frame, the answer to a vault
+   * or key-list request (`minted`), `decided`, `vault-changed`, a relay's.
+   * A box with a key asks for its key list seconds after it starts, so one
+   * arrives early. The LATEST such frame is believed, so a coordinator
+   * rolled back under a box that stays up is heard too. An intent is
+   * spoken in the older of the two parties' versions (buildIntent), so it
+   * can only show the number is at least its own.
+   *
+   * @type {number|null}
+   */
+  coordinatorSpeaks = null;
+
+  /** @param {unknown} msg  a frame from the coordinator (coordinatorSpeaks) */
+  #heardCoordinator(msg) {
+    const frame = /** @type {any} */ (msg);
+    const v = frame?.v;
+    if (!Number.isInteger(v) || v < 1) return;
+    if (frame.kind !== 'intent') this.coordinatorSpeaks = v;
+    else if (v > (this.coordinatorSpeaks ?? 0)) this.coordinatorSpeaks = v;
+  }
+
+  /**
    * Turn one inbound envelope into a reply. Exposed rather than private so a
    * test can drive it with no transport at all.
    *
@@ -900,6 +941,7 @@ export class Sidecar {
    * @returns {Promise<Record<string, any>>}
    */
   async handle(msg) {
+    this.#heardCoordinator(msg);
     // BYTES THROUGH A PHONE, before anything that awaits: a relay's frames
     // must reach its streams in the order they arrived, and they are not
     // intents and get no reply (xo-relay.js checks each).
@@ -1039,6 +1081,28 @@ export class Sidecar {
       };
     }
 
+    // A DELEGATION AT A SESSION THAT RUNS AS A MEMBER (docs/members.md, "A
+    // delegation covers a member only by naming it"). The rule above stopped
+    // a grant that names no member from starting a session as one, and
+    // nothing after the start asked it: the same grant wrote files into a
+    // member's running session, answered its prompts, resumed it and read
+    // it. So a delegated verb that names a session is held to the grant's
+    // `members` when that session is a member's.
+    //
+    // ONLY WHERE THIS BOX TAKES NOTHING UNSIGNED. A box that takes unsigned
+    // work takes the coordinator's word for these verbs with or without a
+    // grant, so refusing the grant there would stop an honest coordinator
+    // and nobody else (docs/members.md, "What it does not stop").
+    if (verdict === 'delegated' && this.#enforces(intent) && SESSION_VERBS.includes(intent.verb) && typeof intent.params?.name === 'string') {
+      // The grant as it was just checked: `delegated` is a signature that
+      // held over exactly this shape, `members` in it or left out.
+      const refused = await this.#heldToMembers(intent, delegationShape(intent.delegation)?.grant.members ?? []);
+      if (refused) {
+        this.log.warn(`sidecar: refused ${intent.verb} ${intent.id} at ${intent.params.name} from ${intent.actor ?? 'nobody'}: ${refused.why}`);
+        return { v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: refused.code }, text: refused.text };
+      }
+    }
+
     // AS A MEMBER (docs/members.md, "Starting as a member"): checked here,
     // against the list the minter signed, whatever this box's mode. From
     // here on the intent is the member's own start, with who asked beside it.
@@ -1082,29 +1146,44 @@ export class Sidecar {
     const cached = this.#recall(intent.id);
     if (cached) {
       const was = await cached;
-      // AN ENGINE SIGN-IN'S PAGE AND CODE WERE NOT KEPT (below), so there is
+      // NOTHING OF AN ENGINE SIGN-IN'S ANSWER WAS KEPT (below), so there is
       // no first reply to replay. The retry is answered with where the
-      // sign-in stands now, which never starts anything: the attempt in
-      // flight while there is one, with its code, signed over this same id.
-      if (was === CODE_NOT_KEPT) {
-        this.log.info(`sidecar: enginesignin ${intent.id} already answered; its page and code are not kept, so it is answered with where the sign-in stands now`);
+      // sign-in stands now, FOR THE MEMBER AND ENGINE THIS REQUEST NAMES,
+      // which never starts anything: the attempt in flight while there is
+      // one, with its code, signed over this same id.
+      if (was === CODE_NOT_KEPT && intent.verb === 'enginesignin') {
+        this.log.info(`sidecar: enginesignin ${intent.id} already answered; nothing of its answer is kept, so it is answered with where the sign-in stands now`);
         return { ...(await this.#run({ ...intent, params: { ...intent.params, action: 'status' } }, verdict)), replayed: true };
+      }
+      // AN ID THAT ANSWERED A SIGN-IN, OR ANOTHER KIND OF REQUEST, IS NOT RUN
+      // AS THIS ONE. An id is one request's. This ran whatever verb arrived
+      // under a sign-in's id as if it were new, a stop among them, and
+      // answered a sign-in under another request's id with that request's
+      // reply. Neither is a retry, so neither is answered as one.
+      if (was === CODE_NOT_KEPT || intent.verb === 'enginesignin') {
+        this.log.warn(`sidecar: refused ${intent.verb} ${intent.id}: that id already answered another kind of request`);
+        return {
+          v: PROTOCOL_VERSION, kind: 'reply', id: intent.id, ok: false, error: { code: 'id_reused' },
+          text: `${this.hostId} already answered another request under this id, so it does not run this one. Send it again under an id of its own. Nothing was done.`,
+        };
       }
       this.log.info(`sidecar: ${intent.verb} ${intent.id} already handled — replaying the original reply`);
       return { ...was, replayed: true };
     }
     const pending = this.#run(intent, verdict);
-    // WHAT IS REMEMBERED IS THE REPLY, EXCEPT A CODE. The page and the code
-    // of an engine sign-in are for whoever asked, for as long as they are of
-    // use, and ten minutes in this map is neither: of such a reply only the
-    // id is remembered, as answered. The id still cannot be run twice. A
-    // sealed reply is not kept either: it is the same page and code, and a
-    // retry is sealed to its own `reply`, which need not be the first one's.
+    // WHAT IS REMEMBERED IS THE REPLY, EXCEPT AN ENGINE SIGN-IN'S, OF WHICH
+    // NOTHING IS. The page and the code are for whoever asked, for as long as
+    // they are of use, and ten minutes in this map is neither. And the rest
+    // of an answer is one member's: this kept every answer that carried no
+    // code, the account a sign-in is on among it, under the id alone, and a
+    // second outside review asked after another member under the same id
+    // and was handed the first member's account. So of every such reply
+    // only the id is remembered, as answered: it still cannot be run twice,
+    // and a retry is answered afresh, for what it asks, sealed to its own
+    // `reply`, which need not be the first one's.
     if (intent.verb === 'enginesignin') {
-      const kept = pending.then((r) => (typeof r?.code === 'string' || typeof r?.url === 'string' || typeof r?.signature === 'string' || r?.sealed ? CODE_NOT_KEPT : r));
       // Whoever asked is told of a failure by `pending` itself; this copy of it is only for a retry.
-      kept.catch(() => {});
-      this.#remember(intent.id, kept);
+      this.#remember(intent.id, pending.then(() => CODE_NOT_KEPT, () => CODE_NOT_KEPT));
     } else {
       this.#remember(intent.id, pending);
     }
@@ -1192,6 +1271,60 @@ export class Sidecar {
     const who = actorEmail(intent.actor);
     if (!owner || !who) return null;
     return owner === who;
+  }
+
+  /**
+   * Why a delegated verb at a session is not covered by the members its
+   * grant names, or null when it is.
+   *
+   * WHOSE THE SESSION IS COMES FROM THIS BOX'S OWN HUB, and from nothing the
+   * request says. The hub wrote `member` on the session's record when it
+   * started it, and this box sent that start only after it had checked it
+   * against the minter's list (#startAs), so the record is this box's own
+   * word. The coordinator's list of sessions is not asked: it is the party
+   * the grant is checked against.
+   *
+   *  - A session the hub records no member for is its starter's, and the
+   *    grant covers it as it always did.
+   *  - A name the hub does not have is passed on, and the hub says so.
+   *  - A HUB THAT DOES NOT ANSWER IS CANNOT TELL, and that refuses: a check
+   *    that lapsed while the hub was busy would be one a coordinator could
+   *    wait for.
+   *
+   * Running, stopped and binned alike: a resume runs on the member's
+   * sign-ins again, and a restore brings the session back to do so.
+   *
+   * @param {any} intent @param {string[]} names  the members the grant names
+   * @returns {Promise<{ code: string, text: string, why: string }|null>}
+   */
+  async #heldToMembers(intent, names) {
+    const session = String(intent.params.name);
+    /** @type {any} */
+    let state = null;
+    try {
+      state = await this.hub.state();
+    } catch {
+      state = null;
+    }
+    if (!state || !Array.isArray(state.sessions)) {
+      return {
+        code: 'member_unchecked',
+        why: 'the hub did not say whose session it is',
+        text: `${this.hostId} could not read from its own session manager whose session ${session} is, so it cannot tell whether what ${intent.actor} granted this connection covers it. Nothing was done. Try again in a moment.`,
+      };
+    }
+    const rows = [...state.sessions, ...(Array.isArray(state.bin) ? state.bin : [])].filter((/** @type {any} */ r) => r && r.name === session);
+    const row = rows.find((/** @type {any} */ r) => typeof r.member === 'string' && r.member && !names.includes(r.member));
+    if (!row) return null;
+    const name = typeof row.memberName === 'string' && row.memberName ? row.memberName : row.member;
+    const named = names.length ? names.join(', ') : 'no member';
+    return {
+      code: 'member_not_delegated',
+      why: `it runs as ${row.member} and the delegation it carries names ${named}`,
+      text:
+        `What ${intent.actor} granted this connection does not cover ${session}, which runs as ${name}: it names ${named}. ` +
+        `Grant it again from the Fleetwright app on a phone, under You \u2192 Delegations, with ${name} among the members it may start as. Nothing was done.`,
+    };
   }
 
   /**
@@ -1296,6 +1429,57 @@ export class Sidecar {
   }
 
   /**
+   * Tell the hub which members the vault lists now, each time this box takes
+   * a list, so that a member who has left it stops being reported as signed
+   * in here and its engine home is removed (src/core/engine-signin.js,
+   * keepMembers).
+   *
+   * Removing a member told a box nothing: its engine home stayed, the box
+   * went on reporting it signed in, and a member filed later under the same
+   * id was handed the first one's sign-in. This box already holds the one
+   * account of who is a member that it checks for itself, the minter's
+   * signed list, and holds every member start to it (#actingAs). The hub
+   * holds the volumes and the record, and neither the list nor the key it is
+   * checked with, so it is told the ids and nothing else.
+   *
+   * ONLY A LIST THIS BOX MAY STILL USE (`currentMembers`): none yet, one
+   * past its age, or a minter that sends no members is this box not knowing
+   * who is a member, and the hub is then told nothing. A member missing from
+   * what is sent loses its sign-in on this machine.
+   *
+   * ONCE A CHANGE. The list is taken every ten minutes and is nearly always
+   * the same one; the hub looks through its volumes each time it is told.
+   * What it was last told is remembered only once it said it took it, so a
+   * hub that was down, or could not finish, is told again with the next
+   * list. Never throws: the list is taken whatever becomes of this.
+   */
+  async #tellHubWhoIsListed() {
+    const members = this.intentKeys?.currentMembers ?? null;
+    if (!members) return;
+    // A list as long as this box reads of one (intent-keys.js, keyListFrom)
+    // may have been cut there, and a member past the cut is not one who left.
+    if (members.size >= 512) return;
+    const ids = [...members.keys()].sort();
+    const listed = ids.join(',');
+    if (listed === this.listedToHub) return;
+    try {
+      const told = await this.hub.engineMembers(ids);
+      if (!told.ok) {
+        this.log.warn(`sidecar: fleetwright did not take who the vault lists as members, so a removed member’s engine sign-in may still be on this machine: ${told.text}`);
+        return;
+      }
+      this.listedToHub = listed;
+      if (told.gone.length) {
+        this.log.info(`sidecar: ${told.text}`);
+        // Who is signed in here has changed, and the coordinator shows it.
+        void this.#pushHealth();
+      }
+    } catch (e) {
+      this.log.warn(`sidecar: could not tell fleetwright who the vault lists as members: ${/** @type {Error} */ (e).message}`);
+    }
+  }
+
+  /**
    * May this engine sign-in be made for the member it names?
    *
    * EXACTLY WHO MAY START A SESSION AS THAT MEMBER (#actingAs), because what
@@ -1334,6 +1518,13 @@ export class Sidecar {
     // asked after, on a machine whose approval has since been removed.
     if (intent.params.action === 'start') {
       const held = this.approvedFor;
+      // AND WHY, when the vault did answer and this box could not take the
+      // answer for the vault's: "try again in a few minutes" would send a
+      // person round a loop that only a deploy, or a file on this box, ends.
+      if (!held && this.vaultUnchecked) {
+        return refuse('approval_unknown',
+          `${this.hostId} cannot tell whether it is approved to hold ${name}’s credentials, because ${this.vaultUnchecked.why}. ${this.vaultUnchecked.todo}`);
+      }
       if (!held) {
         const asks = this.vaultKey && this.vaultIntervalMs > 0 && !this.jobToken;
         return refuse('approval_unknown',
@@ -1400,10 +1591,32 @@ export class Sidecar {
       if (!key) throw new Error('it has no key of its own');
       const hostKey = { kty: 'EC', crv: 'P-256', x: key.publicJwk.x, y: key.publicJwk.y };
       const who = said.signedIn?.who ? { email: said.signedIn.who.email ?? null, plan: said.signedIn.who.plan ?? null } : null;
+      // WHERE IT STANDS, WHY IT FAILED AND WHEN THE CODE RUNS OUT, signed and
+      // sealed with the rest. They were only in the clear part, where the
+      // coordinator carries them, and a phone wrote its sentence from them:
+      // a genuine sealed answer came back beside `state: "failed"` and a
+      // `detail` naming a code of the coordinator's own, and the sentence a
+      // person read was that. In a sealed answer only, so a clear one's
+      // bytes are what they were. The clear copies stay beside the seal.
+      //
+      //   state      a code that is out is `waiting`, whatever else was said.
+      //   detail     the engine's sentence or null, held to one line of
+      //              printable ASCII: the phones' encoders and this one
+      //              must write the same bytes, and that is the range in
+      //              which no two JSON encoders differ.
+      //   expiresAt  a whole number, and only while a code is out.
+      const state = typeof said.state === 'string' ? said.state : 'waiting';
+      // Its curled quotes and dashes written straight first, and only then
+      // what is left outside the range dropped: the hub's own sentences use
+      // them, and with the apostrophe simply removed a phone read "not
+      // OpenAIs own page" under a sign-in it had just verified.
+      const plain = (/** @type {string} */ t) => t.replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[\u2013\u2014]/g, '-').replace(/\u2026/g, '...');
+      const detail = typeof said.detail === 'string' ? plain(said.detail).replace(/[^\x20-\x7e]/g, '').slice(0, 200) : null;
+      const expiresAt = coded && said.expiresAt !== null && Number.isFinite(Number(said.expiresAt)) ? Math.round(Number(said.expiresAt)) : null;
       const signed = {
         id: intent.id, host: await keyId(hostKey), member: String(intent.params.member), engine: String(intent.params.engine),
         ...(coded ? { url: said.url, code: said.code } : {}), at,
-        ...(sealTo ? { signedIn: said.signedIn ? { since: Number(said.signedIn.since), who } : null } : {}),
+        ...(sealTo ? { signedIn: said.signedIn ? { since: Number(said.signedIn.since), who } : null, state, detail, ...(expiresAt === null ? {} : { expiresAt }) } : {}),
       };
       const signature = await key.sign(signinAnswerInput(signed));
       if (!sealTo) return { ...said, signedAt: at, hostKey, signature };
@@ -1413,12 +1626,21 @@ export class Sidecar {
       this.log.warn(`sidecar: could not sign the answer to enginesignin ${intent.id}: ${/** @type {Error} */ (e).message}`);
       delete clear.url;
       delete clear.code;
+      // WHAT TO DO NEXT, BY WHO IS READING. A phone's sheet has no button
+      // that asks again: while a code is out it asks by itself every few
+      // seconds, and otherwise when the screen is opened. Told to "ask
+      // where it stands again", a person on a phone was told to do
+      // something the screen does not offer. An agent, which sends no
+      // `reply`, has the tool to ask with, and is still told to.
+      const next = sealTo
+        ? (coded ? 'This screen asks again by itself in a few seconds: wait for that, or cancel it.' : 'This screen asks again the next time it is opened.')
+        : (coded ? 'Ask where it stands again, or cancel it.' : 'Ask where it stands again.');
       return {
         ...clear, ok: false, error: { code: 'answer_unsigned' },
         text: coded
           ? `${this.hostId} could not sign its answer, so the page and the code are not passed on: a code this machine has not signed is one nobody can tell is its own. ` +
-            'The sign-in is still waiting there. Ask where it stands again, or cancel it.'
-          : `${this.hostId} could not sign its answer, so what it says of this sign-in is not passed on. Ask where it stands again.`,
+            `The sign-in is still waiting there. ${next}`
+          : `${this.hostId} could not sign its answer, so what it says of this sign-in is not passed on. ${next}`,
       };
     }
   }
@@ -2246,6 +2468,9 @@ export class Sidecar {
     // socket, and the minter answers both.
     void this.intentKeys?.refresh();
     const said = await this.#askVault();
+    // WHY THE LAST ANSWER COULD NOT BE CHECKED, kept for whoever is refused a
+    // sign-in for want of an approval this box cannot now hear (#signInAs).
+    this.vaultUnchecked = said.ok ? null : (said.unchecked ?? null);
     if (said.ok) {
       this.approvedFor = approvalsIn(said.accounts);
       // POOLS OUT, before the hub sees the answer: kept in this process and
@@ -2271,7 +2496,10 @@ export class Sidecar {
       this.pools?.adopt([]);
       await this.hub.vault({ accounts: [] }).catch(() => {});
     }
-    this.log.info(`sidecar: vault: ${said.text}`);
+    // AN ANSWER THIS BOX COULD NOT CHECK is somebody's to fix, and is said as
+    // a warning; every other refusal is said as it always was.
+    if (this.vaultUnchecked) this.log.warn(`sidecar: vault: ${said.text}`);
+    else this.log.info(`sidecar: vault: ${said.text}`);
     return this.vaultIntervalMs;
   }
 
@@ -2415,6 +2643,15 @@ export class Sidecar {
    */
   approvedFor = null;
 
+  /**
+   * Why this box took nothing from the vault's last answer, when the reason
+   * was that it could not tell the answer was the vault's
+   * (#vaultAnswerUnchecked), else null.
+   *
+   * @type {{ why: string, todo: string }|null}
+   */
+  vaultUnchecked = null;
+
   /** The API providers this box's hub last said it may bill to. @type {string[]} */
   apiProviders = [];
   /** Whether the last vault request asked for API keys, or null before any and once a change has been acted on. @type {boolean|null} */
@@ -2460,7 +2697,9 @@ export class Sidecar {
   }
 
   /**
-   * @returns {Promise<{ ok: true, accounts: Array<{ email: string, items: Array<{ name: string, expiresAt: number|null }>, problems?: string[] }> } | { ok: false, forget: boolean, text: string }>}
+   * @returns {Promise<{ ok: true, accounts: Array<{ email: string, items: Array<{ name: string, expiresAt: number|null }>, problems?: string[] }> }
+   *   | { ok: false, forget: boolean, text: string, unchecked?: { why: string, todo: string } }>}
+   *   `unchecked`, when the refusal is that this box could not tell the answer was the vault's (#vaultAnswerUnchecked)
    */
   async #askVault() {
     const key = /** @type {NonNullable<typeof this.vaultKey>} */ (this.vaultKey);
@@ -2536,12 +2775,81 @@ export class Sidecar {
         : `the vault did not answer for this box (${said})`;
       return { ok: false, forget: false, text: `${why}. Nothing this box holds was forgotten, and it asks again in ${Math.round(this.vaultIntervalMs / 60_000)} minutes.` };
     }
+    // THE VAULT'S OWN ANSWER, OR NOTHING IS TAKEN FROM IT (#vaultAnswerUnchecked).
+    // Before it is opened, and so before anything below reads a word of it.
+    const unchecked = await this.#vaultAnswerUnchecked(request, answer.sealed);
+    if (unchecked) return { ok: false, forget: false, unchecked, text: `${unchecked.why}. ${unchecked.todo} Nothing this box holds was changed, and it asks again in ${Math.round(this.vaultIntervalMs / 60_000)} minutes.` };
     try {
       const inside = /** @type {any} */ (await open({ privateKey, publicKey, aad: VAULT_BOX_AAD, sealed: answer.sealed }));
       return { ok: true, accounts: Array.isArray(inside?.accounts) ? inside.accounts : [] };
     } catch {
       return { ok: false, forget: false, text: 'the answer did not open with this request’s key, so it was not used' };
     }
+  }
+
+  /**
+   * Why an answer to this box's vault request is not the vault's own, as far
+   * as this box can tell, or null when it is.
+   *
+   * SEALED WAS NEVER ENOUGH. This box's request is signed and not sealed, so
+   * the key its answer is sealed to goes through the coordinator in the
+   * clear, and anybody can seal to a public key. A second outside review
+   * answered a box in the vault's place: the box set itself approved for a
+   * member's vault nobody had approved it for, and handed its hub a Codex
+   * sign-in for a member that no custodian had kept. So the answer carries
+   * the minter's signature, inside `sealed` beside its three strings, by the
+   * key this box pins from the fleet's own address for the key list
+   * (intent-keys.js), over this box, this request and this sealed part
+   * (protocol/vault-answer.js), and it is checked HERE, before the answer is
+   * opened: nothing is set approved, handed to the hub, or forgotten on an
+   * answer that does not pass.
+   *
+   * EVERY WAY OF NOT PASSING IS CANNOT TELL, and keeps what is held, as
+   * silence does (syncVault): a coordinator that could make a box forget by
+   * sending it an answer it cannot check would be given the one thing this
+   * check takes from it. (One refusal of the coordinator's own still does
+   * make a box forget, and is not an answer in the vault's name: that the
+   * request is not signed by the key this box enrolled with. It is the
+   * coordinator's word, said as such in docs/vault.md, and it can only
+   * take away from a box that is no longer the one enrolled.) The reason is
+   * said in words that say what to do,
+   * because two of the three are somebody's to fix: a minter older than
+   * this box, which signs nothing, and a minter given a new signing key.
+   *
+   * @param {{ hostKey: { kty: string, crv: string, x: string, y: string }, at: number, reply: string }} request  what this box signed and sent
+   * @param {any} sealed  what came back as the sealed part
+   * @returns {Promise<{ why: string, todo: string }|null>}
+   */
+  async #vaultAnswerUnchecked(request, sealed) {
+    const signature = typeof sealed?.signature === 'string' ? sealed.signature : '';
+    if (!signature) {
+      return {
+        why: 'the vault’s answer is not signed, which is what a minter older than this box sends, and one whose signing key does not load',
+        todo: 'Whoever runs the fleet deploys its minting Worker again, and this box takes its vault at its next ask.',
+      };
+    }
+    const pinned = this.intentKeys ? await this.intentKeys.minterKey() : null;
+    if (!pinned) {
+      const problem = this.intentKeys?.problem;
+      return {
+        why: `this box keeps no signing key of the minter’s to check the vault’s answer with${problem ? ` (${problem})` : ''}`,
+        // TWO DIFFERENT THINGS TO DO. A box that could not reach the
+        // address looks at its own network. A box that reached it and was
+        // given something else is on a fleet whose minter has no route
+        // there, which no amount of waiting mends: whoever runs the fleet
+        // gives the minter its route, or this box is given the key by hand
+        // (docs/vault.md, "A fleet whose minter has no route").
+        todo: this.intentKeys?.unrouted
+          ? `Whoever runs the fleet gives its minting Worker a route there, or puts the public half of the minter’s signing key in ${this.intentKeys?.file ?? MINTER_KEY_FILE} on this box (docs/vault.md says how).`
+          : 'It keeps one the first time it reaches the fleet’s own address, so look at whether this box can reach it.',
+      };
+    }
+    const signed = await vaultBoxAnswerInput({ host: await keyId(request.hostKey), at: request.at, reply: request.reply, sealed });
+    if (await verify(pinned, signature, signed)) return null;
+    return {
+      why: 'the vault’s answer is not signed by the minter’s key this box keeps, so it was changed on its way here, or the minter has a new signing key',
+      todo: `If the minter was given a new key, delete ${this.intentKeys?.file ?? MINTER_KEY_FILE} on this box to accept it. If it was not, something between this box and the vault is answering in its place.`,
+    };
   }
 
   /**
@@ -2884,7 +3192,12 @@ export class Sidecar {
         // engine and since when. Only the ones signed in now, and no account.
         // A hub from before sign-ins says nothing, and the frame then has no
         // list, which is cannot tell and never nobody.
-        ...(Array.isArray(state.engineSignins) ? { engineSignins: signedInOn(state.engineSignins) } : {}),
+        //
+        // AND ONLY TO A COORDINATOR THAT HAS SHOWN IT KNOWS THE LIST
+        // (coordinatorSpeaks): one from before it hands every member every
+        // entry. Held back, the frame has no list, which that coordinator
+        // and every screen already read as cannot tell.
+        ...(Array.isArray(state.engineSignins) && (this.coordinatorSpeaks ?? 0) >= ENGINE_SIGNINS_SINCE ? { engineSignins: signedInOn(state.engineSignins) } : {}),
         // The metered API providers an engine here may bill to, when its
         // operator named any (docs/api-engines.md). Kept, because it is also
         // what decides whether this box asks a vault for keys (#askVault).

@@ -122,13 +122,51 @@ function line(/** @type {unknown} */ v) {
  * report of its own boot withholds them (pve-pools.js). A long path or host
  * name goes the same way, which is the price of not listing shapes.
  *
+ * AND WHAT IS SHORT, BY WHERE IT STANDS. A run of 32 was the only rule for
+ * a value of no known shape, so a password in an address
+ * (`https://deploy:hunter2@git.example/…`) and a key of thirty characters
+ * went to its owner's screen, this hub's log and the coordinator. Two places
+ * say a value is a secret whatever its length: between `://` and `@` in an
+ * address, and after a word that names one (key, token, secret, password).
+ * Written as an assignment (`token=…`, `"key": "…"`) what follows is taken
+ * out whole. Written loosely (`bad key … rejected`) it is taken out only
+ * when it has a digit in it or is twenty characters or more, so that "the
+ * token was refused" still says so. Everything before the `@` of an address
+ * goes, a bare user name with it: a token is as often put there alone.
+ *
  * @param {string} text
  */
 function withheld(text) {
   return text
     .replace(/\bfwt_[A-Za-z0-9_-]+/g, '[ticket]')
     .replace(/\b(?:fw[a-z]_|sk-ant-)[A-Za-z0-9._~+/=-]+/g, '[removed]')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[removed]@')
+    .replace(/((?:key|token|secret|password|passwd)["']?\s*[=:]\s*["'])([^"'\s]+)/gi, '$1[removed]')
+    .replace(/((?:key|token|secret|password|passwd)=)([^\s"',;&]+)/gi, '$1[removed]')
+    .replace(/((?<![A-Za-z])(?:key|token|secret|password|passwd)[\s:]+)([^\s"',;]+)/gi, (all, word, value) => (/\d/.test(value) || value.length >= 20 ? `${word}[removed]` : all))
     .replace(/[A-Za-z0-9_+/=.~-]{32,}/g, '[removed]');
+}
+
+/**
+ * The time Podman puts on a log line, as two numbers that sort: its second,
+ * and how far into it. Null for anything that is not one.
+ *
+ * NOT COMPARED AS TEXT. Podman prints the fraction with its trailing zeros
+ * dropped (Go's RFC3339Nano), so 0.12 s is `.12Z` and 0.1234 s is `.1234Z`,
+ * and as text the first sorts after the second: `Z` comes after every
+ * digit. On a box whose clock is on UTC two lines of one second changed
+ * places, and the line said to be how the log ended was not the last. With
+ * an offset in place of the `Z` the text happened to sort right, because
+ * `+` and `-` come before the digits.
+ *
+ * @param {string} at
+ * @returns {[number, number]|null}
+ */
+function logTime(at) {
+  const m = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:[.,](\d+))?(Z|[+-]\d\d:?\d\d)$/.exec(at);
+  if (!m) return null;
+  const second = Date.parse(`${m[1]}${m[3].replace(/^([+-]\d\d)(\d\d)$/, '$1:$2')}`);
+  return Number.isFinite(second) ? [second, Number((m[2] ?? '').padEnd(9, '0').slice(0, 9))] : null;
 }
 
 /**
@@ -158,6 +196,15 @@ const SETTLED_MS = 2000;
 const tags = new Map();
 
 /**
+ * The major of the Node this hub runs on: what the image is built with
+ * (sandbox/machine/Containerfile, `NODE_MAJOR`), and so part of which image
+ * it is (releaseTag).
+ */
+function nodeMajor() {
+  return process.versions.node.split('.')[0];
+}
+
+/**
  * What identifies the release this box runs, as a short tag: THE BYTES of
  * every file a host runs from, by its path. A checkout that pulled and a
  * release that was replaced both change it, and the image is built again.
@@ -178,7 +225,20 @@ const tags = new Map();
  *
  * `node_modules` is not walked. What npm installed there is listed in its
  * own `.package-lock.json`, and that file's bytes stand for the directory; a
- * release has no `node_modules`, since everything is in its bundle.
+ * release has no `node_modules`, since everything is in its bundle. ONE WITH
+ * NO SUCH FILE STANDS FOR NOTHING: its name is in the tag and nothing of
+ * what is in it, so a dependency changed there by another installer, or by
+ * hand, is the same image. That entry has no file to read, and it was read
+ * all the same when `node_modules` was a link, as it is in a second
+ * worktree of a checkout: the link's own target was asked of an empty path,
+ * which threw, and a box could neither list its machines nor make one.
+ *
+ * TWO THINGS THAT ARE NOT BYTES ARE IN IT TOO, because the image differs by
+ * them. The major of the Node this hub runs on, which the build installs
+ * (`NODE_MAJOR`, below): a box whose Node moved a major kept the image with
+ * the old one inside. And whether each file may be run: a release that only
+ * made `bin/fleetwright-sidecar` executable, or stopped it being, has the
+ * same bytes and is not the same host.
  *
  * @param {string} installDir
  */
@@ -211,15 +271,17 @@ export function releaseTag(installDir) {
   };
   for (const part of RELEASE_PARTS) walk(part);
   walk(path.join('sandbox', 'machine'));
-  const seen = files.map((f) => `${f.rel}\0${f.st.size}\0${f.st.mtimeMs}\0${f.st.ctimeMs}\0${f.st.ino}`).join('\n');
+  const seen = [`node ${nodeMajor()}`, ...files.map((f) => `${f.rel}\0${f.st.size}\0${f.st.mtimeMs}\0${f.st.ctimeMs}\0${f.st.ino}\0${f.st.mode}`)].join('\n');
   const kept = tags.get(installDir);
   if (kept?.seen === seen) return kept.tag;
   const h = createHash('sha256');
+  h.update(`node\0${nodeMajor()}\0`);
   for (const f of files) {
     // A link is where it points, and anything else that is not a file is
-    // only its name: neither is read through.
-    const bytes = f.st.isSymbolicLink() ? Buffer.from(readlinkSync(f.at)) : f.st.isFile() ? readFileSync(f.at) : Buffer.alloc(0);
-    h.update(`${f.rel}\0${bytes.length}\0`);
+    // only its name: neither is read through. Nor is an entry with nowhere
+    // to read from, which is a `node_modules` that has no lock file.
+    const bytes = !f.at ? Buffer.alloc(0) : f.st.isSymbolicLink() ? Buffer.from(readlinkSync(f.at)) : f.st.isFile() ? readFileSync(f.at) : Buffer.alloc(0);
+    h.update(`${f.rel}\0${bytes.length}\0${f.at && f.st.isFile() && f.st.mode & 0o100 ? 'x' : '-'}\0`);
     h.update(bytes);
   }
   const tag = h.digest('hex').slice(0, 12);
@@ -352,8 +414,8 @@ export class Machines {
    * hands back what a container printed and what it printed as errors
    * apart, and the fleet's host prints its warnings as errors: read one after
    * the other, the last line would be the last warning, however long before
-   * the end that was. The time is taken off again. A Podman that prints no
-   * time gives the lines as it gave them.
+   * the end that was. The time is read as a time (logTime) and taken off
+   * again. A Podman that prints no time gives the lines as it gave them.
    *
    * @param {string} name
    * @returns {Promise<string[]|null>}
@@ -361,16 +423,20 @@ export class Machines {
   async #lastWords(name) {
     const r = await podmanAsync(this.cfg, ['logs', '--timestamps', '--tail', String(LOG_LINES), machineNames(name).container], { timeout: 30_000 });
     if (r.status !== 0) return null;
-    /** @type {Array<{ at: string, text: string }>} */
+    /** @type {Array<{ at: [number, number]|null, text: string }>} */
     const lines = [];
     for (const stream of [r.stdout, r.stderr]) {
       for (const l of String(stream || '').split('\n')) {
-        const m = /^(\d{4}-\d\d-\d\dT[\d:.,]+(?:Z|[+-]\d\d:?\d\d))\s(.*)$/.exec(l);
-        lines.push({ at: m ? m[1] : '', text: m ? m[2] : l });
+        const m = /^(\S+)\s(.*)$/.exec(l);
+        const at = m ? logTime(m[1]) : null;
+        lines.push({ at, text: at && m ? m[2] : l });
       }
     }
+    // By the time on each, the second and then how far into it (logTime). A
+    // line with no time on it comes before every line with one, as it did,
+    // and lines of the same time stay in the order Podman gave them.
     return lines
-      .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+      .sort((a, b) => (a.at && b.at ? a.at[0] - b.at[0] || a.at[1] - b.at[1] : a.at ? 1 : b.at ? -1 : 0))
       .map((l) => withheld(l.text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/[^\x20-\x7e’]/g, '')).trim().slice(0, LOG_LINE_CHARS))
       .filter(Boolean)
       .slice(-LOG_LINES);
@@ -510,7 +576,7 @@ export class Machines {
         '--label', `${IMAGE_LABEL}=1`,
         // THE NODE THIS HUB RUNS ON, so the host inside runs on what the host
         // outside does (sandbox/machine/Containerfile).
-        '--build-arg', `NODE_MAJOR=${process.versions.node.split('.')[0]}`,
+        '--build-arg', `NODE_MAJOR=${nodeMajor()}`,
         '-f', path.join(cfg.installDir, 'sandbox', 'machine', 'Containerfile'),
         stage,
       ],
@@ -617,6 +683,8 @@ export class Machines {
     const ends = this.#ends();
     const now = this.now();
     const machines = [];
+    /** The machines this look removed. @type {Set<string>} */
+    const removed = new Set();
     for (const c of all) {
       // WHEN IT ENDS: what this box last wrote, or what it was made with.
       const until = ends[c.name]?.until ?? c.labelled;
@@ -628,6 +696,7 @@ export class Machines {
         // it stopped. Read first, for a machine nobody ended.
         if (c.state === 'over') await this.#noteEnded(c);
         await this.#remove(c.name);
+        removed.add(c.name);
         log.info(`machines: ended ${c.name} (${until !== null && until <= now ? 'its time was up' : 'its container had stopped'})`);
         continue;
       }
@@ -639,10 +708,20 @@ export class Machines {
     // times as they were read at the top put back an end somebody had just
     // extended: they were told two more hours, and the machine went in ten
     // minutes with its disk.
+    //
+    // AND GONE IS WHAT THIS LOOK SAW GO, never "not among the containers it
+    // listed". That list is from before the removals too, so a machine made
+    // while one was being cleared away was not on it, and its end was taken
+    // out of the file as one that had gone: made for ten minutes and given
+    // two hours in the same breath, its owner was told two hours and it went
+    // at the ten its label said. So an end is dropped only when it was in
+    // the file as this look began and is the same now, and its machine was
+    // removed here or had no container then. An end written since is
+    // somebody's newer word and stays for the next look to judge.
     await this.#clearStrays(all);
-    const live = new Set(machines.map((m) => m.name));
+    const listed = new Set(all.map((c) => c.name));
     const fresh = this.#ends();
-    const still = Object.fromEntries(Object.entries(fresh).filter(([n]) => live.has(n)));
+    const still = Object.fromEntries(Object.entries(fresh).filter(([n, e]) => !(ends[n]?.until === e.until && (removed.has(n) || !listed.has(n)))));
     if (Object.keys(still).length !== Object.keys(fresh).length) this.#keep(still);
     const image = await (prepare ? this.prepare() : this.imageState());
     const ended = this.#ended().map((e) => ({ name: e.name, owner: e.owner, at: e.at, text: endedText(e, now) }));

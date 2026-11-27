@@ -30,10 +30,13 @@
 // can be read, the answer is "no limit known" and the box's own number
 // stands, which is how this behaved before.
 //
-// NOTHING HERE HAS RUN IN A CONTAINER. The tests read a tree that stands in
-// for /sys/fs/cgroup (test/cgroup-memory.test.js). That a machine's hub then
-// refuses a session for memory at its container's limit has not been seen:
-// CI starts its machine with no limits (scripts/machine-smoke.mjs says why).
+// WHERE THIS HAS RUN IN A CONTAINER IS CI'S TO SAY, RUN BY RUN. The tests
+// read a tree that stands in for /sys/fs/cgroup (test/cgroup-memory.test.js).
+// CI gives its machine a memory limit where the runner's user can be given
+// one, and asks the hub inside how many sessions it would take
+// (scripts/machine-smoke.mjs); a run that could not says so in its summary.
+// That a hub then refuses a session at the limit, in words, is not seen
+// there: the smoke starts one session and asks how many more.
 
 import { readFileSync } from 'node:fs';
 import os from 'node:os';

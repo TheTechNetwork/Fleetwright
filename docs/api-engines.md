@@ -64,14 +64,30 @@ not `apikeys` is handed a Codex sign-in and never a key.
 **On the box**, a key is kept with the member's other items and handed to a
 session over its own socket, only for an engine that session's member names
 on that provider ([engines.md](./engines.md), "Credentials"). The runner
-writes it where OpenCode reads its keys, inside the container, and for
-OpenRouter also sets the variable OpenCode's documentation names.
+hands it to OpenCode in that one process's environment and writes it
+nowhere: in `OPENCODE_AUTH_CONTENT`, which OpenCode reads in place of its
+key file, and for OpenRouter also in the variable OpenCode's documentation
+names. It is not written into the member's engine home, which outlives the
+session. On a box with no engine home it is written where OpenCode reads
+its keys inside the session's own container, as it always was.
+
+**A session with no key to be handed is told which of two things it is**,
+in the words its turn ends with. The box holds none for the member: *"This
+machine holds no OpenRouter API key for this member. To keep one: this
+member's Credentials in the Fleetwright app, OpenRouter API key."* Or the
+box's operator has not turned the provider on, whatever the vault left
+there (`provider_off`): *"The operator of this machine has not turned
+OpenRouter on, so no session here runs on its API key. It is turned on in
+FLEETWRIGHT_API_PROVIDERS on this machine."* A box says what it holds and
+not what the vault keeps: a key kept there that this box was not handed is
+the first sentence too.
 
 **A key is never said back.** How a turn ended is the engine's own words,
 and a provider that quotes a key in its refusal would otherwise put it in a
 notification. The runner takes any value it was handed out of everything it
 reports or prints: the turn's ending, the agent's own words in the pane,
-and the engine's error output, which is where a handoff note is cut from.
+whole or a few characters at a time as a model streams them, and the
+engine's error output, which is where a handoff note is cut from.
 The sandbox driver does the same with a provider's answer.
 
 ### Off until an operator says so, per provider
@@ -287,6 +303,16 @@ stamps every file 2020, and a fix that kept a file's length would have kept
 the tag, and the old host in every machine. The same bytes unpacked again
 are the same image, and nothing is rebuilt.
 
+Two things that are not bytes are in the tag too, because the image differs
+by them: the major of the Node the hub runs on, which is the Node the build
+installs, and whether each file may be run. **A checkout's `node_modules`
+is not read.** What npm installed is listed in `node_modules/.package-lock.json`,
+and that one file stands for the directory, through a link when
+`node_modules` is one (a second worktree's). A `node_modules` with no such
+file stands for nothing: a dependency changed there, by another installer
+or by hand, is the same tag and the image is not built again. A release has
+no `node_modules`.
+
 ### The same image is the template a provider needs
 
 Part two says a provider's template has to enrol itself and that building
@@ -353,20 +379,30 @@ behind the hub's token like every route there.
   hub's state, because more time changes it. A hub that lost that state
   ends a machine by its labels, and a machine whose container stopped by
   itself (its sidecar ended, or the box restarted) is cleared away with
-  its volume.
+  its volume. A look takes an end out of that state only for a machine it
+  removed itself, or one that had no container when the look began. An
+  end written while a look is under way, for a machine made or given more
+  time in that moment, is left for the next look.
 - **Why one stopped is kept, for an hour.** A machine's log goes with its
   container, and it is the one place the machine said why. So before the
   hub removes one that stopped by itself it reads the last twenty lines of
-  that log, in the order they were printed, and writes them to its own
+  that log, in the order they were printed (by the time Podman puts on
+  each, read as a time and not as text), and writes them to its own
   log. The last line that says something is kept for an hour and shown on
   its owner's place for this box, where that place says why it has no
   image, as *"This machine found vm-… stopped 12 minutes ago and removed
   it with its disk. Its log ends: …"*. Nobody else is shown it. Anything
   in those lines that looks like a ticket or a token is withheld before
   they are logged or kept, and so is any long unbroken run of a token's
-  letters, which costs a long path or host name too. A log Podman could
-  not read, or an empty one, is said as that. A machine the box ended, on
-  its owner's word or when its time was up, is not said: its owner knows.
+  letters, which costs a long path or host name too. A shorter secret is
+  withheld by where it stands: whatever is before the `@` of an address,
+  and what follows a word that names one (key, token, secret, password),
+  whole when it is written as an assignment and otherwise when it has a
+  digit in it or is twenty characters or more. A secret of no known shape,
+  under thirty-two characters, in neither place, is not caught. A log
+  Podman could not read, or an empty one, is said as that. A machine the
+  box ended, on its owner's word or when its time was up, is not said: its
+  owner knows.
 - **Asked first, by name.** For more time, an end or a sign-in, this
   driver is asked before a hypervisor's: the hub is on the box and answers
   at once whether a machine is its own, where a pool that is down would
@@ -419,15 +455,33 @@ included. It built from a checkout only, and ran only when the image's own
 directory changed, which is how a path that was wrong only in a release
 (the SessionStart hook's) was never seen here.
 
-That run has no memory, processor or process limit on the machine, because
-a CI job's user has no cgroup controllers of its own; that Podman honours
-the limits a box passes is not checked anywhere, and neither is the hub
-inside refusing a session at its container's limit, which the tests read
-from a stand-in for the cgroup's files (`test/cgroup-memory.test.js`).
+**A session is started in the machine, in both legs.** The release leg was
+added for the hook's path and then started no session, so it never looked
+at it. A plain program stands where Claude Code would be, with no engine
+and nothing signed in: it runs the SessionStart hook the session's settings
+name, as Claude Code does, and the hub inside is asked whether it heard.
+A hook that names a file the machine does not have fails there. That part
+was run before CI, against the hub of a packed release on loopback with no
+network, both as it is and with the hook's file taken away.
 
-**The release leg, the stopped machine and the stray volume in that run
-were written without a Podman to run them on, and have not run until CI
-runs them.**
+**The three limits are applied where the runner will grant them.** A limit
+needs the user's own cgroup controllers, which a CI job's shell does not
+have, so the workflow asks for them (a manager of the user's own that
+outlives a login, told to hand it memory, processors and processes) and the
+smoke asks Podman before it leans on them (`--limits-if-granted`). With
+them, each limit is read back out of the machine's own cgroup as the number
+it was made with, and the hub inside is asked how many sessions it would
+take: no more than its 4 GB leaves room for, on a runner with several times
+that free. Where Podman still refuses, the run goes on without limits and
+says so, as a warning on the run and a heading in the job's summary. A run
+that says the limits were not applied shows nothing about them, and until
+one says they were, that Podman honours them and that the hub inside counts
+against one are still only read from a stand-in
+(`test/cgroup-memory.test.js`).
+
+**The limits, the step that asks for the controllers, and the session inside
+a real container were written without a Podman to run them on, and have not
+run until CI runs them.**
 
 **No machine has been made on a real box, and none has joined a fleet.**
 What is left unproven is the last step: a machine enrolling with a real
