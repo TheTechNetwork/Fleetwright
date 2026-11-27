@@ -51,7 +51,7 @@ packages:
   SwiftNIO:
     url: https://github.com/apple/swift-nio
     # renovate: datasource=github-tags depName=apple/swift-nio
-    exactVersion: 2.105.0
+    exactVersion: 2.105.2
 
 # THE VERSION, ONCE, FOR EVERY TARGET. App Store Connect refuses an upload
 # whose extension carries a different CFBundleShortVersionString or
