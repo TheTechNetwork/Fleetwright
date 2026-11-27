@@ -157,6 +157,19 @@ GitHub as a different account now, or an address handed on to somebody new.
   handed by the address, so otherwise the next person under it would start
   sessions on the last one's sign-ins. What the old account keeps stays in
   its own vault.
+- **A machine it approved for a member's vault stays approved.** A custodian
+  approves machines for an agent, or for a person who let them, and those
+  approvals are the member's and not the address's: releasing a leaver's
+  address does not take the leaver's own box away from an agent. The answer
+  to the release names each one, by the label and fingerprint the member's
+  list shows it under and the member it is for, and says to remove the ones
+  that should not hold that member's credentials, from the member's
+  Credentials. An admin does that; the release does not.
+- **What its person revoked stays revoked.** The delegations they took back
+  are kept with the released address until each would have run out. A key
+  can come back under the address, the same phone listed again by the same
+  person or as their new GitHub account, and it verifies everything it ever
+  signed.
 - It is written in the log of every vault the address may open, and of the
   old account's own, as `release` with the address and the admin who did it.
 - An org admin's own address is not released while it is one (`is_admin`):
@@ -181,6 +194,18 @@ much. It used to stay "until a custodian forgets it", which could not
 happen: nobody is the custodian of a member that is not in the tree, so the
 sign-ins were kept, renewed, and handed to whoever filed the same id next. A
 new agent filed under an id something was left under starts empty too. A
+request made for the member that was removed is not taken by the one filed
+under its id afterwards: the vault keeps when it was emptied, and refuses
+anything asked at or before then (`stale`). That time is the latest of the
+removal's own, the minter's clock, and every change the vault held, because
+two phones' clocks differ: an approval stamped by a phone running ahead of
+the one that removed the member is otherwise "asked after" a removal that
+followed it. The cost is that a phone behind the minter's clock is refused
+for that member until its clock passes the emptying, and is told to ask
+again. What a time cannot settle is a request that was never delivered,
+stamped by a clock ahead of the minter's, and held back until the id was
+filed again: only a request naming which member it was made for could, and
+none does yet. A
 person's vault is their own and a removal does not touch it.
 
 **Custodians of a person member.** A person's vault holds their own
@@ -205,8 +230,11 @@ sign-ins, and who else holds custody of it depends on who was there first.
   - *Taking a record out and filing it again*, or filing one for somebody
     whose keys were all removed after a lost phone. The address was met, so
     it gives nothing. Nor does it give back custody an org admin took away
-    from somebody nobody had met yet: the removal remembers whose address
-    the record was.
+    from somebody nobody had met yet: the minter remembers every address a
+    record has left (`orgl:<address>`), by removal or by being pointed at
+    another address, and filing that address again adds nobody new, under
+    the same id or any other. It was remembered on the removed record
+    itself, and an id is the filer's to choose.
   - *Filing a record at an address somebody has not used yet.* When a
     GitHub account that already has a vault files its first key under that
     address, the vault had met them after all, and the custody is dropped at

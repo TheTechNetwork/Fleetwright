@@ -1542,7 +1542,9 @@ const SIGN_MAIN = String.raw`
   // who signs in to GitHub as another account now is refused until an org
   // admin says the address is free. Drawn only for an org admin, on their own
   // vault (C-2): the vault refuses it from anybody else. Asked once more on
-  // the row, with what goes, because nothing here gives it back.
+  // the row, with what goes, because nothing here gives it back, and with
+  // what stays: a machine the address approved for a member is that member's
+  // approval, and the vault's answer names each one (org.js).
   function releaseRow() {
     var r = row('Release an address', 'An address belongs to the first GitHub account that signed in under it. Release one when its person signs in to GitHub as a different account now, or the address is somebody else’s.', false);
     r.step.hidden = false;
@@ -1567,7 +1569,7 @@ const SIGN_MAIN = String.raw`
       note(r, '');
       sure.textContent = '';
       sure.hidden = false;
-      sure.appendChild(el('p', null, 'Release ' + a + '? Its signing keys go, and machines approved under it stop being given its credentials. Whoever signs in under it next holds it, with whatever the organization gives that address. This page cannot give it back.'));
+      sure.appendChild(el('p', null, 'Release ' + a + '? Its signing keys go, and machines approved under it stop being given its credentials. A machine it approved for a member stays approved, and the answer names each one. Whoever signs in under it next holds it, with whatever the organization gives that address. This page cannot give it back.'));
       var acts = el('div', 'actions');
       button(acts, 'Release ' + a, 'primary', function () {
         sure.hidden = true;

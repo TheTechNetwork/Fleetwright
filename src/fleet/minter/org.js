@@ -30,6 +30,9 @@
 // The address is that account's for good (vault.js, `devicekey`), and the one
 // way it becomes somebody else's is an org admin releasing it here
 // (`releaseaddress`), written in every vault the address could open.
+// WHICH ADDRESSES HAVE HAD A RECORD is kept too (`orgl:<address>`), by the
+// address and not by the member's id, because that is what "somebody new"
+// is asked of (`orgmember`).
 //
 // WHOEVER ADDS A PERSON MANAGES THEIR CREDENTIALS, and nobody else does until
 // the person says so. Asked for in so many words, after the first build made
@@ -69,6 +72,13 @@ export const ORG_ADMINS_ROW = 'org:admins';
 export const ORG_MEMBER_PREFIX = 'orgm:';
 /** What custodians did to a vault, for its owner to read. */
 export const CUSTODY_LOG_PREFIX = 'clog:';
+/**
+ * An address a person record was filed at and then taken off, by removal or
+ * by pointing the record at somebody else. One small row an address, kept for
+ * good: it is what makes filing that address again not adding somebody new,
+ * under whatever id it is filed.
+ */
+export const ORG_LEFT_PREFIX = 'orgl:';
 /** Org admins a fleet keeps, and explicit custodians one agent member keeps. */
 export const MAX_ORG_ADMINS = 8;
 export const MAX_CUSTODIANS = 8;
@@ -139,6 +149,29 @@ export async function isBound(store, email, userId) {
 async function addressMet(store, email) {
   const row = await store.get(`dk:${lower(email)}`);
   return Boolean(row && typeof row.github === 'string');
+}
+
+/**
+ * Whether a person record at this address was filed before and taken off.
+ *
+ * BY THE ADDRESS, UNDER ANY ID. It used to be read off the tombstone at the
+ * id being filed, and an id is the filer's to choose: a manager whose custody
+ * of somebody an org admin had taken away removed the record and filed the
+ * same address as `sam2`, and was "whoever added" them again. A tombstone is
+ * also written over by the next member filed under its id, so the address is
+ * remembered in a row of its own (`orgl:`), written when a record leaves it.
+ * The tombstones are still read, for a removal made before that row existed.
+ *
+ * @param {Store} store @param {string} email
+ */
+async function addressLeft(store, email) {
+  const address = lower(email);
+  if (await store.get(`${ORG_LEFT_PREFIX}${address}`)) return true;
+  if (!store.list) return false;
+  for (const row of (await store.list({ prefix: ORG_MEMBER_PREFIX })).values()) {
+    if (row?.removed && row.kind === 'person' && lower(row.email) === address) return true;
+  }
+  return false;
 }
 
 /**
@@ -357,10 +390,10 @@ export async function membersForBoxes(store, listed) {
  *
  * @param {any} inside  the opened request
  * @param {{ store: Store, email: string, who: { userId: string, login: string }, at: number, fleetAdmin: boolean }} ctx
- * @returns {Promise<{ ok: true, answer?: any, text: string, empty?: string, released?: { address: string, account: string } } | { ok: false, error: { code: string }, text: string }>}
+ * @returns {Promise<{ ok: true, answer?: any, text: string, empty?: string, released?: { address: string, account: string, stays: string } } | { ok: false, error: { code: string }, text: string }>}
  *   `empty` names an agent member whose vault the caller empties; `released`
  *   an address and the account it was taken from, whose approvals under it
- *   the caller takes back
+ *   the caller takes back, and the sentence for the approvals that stay
  */
 export async function runOrgOp(inside, ctx) {
   const { store, email, who, at } = ctx;
@@ -433,6 +466,12 @@ export async function runOrgOp(inside, ctx) {
       if (reports.length) return refuse('has_reports', `${reports.join(', ')} still ${reports.length === 1 ? 'reports' : 'report'} to ${id}. Move ${reports.length === 1 ? 'it' : 'them'} first.`);
       // WHAT THE TOMBSTONE REMEMBERS. Whose address a person was, so filing
       // them again is not adding somebody new (below, `again`).
+      // THE ADDRESS REMEMBERS IT FIRST, apart from the id (addressLeft),
+      // and first so that a write that fails between the two leaves an
+      // address marked as left that has not, which only withholds custody
+      // nobody was owed, and never a record gone with nothing to say whose
+      // address it was once its tombstone is filed over.
+      if (prior.kind === 'person') await store.put(`${ORG_LEFT_PREFIX}${lower(prior.email)}`, { at });
       await store.put(`${ORG_MEMBER_PREFIX}${id}`, { id, at, removed: true, kind: prior.kind, ...(prior.kind === 'person' ? { email: lower(prior.email) } : {}) });
       // AN AGENT'S VAULT GOES WITH IT (`empty`, done by vault.js under the
       // vault's own lock). It used to stay "until a custodian forgets it",
@@ -484,10 +523,10 @@ export async function runOrgOp(inside, ctx) {
     // old one's custodians held must not follow it to them.
     const met = kind === 'person' ? await addressMet(store, address) : false;
     const samePerson = Boolean(prior && prior.kind === 'person' && lower(prior.email) === address);
-    // REMOVED AND FILED AGAIN is not somebody new either. Without this,
-    // custody an org admin took away came back by removing the record and
-    // filing it again.
-    const again = Boolean(stored?.removed && stored.kind === 'person' && lower(stored.email) === address);
+    // REMOVED AND FILED AGAIN is not somebody new either, under this id or
+    // another. Without this, custody an org admin took away came back by
+    // removing the record and filing it again.
+    const again = kind === 'person' && !samePerson && !met ? await addressLeft(store, address) : false;
     const added = kind === 'person' && !samePerson && !met && !again && address !== email ? [email] : [];
     const personCustodians = kind === 'person' ? (samePerson ? prior?.custodians ?? [] : added) : [];
     /** @type {OrgNode} */
@@ -502,6 +541,12 @@ export async function runOrgOp(inside, ctx) {
     if (!prior && live.size >= MAX_MEMBERS) return refuse('too_many', `The organization holds ${MAX_MEMBERS} members already.`);
     const fits = checkTree(live, next);
     if (!fits.ok) return refuse('bad_params', fits.text);
+    // A RECORD POINTED AT ANOTHER ADDRESS has left the one it had, as a
+    // removed one has (addressLeft). Written BEFORE the record: were the
+    // record written first and this write lost, the request sent again
+    // would find the record already at its new address, see nothing to
+    // mark, and no row anywhere would remember the old one.
+    if (prior?.kind === 'person' && lower(prior.email) !== address) await store.put(`${ORG_LEFT_PREFIX}${lower(prior.email)}`, { at });
     await store.put(`${ORG_MEMBER_PREFIX}${id}`, next);
     const after = new Map(tree).set(id, next);
     return {
@@ -571,8 +616,13 @@ export async function runOrgOp(inside, ctx) {
   // hands, and it is the step a coordinator that lies about who is signing
   // in used to take by itself.
   //
-  // WHAT IT LEAVES. The address is nobody's: no account, no keys, and the
-  // delegations it revoked gone with the keys that signed them. The tree is
+  // WHAT IT LEAVES. The address is nobody's: no account and no keys. THE
+  // DELEGATIONS ITS PERSON REVOKED STAY REVOKED, on the row, until each would
+  // have run out. They used to go with the keys that signed them, and a key
+  // can come back: the same phone listed under the address again, by the
+  // same person or as their new GitHub account, verified every delegation it
+  // had ever signed, the revoked ones too, and the coordinator is who holds
+  // those. The tree is
   // not changed, so whoever signs in under the address next holds what the
   // tree gives it, exactly as for an address nobody has signed in under yet
   // (docs/members.md, "What it does not stop"). That is why it is written in
@@ -599,13 +649,42 @@ export async function runOrgOp(inside, ctx) {
       const vaultId = node.kind === 'agent' ? `${MEMBER_PREFIX}${node.id}` : await accountOf(store, lower(node.email));
       if (vaultId) vaults.push(vaultId);
     }
-    await store.put(`dk:${address}`, { keys: [], released: { at, by: email } });
+    // THE MACHINES IT APPROVED FOR SOMEBODY ELSE'S VAULT, as a custodian.
+    // They are that member's approvals and not the address's, so they stay,
+    // and a release that said only "its machines stop" read as if they went:
+    // an admin releasing a leaver's address left the leaver's own box holding
+    // an agent's sign-ins and was told nothing of it. Named here, by the
+    // label and fingerprint the member's own list shows them under, for the
+    // admin to remove the ones that should go. Every member's vault is
+    // looked at, since an approval outlives the custody it was made with.
+    /** @type {Array<{ member: string, label: string, fingerprint: string }>} */
+    const machines = [];
+    for (const node of tree.values()) {
+      if (node.kind === 'person' && lower(node.email) === address) continue;
+      const vaultId = node.kind === 'agent' ? `${MEMBER_PREFIX}${node.id}` : await accountOf(store, lower(node.email));
+      const grants = vaultId ? (await store.get(`v:${vaultId}`))?.grants : null;
+      for (const [hash, grant] of Object.entries(grants && typeof grants === 'object' ? grants : {})) {
+        const g = /** @type {any} */ (grant);
+        if (g && !g.revoked && g.jwk && lower(g.by) === address) machines.push({ member: node.id, label: String(g.label || ''), fingerprint: hash.slice(0, 16) });
+      }
+    }
+    machines.sort((a, b) => (a.member + a.label < b.member + b.label ? -1 : 1));
+    const stillRevoked = (Array.isArray(row.revoked) ? row.revoked : []).filter((/** @type {any} */ r) => r && typeof r.id === 'string' && Number(r.until) >= at);
+    await store.put(`dk:${address}`, { keys: [], released: { at, by: email }, ...(stillRevoked.length ? { revoked: stillRevoked } : {}) });
     for (const vaultId of vaults) await logCustody(store, vaultId, { at, by: email, op: 'release', name: address });
     const was = String(row.login || 'a GitHub account');
+    const named = machines.slice(0, 8).map((m) => `${m.label || m.fingerprint} (${m.fingerprint}) for ${m.member}`).join(', ');
     return {
       ok: true,
-      released: { address, account: row.github },
-      answer: { address, vaults: vaults.length },
+      // `stays` is said last, after what the caller finds went (vault.js).
+      released: {
+        address,
+        account: row.github,
+        stays: machines.length
+          ? `${machines.length === 1 ? 'One machine' : `${machines.length} machines`} it approved for a member ${machines.length === 1 ? 'is' : 'are'} still approved, because ${machines.length === 1 ? 'that approval is' : 'those approvals are'} the member’s: ${named}${machines.length > 8 ? `, and ${machines.length - 8} more` : ''}. Remove any that should not hold that member’s credentials, from the member’s Credentials.`
+          : '',
+      },
+      answer: { address, vaults: vaults.length, machines },
       text: `Released ${address}. It was ${was}’s and is nobody’s now: its signing keys are gone, so machines stop taking them when they next ask. ` +
         `Whoever signs in under it next holds it, with whatever the organization gives that address` +
         `${vaults.length ? `, which is written in the ${vaults.length === 1 ? 'vault' : `${vaults.length} vaults`} it may manage` : ''}.`,

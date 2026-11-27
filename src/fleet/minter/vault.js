@@ -51,6 +51,16 @@
 // sign as a box, short of getting the person to finish a GitHub sign-in it
 // started with a verifier of its own. See docs/vault.md and security.md §4.1.
 //
+// NOR ANSWER A BOX IN THIS VAULT'S PLACE, which it could until an outside
+// review did it. A box's request is signed and not sealed, so the key its
+// answer is sealed to reaches the coordinator in the clear, and sealing to a
+// public key says nothing about who sealed: a coordinator answered a box
+// itself, and the box filed what it was handed. So every answer to a box is
+// signed here as well, with the key a box already pins for the signed key
+// list, over which box, which request and which sealed part
+// (protocol/vault-answer.js, answerVaultBox), and a box takes nothing from
+// an answer whose signature does not hold (sidecar.js, #askVault).
+//
 // WHAT A BOX IS GIVEN is never a refresh token. An OAuth item is renewed here
 // and only here, under a lock, so one rotation happens however many boxes ask
 // at once; a box gets the access token, which lasts hours, and asks again
@@ -73,6 +83,7 @@ import { API_PROVIDERS, API_KEY_ITEMS, ENGINES, ENGINE_IDS, DEFAULT_ENGINE } fro
 import { SANDBOX_PROVIDER_NAMES, sandboxProviderOf, sandboxDepositProblem } from '../protocol/sandboxes.js';
 import { SEAL_KEY_RE, VAULT_REQUEST_AAD, VAULT_REPLY_AAD, VAULT_BOX_AAD, atRestAad, vaultAtRestAad, seal, open } from '../seal.js';
 import { verify, sign, signingInput } from '../crypto.js';
+import { vaultBoxAnswerInput } from '../protocol/vault-answer.js';
 import { githubUser } from '../../core/repo-tokens.js';
 import { refreshGithubToken, refreshCloudflareToken, exchangeCode } from '../../core/oauth-refresh.js';
 import { DEPOSIT_MAX_AGE_MS, checkBeforeKeeping } from './claude.js';
@@ -462,20 +473,53 @@ async function loadKey(config) {
 
 /**
  * Everything an agent member's vault keeps and every machine approved for
- * it, forgotten at once (org.js, a removal). Rows are written over and not
- * deleted, as a single forget does, so an older request replayed afterwards
- * is still told it is stale. Called under the vault's `row:` lock.
+ * it, forgotten at once (org.js, a removal). Called under the vault's `row:`
+ * lock.
  *
- * @param {VaultStore} store @param {string} vaultId  `member:<id>` @param {number} at
+ * WHEN IT WAS EMPTIED IS KEPT ON THE ROW (`emptied`), and nothing asked at or
+ * before then is taken afterwards (runDeviceOp). The row used to be written
+ * as nothing at all, which also dropped the time of every change it had
+ * held: an approval sealed for the member that was removed, sent again
+ * inside its ten minutes once the id had been filed again, was not "older
+ * than a newer change" any more, and the old member's box was handed the new
+ * member's sign-ins. One time for the whole vault and not a tombstone an
+ * item, because a request the coordinator held back and never delivered
+ * names an item the vault never had.
+ *
+ * THAT TIME IS NOT THE REMOVING PHONE'S ALONE. It was: the removal's own
+ * `at`, which is one phone's clock, compared afterwards with every other
+ * phone's. A custodian whose phone ran half a minute ahead of the remover's
+ * had an approval stamped LATER than the removal that followed it, so sent
+ * again once the id was filed again it was "asked after the emptying" and
+ * was taken. So the time kept is the latest of three: the removal's own,
+ * this minter's clock, and every change the vault held, tombstones and
+ * taken-back approvals included. Nothing already applied can then be
+ * applied again, whatever clock stamped it, and nothing an honest clock
+ * stamped before the removal reached here is taken after it.
+ *
+ * WHAT THAT COSTS, AND WHAT IT LEAVES. A phone behind this minter's clock
+ * is refused `stale` for that member until its clock passes the emptying,
+ * and so is everybody for as long as the vault held something stamped
+ * ahead; the refusal says to ask again. A request never delivered, stamped
+ * by a clock ahead of this minter's, and held back until after the id was
+ * filed again is still taken: a time cannot tell it from one made for the
+ * new member, and only a request that named which member it was made for
+ * could.
+ *
+ * @param {VaultStore} store @param {string} vaultId  `member:<id>` @param {number} at  when the removal says it was asked
+ * @param {number} now  this minter's clock
+ * @param {{ always?: boolean }} [o]  `always` writes the row though the vault never had one: a removal, which a held-back request must not outlive
  * @returns {Promise<{ items: number, grants: number }>} how much there was
  */
-async function emptyMemberVault(store, vaultId, at) {
+async function emptyMemberVault(store, vaultId, at, now, { always = false } = {}) {
   const kept = await store.get(`v:${vaultId}`);
   const claude = await store.get(`gh:${vaultId}`);
   const items = Object.values(kept?.items ?? {}).filter((v) => v && !v.forgotten && v.sealed).length + (claude?.sealed && !claude.forgotten ? 1 : 0);
   const grants = Object.values(kept?.grants ?? {}).filter((g) => g && !g.revoked && g.jwk).length;
-  if (kept) await store.put(`v:${vaultId}`, { login: vaultId, items: {}, grants: {} });
-  if (claude) await store.put(`gh:${vaultId}`, { at: Math.max(at, Number(claude.at) || 0), login: vaultId, forgotten: true });
+  const held = [...Object.values(kept?.items ?? {}), ...Object.values(kept?.grants ?? {}), kept?.custody, claude].map((v) => Number(v?.at) || 0);
+  const emptied = Math.max(at, now, Number(kept?.emptied) || 0, ...held);
+  if (kept || always) await store.put(`v:${vaultId}`, { login: vaultId, items: {}, grants: {}, emptied });
+  if (claude) await store.put(`gh:${vaultId}`, { at: emptied, login: vaultId, forgotten: true });
   return { items, grants };
 }
 
@@ -516,6 +560,8 @@ function emptyRow(row) {
     login: String(row?.login || ''), items: { ...(row?.items || {}) }, grants: { ...(row?.grants || {}) },
     // Whether this person's managers may manage it (org.js), kept with the row it is about.
     ...(row?.custody && typeof row.custody === 'object' ? { custody: { allow: row.custody.allow === true, at: Number(row.custody.at) || 0 } } : {}),
+    // When an agent member's vault was last emptied (emptyMemberVault).
+    ...(Number(row?.emptied) > 0 ? { emptied: Number(row.emptied) } : {}),
   };
 }
 
@@ -586,7 +632,7 @@ export async function answerVaultDevice(ask, config) {
     let text = done.text;
     if (done.empty) {
       const memberVault = `${MEMBER_PREFIX}${done.empty}`;
-      const gone = await withLock(`row:${memberVault}`, () => emptyMemberVault(store, memberVault, at));
+      const gone = await withLock(`row:${memberVault}`, () => emptyMemberVault(store, memberVault, at, now(), { always: inside.remove === true }));
       if (inside.remove === true) {
         // IN NUMBERS, since it cannot be undone and nobody can look after.
         const what = [
@@ -607,11 +653,14 @@ export async function answerVaultDevice(ask, config) {
     // A box files what it is handed by the address, so without this whoever
     // signs in under the address next would start sessions on them.
     if (done.released) {
-      const { address, account } = done.released;
+      const { address, account, stays } = done.released;
       const machines = await withLock(`row:${account}`, () => unfileAddress(store, account, address, at));
       if (machines) {
         text += ` ${machines} machine${machines === 1 ? '' : 's'} approved under it ${machines === 1 ? 'is' : 'are'} no longer approved, and ${machines === 1 ? 'stops' : 'stop'} being given anything when ${machines === 1 ? 'it next asks' : 'they next ask'}. What that account keeps is still its own.`;
       }
+      // AND WHAT STAYS, last: the machines the address approved for a member
+      // as its custodian, which are the member's and are named (org.js).
+      if (stays) text += ` ${stays}`;
       await logCustody(store, account, { at, by: email, op: 'release', name: address });
     }
     return { ok: true, sealed: await seal({ to: reply, aad: VAULT_REPLY_AAD, payload: done.answer ?? {} }), text, ...(inside.op === 'org' ? {} : { changed: true }) };
@@ -692,6 +741,15 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
   // THE FLEET ACCOUNT THE VAULT IS FILED UNDER: the asker's own, a person's
   // whose manager opened it, or none for an agent, which has no address.
   const owner = acting ? acting.owner : email;
+
+  // A MEMBER'S VAULT THAT WAS EMPTIED takes nothing asked before it was
+  // (emptyMemberVault): the member that request was made for is gone, and
+  // the one under its id now is another. A list changes nothing and is
+  // answered.
+  if (inside.op !== 'list' && row.emptied && at <= row.emptied) {
+    const whose = acting?.member ?? 'This member';
+    return refuse('stale', `${whose} was removed, or filed again, after this was asked, so this could be a request made for the member that was there before. Nothing was changed. Ask again.`);
+  }
 
   if (inside.op === 'list') {
     if (acting) {
@@ -775,7 +833,10 @@ async function runDeviceOp(inside, config, key, who, email, at, acting = null) {
       const dropped = new Set(tombstones.slice(0, Math.max(0, tombstones.length - MAX_DEVICE_TOMBSTONES)).map((k) => k.kid));
       await store.put(`${DEVICE_KEYS_PREFIX}${email}`, {
         github: who.userId, login: who.login, keys: next.filter((k) => !dropped.has(k.kid)),
-        ...(kept?.github === who.userId && Array.isArray(kept.revoked) ? { revoked: kept.revoked } : {}),
+        // WHAT WAS REVOKED STAYS REVOKED, across a release too (org.js,
+        // `releaseaddress`): the row is this account's or nobody's by here,
+        // and a key listed again verifies everything it ever signed.
+        ...(Array.isArray(kept?.revoked) ? { revoked: kept.revoked } : {}),
         ...(kept?.released ? { released: kept.released } : {}),
       });
       // THIS ACCOUNT'S FIRST KEY UNDER THIS ADDRESS, and it has a vault
@@ -1220,6 +1281,8 @@ async function describe(row, store, userId) {
  * @param {unknown} ask  `{ request: { v: 1, hostKey, at, reply }, signature, members? }`,
  *   the signature being the box's key over signingInput('vault-box', request)
  * @param {VaultConfig} config
+ * @returns {Promise<Record<string, any>>}  a refusal, or `{ ok: true, sealed: { epk, iv, ct, signature }, text }`,
+ *   `signature` being this minter's over vaultBoxAnswerInput (protocol/vault-answer.js)
  */
 export async function answerVaultBox(ask, config) {
   const missing = notConfigured(config);
@@ -1283,7 +1346,43 @@ export async function answerVaultBox(ask, config) {
     if (one) accounts.push(one);
   }
   const sealed = await seal({ to: String(req.reply), aad: VAULT_BOX_AAD, payload: { at: now(), accounts } });
-  return { ok: true, sealed, text: accounts.length ? `This box holds credentials for ${accounts.length} ${accounts.length === 1 ? 'person' : 'people'}.` : 'Nobody has approved this box to hold their credentials.' };
+  const said = accounts.length ? `This box holds credentials for ${accounts.length} ${accounts.length === 1 ? 'person' : 'people'}.` : 'Nobody has approved this box to hold their credentials.';
+  // SIGNED, BECAUSE SEALED IS NOT ENOUGH. `reply` came here in the clear,
+  // through the coordinator, so anybody who carried the request could seal an
+  // answer of their own to it, and a box that only opened what it was sent
+  // could not tell that answer from this one. Signed with the key a box pins
+  // for the key list (answerVaultKeys), over the box this is for, the
+  // request it answers and the digest of the sealed part
+  // (protocol/vault-answer.js).
+  //
+  // INSIDE `sealed`, beside its three strings: the coordinator passes on
+  // `sealed` and this sentence and nothing else (core.js, #onHostVault), so
+  // one from before the signature carries it all the same, and a box from
+  // before it opens `sealed` by the three it knows.
+  //
+  // A MINTER THAT CANNOT SIGN STILL ANSWERS, unsigned and saying so. A box
+  // that checks refuses that answer and keeps what it holds; a box from
+  // before the signature is served as it always was. Refusing here instead
+  // would take the vault from every box for want of a key only some check.
+  /** @type {string|null} */
+  let signed = null;
+  let unsigned = 'this minter holds no signing key';
+  if (config.signingKey) {
+    try {
+      const signing = await config.signingKey();
+      signed = await sign(signing.privateJwk, await vaultBoxAnswerInput({ host: hash, at, reply: String(req.reply), sealed }));
+    } catch (e) {
+      // WHY is for this minter's own log and nobody else's. The sentence
+      // below is passed on to the coordinator and written to a box's log,
+      // and an error from reading a key can quote the start of what it
+      // read: `JSON.parse` on a value that is not JSON names its first ten
+      // characters, which for a key kept as anything else are the key's.
+      console.warn(`minter: the signing key does not load, so a vault answer went unsigned: ${/** @type {Error} */ (e)?.message || e}`);
+      unsigned = 'its signing key does not load (the minting Worker’s log says why)';
+    }
+  }
+  if (!signed) return { ok: true, sealed, text: `${said} This answer is not signed, because ${unsigned}. A box that checks the vault’s signature will not use it.` };
+  return { ok: true, sealed: { ...sealed, signature: signed }, text: said };
 }
 
 /**
