@@ -80,7 +80,7 @@ export const DEBIAN_IMAGE = Object.freeze({
   algorithm: /** @type {'sha512'} */ ('sha512'),
   release: '13',
   // renovate: datasource=custom.debian-cloud depName=trixie
-  build: '20261116-2664',
+  build: '20261123-2671',
   url: 'https://cloud.debian.org/images/cloud/trixie/20261116-2664/debian-13-genericcloud-amd64-20261116-2664.qcow2',
   /** As published in that build's SHA512SUMS, and as downloaded. */
   sha512: '37cb32b320820417eb04b335afcf489bfb4cecce4a957190d09cb2bffbe02b56a1cadd62d78c6ead92aa7839d5ea65e4260f994bbb4b54490df59fdf11ee1d97',
