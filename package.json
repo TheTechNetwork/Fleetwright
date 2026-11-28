@@ -33,7 +33,7 @@
     "@commitlint/cli": "21.2.4",
     "@modelcontextprotocol/client": "2.4.0",
     "@novnc/novnc": "1.7.0",
-    "@types/node": "26.6.7",
+    "@types/node": "26.6.10",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
     "esbuild": "0.28.2",
